@@ -1,0 +1,13 @@
+{
+  "id": "pdf",
+  "name": "PDF",
+  "description": "Create paginated A4 PDF artifacts with CJK text support.",
+  "version": "1.3.0",
+  "tools": ["write_pdf", "open_file"],
+  "instructions": [
+    "Use write_pdf for a requested text PDF and pass the full final Markdown. The writer preserves intentional line breaks and automatically wraps and paginates long prose.",
+    "Confirm the workspace approval and successful tool result before presenting the file as complete.",
+    "The built-in writer supports A4 text pages, Markdown-aware headings, page numbers, and CJK characters. Verify every final page is approximately 595 x 842 points; a 612 x 792 point page is US Letter and fails an A4 academic-document requirement.",
+    "Render and inspect every page before completion. Reject blank interior pages, placeholder table-of-contents pages, clipped or garbled text, missing abstracts/references, and a PDF whose visible structure differs from the source DOCX. Do not claim images, forms, or pixel-perfect institutional templates unless separately verified."
+  ]
+}

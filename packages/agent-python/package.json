@@ -1,0 +1,23 @@
+{
+  "name": "@arforge-ai/agent-python",
+  "version": "1.0.0-test.1",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./protocol": "./src/protocol.ts"
+  },
+  "scripts": {
+    "audit:legacy-ownership": "bun test test/legacy-ownership.test.ts",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

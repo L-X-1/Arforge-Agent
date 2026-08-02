@@ -1,0 +1,65 @@
+.arforge-control-center-panel {
+  user-select: none;
+}
+
+.arforge-control-center-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+.arforge-control-center-description {
+  max-width: 720px;
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+  color: var(--v2-text-text-muted);
+  text-wrap: pretty;
+}
+
+.arforge-control-center-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--arforge-radius-card);
+  background-color: var(--arforge-material-main);
+  box-shadow:
+    inset 0 0 0 0.5px var(--arforge-hairline),
+    var(--arforge-inner-highlight);
+}
+
+.arforge-control-center-path {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 440;
+  line-height: 18px;
+  color: var(--v2-text-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arforge-control-center-body {
+  gap: 20px;
+}
+
+.arforge-control-center-body :is(input, textarea, code, pre) {
+  user-select: text;
+}
+
+@media (max-width: 767px) {
+  .arforge-control-center-context {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arforge-control-center-panel * {
+    scroll-behavior: auto;
+  }
+}

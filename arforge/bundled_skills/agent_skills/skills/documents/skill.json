@@ -1,0 +1,15 @@
+{
+  "id": "documents",
+  "name": "Documents",
+  "description": "Create and inspect structured A4 DOCX document artifacts.",
+  "version": "1.3.0",
+  "tools": ["write_docx", "read_office_document", "open_file"],
+  "instructions": [
+    "Use write_docx for a requested DOCX artifact and pass the full final Markdown, target filename, and optional font settings. Markdown headings become Word title/heading styles; use a heading named 目录 for an updateable TOC field and <!-- pagebreak --> when an explicit page boundary is required.",
+    "Workspace writes require the normal approval flow; never claim the document exists before the tool succeeds.",
+    "After creation, call read_office_document and verify that headings, names, dates, figures, references, and conclusions survived the round trip. A user request for a standard report or thesis is not complete if the final answer admits missing pagination, missing sections, or manual reconstruction.",
+    "The writer emits A4 page settings, margins, heading styles, an optional TOC field, section page breaks, and page-number footer. Prefer it over an ad-hoc python-docx generator. If a custom generator is genuinely necessary, explicitly set every section to A4 (210 x 297 mm; OOXML page size about 11906 x 16838 twips) and verify the saved package rather than accepting the library's US Letter default.",
+    "For a standard Chinese thesis, the final rendered document must contain a cover, Chinese abstract and keywords, English Abstract and keywords, a populated visible table of contents (not an instruction telling the reader to update it), numbered chapters, embedded references, and page numbers. A standard proposal must embed its reference list instead of only pointing to a companion Markdown file.",
+    "Before completion, inspect OOXML page dimensions and render every page. Reject blank interior pages, clipped/garbled text, placeholder TOC pages, missing abstracts, missing references, and any Letter-sized output. Do not claim tracked changes, comments, complex tables, or pixel-perfect institutional templates unless separately verified."
+  ]
+}

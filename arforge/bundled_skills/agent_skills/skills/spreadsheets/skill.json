@@ -1,0 +1,13 @@
+{
+  "id": "spreadsheets",
+  "name": "Spreadsheets",
+  "description": "Create and inspect portable XLSX spreadsheets and analyze CSV data.",
+  "version": "1.1.0",
+  "tools": ["write_xlsx", "read_office_document", "csv_preview", "open_file"],
+  "instructions": [
+    "Use write_xlsx with a JSON array of objects for named columns or an array of arrays for an explicit table.",
+    "Preserve numeric and boolean values as their original JSON types instead of converting every cell to text.",
+    "After creation, call read_office_document and verify headers, row count, key values, sheet name, and requested filename.",
+    "Use csv_preview for existing CSV data. Do not claim formulas, charts, macros, or styling unless they were explicitly produced and verified."
+  ]
+}

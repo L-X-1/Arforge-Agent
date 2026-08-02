@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-28",
+  "workspace": "E:\\Arforge-Agent",
+  "status": "implemented-and-verified",
+  "ownerDecision": {
+    "option": 1,
+    "topology": "separate-arforge-ma",
+    "approvedAt": "2026-07-28"
+  },
+  "facts": {
+    "serverVersion": "17.10",
+    "applicationRole": "arforge_app",
+    "applicationRoleCanCreateSchema": false,
+    "main": {
+      "target": "postgresql://localhost:5432/arforge",
+      "physicalPublicTables": 48,
+      "visiblePublicTables": 48,
+      "workflowGraphTables": 3,
+      "multiagentTables": 2,
+      "multiagentRowsVisibleToApplicationRole": {
+        "tasks": 0,
+        "conversations": 0
+      },
+      "coreMigrationLedger": [
+        "20260726151858_deep_famine",
+        "20260726215425_feedback_workspace_scope",
+        "20260728090000_workflow_graph_unified_store"
+      ]
+    },
+    "explicitMultiagent": {
+      "target": "postgresql://localhost:5432/arforge_ma",
+      "physicalPublicTables": 3,
+      "visiblePublicTables": 3,
+      "multiagentTables": 2,
+      "applicationWritableMultiagentTables": 2,
+      "alembicLedgerPresent": true,
+      "conclusion": "The isolated schema is explicit, preserves 23 tasks and 48 conversations, and is usable by the least-privilege application role."
+    },
+    "workflowGraph": {
+      "pendingMigration": "20260728090000_workflow_graph_unified_store",
+      "expectedTables": [
+        "workflow_graph_runs",
+        "workflow_graph_nodes",
+        "workflow_graph_events"
+      ],
+      "pendingAdminMarker": false
+    },
+    "administratorConnectionConfigured": false,
+    "administratorConnectionRemovedAfterMigration": true
+  },
+  "executionResult": {
+    "mainPublicTables": 48,
+    "workflowGraphTables": 3,
+    "multiagentPublicTables": 3,
+    "multiagentTasks": 23,
+    "multiagentConversations": 48,
+    "applicationRoleCanCreateSchema": false,
+    "mainRestoreRowDifferences": 0,
+    "multiagentRestoreRowDifferences": 0,
+    "temporaryRestoreDatabasesRemoved": true,
+    "legacyWorkflowRunsDiscovered": 0,
+    "legacyWorkflowFingerprintSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "options": [
+    {
+      "id": 1,
+      "name": "独立 arforge_ma 数据库",
+      "recommended": true,
+      "approvalPhrase": "数据库选择 1，独立 arforge_ma",
+      "benefits": [
+        "Multi-agent migrations and load are isolated from Session/Core tables.",
+        "Least-privilege grants can be scoped to only three multi-agent schema tables.",
+        "A future multi-agent repair does not require touching the main product schema."
+      ],
+      "costs": [
+        "Backups and restore drills must cover both databases.",
+        "The current arforge_ma grants must be repaired by an administrator.",
+        "ARFORGE_MULTIAGENT_DB_URL must be persisted explicitly instead of relying on derived naming."
+      ],
+      "requiredAdminActions": [
+        "Inspect row counts in arforge_ma before changing grants.",
+        "Grant CONNECT, public schema USAGE, and DML on multiagent_tasks and multiagent_conversations to arforge_app.",
+        "Verify the application role can read and write both tables but still cannot create schemas.",
+        "Apply the Workflow Graph Core migration to the main arforge database.",
+        "Back up and restore-drill both arforge and arforge_ma."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "全部共用 arforge 主库",
+      "recommended": false,
+      "approvalPhrase": "数据库选择 2，共用 arforge",
+      "benefits": [
+        "One database backup contains Session, memory, learning, workflow, and multi-agent state.",
+        "The existing main-database multi-agent tables are already writable by arforge_app.",
+        "No second application database privilege repair is needed."
+      ],
+      "costs": [
+        "Core and Alembic migrations share one public schema and require stricter collision controls.",
+        "The existing arforge_ma database must be inspected and then retained, archived, or removed by a separate explicit decision.",
+        "A multi-agent-heavy workload shares maintenance and failure scope with the main product."
+      ],
+      "requiredAdminActions": [
+        "Inspect arforge_ma row counts before deciding whether it contains data that must be imported.",
+        "Persist ARFORGE_MULTIAGENT_DB_URL equal to the main arforge URL.",
+        "Apply the Workflow Graph Core migration to arforge.",
+        "Run the complete application-role privilege audit and a single-database restore drill."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "回退到本地 SQLite",
+      "recommended": false,
+      "approvalPhrase": "数据库选择 3，本地 SQLite",
+      "benefits": [
+        "No PostgreSQL administrator is needed for a single local profile."
+      ],
+      "costs": [
+        "Conflicts with the requested private PostgreSQL product direction.",
+        "Removes the server/team durability and cross-process database contract.",
+        "Would require a new migration and acceptance scope."
+      ],
+      "requiredAdminActions": []
+    }
+  ],
+  "recommendedDecision": {
+    "option": 1,
+    "reason": "The project already models multi-agent persistence as an isolated database and its schema exists. Repairing least-privilege grants is lower risk than merging two migration authorities into the main public schema."
+  },
+  "requiredSecretInput": {
+    "variable": "ARFORGE_DB_ADMIN_URL",
+    "rules": [
+      "Provide it only in the current process or the private user environment.",
+      "Do not paste it into source, chat output, command history, logs, or documentation.",
+      "The Workflow Graph migration URL must target the arforge database on the same PostgreSQL server.",
+      "Option 1 additionally needs administrator access to arforge_ma for grant repair and verification."
+    ]
+  },
+  "verificationCommand": "bun run db:topology:preflight",
+  "destructiveActionsPerformed": 0
+}

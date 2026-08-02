@@ -1,0 +1,10 @@
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+tests/
+data/
+.arforge/
+.env*
+arforge_corrupt_backup_*/
+.recovery_pyc/

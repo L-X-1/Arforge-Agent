@@ -1,0 +1,34 @@
+{
+	admin 127.0.0.1:2019
+}
+
+{$ARFORGE_DOMAIN:arforge.localhost} {
+	tls internal
+	encode zstd gzip
+
+	log {
+		format filter {
+			request>uri query {
+				replace auth_token REDACTED
+			}
+			request>headers>Cookie delete
+			request>headers>Authorization delete
+			wrap json
+		}
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+	}
+
+	reverse_proxy 127.0.0.1:4096 {
+		transport http {
+			dial_timeout 5s
+			keepalive 30s
+		}
+	}
+}

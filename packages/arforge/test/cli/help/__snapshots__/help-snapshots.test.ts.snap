@@ -1,0 +1,793 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge acp --help 1`] = `
+"arforge acp
+
+启动 ACP（代理客户端协议）服务器
+
+选项：
+  -h, --help         显示帮助                                                                 [布尔]
+  -v, --version      显示版本号                                                               [布尔]
+      --print-logs   将日志输出到标准错误                                                     [布尔]
+      --log-level    日志级别                   [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         不加载外部插件                                                           [布尔]
+      --port         监听端口                                                    [数字] [默认值： 0]
+      --hostname     监听主机名                                      [字符串] [默认值： "127.0.0.1"]
+      --mdns         启用 mDNS 服务发现（主机名默认改为 0.0.0.0）            [布尔] [默认值： false]
+      --mdns-domain  mDNS 自定义域名（默认：arforge.local）      [字符串] [默认值： "arforge.local"]
+      --cors         额外允许跨域访问的域名                                     [数组] [默认值： []]
+      --https-cert   HTTPS PEM 证书文件（需同时提供 --https-key）                           [字符串]
+      --https-key    HTTPS PEM 私钥文件（需同时提供 --https-cert）                          [字符串]
+      --cwd          working directory
+                               [字符串] [默认值： "<HOME>"]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge mcp --help 1`] = `
+"arforge mcp
+
+管理 MCP（模型上下文协议）服务器
+
+命令：
+  arforge mcp add [name]     add an MCP server
+  arforge mcp list           list MCP servers and their status [aliases: ls]
+  arforge mcp auth [name]    authenticate with an OAuth-enabled MCP server
+  arforge mcp logout [name]  remove OAuth credentials for an MCP server
+  arforge mcp debug <name>   debug OAuth connection for an MCP server
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge attach --help 1`] = `
+"arforge attach <url>
+
+连接正在运行的 Arforge 服务器
+
+位置参数：
+  url  http://localhost:4096                                                         [字符串] [必需]
+
+选项：
+  -h, --help          显示帮助                                                                [布尔]
+  -v, --version       显示版本号                                                              [布尔]
+      --print-logs    将日志输出到标准错误                                                    [布尔]
+      --log-level     日志级别                  [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure          不加载外部插件                                                          [布尔]
+      --dir           directory to run in                                                   [字符串]
+  -c, --continue      continue the last session                                               [布尔]
+  -s, --session       session id to continue                                                [字符串]
+      --fork          fork the session when continuing (use with --continue or --session)     [布尔]
+  -p, --password      basic auth password (defaults to ARFORGE_SERVER_PASSWORD)             [字符串]
+  -u, --username      basic auth username (defaults to ARFORGE_SERVER_USERNAME or 'arforge')[字符串]
+      --mini          start the minimal interactive interface                [布尔] [默认值： false]
+      --no-replay     disable mini session history replay on resume and after resize          [布尔]
+      --replay-limit  cap visible mini replay to the newest N messages                        [数字]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge run --help 1`] = `
+"arforge run [message..]
+
+使用消息运行 Arforge
+
+位置参数：
+  message  message to send                                                      [数组] [默认值： []]
+
+选项：
+  -h, --help         显示帮助                                                                 [布尔]
+  -v, --version      显示版本号                                                               [布尔]
+      --print-logs   将日志输出到标准错误                                                     [布尔]
+      --log-level    日志级别                   [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         不加载外部插件                                                           [布尔]
+      --command      the command to run, use message for args                               [字符串]
+  -c, --continue     continue the last session                                                [布尔]
+  -s, --session      session id to continue                                                 [字符串]
+      --fork         fork the session before continuing (requires --continue or --session)    [布尔]
+      --share        share the session                                                        [布尔]
+  -m, --model        model to use in the format of provider/model                           [字符串]
+      --agent        agent to use                                                           [字符串]
+      --format       format: default (formatted) or json (raw JSON events)
+                                          [字符串] [可选值： "default", "json"] [默认值： "default"]
+  -f, --file         file(s) to attach to message                                             [数组]
+      --title        title for the session (uses truncated prompt if no value provided)     [字符串]
+      --attach       attach to a running Arforge server (e.g., http://localhost:4096)       [字符串]
+  -p, --password     basic auth password (defaults to ARFORGE_SERVER_PASSWORD)              [字符串]
+  -u, --username     basic auth username (defaults to ARFORGE_SERVER_USERNAME or 'arforge') [字符串]
+      --dir          directory to run in, path on remote server if attaching                [字符串]
+      --port         port for the local server (defaults to random port if no value provided) [数字]
+      --variant      model variant (provider-specific reasoning effort, e.g., high, max, minimal)
+                                                                                            [字符串]
+      --thinking     show thinking blocks                                                     [布尔]
+  -i, --interactive  run in direct interactive split-footer mode             [布尔] [默认值： false]
+      --auto         auto-approve permissions that are not explicitly denied (dangerous!)
+                                                                             [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge debug --help 1`] = `
+"arforge debug
+
+调试和故障排查工具
+
+命令：
+  arforge debug config        show resolved configuration
+  arforge debug lsp           LSP debugging utilities
+  arforge debug rg            ripgrep debugging utilities
+  arforge debug file          file system debugging utilities
+  arforge debug scrap         list all known projects
+  arforge debug skill         list all available skills
+  arforge debug snapshot      snapshot debugging utilities
+  arforge debug startup       print startup timing
+  arforge debug agent <name>  show agent configuration details
+  arforge debug v2            debug v2 catalog and built-in plugins
+  arforge debug info          show debug information
+  arforge debug paths         show global paths (data, config, cache, state)
+  arforge debug wait          wait indefinitely (for debugging)
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge providers --help 1`] = `
+"arforge providers
+
+管理 AI 提供商和凭据
+
+命令：
+  arforge providers list               list providers and credentials [aliases: ls]
+  arforge providers login [url]        log in to a provider
+  arforge providers logout [provider]  log out from a configured provider
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge agent --help 1`] = `
+"arforge agent
+
+管理代理
+
+命令：
+  arforge agent create  create a new agent
+  arforge agent list    list all available agents
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge upgrade --help 1`] = `
+"arforge upgrade [target]
+
+升级 Arforge
+
+位置参数：
+  target  version to upgrade to, for ex '0.1.48' or 'v0.1.48'                               [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+  -m, --method      installation method to use
+                          [字符串] [可选值： "curl", "npm", "pnpm", "bun", "brew", "choco", "scoop"]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge uninstall --help 1`] = `
+"arforge uninstall
+
+卸载 Arforge 并清理相关文件
+
+选项：
+  -h, --help         显示帮助                                                                 [布尔]
+  -v, --version      显示版本号                                                               [布尔]
+      --print-logs   将日志输出到标准错误                                                     [布尔]
+      --log-level    日志级别                   [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         不加载外部插件                                                           [布尔]
+  -c, --keep-config  keep configuration files                                [布尔] [默认值： false]
+  -d, --keep-data    keep session data and snapshots                         [布尔] [默认值： false]
+      --dry-run      show what would be removed without removing             [布尔] [默认值： false]
+  -f, --force        skip confirmation prompts                               [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge serve --help 1`] = `
+"arforge serve
+
+启动无界面的本地 Arforge 服务器
+
+选项：
+  -h, --help         显示帮助                                                                 [布尔]
+  -v, --version      显示版本号                                                               [布尔]
+      --print-logs   将日志输出到标准错误                                                     [布尔]
+      --log-level    日志级别                   [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         不加载外部插件                                                           [布尔]
+      --port         监听端口                                                    [数字] [默认值： 0]
+      --hostname     监听主机名                                      [字符串] [默认值： "127.0.0.1"]
+      --mdns         启用 mDNS 服务发现（主机名默认改为 0.0.0.0）            [布尔] [默认值： false]
+      --mdns-domain  mDNS 自定义域名（默认：arforge.local）      [字符串] [默认值： "arforge.local"]
+      --cors         额外允许跨域访问的域名                                     [数组] [默认值： []]
+      --https-cert   HTTPS PEM 证书文件（需同时提供 --https-key）                           [字符串]
+      --https-key    HTTPS PEM 私钥文件（需同时提供 --https-cert）                          [字符串]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge web --help 1`] = `
+"arforge web
+
+启动 Arforge 服务器并打开网页界面
+
+选项：
+  -h, --help         显示帮助                                                                 [布尔]
+  -v, --version      显示版本号                                                               [布尔]
+      --print-logs   将日志输出到标准错误                                                     [布尔]
+      --log-level    日志级别                   [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure         不加载外部插件                                                           [布尔]
+      --port         监听端口                                                    [数字] [默认值： 0]
+      --hostname     监听主机名                                      [字符串] [默认值： "127.0.0.1"]
+      --mdns         启用 mDNS 服务发现（主机名默认改为 0.0.0.0）            [布尔] [默认值： false]
+      --mdns-domain  mDNS 自定义域名（默认：arforge.local）      [字符串] [默认值： "arforge.local"]
+      --cors         额外允许跨域访问的域名                                     [数组] [默认值： []]
+      --https-cert   HTTPS PEM 证书文件（需同时提供 --https-key）                           [字符串]
+      --https-key    HTTPS PEM 私钥文件（需同时提供 --https-cert）                          [字符串]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge models --help 1`] = `
+"arforge models [provider]
+
+列出可用模型
+
+位置参数：
+  provider  provider ID to filter models by                                                 [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --verbose     use more verbose model output (includes metadata like costs)              [布尔]
+      --refresh     刷新已配置的远程模型目录（未配置时使用内置离线目录）                      [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge capabilities --help 1`] = `
+"arforge capabilities [workspace]
+
+查看通过共享 Core 接入的 Arforge Agent 特色能力
+
+位置参数：
+  workspace  要检查的工作区，默认为当前目录                                                 [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]
+      --all         显示能力说明、类别和优先级                               [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge quality --help 1`] = `
+"arforge quality [files..]
+
+运行 Arforge Agent 的只读交付质量门禁
+
+位置参数：
+  files  要检查的工作区相对文件                                                 [数组] [默认值： []]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --workspace   工作区目录，默认为当前目录                                              [字符串]
+      --patch-file  可选的 unified diff 文件                                                [字符串]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge repo-scale --help 1`] = `
+"arforge repo-scale [query]
+
+扫描大型仓库并执行有界本地搜索
+
+位置参数：
+  query  可选的本地搜索词                                                                   [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --workspace   工作区目录，默认为当前目录                                              [字符串]
+      --path        工作区内要扫描的相对目录                                 [字符串] [默认值： "."]
+      --max-files   本次扫描的最大代码文件数                                  [数字] [默认值： 5000]
+      --limit       最大文件与搜索结果条数                                      [数字] [默认值： 20]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge run-history --help 1`] = `
+"arforge run-history [run-id]
+
+查看旧 Core 与新界面共用的持久化运行记录
+
+位置参数：
+  run-id  可选的运行 ID；省略时列出最近记录                                                 [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --workspace   工作区目录，默认为当前目录                                              [字符串]
+      --limit       列表最大记录数                                              [数字] [默认值： 20]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge goal --help 1`] = `
+"arforge goal <action> <session-id> [goal-id]
+
+管理会话目标及其持久化执行状态
+
+位置参数：
+  action      目标操作
+  [必需] [可选值： "list", "create", "get", "run", "pause", "resume", "complete", "block", "cancel",
+                                                                     "replace", "delete", "reorder"]
+  session-id  会话 ID                                                                [字符串] [必需]
+  goal-id     目标 ID                                                                       [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --objective   创建或替换后的目标内容                                                  [字符串]
+      --queue       创建为排队目标                                           [布尔] [默认值： false]
+      --history     列表包含已结束目标                                        [布尔] [默认值： true]
+      --error       阻塞原因                                                                [字符串]
+      --order       排队目标 ID，按期望顺序以逗号分隔                                       [字符串]
+      --revision    可选乐观锁版本；省略时自动读取最新版本                                    [数字]
+      --workspace   会话所属工作区，默认为当前目录                                          [字符串]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge task --help 1`] = `
+"arforge task <action> <session-id> [task-id]
+
+管理会话任务图、依赖与领取状态
+
+位置参数：
+  action      任务操作
+       [必需] [可选值： "list", "create", "get", "update", "claim", "release", "complete", "cancel",
+                                                                                  "delete", "clear"]
+  session-id  会话 ID                                                                [字符串] [必需]
+  task-id     任务 ID                                                                       [字符串]
+
+选项：
+  -h, --help           显示帮助                                                               [布尔]
+  -v, --version        显示版本号                                                             [布尔]
+      --print-logs     将日志输出到标准错误                                                   [布尔]
+      --log-level      日志级别                 [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure           不加载外部插件                                                         [布尔]
+      --title          任务标题                                                             [字符串]
+      --description    任务描述                                                             [字符串]
+      --active-form    进行中显示文本                                                       [字符串]
+      --owner          任务所有者，领取和释放时必需                                         [字符串]
+      --status         列表状态过滤    [可选值： "pending", "in_progress", "completed", "cancelled"]
+      --search         列表关键词过滤                                                       [字符串]
+      --blocked-by     依赖任务 ID，逗号分隔                                                [字符串]
+      --blocks         被本任务阻塞的任务 ID，逗号分隔                                      [字符串]
+      --metadata       字符串值 JSON 对象                                                   [字符串]
+      --revision       可选乐观锁版本；省略时自动读取最新版本                                 [数字]
+      --terminal-only  clear 仅清理已结束任务                                 [布尔] [默认值： true]
+      --workspace      会话所属工作区，默认为当前目录                                       [字符串]
+      --json           输出机器可读 JSON                                     [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge prompt-queue --help 1`] = `
+"arforge prompt-queue <action> <session-id> [message-id]
+
+管理桌面端与 CLI 共用的持久化提示队列
+
+位置参数：
+  action      队列操作                  [必需] [可选值： "list", "add", "update", "remove", "drain"]
+  session-id  会话 ID                                                                [字符串] [必需]
+  message-id  队列消息 ID                                                                   [字符串]
+
+选项：
+  -h, --help          显示帮助                                                                [布尔]
+  -v, --version       显示版本号                                                              [布尔]
+      --print-logs    将日志输出到标准错误                                                    [布尔]
+      --log-level     日志级别                  [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure          不加载外部插件                                                          [布尔]
+      --text          新增或替换后的提示文本                                                [字符串]
+      --agent         仅对该提示生效的代理                                                  [字符串]
+      --provider      模型提供商 ID                                                         [字符串]
+      --model         模型 ID；与 --provider 一起使用                                       [字符串]
+      --variant       模型变体                                                              [字符串]
+      --admitted-seq  可选并发令牌；省略时自动读取                                            [数字]
+      --workspace     会话所属工作区，默认为当前目录                                        [字符串]
+      --json          输出机器可读 JSON                                      [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge workflow --help 1`] = `
+"arforge workflow <action> [target] [node-id]
+
+管理验证后的工作流定义与持久化图运行
+
+位置参数：
+  action   工作流操作
+            [必需] [可选值： "list", "preview", "runs", "get", "start", "pause", "resume", "cancel",
+                                                                       "approve", "reject", "retry"]
+  target   定义路径或运行 ID                                                                [字符串]
+  node-id  审批或重试的节点 ID                                                              [字符串]
+
+选项：
+  -h, --help                 显示帮助                                                         [布尔]
+  -v, --version              显示版本号                                                       [布尔]
+      --print-logs           将日志输出到标准错误                                             [布尔]
+      --log-level            日志级别           [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure                 不加载外部插件                                                   [布尔]
+      --session              按会话过滤运行，或为新运行指定会话                             [字符串]
+      --permission-mode      代理节点权限模式
+                             [可选值： "plan", "acceptEdits", "fullAccess"] [默认值： "acceptEdits"]
+      --max-parallel         最大并行节点数（1-8）                               [数字] [默认值： 4]
+      --comment              审批说明                                                       [字符串]
+      --include-descendants  重试节点的后继分支                               [布尔] [默认值： true]
+      --workspace            工作区目录，默认为当前目录                                     [字符串]
+      --json                 输出机器可读 JSON                               [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge skill --help 1`] = `
+"arforge skill <action> [skill-id]
+
+统一查看运行时技能并管理本地技能启停
+
+位置参数：
+  action    技能操作                        [必需] [可选值： "list", "enable", "disable", "refresh"]
+  skill-id  技能 ID                                                                         [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --workspace   工作区目录，默认为当前目录                                              [字符串]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge plugin-manager --help 1`] = `
+"arforge plugin-manager <action> [target]
+
+管理本地声明式插件的检查、启停、安装与恢复
+
+位置参数：
+  action  插件操作
+              [必需] [可选值： "list", "enable", "disable", "inspect", "apply", "remove", "restore"]
+  target  插件名、来源、检查令牌或恢复 ID                                                   [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --name        从检查结果中选择的插件名                                                [字符串]
+      --replace     替换已安装的同名插件                                     [布尔] [默认值： false]
+      --workspace   工作区目录，默认为当前目录                                              [字符串]
+      --json        输出机器可读 JSON                                        [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge stats --help 1`] = `
+"arforge stats
+
+显示令牌用量和费用统计
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --days        show stats for the last N days (default: all time)                        [数字]
+      --tools       number of tools to show (default: all)                                    [数字]
+      --models      show model statistics (default: hidden). Pass a number to show top N, otherwise
+                    shows all
+      --project     filter by project (default: all projects, empty string: current project)[字符串]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge export --help 1`] = `
+"arforge export [sessionID]
+
+将会话数据导出为 JSON
+
+位置参数：
+  sessionID  session id to export                                                           [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --sanitize    redact sensitive transcript and file data                                 [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge import --help 1`] = `
+"arforge import <file>
+
+从 JSON 文件或 URL 导入会话数据
+
+位置参数：
+  file  path to JSON file or share URL                                               [字符串] [必需]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge session --help 1`] = `
+"arforge session
+
+管理会话
+
+命令：
+  arforge session list                list sessions
+  arforge session delete <sessionID>  delete a session
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge plugin --help 1`] = `
+"arforge plugin <module>
+
+安装插件并更新配置
+
+位置参数：
+  module  npm module name                                                            [字符串] [必需]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+  -g, --global      install in global config                                 [布尔] [默认值： false]
+  -f, --force       replace existing plugin version                          [布尔] [默认值： false]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge db --help 1`] = `
+"arforge db
+
+数据库工具
+
+命令：
+  arforge db [query]     open an interactive sqlite3 shell or run a query                   [默认值]
+  arforge db path        print the database path
+
+位置参数：
+  query  SQL query to execute                                                               [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --format      Output format                 [字符串] [可选值： "json", "tsv"] [默认值： "tsv"]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge mcp list --help 1`] = `
+"arforge mcp list
+
+list MCP servers and their status
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge mcp add --help 1`] = `
+"arforge mcp add [name]
+
+add an MCP server
+
+位置参数：
+  name  name of the MCP server                                                              [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+      --url         URL for a remote MCP server                                             [字符串]
+      --env         environment variable for a local MCP server (KEY=VALUE)                   [数组]
+      --header      HTTP header for a remote MCP server (KEY=VALUE)                           [数组]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge mcp auth --help 1`] = `
+"arforge mcp auth [name]
+
+authenticate with an OAuth-enabled MCP server
+
+命令：
+  arforge mcp auth list  list OAuth-capable MCP servers and their auth status [aliases: ls]
+
+位置参数：
+  name  name of the MCP server                                                              [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge mcp logout --help 1`] = `
+"arforge mcp logout [name]
+
+remove OAuth credentials for an MCP server
+
+位置参数：
+  name  name of the MCP server                                                              [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge providers list --help 1`] = `
+"arforge providers list
+
+list providers and credentials
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge providers login --help 1`] = `
+"arforge providers login [url]
+
+log in to a provider
+
+位置参数：
+  url  arforge auth provider                                                                [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+  -p, --provider    provider id or name to log in to (skips provider selection)             [字符串]
+  -m, --method      login method label (skips method selection)                             [字符串]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge providers logout --help 1`] = `
+"arforge providers logout [provider]
+
+log out from a configured provider
+
+位置参数：
+  provider  provider id or name to log out from                                             [字符串]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge agent create --help 1`] = `
+"arforge agent create
+
+create a new agent
+
+选项：
+  -h, --help                  显示帮助                                                        [布尔]
+  -v, --version               显示版本号                                                      [布尔]
+      --print-logs            将日志输出到标准错误                                            [布尔]
+      --log-level             日志级别          [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure                  不加载外部插件                                                  [布尔]
+      --path                  directory path to generate the agent file                     [字符串]
+      --description           what the agent should do                                      [字符串]
+      --mode                  agent mode            [字符串] [可选值： "all", "primary", "subagent"]
+      --permissions, --tools  comma-separated list of permissions to allow (default: all).
+                              Available: "bash, read, edit, glob, grep, webfetch, task, todowrite,
+                              websearch, lsp, skill"                                        [字符串]
+  -m, --model                 model to use in the format of provider/model                  [字符串]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge agent list --help 1`] = `
+"arforge agent list
+
+list all available agents
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge session list --help 1`] = `
+"arforge session list
+
+list sessions
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]
+  -n, --max-count   limit to N most recent sessions                                           [数字]
+      --format      output format             [字符串] [可选值： "table", "json"] [默认值： "table"]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge session delete --help 1`] = `
+"arforge session delete <sessionID>
+
+delete a session
+
+位置参数：
+  sessionID  session ID to delete                                                    [字符串] [必需]
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;
+
+exports[`arforge CLI help-text snapshots every documented command emits stable help text: arforge db path --help 1`] = `
+"arforge db path
+
+print the database path
+
+选项：
+  -h, --help        显示帮助                                                                  [布尔]
+  -v, --version     显示版本号                                                                [布尔]
+      --print-logs  将日志输出到标准错误                                                      [布尔]
+      --log-level   日志级别                    [字符串] [可选值： "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        不加载外部插件                                                            [布尔]"
+`;

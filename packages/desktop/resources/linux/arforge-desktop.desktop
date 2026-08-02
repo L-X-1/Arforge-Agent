@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Arforge
+Exec=/opt/Arforge/ai.arforge.desktop %U
+Terminal=false
+Type=Application
+Icon=ai.arforge.desktop
+StartupWMClass=ai.arforge.desktop
+NoDisplay=true
+Comment=Open source AI coding agent
+Categories=Development;

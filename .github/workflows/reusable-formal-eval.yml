@@ -1,0 +1,77 @@
+name: Reusable formal evaluation
+
+on:
+  workflow_call:
+    inputs:
+      suite:
+        required: true
+        type: string
+      token_budget:
+        required: true
+        type: string
+    secrets:
+      DEEPSEEK_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: ${{ inputs.suite }} (50 real-model tasks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: arforge_app
+          POSTGRES_PASSWORD: arforge_ci_password
+          POSTGRES_DB: arforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U arforge_app -d arforge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NO_COLOR: "1"
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ARFORGE_DATABASE_MODE: server
+      ARFORGE_DB_URL: postgresql://arforge_app:arforge_ci_password@127.0.0.1:5432/arforge
+      ARFORGE_MULTIAGENT_DB_URL: postgresql://arforge_app:arforge_ci_password@127.0.0.1:5432/arforge_multiagent
+      ARFORGE_EVAL_TOKEN_BUDGET: ${{ inputs.token_budget }}
+      ARFORGE_HOME: ${{ github.workspace }}/.arforge-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked development environment
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Install current checkout
+        run: python -m pip install --no-deps -e .
+      - name: Create isolated multi-agent database
+        env:
+          PGPASSWORD: arforge_ci_password
+        run: psql -h 127.0.0.1 -U arforge_app -d arforge -c "CREATE DATABASE arforge_multiagent"
+      - name: Apply database migrations
+        run: python -c "from arforge.database.migration import upgrade_database; upgrade_database('main'); upgrade_database('multiagent')"
+      - name: Verify harness and PostgreSQL readiness
+        run: arforge doctor --json
+      - name: Run complete formal suite with hard budget
+        run: arforge eval --suite "${{ inputs.suite }}" --token-budget "${{ inputs.token_budget }}" --json > "${{ inputs.suite }}.json"
+      - name: Upload formal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.suite }}-evidence-${{ github.run_id }}
+          path: |
+            ${{ inputs.suite }}.json
+            .arforge-ci/formal-dogfood/
+            .arforge/eval-failures/
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,263 @@
+import path from "path"
+import { fileURLToPath } from "node:url"
+import { Context, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { ModelsDev } from "@arforge-ai/schema/models-dev"
+import { Global } from "./global"
+import { Flag } from "./flag/flag"
+import { Flock } from "./util/flock"
+import { Hash } from "./util/hash"
+import { FSUtil } from "./fs-util"
+import { InstallationChannel, InstallationVersion } from "./installation/version"
+import { EventV2 } from "./event"
+import { makeGlobalNode } from "./effect/app-node"
+import { httpClient } from "./effect/app-node-platform"
+
+export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
+export type CatalogModelStatus = typeof CatalogModelStatus.Type
+
+const USER_AGENT = `arforge/${InstallationChannel}/${InstallationVersion}/${Flag.ARFORGE_CLIENT}`
+
+const CostTier = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cache_read: Schema.optional(Schema.Finite),
+  cache_write: Schema.optional(Schema.Finite),
+  tier: Schema.Struct({
+    type: Schema.Literal("context"),
+    size: Schema.Finite,
+  }),
+})
+
+const Cost = Schema.Struct({
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cache_read: Schema.optional(Schema.Finite),
+  cache_write: Schema.optional(Schema.Finite),
+  tiers: Schema.optional(Schema.Array(CostTier)),
+  context_over_200k: Schema.optional(
+    Schema.Struct({
+      input: Schema.Finite,
+      output: Schema.Finite,
+      cache_read: Schema.optional(Schema.Finite),
+      cache_write: Schema.optional(Schema.Finite),
+    }),
+  ),
+})
+
+const ReasoningOption = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("effort"),
+    values: Schema.Array(Schema.NullOr(Schema.String)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("toggle"),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("budget_tokens"),
+    min: Schema.optional(Schema.Finite),
+    max: Schema.optional(Schema.Finite),
+  }),
+])
+
+export const Model = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  family: Schema.optional(Schema.String),
+  release_date: Schema.String,
+  attachment: Schema.Boolean,
+  reasoning: Schema.Boolean,
+  temperature: Schema.Boolean,
+  tool_call: Schema.Boolean,
+  reasoning_options: Schema.optional(Schema.Array(ReasoningOption)),
+  interleaved: Schema.optional(
+    Schema.Union([
+      Schema.Literal(true),
+      Schema.Struct({
+        field: Schema.Literals(["reasoning", "reasoning_content", "reasoning_details"]),
+      }),
+    ]),
+  ),
+  cost: Schema.optional(Cost),
+  limit: Schema.Struct({
+    context: Schema.Finite,
+    input: Schema.optional(Schema.Finite),
+    output: Schema.Finite,
+  }),
+  modalities: Schema.optional(
+    Schema.Struct({
+      input: Schema.Array(Schema.Literals(["text", "audio", "image", "video", "pdf"])),
+      output: Schema.Array(Schema.Literals(["text", "audio", "image", "video", "pdf"])),
+    }),
+  ),
+  experimental: Schema.optional(
+    Schema.Struct({
+      modes: Schema.optional(
+        Schema.Record(
+          Schema.String,
+          Schema.Struct({
+            cost: Schema.optional(Cost),
+            provider: Schema.optional(
+              Schema.Struct({
+                body: Schema.optional(Schema.Record(Schema.String, Schema.MutableJson)),
+                headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+              }),
+            ),
+          }),
+        ),
+      ),
+    }),
+  ),
+  status: Schema.optional(CatalogModelStatus),
+  provider: Schema.optional(
+    Schema.Struct({ npm: Schema.optional(Schema.String), api: Schema.optional(Schema.String) }),
+  ),
+})
+export type Model = Schema.Schema.Type<typeof Model>
+
+export const Provider = Schema.Struct({
+  api: Schema.optional(Schema.String),
+  name: Schema.String,
+  env: Schema.Array(Schema.String),
+  id: Schema.String,
+  npm: Schema.optional(Schema.String),
+  models: Schema.Record(Schema.String, Model),
+})
+
+export type Provider = Schema.Schema.Type<typeof Provider>
+
+export const Event = ModelsDev.Event
+
+declare const ARFORGE_MODELS_DEV: Record<string, Provider> | undefined
+
+export interface Interface {
+  readonly get: () => Effect.Effect<Record<string, Provider>>
+  readonly refresh: (force?: boolean) => Effect.Effect<void>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@arforge/ModelsDev") {}
+
+const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    const events = yield* EventV2.Service
+    const http = HttpClient.filterStatusOk(
+      (yield* HttpClient.HttpClient).pipe(
+        HttpClient.retryTransient({
+          retryOn: "errors-and-responses",
+          times: 2,
+          schedule: Schedule.exponential(200).pipe(Schedule.jittered),
+        }),
+      ),
+    )
+
+    const source = Flag.ARFORGE_MODELS_URL?.replace(/\/$/, "")
+    const filepath = path.join(Global.Path.cache, source ? `models-${Hash.fast(source)}.json` : "models.json")
+    const bundledCatalog = fileURLToPath(new URL("../assets/models.json", import.meta.url))
+    const ttl = Duration.minutes(5)
+    const lockKey = `models-dev:${filepath}`
+
+    const fresh = Effect.fnUntraced(function* () {
+      const stat = yield* fs.stat(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!stat) return false
+      const mtime = Option.getOrElse(stat.mtime, () => new Date(0)).getTime()
+      return Date.now() - mtime < Duration.toMillis(ttl)
+    })
+
+    const fetchApi = Effect.fn("ModelsDev.fetchApi")(function* () {
+      if (!source) return yield* Effect.fail(new Error("未配置远程模型目录"))
+      return yield* HttpClientRequest.get(`${source}/api.json`).pipe(
+        HttpClientRequest.setHeader("User-Agent", USER_AGENT),
+        http.execute,
+        Effect.flatMap((res) => res.text),
+        Effect.timeout("10 seconds"),
+      )
+    })
+
+    const configuredCatalog = Flag.ARFORGE_MODELS_PATH ?? (source ? filepath : undefined)
+    const loadFromDisk = configuredCatalog
+      ? fs.readJson(configuredCatalog).pipe(
+          Effect.catch((error) => {
+            if (configuredCatalog === filepath && error._tag === "FileSystemError" && error.method === "readJson") {
+              return fs.remove(filepath, { force: true }).pipe(Effect.ignore, Effect.as(undefined))
+            }
+            return Effect.succeed(undefined)
+          }),
+          Effect.map((v) => v as Record<string, Provider> | undefined),
+        )
+      : Effect.succeed(undefined)
+
+    const loadSnapshot = Effect.sync(() => (typeof ARFORGE_MODELS_DEV === "undefined" ? undefined : ARFORGE_MODELS_DEV))
+    const loadBundledCatalog = fs.readJson(bundledCatalog).pipe(
+      Effect.map((value) => value as Record<string, Provider>),
+      Effect.catch(() => Effect.succeed({} as Record<string, Provider>)),
+    )
+
+    const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
+      const text = yield* fetchApi()
+      const tempfile = `${filepath}.${process.pid}.${Date.now()}.tmp`
+      yield* fs.writeWithDirs(tempfile, text).pipe(
+        Effect.andThen(fs.rename(tempfile, filepath)),
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* fs.remove(tempfile, { force: true }).pipe(Effect.ignore)
+            return yield* Effect.fail(error)
+          }),
+        ),
+      )
+      return text
+    })
+
+    const populate = Effect.gen(function* () {
+      const fromDisk = yield* loadFromDisk
+      if (fromDisk) return fromDisk
+      if (source && !Flag.ARFORGE_DISABLE_MODELS_FETCH) {
+        const text = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Flock.effect(lockKey)
+            return yield* fetchAndWrite()
+          }),
+        )
+        return JSON.parse(text) as Record<string, Provider>
+      }
+      const snapshot = yield* loadSnapshot
+      if (snapshot) return snapshot
+      return yield* loadBundledCatalog
+    }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
+
+    const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)
+
+    const get = (): Effect.Effect<Record<string, Provider>> => cachedGet
+
+    const refresh = Effect.fn("ModelsDev.refresh")(function* (force = false) {
+      if (!source || Flag.ARFORGE_DISABLE_MODELS_FETCH) return
+      if (!force && (yield* fresh())) return
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Flock.effect(lockKey)
+          // Re-check under the lock: another process may have refreshed between
+          // our outer check and lock acquisition.
+          if (!force && (yield* fresh())) return
+          yield* fetchAndWrite()
+          yield* invalidate
+          yield* events.publish(Event.Refreshed, {})
+        }),
+      ).pipe(
+        Effect.tapCause((cause) => Effect.logError("自定义模型目录刷新失败", { cause })),
+        Effect.ignore,
+      )
+    })
+
+    if (source && !Flag.ARFORGE_DISABLE_MODELS_FETCH && !process.argv.includes("--get-yargs-completions")) {
+      // Schedule.spaced runs the effect once, then waits between completions.
+      yield* Effect.forkScoped(refresh().pipe(Effect.repeat(Schedule.spaced("60 minutes")), Effect.ignore))
+    }
+
+    return Service.of({ get, refresh })
+  }),
+)
+
+export const node = makeGlobalNode({ service: Service, layer: layer, deps: [FSUtil.node, EventV2.node, httpClient] })
+
+export * as ModelsDev from "./models-dev"

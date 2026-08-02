@@ -1,0 +1,88 @@
+name: Desktop signed Beta candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-signed-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-signed-beta:
+    name: Build protected signed Windows Beta
+    runs-on: windows-latest
+    timeout-minutes: 75
+    environment: desktop-release-candidate
+    env:
+      ARFORGE_CHANNEL: beta
+      ARFORGE_WINDOWS_SIGNING_PROVIDER: digicert-keylocker
+      ARFORGE_WINDOWS_KEYPAIR_ALIAS: ${{ vars.ARFORGE_WINDOWS_KEYPAIR_ALIAS }}
+      ARFORGE_WINDOWS_EXPECTED_SIGNER_SUBJECT: ${{ vars.ARFORGE_WINDOWS_EXPECTED_SIGNER_SUBJECT }}
+      SM_HOST: ${{ vars.SM_HOST }}
+      SM_API_KEY: ${{ secrets.SM_API_KEY }}
+      SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore signing client credential without exposing it
+        shell: pwsh
+        env:
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SM_CLIENT_CERT_FILE_B64)) {
+            throw "SM_CLIENT_CERT_FILE_B64 is missing."
+          }
+          $clientCertificatePath = Join-Path $env:RUNNER_TEMP "arforge-signing-client.p12"
+          "SM_CLIENT_CERT_FILE=$clientCertificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          [IO.File]::WriteAllBytes(
+            $clientCertificatePath,
+            [Convert]::FromBase64String($env:SM_CLIENT_CERT_FILE_B64)
+          )
+      - name: Setup DigiCert Software Trust client
+        uses: digicert/code-signing-software-trust-action@cb502242630f8556eb815a4f9c1e8c64d2a2d2a3 # v1.0.1
+        env:
+          SM_HOST: ${{ env.SM_HOST }}
+          SM_API_KEY: ${{ env.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE: ${{ env.SM_CLIENT_CERT_FILE }}
+          SM_CLIENT_CERT_PASSWORD: ${{ env.SM_CLIENT_CERT_PASSWORD }}
+      - name: Verify signing readiness without exposing secrets
+        shell: pwsh
+        run: ./scripts/test_signing_readiness.ps1
+      - name: Install locked workspace
+        run: bun install --frozen-lockfile
+      - name: Run Desktop behavior contracts
+        working-directory: packages/desktop
+        run: bun test
+      - name: Build Desktop Beta
+        run: bun run --cwd packages/desktop build
+      - name: Package and sign Desktop Beta through cloud HSM
+        run: bun run --cwd packages/desktop package:win
+      - name: Remove signing client credential
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath $env:SM_CLIENT_CERT_FILE -Force -ErrorAction SilentlyContinue
+      - name: Verify Authenticode signature and RFC 3161 timestamp
+        shell: pwsh
+        run: >-
+          ./scripts/write_desktop_signed_candidate_evidence.ps1
+          -Installer packages/desktop/dist/arforge-desktop-win-x64.exe
+      - name: Upload private signed Beta candidate and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: arforge-desktop-signed-beta-${{ github.run_id }}
+          path: |
+            packages/desktop/dist/arforge-desktop-win-x64.exe
+            desktop/release-evidence/signing-readiness.json
+            desktop/release-evidence/signed-candidate.json
+            desktop/release-evidence/*.timestamp-proof.json
+            desktop/release-evidence/SHA256SUMS.signed-beta
+          if-no-files-found: error
+          retention-days: 14

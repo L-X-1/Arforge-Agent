@@ -1,0 +1,134 @@
+.session-settings-panel {
+  user-select: none;
+}
+
+.session-settings-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+.session-settings-description {
+  max-width: 720px;
+  color: var(--v2-text-text-muted);
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+  text-wrap: pretty;
+}
+
+.session-settings-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--arforge-radius-card);
+  background-color: var(--arforge-material-main);
+  box-shadow: inset 0 0 0 0.5px var(--arforge-hairline), var(--arforge-inner-highlight);
+}
+
+.session-settings-context-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.session-settings-context-copy strong {
+  overflow: hidden;
+  color: var(--v2-text-text-base);
+  font-size: 13px;
+  font-weight: 530;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-settings-context-copy span {
+  overflow: hidden;
+  color: var(--v2-text-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.session-settings-context-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-settings-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text-text-muted);
+  font-size: 11px;
+  font-weight: 530;
+  line-height: 16px;
+}
+
+.session-settings-state::before {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--v2-icon-icon-muted);
+  content: "";
+}
+
+.session-settings-state[data-active="true"]::before {
+  background-color: var(--icon-warning-base);
+}
+
+.session-settings-body {
+  gap: 20px;
+}
+
+.session-settings-body > section {
+  gap: 16px;
+  padding: 20px;
+  border: 0;
+  border-radius: var(--arforge-radius-card);
+  background-color: var(--arforge-material-main);
+  box-shadow: inset 0 0 0 0.5px var(--arforge-hairline), var(--arforge-inner-highlight);
+}
+
+.session-settings-body :is(input, textarea, pre, code) {
+  max-width: 100%;
+  user-select: text;
+}
+
+.session-settings-body article {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .session-settings-context {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .session-settings-context-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .session-settings-body > section {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-settings-panel * {
+    scroll-behavior: auto;
+  }
+}

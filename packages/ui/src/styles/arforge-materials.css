@@ -1,0 +1,211 @@
+:root {
+  --arforge-accent: #007aff;
+  --arforge-accent-hover: #006ee6;
+  --arforge-accent-soft: color-mix(in srgb, var(--arforge-accent) 12%, transparent);
+  --arforge-accent-faint: color-mix(in srgb, var(--arforge-accent) 7%, transparent);
+
+  --arforge-font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI Variable", "Segoe UI", Inter,
+    sans-serif;
+  --arforge-font-mono: "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas,
+    monospace;
+
+  --arforge-type-body-size: 14px;
+  --arforge-type-body-line: 21px;
+  --arforge-type-secondary-size: 12px;
+  --arforge-type-secondary-line: 18px;
+  --arforge-type-label-size: 13px;
+  --arforge-type-code-size: 13.5px;
+  --arforge-type-code-line: 20px;
+
+  --arforge-radius-control: 8px;
+  --arforge-radius-card: 12px;
+  --arforge-radius-panel: 16px;
+  --arforge-radius-dialog: 20px;
+
+  --arforge-hairline: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  --arforge-hairline-strong: color-mix(in srgb, var(--text-strong) 18%, transparent);
+  --arforge-glass-specular: color-mix(in srgb, white 28%, transparent);
+  --arforge-glass-refraction: color-mix(in srgb, var(--arforge-accent) 5%, transparent);
+  --arforge-inner-highlight:
+    inset 0 1px 0 color-mix(in srgb, white 32%, transparent),
+    inset 1px 0 0 color-mix(in srgb, white 10%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, #0b1220 10%, transparent);
+  --arforge-floating-shadow: 0 18px 48px color-mix(in srgb, #0b1220 18%, transparent);
+  --arforge-focus-ring: 0 0 0 2px var(--background-base), 0 0 0 4px var(--arforge-accent);
+  --arforge-glass-filter-shell: blur(18px) saturate(1.32) contrast(1.02);
+  --arforge-glass-filter-main: blur(16px) saturate(1.2) contrast(1.01);
+  --arforge-glass-filter-floating: blur(18px) saturate(1.26) contrast(1.02);
+
+  --arforge-atmosphere:
+    radial-gradient(70rem 52rem at 70% -12%, color-mix(in srgb, var(--arforge-accent) 12%, transparent), transparent 62%),
+    radial-gradient(38rem 30rem at 6% 104%, color-mix(in srgb, white 22%, transparent), transparent 68%),
+    linear-gradient(145deg, #f7f8fa 0%, #eef1f5 56%, #f8f9fb 100%);
+  --arforge-material-sidebar: color-mix(in srgb, var(--background-base) 42%, transparent);
+  --arforge-material-titlebar: color-mix(in srgb, var(--background-base) 40%, transparent);
+  --arforge-material-main: color-mix(in srgb, var(--background-base) 74%, transparent);
+  --arforge-material-dialog: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 58%, transparent);
+  --arforge-material-floating: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 64%, transparent);
+  --arforge-material-code: color-mix(in srgb, var(--background-stronger) 88%, transparent);
+  --arforge-native-window-background: #00000000;
+
+  --font-family-sans: var(--arforge-font-sans);
+  --font-family-mono: var(--arforge-font-mono);
+  --radius-md: var(--arforge-radius-control);
+  --radius-lg: var(--arforge-radius-card);
+  --radius-xl: var(--arforge-radius-panel);
+}
+
+:root[data-color-scheme="dark"] {
+  --arforge-accent: #0a84ff;
+  --arforge-accent-hover: #2997ff;
+  --arforge-hairline: color-mix(in srgb, white 12%, transparent);
+  --arforge-hairline-strong: color-mix(in srgb, white 18%, transparent);
+  --arforge-glass-specular: color-mix(in srgb, white 13%, transparent);
+  --arforge-glass-refraction: color-mix(in srgb, var(--arforge-accent) 7%, transparent);
+  --arforge-inner-highlight:
+    inset 0 1px 0 color-mix(in srgb, white 14%, transparent),
+    inset 1px 0 0 color-mix(in srgb, white 5%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, black 26%, transparent);
+  --arforge-floating-shadow: 0 20px 56px color-mix(in srgb, black 38%, transparent);
+  --arforge-atmosphere:
+    radial-gradient(72rem 54rem at 72% -14%, color-mix(in srgb, var(--arforge-accent) 14%, transparent), transparent 64%),
+    radial-gradient(40rem 32rem at 4% 108%, color-mix(in srgb, #8796ad 10%, transparent), transparent 70%),
+    linear-gradient(145deg, #1c1e22 0%, #121419 58%, #1a1c20 100%);
+}
+
+html,
+body {
+  font-family: var(--arforge-font-sans);
+  font-size: var(--arforge-type-body-size);
+  line-height: var(--arforge-type-body-line);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--arforge-font-mono);
+}
+
+[data-arforge-atmosphere] {
+  background: var(--arforge-atmosphere);
+}
+
+[data-arforge-material] {
+  border-color: var(--arforge-hairline);
+  background-image:
+    radial-gradient(120% 96% at 10% -32%, var(--arforge-glass-specular), transparent 46%),
+    linear-gradient(142deg, color-mix(in srgb, white 7%, transparent), transparent 32% 68%, var(--arforge-glass-refraction));
+  background-clip: padding-box;
+}
+
+[data-arforge-material="sidebar"] {
+  background-color: var(--arforge-material-sidebar);
+  backdrop-filter: var(--arforge-glass-filter-shell);
+  -webkit-backdrop-filter: var(--arforge-glass-filter-shell);
+  box-shadow: var(--arforge-inner-highlight);
+}
+
+[data-arforge-material="titlebar"] {
+  background-color: var(--arforge-material-titlebar);
+  backdrop-filter: var(--arforge-glass-filter-shell);
+  -webkit-backdrop-filter: var(--arforge-glass-filter-shell);
+  box-shadow: var(--arforge-inner-highlight);
+}
+
+[data-arforge-material="main"] {
+  background-color: var(--arforge-material-main);
+  backdrop-filter: var(--arforge-glass-filter-main);
+  -webkit-backdrop-filter: var(--arforge-glass-filter-main);
+  box-shadow: var(--arforge-inner-highlight);
+}
+
+[data-arforge-material="dialog"] {
+  background-color: var(--arforge-material-dialog);
+  backdrop-filter: var(--arforge-glass-filter-floating);
+  -webkit-backdrop-filter: var(--arforge-glass-filter-floating);
+  box-shadow: var(--arforge-inner-highlight), var(--arforge-floating-shadow);
+}
+
+[data-arforge-material="floating"] {
+  background-color: var(--arforge-material-floating);
+  backdrop-filter: var(--arforge-glass-filter-floating);
+  -webkit-backdrop-filter: var(--arforge-glass-filter-floating);
+  box-shadow: var(--arforge-inner-highlight), var(--arforge-floating-shadow);
+}
+
+[data-arforge-material="code"] {
+  background-color: var(--arforge-material-code);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:where(button, a, input, textarea, select, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--arforge-focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --arforge-material-sidebar: color-mix(in srgb, var(--background-base) 96%, transparent);
+    --arforge-material-titlebar: color-mix(in srgb, var(--background-base) 96%, transparent);
+    --arforge-material-main: color-mix(in srgb, var(--background-base) 98%, transparent);
+    --arforge-material-dialog: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 98%, transparent);
+    --arforge-material-floating: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 98%, transparent);
+  }
+
+  [data-arforge-material] {
+    background-image: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+:root[data-transparency="reduced"] {
+  --arforge-material-sidebar: color-mix(in srgb, var(--background-base) 96%, transparent);
+  --arforge-material-titlebar: color-mix(in srgb, var(--background-base) 96%, transparent);
+  --arforge-material-main: color-mix(in srgb, var(--background-base) 98%, transparent);
+  --arforge-material-dialog: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 98%, transparent);
+  --arforge-material-floating: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 98%, transparent);
+}
+
+:root[data-transparency="reduced"] [data-arforge-material] {
+  background-image: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+:root[data-rendering="software"] {
+  --arforge-material-sidebar: color-mix(in srgb, var(--background-base) 86%, transparent);
+  --arforge-material-titlebar: color-mix(in srgb, var(--background-base) 86%, transparent);
+  --arforge-material-main: color-mix(in srgb, var(--background-base) 91%, transparent);
+  --arforge-material-dialog: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 90%, transparent);
+  --arforge-material-floating: color-mix(in srgb, var(--surface-raised-stronger-non-alpha) 88%, transparent);
+}
+
+:root[data-rendering="software"] [data-arforge-material] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (forced-colors: active) {
+  [data-arforge-material] {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+  }
+}

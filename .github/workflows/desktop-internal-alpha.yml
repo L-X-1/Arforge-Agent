@@ -1,0 +1,46 @@
+name: Desktop internal Alpha
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-internal-alpha-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-alpha:
+    name: Build unsigned Windows internal Alpha
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ARFORGE_CHANNEL: dev
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked workspace
+        run: bun install --frozen-lockfile
+      - name: Run Desktop behavior contracts
+        working-directory: packages/desktop
+        run: bun test
+      - name: Build installer and fail-closed Alpha evidence
+        shell: pwsh
+        run: ./scripts/build_internal_alpha.ps1
+      - name: Upload internal-only Alpha bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: arforge-desktop-internal-alpha-${{ github.run_id }}
+          path: |
+            packages/desktop/dist/arforge-desktop-win-x64.exe
+            packages/desktop/dist/internal-alpha-manifest.json
+            packages/desktop/dist/SHA256SUMS.internal-alpha
+          if-no-files-found: error
+          retention-days: 14

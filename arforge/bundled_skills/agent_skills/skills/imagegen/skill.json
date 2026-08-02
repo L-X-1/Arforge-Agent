@@ -1,0 +1,6 @@
+{
+  "id": "imagegen",
+  "name": "Image Generation",
+  "description": "Generate or edit raster images when the task benefits from AI-created bitmap visuals.",
+  "version": "1.0.0"
+}

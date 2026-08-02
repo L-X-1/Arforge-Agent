@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@arforge-ai/client-next",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "exports": {
+    ".": "./src/index.ts",
+    "./effect": "./src/effect.ts"
+  },
+  "scripts": {
+    "generate": "bun run script/build.ts",
+    "check:generated": "bun run generate && git diff --exit-code -- src/generated src/generated-effect",
+    "test": "bun test --timeout 5000",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@arforge-ai/schema": "workspace:*",
+    "@arforge-ai/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.83"
+  },
+  "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@arforge-ai/core": "workspace:*",
+    "@arforge-ai/httpapi-codegen": "workspace:*",
+    "@arforge-ai/server": "workspace:*",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "effect": "catalog:"
+  }
+}

@@ -1,0 +1,472 @@
+import { Button } from "@arforge-ai/ui/button"
+import { Logo } from "@arforge-ai/ui/logo"
+import { TextField } from "@arforge-ai/ui/text-field"
+import { Match, onMount, Show, Switch } from "solid-js"
+import { createStore } from "solid-js/store"
+
+type AuthMode = "private" | "users"
+type View = "login" | "register" | "forgot" | "reset" | "verify"
+
+type AuthResult = {
+  authenticated?: boolean
+  accepted?: boolean
+  verified?: boolean
+  reset?: boolean
+  developmentToken?: string
+  error?: string
+}
+
+type State = {
+  view: View
+  username: string
+  email: string
+  displayName: string
+  password: string
+  resetToken: string
+  submitting: boolean
+  error: string
+  notice: string
+}
+
+function decodeAuthResult(value: unknown): AuthResult {
+  if (!value || typeof value !== "object") return {}
+  return {
+    authenticated:
+      "authenticated" in value && typeof value.authenticated === "boolean" ? value.authenticated : undefined,
+    accepted: "accepted" in value && typeof value.accepted === "boolean" ? value.accepted : undefined,
+    verified: "verified" in value && typeof value.verified === "boolean" ? value.verified : undefined,
+    reset: "reset" in value && typeof value.reset === "boolean" ? value.reset : undefined,
+    developmentToken:
+      "developmentToken" in value && typeof value.developmentToken === "string" ? value.developmentToken : undefined,
+    error: "error" in value && typeof value.error === "string" ? value.error : undefined,
+  }
+}
+
+function takeActionTokens() {
+  const params = new URLSearchParams(location.search)
+  const verifyToken = params.get("verify_token") ?? ""
+  const resetToken = params.get("reset_token") ?? ""
+  if (verifyToken || resetToken) {
+    params.delete("verify_token")
+    params.delete("reset_token")
+    history.replaceState(null, "", location.pathname + (params.size ? `?${params}` : "") + location.hash)
+  }
+  return { verifyToken, resetToken }
+}
+
+export function PrivateLogin(props: { serverUrl: string; mode: AuthMode; onAuthenticated: () => void }) {
+  const chinese = navigator.languages.some((language) => language.toLowerCase().startsWith("zh"))
+  const tokens = props.mode === "users" ? takeActionTokens() : { verifyToken: "", resetToken: "" }
+  const copy = chinese
+    ? {
+        privateEyebrow: "私有工作空间",
+        userEyebrow: "安全账户",
+        loginTitle: "登录 Arforge",
+        privateDescription: "使用你的私人服务器账户继续。凭据只会发送到当前 Arforge 服务。",
+        userDescription: "登录后继续访问你的工作空间。每个账户的数据由租户边界隔离。",
+        registerTitle: "创建账户",
+        registerDescription: "注册后，我们会向你的邮箱发送一次性验证链接。",
+        forgotTitle: "找回密码",
+        forgotDescription: "输入注册邮箱。无论账户是否存在，返回结果都保持一致。",
+        resetTitle: "设置新密码",
+        resetDescription: "新密码保存后，所有已登录设备都会立即退出。",
+        verifyTitle: "验证邮箱",
+        verifyDescription: "正在验证一次性链接，请稍候。",
+        username: "用户名",
+        email: "邮箱",
+        displayName: "显示名称（选填）",
+        password: "密码",
+        newPassword: "新密码",
+        passwordHelp: "使用 12–256 个字符；建议使用密码管理器生成的独立密码。",
+        signIn: "登录",
+        register: "注册",
+        sendReset: "发送重置邮件",
+        savePassword: "保存新密码",
+        submitting: "正在处理…",
+        createAccount: "创建账户",
+        forgotPassword: "忘记密码？",
+        backToLogin: "返回登录",
+        invalidPrivate: "用户名或密码不正确。",
+        invalidUser: "邮箱或密码不正确，或邮箱尚未验证。",
+        invalidForm: "请检查输入后重试。",
+        unavailable: "无法连接到服务器，请检查服务和 HTTPS 配置。",
+        registrationSent: "如果该邮箱可以注册，验证邮件已经发送。请查收邮件后登录。",
+        resetSent: "如果账户存在，密码重置邮件已经发送。",
+        resetDone: "密码已更新，所有旧会话均已注销。现在可以使用新密码登录。",
+        verifyDone: "邮箱验证成功。现在可以登录。",
+        verifyFailed: "验证链接无效、已使用或已过期。",
+        resetFailed: "重置链接无效、已使用或已过期。",
+        persistentSession: "持久化加密会话 · HttpOnly Cookie",
+        privateSession: "8 小时签名会话 · HttpOnly Cookie",
+      }
+    : {
+        privateEyebrow: "Private workspace",
+        userEyebrow: "Secure account",
+        loginTitle: "Sign in to Arforge",
+        privateDescription: "Continue with your private server account. Credentials are sent only to this server.",
+        userDescription: "Sign in to your workspace. Tenant boundaries isolate every account's data.",
+        registerTitle: "Create an account",
+        registerDescription: "We will send a single-use verification link to your email address.",
+        forgotTitle: "Reset your password",
+        forgotDescription: "Enter your account email. The response is identical whether the account exists or not.",
+        resetTitle: "Choose a new password",
+        resetDescription: "Saving a new password immediately signs out every existing device.",
+        verifyTitle: "Verify your email",
+        verifyDescription: "Checking this single-use link now.",
+        username: "Username",
+        email: "Email",
+        displayName: "Display name (optional)",
+        password: "Password",
+        newPassword: "New password",
+        passwordHelp: "Use 12–256 characters. A unique password generated by a password manager is recommended.",
+        signIn: "Sign in",
+        register: "Create account",
+        sendReset: "Send reset email",
+        savePassword: "Save new password",
+        submitting: "Working…",
+        createAccount: "Create account",
+        forgotPassword: "Forgot password?",
+        backToLogin: "Back to sign in",
+        invalidPrivate: "The username or password is incorrect.",
+        invalidUser: "The email or password is incorrect, or the email has not been verified.",
+        invalidForm: "Check the form and try again.",
+        unavailable: "The server is unavailable. Check the service and HTTPS configuration.",
+        registrationSent: "If this address can be registered, a verification email has been sent.",
+        resetSent: "If the account exists, a password reset email has been sent.",
+        resetDone: "Password updated and all old sessions signed out. You can now sign in.",
+        verifyDone: "Email verified. You can now sign in.",
+        verifyFailed: "This verification link is invalid, already used, or expired.",
+        resetFailed: "This reset link is invalid, already used, or expired.",
+        persistentSession: "Persistent encrypted session · HttpOnly Cookie",
+        privateSession: "8-hour signed session · HttpOnly Cookie",
+      }
+  const [state, setState] = createStore<State>({
+    view: tokens.verifyToken ? "verify" : tokens.resetToken ? "reset" : "login",
+    username: "",
+    email: "",
+    displayName: "",
+    password: "",
+    resetToken: tokens.resetToken,
+    submitting: false,
+    error: "",
+    notice: "",
+  })
+
+  const request = async (path: string, body: unknown) => {
+    const response = await fetch(new URL(path, props.serverUrl), {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => undefined)
+    if (!response) return { response: undefined, result: decodeAuthResult(undefined) }
+    const result = decodeAuthResult(await response.json().catch(() => undefined))
+    return { response, result }
+  }
+
+  const changeView = (view: View) => {
+    setState({ view, password: "", error: "", notice: "" })
+  }
+
+  const verify = async (token: string) => {
+    setState({ submitting: true, error: "", notice: "" })
+    const { response, result } = await request("/auth/verify-email", { token })
+    if (!response) {
+      setState({ submitting: false, error: copy.unavailable })
+      return false
+    }
+    if (!response.ok || !result.verified) {
+      setState({ submitting: false, error: copy.verifyFailed })
+      return false
+    }
+    setState({ submitting: false, notice: copy.verifyDone })
+    return true
+  }
+
+  onMount(() => {
+    if (tokens.verifyToken) void verify(tokens.verifyToken)
+  })
+
+  const submitLogin = async (event: SubmitEvent) => {
+    event.preventDefault()
+    if (state.submitting) return
+    setState({ submitting: true, error: "", notice: "" })
+    const body =
+      props.mode === "users"
+        ? { email: state.email, password: state.password }
+        : { username: state.username, password: state.password }
+    const { response, result } = await request("/auth/login", body)
+    if (!response) {
+      setState({ submitting: false, error: copy.unavailable, password: "" })
+      return
+    }
+    if (!response.ok || !result.authenticated) {
+      setState({
+        submitting: false,
+        error: props.mode === "users" ? copy.invalidUser : copy.invalidPrivate,
+        password: "",
+      })
+      return
+    }
+    setState({ submitting: false, password: "" })
+    props.onAuthenticated()
+  }
+
+  const submitRegister = async (event: SubmitEvent) => {
+    event.preventDefault()
+    if (state.submitting) return
+    setState({ submitting: true, error: "", notice: "" })
+    const { response, result } = await request("/auth/register", {
+      email: state.email,
+      displayName: state.displayName || undefined,
+      password: state.password,
+    })
+    if (!response) {
+      setState({ submitting: false, error: copy.unavailable, password: "" })
+      return
+    }
+    if (!response.ok || !result.accepted) {
+      setState({ submitting: false, error: result.error ?? copy.invalidForm, password: "" })
+      return
+    }
+    if (result.developmentToken && (await verify(result.developmentToken))) {
+      setState({ view: "login", password: "", notice: copy.verifyDone })
+      return
+    }
+    setState({ submitting: false, password: "", notice: copy.registrationSent })
+  }
+
+  const submitForgot = async (event: SubmitEvent) => {
+    event.preventDefault()
+    if (state.submitting) return
+    setState({ submitting: true, error: "", notice: "" })
+    const { response, result } = await request("/auth/forgot-password", { email: state.email })
+    if (!response) {
+      setState({ submitting: false, error: copy.unavailable })
+      return
+    }
+    if (result.developmentToken) {
+      setState({ view: "reset", resetToken: result.developmentToken, submitting: false, notice: "" })
+      return
+    }
+    setState({ submitting: false, notice: copy.resetSent })
+  }
+
+  const submitReset = async (event: SubmitEvent) => {
+    event.preventDefault()
+    if (state.submitting) return
+    setState({ submitting: true, error: "", notice: "" })
+    const { response, result } = await request("/auth/reset-password", {
+      token: state.resetToken,
+      password: state.password,
+    })
+    if (!response) {
+      setState({ submitting: false, error: copy.unavailable, password: "" })
+      return
+    }
+    if (!response.ok || !result.reset) {
+      setState({ submitting: false, error: result.error ?? copy.resetFailed, password: "" })
+      return
+    }
+    setState({ view: "login", resetToken: "", submitting: false, password: "", notice: copy.resetDone })
+  }
+
+  const title = () => {
+    if (state.view === "register") return copy.registerTitle
+    if (state.view === "forgot") return copy.forgotTitle
+    if (state.view === "reset") return copy.resetTitle
+    if (state.view === "verify") return copy.verifyTitle
+    return copy.loginTitle
+  }
+
+  const description = () => {
+    if (state.view === "register") return copy.registerDescription
+    if (state.view === "forgot") return copy.forgotDescription
+    if (state.view === "reset") return copy.resetDescription
+    if (state.view === "verify") return copy.verifyDescription
+    return props.mode === "users" ? copy.userDescription : copy.privateDescription
+  }
+
+  return (
+    <main class="arforge-login">
+      <section class="arforge-login__card" aria-labelledby="arforge-login-title">
+        <Logo class="arforge-login__logo" />
+        <div class="arforge-login__eyebrow">{props.mode === "users" ? copy.userEyebrow : copy.privateEyebrow}</div>
+        <h1 id="arforge-login-title">{title()}</h1>
+        <p class="arforge-login__description">{description()}</p>
+
+        <Switch>
+          <Match when={state.view === "login"}>
+            <form onSubmit={submitLogin} class="arforge-login__form">
+              <Show
+                when={props.mode === "users"}
+                fallback={
+                  <TextField
+                    name="username"
+                    label={copy.username}
+                    autocomplete="username"
+                    value={state.username}
+                    onChange={(value) => setState("username", value)}
+                    required
+                    autofocus
+                  />
+                }
+              >
+                <TextField
+                  name="email"
+                  type="email"
+                  inputmode="email"
+                  label={copy.email}
+                  autocomplete="email"
+                  value={state.email}
+                  onChange={(value) => setState("email", value)}
+                  required
+                  autofocus
+                />
+              </Show>
+              <TextField
+                name="password"
+                type="password"
+                label={copy.password}
+                autocomplete="current-password"
+                value={state.password}
+                onChange={(value) => setState("password", value)}
+                required
+                error={state.error}
+              />
+              <Button type="submit" variant="primary" size="large" disabled={state.submitting}>
+                {state.submitting ? copy.submitting : copy.signIn}
+              </Button>
+            </form>
+            <Show when={props.mode === "users"}>
+              <div class="arforge-login__actions">
+                <button type="button" onClick={() => changeView("register")}>
+                  {copy.createAccount}
+                </button>
+                <button type="button" onClick={() => changeView("forgot")}>
+                  {copy.forgotPassword}
+                </button>
+              </div>
+            </Show>
+          </Match>
+
+          <Match when={state.view === "register"}>
+            <form onSubmit={submitRegister} class="arforge-login__form">
+              <TextField
+                name="email"
+                type="email"
+                inputmode="email"
+                label={copy.email}
+                autocomplete="email"
+                value={state.email}
+                onChange={(value) => setState("email", value)}
+                required
+                autofocus
+              />
+              <TextField
+                name="displayName"
+                label={copy.displayName}
+                autocomplete="name"
+                value={state.displayName}
+                onChange={(value) => setState("displayName", value)}
+              />
+              <TextField
+                name="password"
+                type="password"
+                label={copy.password}
+                autocomplete="new-password"
+                minlength={12}
+                maxlength={256}
+                description={copy.passwordHelp}
+                value={state.password}
+                onChange={(value) => setState("password", value)}
+                required
+                error={state.error}
+              />
+              <Button type="submit" variant="primary" size="large" disabled={state.submitting}>
+                {state.submitting ? copy.submitting : copy.register}
+              </Button>
+            </form>
+            <button class="arforge-login__back" type="button" onClick={() => changeView("login")}>
+              {copy.backToLogin}
+            </button>
+          </Match>
+
+          <Match when={state.view === "forgot"}>
+            <form onSubmit={submitForgot} class="arforge-login__form">
+              <TextField
+                name="email"
+                type="email"
+                inputmode="email"
+                label={copy.email}
+                autocomplete="email"
+                value={state.email}
+                onChange={(value) => setState("email", value)}
+                required
+                autofocus
+                error={state.error}
+              />
+              <Button type="submit" variant="primary" size="large" disabled={state.submitting}>
+                {state.submitting ? copy.submitting : copy.sendReset}
+              </Button>
+            </form>
+            <button class="arforge-login__back" type="button" onClick={() => changeView("login")}>
+              {copy.backToLogin}
+            </button>
+          </Match>
+
+          <Match when={state.view === "reset"}>
+            <form onSubmit={submitReset} class="arforge-login__form">
+              <TextField
+                name="password"
+                type="password"
+                label={copy.newPassword}
+                autocomplete="new-password"
+                minlength={12}
+                maxlength={256}
+                description={copy.passwordHelp}
+                value={state.password}
+                onChange={(value) => setState("password", value)}
+                required
+                autofocus
+                error={state.error}
+              />
+              <Button type="submit" variant="primary" size="large" disabled={state.submitting}>
+                {state.submitting ? copy.submitting : copy.savePassword}
+              </Button>
+            </form>
+            <button class="arforge-login__back" type="button" onClick={() => changeView("login")}>
+              {copy.backToLogin}
+            </button>
+          </Match>
+
+          <Match when={state.view === "verify"}>
+            <div class="arforge-login__verification" aria-busy={state.submitting}>
+              <Show when={state.submitting}>
+                <div class="arforge-login__loader" aria-hidden="true" />
+              </Show>
+              <button class="arforge-login__back" type="button" onClick={() => changeView("login")}>
+                {copy.backToLogin}
+              </button>
+            </div>
+          </Match>
+        </Switch>
+
+        <Show when={state.notice}>
+          <p class="arforge-login__message arforge-login__message--success" role="status" aria-live="polite">
+            {state.notice}
+          </p>
+        </Show>
+        <Show when={state.error && state.view === "verify"}>
+          <p class="arforge-login__message arforge-login__message--error" role="alert">
+            {state.error}
+          </p>
+        </Show>
+        <div class="arforge-login__privacy">
+          <span aria-hidden="true">●</span>
+          {props.mode === "users" ? copy.persistentSession : copy.privateSession}
+        </div>
+      </section>
+    </main>
+  )
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@arforge-ai/sdk-next",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "exports": {
+    ".": "./src/index.ts",
+    "./remote": "./src/remote.ts"
+  },
+  "scripts": {
+    "test": "bun test --timeout 5000",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@arforge-ai/client-next": "workspace:*",
+    "@arforge-ai/core": "workspace:*",
+    "@arforge-ai/server": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

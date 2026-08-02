@@ -1,0 +1,137 @@
+[data-sidebar-scrollbar] {
+  --sidebar-scrollbar-gutter-width: 10px;
+  --sidebar-scrollbar-visual-width: 3px;
+  --sidebar-scrollbar-visual-inset: 3.5px;
+  --sidebar-scroll-edge-top-alpha: 1;
+  --sidebar-scroll-edge-bottom-alpha: 1;
+}
+
+@property --sidebar-scroll-edge-top-alpha {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+@property --sidebar-scroll-edge-bottom-alpha {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+[data-sidebar-scrollbar] {
+  overflow-y: auto;
+  scrollbar-color: transparent transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / var(--sidebar-scroll-edge-top-alpha)) 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    rgb(0 0 0 / var(--sidebar-scroll-edge-bottom-alpha)) 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / var(--sidebar-scroll-edge-top-alpha)) 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    rgb(0 0 0 / var(--sidebar-scroll-edge-bottom-alpha)) 100%
+  );
+  transition:
+    --sidebar-scroll-edge-top-alpha 160ms ease-out,
+    --sidebar-scroll-edge-bottom-alpha 160ms ease-out;
+}
+
+[data-sidebar-scrollbar][data-sidebar-scroll-above] {
+  --sidebar-scroll-edge-top-alpha: 0.78;
+}
+
+[data-sidebar-scrollbar][data-sidebar-scroll-below] {
+  --sidebar-scroll-edge-bottom-alpha: 0.78;
+}
+
+[data-sidebar-scrollbar]::-webkit-scrollbar {
+  width: var(--sidebar-scrollbar-gutter-width);
+}
+
+[data-sidebar-scrollbar]::-webkit-scrollbar-track,
+[data-sidebar-scrollbar]::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+[data-sidebar-scrollbar]::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border-inline: var(--sidebar-scrollbar-visual-inset) solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-clip: padding-box;
+  transition: background-color 160ms ease-out;
+}
+
+[data-sidebar-scrollbar]:is(:hover, :focus-within, [data-sidebar-scrollbar-scrolling]) {
+  scrollbar-color: color-mix(in srgb, var(--v2-icon-icon-muted) 52%, transparent) transparent;
+}
+
+[data-sidebar-scrollbar]:is(:hover, :focus-within, [data-sidebar-scrollbar-scrolling])::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--v2-icon-icon-muted) 52%, transparent);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-sidebar-scrollbar]:focus-within:not(:hover):not(:focus-visible):not(:has(:focus-visible)):not(
+      [data-sidebar-scrollbar-scrolling]
+    ) {
+    scrollbar-color: transparent transparent;
+  }
+
+  [data-sidebar-scrollbar]:focus-within:not(:hover):not(:focus-visible):not(:has(:focus-visible)):not(
+      [data-sidebar-scrollbar-scrolling]
+    )::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  [data-sidebar-scrollbar] {
+    scrollbar-gutter: auto;
+  }
+
+  [data-sidebar-scrollbar]:hover:not(:focus-within):not([data-sidebar-scrollbar-scrolling]) {
+    scrollbar-color: transparent transparent;
+  }
+
+  [data-sidebar-scrollbar]:hover:not(:focus-within):not([data-sidebar-scrollbar-scrolling])::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+
+  [data-sidebar-scrollbar]:focus-within:not(:focus-visible):not(:has(:focus-visible)):not(
+      [data-sidebar-scrollbar-scrolling]
+    ) {
+    scrollbar-color: transparent transparent;
+  }
+
+  [data-sidebar-scrollbar]:focus-within:not(:focus-visible):not(:has(:focus-visible)):not(
+      [data-sidebar-scrollbar-scrolling]
+    )::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+}
+
+@media (forced-colors: active) {
+  [data-sidebar-scrollbar] {
+    scrollbar-color: CanvasText transparent !important;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  [data-sidebar-scrollbar]::-webkit-scrollbar-thumb,
+  [data-sidebar-scrollbar]:is(:hover, :focus-within, [data-sidebar-scrollbar-scrolling])::-webkit-scrollbar-thumb {
+    background-color: CanvasText !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-scrollbar],
+  [data-sidebar-scrollbar]::-webkit-scrollbar-thumb {
+    transition: none;
+  }
+}

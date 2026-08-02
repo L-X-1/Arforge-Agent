@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-28",
+  "workspace": "E:\\Arforge-Agent",
+  "status": "executed-recoverable",
+  "purpose": "Retire the frozen Python CLI and Tauri product shell only after parity, database, recovery, and owner-approval gates pass.",
+  "authorization": {
+    "tier2Approved": true,
+    "approvedOption": "B",
+    "approvedAt": "2026-07-28",
+    "acceptedApprovalPhrases": [
+      "批准 Tier 2 方案 A",
+      "批准 Tier 2 方案 B"
+    ],
+    "rule": "Option B is owner-approved. Execution remains gated by every listed precondition, especially the PostgreSQL Workflow Graph migration and reversible backup checks."
+  },
+  "options": {
+    "A": {
+      "name": "旧产品入口最小退役",
+      "recommended": false,
+      "tradeoff": "Removes the duplicate product entry points but deliberately leaves dormant Tauri build and release-support files for a later decision.",
+      "delete": [
+        {
+          "path": "desktop",
+          "type": "directory",
+          "bytes": 111589498,
+          "role": "Frozen React/Tauri desktop product shell"
+        },
+        {
+          "path": "run_cli.py",
+          "type": "file",
+          "bytes": 2505,
+          "role": "Legacy Python product CLI launcher"
+        },
+        {
+          "path": "scripts/run_legacy_tauri.ps1",
+          "type": "file",
+          "bytes": 8380,
+          "role": "Legacy Tauri desktop launcher"
+        },
+        {
+          "path": "bin/install-legacy-python.js",
+          "type": "file",
+          "bytes": 2176,
+          "role": "Legacy npm-to-Python environment installer"
+        },
+        {
+          "path": "legacy/npm-launcher",
+          "type": "directory",
+          "bytes": 436,
+          "role": "Pre-unified npm launcher manifest"
+        }
+      ]
+    },
+    "B": {
+      "name": "旧入口与 Tauri 专属支撑完整退役",
+      "recommended": true,
+      "tradeoff": "Produces the cleanest single-product tree. Generic release-audit capabilities are retained, but Tauri-only packaging and evidence scripts are removed because release work is outside the current objective.",
+      "includes": "A",
+      "additionalDelete": [
+        {
+          "path": "scripts/build_desktop_sidecar.py",
+          "type": "file",
+          "bytes": 7572,
+          "role": "Builds the retired Tauri Python sidecar"
+        },
+        {
+          "path": "scripts/verify_desktop_installer.ps1",
+          "type": "file",
+          "role": "Verifies the retired Tauri MSI bundle"
+        },
+        {
+          "path": "scripts/verify_desktop_nsis.ps1",
+          "type": "file",
+          "role": "Verifies the retired Tauri NSIS bundle"
+        },
+        {
+          "path": "scripts/verify_desktop_signing_readiness.ps1",
+          "type": "file",
+          "bytes": 4269,
+          "role": "Reads sidecars from desktop/src-tauri"
+        },
+        {
+          "path": "scripts/verify_desktop_upgrade.ps1",
+          "type": "file",
+          "role": "Exercises the retired Tauri MSI upgrade path"
+        },
+        {
+          "path": "scripts/write_desktop_accessibility_evidence.ps1",
+          "type": "file",
+          "role": "Writes evidence for the retired signed MSI candidate"
+        },
+        {
+          "path": "scripts/write_desktop_signed_candidate_evidence.ps1",
+          "type": "file",
+          "role": "Writes evidence for the retired signed Tauri candidate"
+        },
+        {
+          "path": "tests/test_desktop_release_contract.py",
+          "type": "file",
+          "role": "Asserts the retired Tauri/Cargo/WiX contract"
+        },
+        {
+          "path": "tests/test_desktop_sidecar_builder.py",
+          "type": "file",
+          "role": "Tests the retired Tauri sidecar builder"
+        }
+      ],
+      "reviewSeparately": [
+        {
+          "path": "docs/PROJECT_SUMMARY_AND_ROADMAP_2026-06-19.md",
+          "reason": "Historical document contains damaged encoding and retired Tauri build history; not included in automatic deletion."
+        },
+        {
+          "path": "docs/SHIP_GATE_REPORT_2026-06-18.md",
+          "reason": "Historical Tauri release report; not included in automatic deletion."
+        },
+        {
+          "path": "docs/RELEASE_RUNBOOK.md",
+          "reason": "Contains Tauri-specific steps but may be rewritten for a future Electron release; not included in automatic deletion."
+        }
+      ]
+    }
+  },
+  "modifyAfterApproval": [
+    {
+      "path": "package.json",
+      "change": "Remove legacy:python-cli and legacy:tauri-desktop only."
+    },
+    {
+      "path": ".gitignore",
+      "change": "Remove retired root desktop/src-tauri output rules; retain packages/desktop rules."
+    },
+    {
+      "path": "README.md",
+      "change": "Remove compatibility-entry instructions and describe the unified entry points only."
+    },
+    {
+      "path": "README.cn.md",
+      "change": "Remove compatibility-entry instructions and describe the unified entry points only."
+    },
+    {
+      "path": "docs/USER_GUIDE.md",
+      "change": "Remove the compatibility-entry section."
+    },
+    {
+      "path": "FROZEN_AFTER_MERGE.md",
+      "change": "Record the approved retirement result instead of describing pending deletion."
+    },
+    {
+      "path": "specs/unified-architecture.md",
+      "change": "Remove the frozen Tauri node from the target tree and record the final single-entry architecture."
+    },
+    {
+      "path": "specs/fusion-worklist.md",
+      "change": "Mark old-entry retirement complete only after all post-delete gates pass."
+    },
+    {
+      "path": "specs/arforge-fusion-verification.md",
+      "change": "Replace pending-retirement wording with fresh post-delete evidence."
+    },
+    {
+      "path": "specs/arforge-agent-migration-matrix.md",
+      "change": "Record the final retirement decision and keep the 191-method ownership evidence."
+    },
+    {
+      "path": "script/generate-brand-assets.py",
+      "change": "Stop writing icons into retired desktop/src-tauri; retain current Electron icon generation."
+    },
+    {
+      "path": "tests/test_brand_policy.py",
+      "change": "Stop scanning the deleted root desktop source; retain current product-source scans."
+    },
+    {
+      "path": "tests/test_cli_contract.py",
+      "change": "Replace the legacy run_cli.py launcher assertion with the canonical scripts/run_cli.ps1 validation."
+    },
+    {
+      "path": "tests/test_m6_packaging.py",
+      "change": "Remove assertions that require the legacy Python CLI package script."
+    }
+  ],
+  "explicitlyRetain": [
+    "arforge",
+    "packages/agent-python",
+    "packages/app",
+    "packages/arforge",
+    "packages/core",
+    "packages/desktop",
+    "run_desktop.py",
+    "scripts/run_desktop.ps1",
+    "scripts/run_cli.ps1",
+    "scripts/sign.ps1",
+    "scripts/release_artifacts.py",
+    "node_modules",
+    ".venv",
+    "scripts/configure_private_postgres.ps1",
+    "scripts/postgres_private_backup.py",
+    "scripts/postgres_restore_drill.py"
+  ],
+  "preconditions": [
+    "The owner approves exactly option A or option B.",
+    "All listed paths resolve inside E:\\Arforge-Agent and no target is a reparse point escaping the workspace.",
+    "The 191-method ownership audit passes with 61 Python capability methods, 130 TypeScript-native methods, and all 58 semantic replacements covered by source-level UI gates.",
+    "Workflow Graph PostgreSQL migration is applied and verified, or an owner-approved database exception is recorded.",
+    "A reversible profile/export archive and a verified PostgreSQL backup exist before retirement.",
+    "The current Electron Desktop, TypeScript CLI, and Python capability service are not running from any target scheduled for deletion."
+  ],
+  "execution": {
+    "method": "Move exact approved paths to the Windows Recycle Bin after resolving and validating each absolute path.",
+    "partialFailure": "Stop immediately, report the exact path that failed, and do not continue with documentation changes.",
+    "permanentDeletion": false
+  },
+  "executionResult": {
+    "executedAt": "2026-07-28",
+    "approvedOption": "B",
+    "targetsRecycled": 14,
+    "manifest": "artifacts/tier2-retirement/pre-delete-manifest-20260728T081631Z.json",
+    "permanentlyDeleted": false
+  },
+  "postconditions": [
+    "Every approved deletion target is absent and every explicitly retained target is present.",
+    "No active command, manifest, test, or user guide references a deleted entry point.",
+    "fusion:verify passes.",
+    "The full App, Core, and Python regression suites pass with zero failures.",
+    "Electron Desktop cold-starts and accepts native mouse and keyboard interaction.",
+    "CLI model selection and one real model response succeed.",
+    "CLI and Desktop observe the same PostgreSQL-backed session.",
+    "PostgreSQL backup and isolated restore comparison report zero row differences.",
+    "Brand, source-path, reparse-point, first-party license, and private-package audits remain clean."
+  ]
+}

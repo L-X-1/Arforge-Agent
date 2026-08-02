@@ -1,0 +1,57 @@
+name: Formal model evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Model-backed suite to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - formal
+          - formal-multistack
+      token_budget:
+        description: Hard token budget per task
+        required: true
+        default: "300000"
+        type: string
+      run_staging:
+        description: Run real staging E2E plus 100-request/15-minute load validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-eval-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  formal:
+    if: inputs.suite == 'all' || inputs.suite == 'formal'
+    uses: ./.github/workflows/reusable-formal-eval.yml
+    with:
+      suite: formal
+      token_budget: ${{ inputs.token_budget }}
+    secrets: inherit
+
+  multistack:
+    if: inputs.suite == 'all' || inputs.suite == 'formal-multistack'
+    uses: ./.github/workflows/reusable-formal-eval.yml
+    with:
+      suite: formal-multistack
+      token_budget: ${{ inputs.token_budget }}
+    secrets: inherit
+
+  staging:
+    if: inputs.run_staging && (inputs.suite == 'all' || inputs.suite == 'formal')
+    needs: formal
+    uses: ./.github/workflows/reusable-staging-validation.yml
+    with:
+      formal_artifact_name: formal-evidence-${{ github.run_id }}
+      token_budget: ${{ inputs.token_budget }}
+    secrets: inherit

@@ -1,0 +1,13 @@
+{
+  "id": "presentations",
+  "name": "Presentations",
+  "description": "Create and inspect portable PPTX presentation artifacts.",
+  "version": "1.1.0",
+  "tools": ["write_pptx", "read_office_document", "open_file"],
+  "instructions": [
+    "Use write_pptx with a non-empty JSON array of slide objects containing title and body fields.",
+    "Keep one clear idea per slide and put separate body points on separate lines.",
+    "After creation, call read_office_document and verify slide order, every title, important figures, and final recommendations.",
+    "This capability creates clean text-based decks. Do not claim template fidelity, charts, animations, or existing-deck edits unless separately verified."
+  ]
+}

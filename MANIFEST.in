@@ -1,0 +1,42 @@
+# Arforge Agent packaging manifest
+
+include config.py
+include main.py
+include dogfood.py
+exclude verify_modules.py
+include pyproject.toml
+include config.py
+include README.md
+include CHANGELOG.md
+include package.json
+include install.bat
+include arforge.cmd
+
+recursive-include bin *.js
+recursive-include arforge *.py
+recursive-include arforge/acceptance *.json
+recursive-include arforge/acceptance/projects *
+recursive-include arforge/bundled_skills *
+prune .recovery_pyc
+prune arforge_corrupt_backup_*
+prune build
+prune __pycache__
+prune arforge/__pycache__
+prune arforge/**/__pycache__
+prune .arforge
+prune data
+prune .pytest_cache
+prune .ruff_cache
+prune workspace
+
+global-exclude __pycache__/*.pyc
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude .DS_Store
+global-exclude *.db
+global-exclude *.sqlite
+global-exclude *LICENSE*
+global-exclude *LICENCE*
+global-exclude *COPYING*
+global-exclude *NOTICE*
+global-exclude upstream.json

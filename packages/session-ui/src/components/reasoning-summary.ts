@@ -1,0 +1,1 @@
+export const REASONING_SUMMARY_DEFAULT_OPEN = false

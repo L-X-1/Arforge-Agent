@@ -1,0 +1,63 @@
+[data-component="icon-button"][data-sidebar-add-project] {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+[data-component="icon-button"][data-sidebar-utility] {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+[data-component="icon-button"][data-sidebar-add-project] [data-slot="icon-svg"] {
+  width: 18px;
+  height: 18px;
+  color: var(--v2-icon-icon-muted);
+}
+
+[data-component="icon-button"][data-sidebar-utility] [data-slot="icon-svg"] {
+  width: 18px;
+  height: 18px;
+  color: var(--v2-icon-icon-muted);
+}
+
+[data-component="icon-button"][data-sidebar-add-project]:is(:hover, :focus-visible):not(:disabled) {
+  background-color: color-mix(in srgb, var(--v2-background-bg-layer-02) 6%, transparent);
+}
+
+[data-component="icon-button"][data-sidebar-utility]:is(:hover, :focus-visible):not(:disabled) {
+  background-color: color-mix(in srgb, var(--v2-background-bg-layer-02) 6%, transparent);
+}
+
+[data-component="icon-button"][data-sidebar-add-project]:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--v2-background-bg-layer-02) 12%, transparent);
+}
+
+[data-component="icon-button"][data-sidebar-utility]:is(:active, [data-expanded]):not(:disabled) {
+  background-color: color-mix(in srgb, var(--v2-background-bg-layer-02) 12%, transparent);
+}
+
+[data-component="dropdown-menu-content"][data-sidebar-utility-menu] {
+  min-width: 180px;
+}
+
+[data-component="dropdown-menu-content"][data-sidebar-utility-menu] [data-slot="dropdown-menu-item"] {
+  min-height: 36px;
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  [data-component="icon-button"][data-sidebar-add-project],
+  [data-component="icon-button"][data-sidebar-utility] {
+    width: 44px;
+    height: 44px;
+  }
+
+  [data-component="dropdown-menu-content"][data-sidebar-utility-menu] [data-slot="dropdown-menu-item"] {
+    min-height: 44px;
+  }
+}

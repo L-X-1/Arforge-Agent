@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "assets": {
+    "clojure/highlights.scm": {
+      "bytes": 13722,
+      "sha256": "73c7916d54213dcd734de3ad5d890ddea08237074b65120472c86a733c032c76"
+    },
+    "clojure/tree-sitter-clojure.wasm": {
+      "bytes": 91957,
+      "sha256": "90f8866b74d04e1643ed73cce25720c732df2aaa38b45da9dcc773bae8181c27"
+    },
+    "vue/html-tags-highlights.scm": {
+      "bytes": 1752,
+      "sha256": "2b64708e3cea1527adca4841247e28b90229c367722471c1d250e8925d1cc6a4"
+    },
+    "vue/tree-sitter-vue.wasm": {
+      "bytes": 30682,
+      "sha256": "94d9292677797c4d0299009885dfca5453513f44b79405efbf9d7dd3e1a1b5a2"
+    },
+    "vue/vue-highlights.scm": {
+      "bytes": 763,
+      "sha256": "43cae0c256b1236a051e856eb4dec18a157d70a00e9d41304549b858c534cefc"
+    }
+  }
+}

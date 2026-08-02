@@ -1,0 +1,6 @@
+{
+  "id": "template-creator",
+  "name": "Template Creator",
+  "description": "Create or update reusable personal Arforge artifact-template skill.",
+  "version": "1.0.0"
+}

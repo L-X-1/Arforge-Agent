@@ -1,0 +1,92 @@
+diff --git a/dist/dev.cjs b/dist/dev.cjs
+--- a/dist/dev.cjs
++++ b/dist/dev.cjs
+@@ -764,6 +764,8 @@ function runComputation(node, value, time) {
+     if (node.updatedAt != null && "observers" in node) {
+       writeSignal(node, nextValue, true);
+     } else if (Transition && Transition.running && node.pure) {
++      // On first computation during transition, also set committed value #2046
++      if (!Transition.sources.has(node)) node.value = nextValue;
+       Transition.sources.add(node);
+       node.tValue = nextValue;
+     } else node.value = nextValue;
+@@ -995,8 +997,9 @@ function cleanNode(node) {
+   if (Transition && Transition.running && node.pure) {
+     reset(node, true);
+   } else if (node.owned) {
+-    for (i = node.owned.length - 1; i >= 0; i--) cleanNode(node.owned[i]);
++    const owned = node.owned;
+     node.owned = null;
++    for (i = owned.length - 1; i >= 0; i--) cleanNode(owned[i]);
+   }
+   if (node.cleanups) {
+     for (i = node.cleanups.length - 1; i >= 0; i--) node.cleanups[i]();
+diff --git a/dist/dev.js b/dist/dev.js
+--- a/dist/dev.js
++++ b/dist/dev.js
+@@ -762,6 +762,8 @@ function runComputation(node, value, time) {
+     if (node.updatedAt != null && "observers" in node) {
+       writeSignal(node, nextValue, true);
+     } else if (Transition && Transition.running && node.pure) {
++      // On first computation during transition, also set committed value #2046
++      if (!Transition.sources.has(node)) node.value = nextValue;
+       Transition.sources.add(node);
+       node.tValue = nextValue;
+     } else node.value = nextValue;
+@@ -993,8 +995,9 @@ function cleanNode(node) {
+   if (Transition && Transition.running && node.pure) {
+     reset(node, true);
+   } else if (node.owned) {
+-    for (i = node.owned.length - 1; i >= 0; i--) cleanNode(node.owned[i]);
++    const owned = node.owned;
+     node.owned = null;
++    for (i = owned.length - 1; i >= 0; i--) cleanNode(owned[i]);
+   }
+   if (node.cleanups) {
+     for (i = node.cleanups.length - 1; i >= 0; i--) node.cleanups[i]();
+diff --git a/dist/solid.cjs b/dist/solid.cjs
+--- a/dist/solid.cjs
++++ b/dist/solid.cjs
+@@ -717,6 +717,8 @@ function runComputation(node, value, time) {
+     if (node.updatedAt != null && "observers" in node) {
+       writeSignal(node, nextValue, true);
+     } else if (Transition && Transition.running && node.pure) {
++      // On first computation during transition, also set committed value #2046
++      if (!Transition.sources.has(node)) node.value = nextValue;
+       Transition.sources.add(node);
+       node.tValue = nextValue;
+     } else node.value = nextValue;
+@@ -946,8 +948,9 @@ function cleanNode(node) {
+   if (Transition && Transition.running && node.pure) {
+     reset(node, true);
+   } else if (node.owned) {
+-    for (i = node.owned.length - 1; i >= 0; i--) cleanNode(node.owned[i]);
++    const owned = node.owned;
+     node.owned = null;
++    for (i = owned.length - 1; i >= 0; i--) cleanNode(owned[i]);
+   }
+   if (node.cleanups) {
+     for (i = node.cleanups.length - 1; i >= 0; i--) node.cleanups[i]();
+diff --git a/dist/solid.js b/dist/solid.js
+--- a/dist/solid.js
++++ b/dist/solid.js
+@@ -715,6 +715,8 @@ function runComputation(node, value, time) {
+     if (node.updatedAt != null && "observers" in node) {
+       writeSignal(node, nextValue, true);
+     } else if (Transition && Transition.running && node.pure) {
++      // On first computation during transition, also set committed value #2046
++      if (!Transition.sources.has(node)) node.value = nextValue;
+       Transition.sources.add(node);
+       node.tValue = nextValue;
+     } else node.value = nextValue;
+@@ -944,8 +946,9 @@ function cleanNode(node) {
+   if (Transition && Transition.running && node.pure) {
+     reset(node, true);
+   } else if (node.owned) {
+-    for (i = node.owned.length - 1; i >= 0; i--) cleanNode(node.owned[i]);
++    const owned = node.owned;
+     node.owned = null;
++    for (i = owned.length - 1; i >= 0; i--) cleanNode(owned[i]);
+   }
+   if (node.cleanups) {
+     for (i = node.cleanups.length - 1; i >= 0; i--) node.cleanups[i]();

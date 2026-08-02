@@ -1,0 +1,27 @@
+<idea-plugin>
+    <id>dev.arforge.jetbrains</id>
+    <name>Arforge</name>
+    <vendor>Arforge</vendor>
+    <description><![CDATA[
+        Arforge coding agent integration for JetBrains IDEs. It shares the active
+        file, selection, cursor and IDE diagnostics with the local Arforge Bridge,
+        preserves sessions across IDE restarts and exposes working-tree review.
+    ]]></description>
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                id="Arforge"
+                anchor="right"
+                factoryClass="dev.arforge.jetbrains.ArforgeToolWindowFactory"
+                canCloseContents="false"/>
+    </extensions>
+
+    <actions>
+        <action
+                id="Arforge.OpenToolWindow"
+                class="dev.arforge.jetbrains.OpenArforgeAction"
+                text="Arforge: 打开对话"
+                description="打开 Arforge 编码智能体"/>
+    </actions>
+</idea-plugin>

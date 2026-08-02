@@ -1,0 +1,677 @@
+{
+  "schema_version": 1,
+  "required_phases": [
+    "clean_build",
+    "unit_tests",
+    "integration_tests",
+    "negative_path",
+    "release_artifact",
+    "repeatability"
+  ],
+  "projects": [
+    {
+      "id": "python-service",
+      "template": "python_service",
+      "capabilities": [
+        "lang-python",
+        "framework-fastapi",
+        "db-sqlite",
+        "tool-pip",
+        "test-pytest"
+      ],
+      "minimum_files": 7,
+      "artifact_glob": "dist/*.whl",
+      "environment": {
+        "PYTHONPATH": "src"
+      },
+      "phases": {
+        "clean_build": [
+          ["{python}", "-m", "compileall", "-q", "src"]
+        ],
+        "unit_tests": [
+          ["{python}", "-m", "pytest", "tests/unit", "-q"]
+        ],
+        "integration_tests": [
+          ["{python}", "-m", "pytest", "tests/integration", "-q"]
+        ],
+        "negative_path": [
+          ["{python}", "-m", "pytest", "tests/negative", "-q"]
+        ],
+        "release_artifact": [
+          ["{python}", "-m", "pip", "wheel", ".", "--no-deps", "--no-build-isolation", "-w", "dist"]
+        ],
+        "repeatability": [
+          ["{python}", "-m", "pytest", "-q"],
+          ["{python}", "-m", "pytest", "-q"]
+        ]
+      }
+    },
+    {
+      "id": "node-web-platform",
+      "template": "node_web_platform",
+      "capabilities": [
+        "lang-javascript",
+        "lang-typescript",
+        "framework-node",
+        "framework-express",
+        "framework-vue",
+        "framework-react",
+        "tool-npm",
+        "tool-pnpm",
+        "test-jest"
+      ],
+      "minimum_files": 8,
+      "artifact_glob": "dist/*.tgz",
+      "environment": {
+        "CI": "1"
+      },
+      "phases": {
+        "clean_build": [
+          ["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"],
+          ["npm", "run", "build", "--silent"]
+        ],
+        "unit_tests": [
+          ["npm", "test", "--", "--runInBand", "tests/unit"]
+        ],
+        "integration_tests": [
+          ["npm", "test", "--", "--runInBand", "tests/integration"]
+        ],
+        "negative_path": [
+          ["npm", "test", "--", "--runInBand", "tests/negative"]
+        ],
+        "release_artifact": [
+          ["node", "-e", "require('fs').mkdirSync('dist',{recursive:true})"],
+          ["npm", "pack", "--pack-destination", "dist"]
+        ],
+        "repeatability": [
+          ["npm", "test", "--", "--runInBand"],
+          ["npm", "test", "--", "--runInBand"]
+        ]
+      }
+    },
+    {
+      "id": "spring-service",
+      "template": "spring_service",
+      "capabilities": [
+        "lang-java",
+        "framework-spring",
+        "tool-maven",
+        "test-junit"
+      ],
+      "minimum_files": 8,
+      "artifact_glob": "target/*.jar",
+      "environment": {
+        "MAVEN_OPTS": "-Dfile.encoding=UTF-8"
+      },
+      "phases": {
+        "clean_build": [
+          ["mvn", "-q", "-DskipTests", "clean", "package"]
+        ],
+        "unit_tests": [
+          ["mvn", "-q", "-Dtest=WorkServiceTest", "test"]
+        ],
+        "integration_tests": [
+          ["mvn", "-q", "-Dtest=WorkControllerIntegrationTest", "test"]
+        ],
+        "negative_path": [
+          ["mvn", "-q", "-Dtest=WorkControllerNegativeTest", "test"]
+        ],
+        "release_artifact": [
+          ["mvn", "-q", "-DskipTests", "package"]
+        ],
+        "repeatability": [
+          ["mvn", "-q", "test"],
+          ["mvn", "-q", "test"]
+        ]
+      }
+    },
+    {
+      "id": "kotlin-gradle-service",
+      "template": "kotlin_gradle_service",
+      "capabilities": [
+        "lang-kotlin",
+        "tool-gradle",
+        "test-junit"
+      ],
+      "minimum_files": 6,
+      "artifact_glob": "build/libs/*.jar",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "clean", "classes", "--no-daemon"]
+        ],
+        "unit_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "test", "--tests", "*PolicyUnitTest", "--no-daemon"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "test", "--tests", "*RepositoryIntegrationTest", "--no-daemon"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "test", "--tests", "*PolicyNegativeTest", "--no-daemon"]
+        ],
+        "release_artifact": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "jar", "--no-daemon"]
+        ],
+        "repeatability": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "test", "--no-daemon"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-gradle-cache:/home/gradle/.gradle", "-w", "/workspace", "gradle:8.14-jdk21-alpine", "gradle", "test", "--no-daemon"]
+        ]
+      }
+    },
+    {
+      "id": "cmake-native-library",
+      "template": "cmake_native_library",
+      "capabilities": [
+        "lang-c",
+        "lang-cpp",
+        "tool-cmake"
+      ],
+      "minimum_files": 7,
+      "artifact_glob": "build/*.zip",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["{python}", "-m", "venv", ".venv"],
+          ["{venv_python}", "-m", "pip", "install", "--disable-pip-version-check", "cmake==4.0.3", "ninja==1.11.1.4"],
+          ["{venv_cmake}", "-S", ".", "-B", "build", "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM={venv_ninja}", "-DCMAKE_BUILD_TYPE=Release"],
+          ["{venv_cmake}", "--build", "build"]
+        ],
+        "unit_tests": [
+          ["{venv_ctest}", "--test-dir", "build", "-L", "unit", "--output-on-failure"]
+        ],
+        "integration_tests": [
+          ["{venv_ctest}", "--test-dir", "build", "-L", "integration", "--output-on-failure"]
+        ],
+        "negative_path": [
+          ["{venv_ctest}", "--test-dir", "build", "-L", "negative", "--output-on-failure"]
+        ],
+        "release_artifact": [
+          ["{venv_cmake}", "--build", "build", "--target", "package"]
+        ],
+        "repeatability": [
+          ["{venv_ctest}", "--test-dir", "build", "--output-on-failure"],
+          ["{venv_ctest}", "--test-dir", "build", "--output-on-failure"]
+        ]
+      }
+    },
+    {
+      "id": "rust-cargo-service",
+      "template": "rust_cargo_service",
+      "capabilities": [
+        "lang-rust",
+        "tool-cargo"
+      ],
+      "minimum_files": 5,
+      "artifact_glob": "target/package/*.crate",
+      "environment": {
+        "CARGO_TERM_COLOR": "never"
+      },
+      "phases": {
+        "clean_build": [
+          ["cargo", "clean"],
+          ["cargo", "build", "--release"]
+        ],
+        "unit_tests": [
+          ["cargo", "test", "--lib"]
+        ],
+        "integration_tests": [
+          ["cargo", "test", "--test", "integration"]
+        ],
+        "negative_path": [
+          ["cargo", "test", "--test", "negative"]
+        ],
+        "release_artifact": [
+          ["cargo", "package", "--allow-dirty"]
+        ],
+        "repeatability": [
+          ["cargo", "test"],
+          ["cargo", "test"]
+        ]
+      }
+    },
+    {
+      "id": "go-modules-service",
+      "template": "go_modules_service",
+      "capabilities": [
+        "lang-go",
+        "tool-go-mod"
+      ],
+      "minimum_files": 7,
+      "artifact_glob": "dist/*.tgz",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "mod", "verify"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "build", "./..."]
+        ],
+        "unit_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "test", "./internal/policy"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "test", "./integration"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "test", "./negative"]
+        ],
+        "release_artifact": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "sh", "-c", "mkdir -p dist && go build -o dist/acceptance ./cmd/acceptance && tar -czf dist/arforge-go.tgz -C dist acceptance"]
+        ],
+        "repeatability": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "test", "./..."],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-go-mod:/go/pkg/mod", "-w", "/workspace", "golang:1.24-alpine", "go", "test", "./..."]
+        ]
+      }
+    },
+    {
+      "id": "dotnet-service",
+      "template": "dotnet_service",
+      "capabilities": [
+        "lang-csharp"
+      ],
+      "minimum_files": 5,
+      "artifact_glob": "dist/*.dll",
+      "environment": {
+        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+        "DOTNET_NOLOGO": "1"
+      },
+      "phases": {
+        "clean_build": [
+          ["dotnet", "clean"],
+          ["dotnet", "build", "-c", "Release"]
+        ],
+        "unit_tests": [
+          ["dotnet", "run", "-c", "Release", "--no-build", "--", "unit"]
+        ],
+        "integration_tests": [
+          ["dotnet", "run", "-c", "Release", "--no-build", "--", "integration"]
+        ],
+        "negative_path": [
+          ["dotnet", "run", "-c", "Release", "--no-build", "--", "negative"]
+        ],
+        "release_artifact": [
+          ["dotnet", "publish", "-c", "Release", "-o", "dist"]
+        ],
+        "repeatability": [
+          ["dotnet", "run", "-c", "Release", "--no-build", "--", "all"],
+          ["dotnet", "run", "-c", "Release", "--no-build", "--", "all"]
+        ]
+      }
+    },
+    {
+      "id": "php-ruby-services",
+      "template": "php_ruby_services",
+      "capabilities": [
+        "lang-php",
+        "lang-ruby"
+      ],
+      "minimum_files": 6,
+      "artifact_glob": "dist/*.tgz",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "-l", "php/src/Repository.php"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "-l", "php/tests/acceptance.php"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "-c", "ruby/lib/repository.rb"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "-c", "ruby/test/acceptance.rb"]
+        ],
+        "unit_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "php/tests/acceptance.php", "unit"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "ruby/test/acceptance.rb", "unit"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "php/tests/acceptance.php", "integration"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "ruby/test/acceptance.rb", "integration"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "php/tests/acceptance.php", "negative"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "ruby/test/acceptance.rb", "negative"]
+        ],
+        "release_artifact": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "alpine:3.22", "sh", "-c", "mkdir -p dist && tar -czf dist/arforge-scripting.tgz php ruby"]
+        ],
+        "repeatability": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "php/tests/acceptance.php", "all"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "ruby/test/acceptance.rb", "all"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "php:8.4-cli-alpine", "php", "php/tests/acceptance.php", "all"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "ruby:3.4-alpine", "ruby", "ruby/test/acceptance.rb", "all"]
+        ]
+      }
+    },
+    {
+      "id": "swift-package-service",
+      "template": "swift_package_service",
+      "capabilities": [
+        "lang-swift"
+      ],
+      "minimum_files": 6,
+      "artifact_glob": ".build/*/release/acceptance-cli",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "package", "clean"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "build", "-c", "release"]
+        ],
+        "unit_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "test", "--filter", "PolicyUnitTests"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "test", "--filter", "RepositoryIntegrationTests"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "test", "--filter", "PolicyNegativeTests"]
+        ],
+        "release_artifact": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "build", "-c", "release"]
+        ],
+        "repeatability": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "test"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-w", "/workspace", "swift:6.1-noble", "swift", "test"]
+        ]
+      }
+    },
+    {
+      "id": "sql-shell-migrations",
+      "template": "sql_shell_migrations",
+      "capabilities": [
+        "lang-sql",
+        "lang-shell"
+      ],
+      "minimum_files": 6,
+      "artifact_glob": "dist/*.zip",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "build"]
+        ],
+        "unit_tests": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "unit"]
+        ],
+        "integration_tests": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "integration"]
+        ],
+        "negative_path": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "negative"]
+        ],
+        "release_artifact": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "package"]
+        ],
+        "repeatability": [
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "all"],
+          ["powershell", "-NoProfile", "-File", "scripts/acceptance.ps1", "all"]
+        ]
+      }
+    },
+    {
+      "id": "python-web-platform",
+      "template": "python_web_platform",
+      "capabilities": [
+        "framework-django",
+        "framework-flask",
+        "tool-poetry",
+        "test-selenium"
+      ],
+      "minimum_files": 8,
+      "artifact_glob": "dist/*.whl",
+      "environment": {
+        "PYTHONPATH": "src"
+      },
+      "phases": {
+        "clean_build": [
+          ["{python}", "-m", "venv", ".venv"],
+          ["{venv_python}", "-m", "pip", "install", "--disable-pip-version-check", "poetry==2.1.3"],
+          ["{venv_poetry}", "install", "--no-interaction"],
+          ["{venv_python}", "-m", "compileall", "-q", "src"]
+        ],
+        "unit_tests": [
+          ["{venv_python}", "-m", "pytest", "tests/unit", "-q"]
+        ],
+        "integration_tests": [
+          ["{venv_python}", "-m", "pytest", "tests/integration", "-q"]
+        ],
+        "negative_path": [
+          ["{venv_python}", "-m", "pytest", "tests/negative", "-q"]
+        ],
+        "release_artifact": [
+          ["{venv_poetry}", "build", "--format", "wheel"]
+        ],
+        "repeatability": [
+          ["{venv_python}", "-m", "pytest", "-q"],
+          ["{venv_python}", "-m", "pytest", "-q"]
+        ]
+      }
+    },
+    {
+      "id": "angular-browser-quality",
+      "template": "angular_browser_quality",
+      "capabilities": [
+        "framework-angular",
+        "test-playwright",
+        "test-cypress"
+      ],
+      "minimum_files": 10,
+      "artifact_glob": "release/*.tgz",
+      "environment": {
+        "CI": "1"
+      },
+      "phases": {
+        "clean_build": [
+          ["npm", "install", "--no-audit", "--no-fund"],
+          ["npm", "run", "build", "--silent"]
+        ],
+        "unit_tests": [
+          ["npm", "run", "test:unit", "--silent"]
+        ],
+        "integration_tests": [
+          ["npm", "run", "test:playwright", "--silent"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/e2e", "-w", "/e2e", "--entrypoint", "sh", "cypress/included:14.5.4", "-c", "node server.cjs & server=$!; cypress run --browser electron; result=$?; kill $server; exit $result"]
+        ],
+        "release_artifact": [
+          ["node", "-e", "require('fs').mkdirSync('release',{recursive:true})"],
+          ["npm", "pack", "--pack-destination", "release"]
+        ],
+        "repeatability": [
+          ["npm", "run", "test:unit", "--silent"],
+          ["npm", "run", "test:playwright", "--silent"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/e2e", "-w", "/e2e", "--entrypoint", "sh", "cypress/included:14.5.4", "-c", "node server.cjs & server=$!; cypress run --browser electron; result=$?; kill $server; exit $result"],
+          ["npm", "run", "test:unit", "--silent"],
+          ["npm", "run", "test:playwright", "--silent"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/e2e", "-w", "/e2e", "--entrypoint", "sh", "cypress/included:14.5.4", "-c", "node server.cjs & server=$!; cypress run --browser electron; result=$?; kill $server; exit $result"]
+        ]
+      }
+    },
+    {
+      "id": "electron-desktop",
+      "template": "electron_desktop",
+      "capabilities": [
+        "framework-electron"
+      ],
+      "minimum_files": 7,
+      "artifact_glob": "dist/*.zip",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["{python}", "prepare.py"],
+          ["node", "--check", "checks.cjs"],
+          ["node", "--check", "main.cjs"]
+        ],
+        "unit_tests": [
+          ["node", "verify.cjs", "unit"]
+        ],
+        "integration_tests": [
+          ["node", "verify.cjs", "integration"]
+        ],
+        "negative_path": [
+          ["node", "verify.cjs", "negative"]
+        ],
+        "release_artifact": [
+          ["{python}", "package.py"]
+        ],
+        "repeatability": [
+          ["node", "verify.cjs", "all"],
+          ["node", "verify.cjs", "all"]
+        ]
+      }
+    },
+    {
+      "id": "tauri-desktop",
+      "template": "tauri_desktop",
+      "capabilities": [
+        "framework-tauri"
+      ],
+      "minimum_files": 8,
+      "artifact_glob": "target/release/tauri-project-acceptance.exe",
+      "environment": {
+        "CARGO_TERM_COLOR": "never"
+      },
+      "phases": {
+        "clean_build": [
+          ["{python}", "prepare.py"],
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "clean"],
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "check"]
+        ],
+        "unit_tests": [
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "test", "--lib", "unit_policy"]
+        ],
+        "integration_tests": [
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "test", "--test", "tauri_integration"]
+        ],
+        "negative_path": [
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "test", "--lib", "negative_policy"]
+        ],
+        "release_artifact": [
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "build", "--release"]
+        ],
+        "repeatability": [
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "test"],
+          ["cmd", "/d", "/c", "scripts\\cargo-msvc.cmd", "test"]
+        ]
+      }
+    },
+    {
+      "id": "flutter-application",
+      "template": "flutter_application",
+      "capabilities": [
+        "framework-flutter"
+      ],
+      "minimum_files": 6,
+      "artifact_glob": "build/web/index.html",
+      "environment": {},
+      "phases": {
+        "clean_build": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "pub", "get"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "analyze"]
+        ],
+        "unit_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "test", "test/policy_test.dart"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "test", "test/widget_integration_test.dart"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "test", "test/negative_test.dart"]
+        ],
+        "release_artifact": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "build", "web", "--release"]
+        ],
+        "repeatability": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "test"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/workspace", "-v", "arforge-project-flutter-pub:/root/.pub-cache", "-w", "/workspace", "ghcr.io/cirruslabs/flutter:3.32.8", "flutter", "test"]
+        ]
+      }
+    },
+    {
+      "id": "database-platform",
+      "template": "database_platform",
+      "capabilities": [
+        "db-mysql",
+        "db-postgresql",
+        "db-redis",
+        "db-mongodb",
+        "db-oracle",
+        "db-vector"
+      ],
+      "minimum_files": 9,
+      "artifact_glob": "dist/*.zip",
+      "environment": {
+        "PYTHONPATH": "."
+      },
+      "phases": {
+        "clean_build": [
+          ["{python}", "-m", "compileall", "-q", "."],
+          ["{python}", "validate_migrations.py"]
+        ],
+        "unit_tests": [
+          ["{python}", "-m", "pytest", "tests/unit", "-q"]
+        ],
+        "integration_tests": [
+          ["docker", "run", "--rm", "-v", "{workspace}:/work", "-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes", "-e", "MYSQL_INITDB_SKIP_TZINFO=1", "--entrypoint", "bash", "mysql:8.4", "-lc", "docker-entrypoint.sh mysqld --skip-networking >/tmp/mysql.log 2>&1 & pid=$!; for i in {1..60}; do grep -q 'MySQL init process done' /tmp/mysql.log && break; sleep 1; done; for i in {1..60}; do mysqladmin ping --silent && break; sleep 1; done; mysql -uroot < /work/migrations/mysql.sql; rc=$?; mysqladmin -uroot shutdown; for i in {1..30}; do kill -0 $pid 2>/dev/null || exit $rc; sleep 1; done; kill -KILL $pid; exit $rc"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/work", "-e", "POSTGRES_PASSWORD=acceptance", "--entrypoint", "bash", "postgres:17-alpine", "-lc", "docker-entrypoint.sh postgres >/tmp/postgres.log 2>&1 & pid=$!; for i in $(seq 1 60); do pg_isready -U postgres && break; sleep 1; done; psql -v ON_ERROR_STOP=1 -U postgres -f /work/migrations/postgresql.sql; rc=$?; kill -TERM $pid; wait $pid; exit $rc"],
+          ["docker", "run", "--rm", "--entrypoint", "sh", "redis:8-alpine", "-lc", "redis-server --daemonize yes; redis-cli SET project:1 arforge >/dev/null; test \"$(redis-cli GET project:1)\" = arforge; redis-cli shutdown"],
+          ["docker", "run", "--rm", "--entrypoint", "bash", "mongo:8.0", "-lc", "mkdir -p /tmp/mongo; mongod --dbpath /tmp/mongo --bind_ip 127.0.0.1 --fork --logpath /tmp/mongod.log; mongosh --quiet --eval \"db=db.getSiblingDB('acceptance'); db.createCollection('items',{validator:{\\$jsonSchema:{bsonType:'object',required:['title'],properties:{title:{bsonType:'string',minLength:1}}}}}); db.items.insertOne({title:'arforge'}); if(db.items.countDocuments({title:'arforge'})!=1) quit(1);\"; rc=$?; mongod --dbpath /tmp/mongo --shutdown; exit $rc"],
+          ["docker", "run", "--rm", "-v", "{workspace}:/work", "-e", "ORACLE_PASSWORD=ArforgeAcceptance1", "-e", "APP_USER=arforge", "-e", "APP_USER_PASSWORD=ArforgeAcceptance1", "--entrypoint", "bash", "gvenzl/oracle-free:23-slim-faststart", "-lc", "/opt/oracle/container-entrypoint.sh >/tmp/oracle.log 2>&1 & pid=$!; for i in $(seq 1 180); do /opt/oracle/healthcheck.sh >/dev/null 2>&1 && break; sleep 1; done; /opt/oracle/healthcheck.sh >/dev/null 2>&1 || { tail -200 /tmp/oracle.log; exit 1; }; sqlplus -s arforge/ArforgeAcceptance1@localhost/FREEPDB1 @/work/migrations/oracle.sql; rc=$?; kill -TERM $pid; exit $rc"],
+          ["{python}", "vector_acceptance.py", "integration"]
+        ],
+        "negative_path": [
+          ["docker", "run", "--rm", "-e", "MYSQL_ALLOW_EMPTY_PASSWORD=yes", "-e", "MYSQL_INITDB_SKIP_TZINFO=1", "--entrypoint", "bash", "mysql:8.4", "-lc", "docker-entrypoint.sh mysqld --skip-networking >/tmp/mysql.log 2>&1 & pid=$!; for i in {1..60}; do grep -q 'MySQL init process done' /tmp/mysql.log && break; sleep 1; done; for i in {1..60}; do mysqladmin ping --silent && break; sleep 1; done; mysql -uroot -e \"CREATE DATABASE acceptance; CREATE TABLE acceptance.items(status VARCHAR(8) CHECK(status IN ('open','closed')));\"; if mysql -uroot -e \"INSERT INTO acceptance.items VALUES ('deleted')\"; then exit 2; fi; test \"$(mysql -N -uroot -e 'SELECT COUNT(*) FROM acceptance.items')\" = 0; mysqladmin -uroot shutdown; for i in {1..30}; do kill -0 $pid 2>/dev/null || exit 0; sleep 1; done; kill -KILL $pid"],
+          ["docker", "run", "--rm", "-e", "POSTGRES_PASSWORD=acceptance", "--entrypoint", "bash", "postgres:17-alpine", "-lc", "docker-entrypoint.sh postgres >/tmp/postgres.log 2>&1 & pid=$!; for i in $(seq 1 60); do pg_isready -U postgres && break; sleep 1; done; psql -v ON_ERROR_STOP=1 -U postgres -c \"CREATE TABLE items(status text CHECK(status IN ('open','closed')));\"; if psql -v ON_ERROR_STOP=1 -U postgres -c \"INSERT INTO items VALUES ('deleted')\"; then exit 2; fi; test \"$(psql -At -U postgres -c 'SELECT COUNT(*) FROM items')\" = 0; kill -TERM $pid; wait $pid"],
+          ["docker", "run", "--rm", "--entrypoint", "sh", "redis:8-alpine", "-lc", "redis-server --daemonize yes; redis-cli SET item string >/dev/null; output=$(redis-cli LPUSH item invalid 2>&1); echo \"$output\" | grep -q WRONGTYPE; test \"$(redis-cli GET item)\" = string; redis-cli shutdown"],
+          ["docker", "run", "--rm", "--entrypoint", "bash", "mongo:8.0", "-lc", "mkdir -p /tmp/mongo; mongod --dbpath /tmp/mongo --bind_ip 127.0.0.1 --fork --logpath /tmp/mongod.log; mongosh --quiet --eval \"db=db.getSiblingDB('acceptance'); db.createCollection('items',{validator:{\\$jsonSchema:{bsonType:'object',required:['title']}}}); let rejected=false; try{db.items.insertOne({status:'open'})}catch(e){rejected=true}; if(!rejected||db.items.countDocuments({})!=0) quit(2);\"; rc=$?; mongod --dbpath /tmp/mongo --shutdown; exit $rc"],
+          ["{python}", "vector_acceptance.py", "negative"]
+        ],
+        "release_artifact": [
+          ["{python}", "package.py"]
+        ],
+        "repeatability": [
+          ["{python}", "-m", "pytest", "tests/unit", "-q"],
+          ["{python}", "-m", "pytest", "tests/unit", "-q"]
+        ]
+      }
+    },
+    {
+      "id": "devops-delivery-platform",
+      "template": "devops_delivery_platform",
+      "capabilities": [
+        "devops-docker",
+        "devops-kubernetes",
+        "devops-cicd",
+        "devops-github-actions",
+        "devops-nginx"
+      ],
+      "minimum_files": 10,
+      "artifact_glob": "dist/*.zip",
+      "environment": {
+        "PYTHONPATH": "."
+      },
+      "phases": {
+        "clean_build": [
+          ["{python}", "pipeline.py"],
+          ["docker", "build", "--iidfile", ".runtime/image.id", "-f", "Dockerfile", "."],
+          ["kubectl", "create", "deployment", "arforge-acceptance", "--image=arforge/devops-acceptance:0.1.0", "--replicas=2", "--dry-run=client", "-o", "yaml"],
+          ["kubectl", "create", "service", "clusterip", "arforge-acceptance", "--tcp=80:8080", "--dry-run=client", "-o", "yaml"],
+          ["{python}", "validate_k8s.py"]
+        ],
+        "unit_tests": [
+          ["{python}", "-m", "pytest", "tests/unit", "-q"],
+          ["docker", "run", "--rm", "-v", "{workspace}/nginx.conf:/etc/nginx/nginx.conf:ro", "nginx:1.27-alpine", "nginx", "-t"]
+        ],
+        "integration_tests": [
+          ["{python}", "integration.py"]
+        ],
+        "negative_path": [
+          ["{python}", "negative.py"]
+        ],
+        "release_artifact": [
+          ["{python}", "package.py"]
+        ],
+        "repeatability": [
+          ["{python}", "pipeline.py"],
+          ["docker", "run", "--rm", "-v", "{workspace}/nginx.conf:/etc/nginx/nginx.conf:ro", "nginx:1.27-alpine", "nginx", "-t"],
+          ["{python}", "pipeline.py"],
+          ["docker", "run", "--rm", "-v", "{workspace}/nginx.conf:/etc/nginx/nginx.conf:ro", "nginx:1.27-alpine", "nginx", "-t"]
+        ]
+      }
+    }
+  ]
+}

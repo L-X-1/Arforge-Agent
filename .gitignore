@@ -1,0 +1,97 @@
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Arforge Agent local runtime data (one reviewed workflow ships as an example)
+.arforge/*
+!.arforge/workflows/
+.arforge/workflows/*
+!.arforge/workflows/engineering_delivery.json
+# Package processes may use a package as their temporary workspace during
+# development. Runtime profiles and generated local config are never source.
+/packages/*/.arforge/
+/packages/arforge/config.json
+.recovery_pyc/
+workspace/
+*.db
+*.sqlite
+*.sqlite3
+
+# User data exports and backups
+arforge_export_*.json
+*.bak
+*.backup
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+build/
+dist/
+!packages/ghostty-web/dist/
+!packages/ghostty-web/dist/**
+!packages/gitlab-ai-provider/dist/
+!packages/gitlab-ai-provider/dist/**
+*.egg-info/
+*.tgz
+!packages/app/vendor/arforge-ai-client-1.17.13.tgz
+*.msi
+*.wixpdb
+
+# Node
+node_modules/
+.bun/
+.turbo/
+packages/desktop/out/
+packages/app/.vinxi/
+packages/app/.output/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+/ide/jetbrains/.gradle/
+/ide/jetbrains/.intellijPlatform/
+
+# Local diagnostics and test-server output
+/.codex-runtime/
+/.codex-tmp/
+/.err
+/.out
+*.log
+*.stdout
+*.stderr
+/packages/app/e2e/.playwright-temp/
+
+# Generated screenshots, diagnostics, browser profiles, and acceptance evidence.
+/artifacts/
+/memory-vault/wiki/log.md
+
+# Recovery/migration artifacts
+arforge_corrupt_backup_*/
+tools_tmp/
+tests/legacy_script/
+.arforge-run/
+.tools/
+
+# Local accidental shell fragments observed during recovery.
+# Keep them out of commits without deleting the user's local files.
+/=*
+/C
+/nul
+/_tmp_*.py
+/.tmp-*/
+
+.pytest-tmp/
+
+workspace/
+.arforge-acceptance-workspaces/

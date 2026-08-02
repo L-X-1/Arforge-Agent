@@ -1,0 +1,6 @@
+{
+  "id": "model-api",
+  "name": "Model API",
+  "description": "Reference for model API / SDK work: model ids, pricing, params, streaming, tool use, and migration.",
+  "version": "1.0.0"
+}

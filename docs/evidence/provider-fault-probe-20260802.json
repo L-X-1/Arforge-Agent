@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "started_at_utc": "2026-08-01T16:20:44.541183+00:00",
+  "completed_at_utc": "2026-08-01T16:20:56.251881+00:00",
+  "failure_recovery": true,
+  "failure_probe": "loopback_http_tcp_faults_then_real_provider_recovery",
+  "fault_injection": {
+    "schema_version": 1,
+    "injection_layer": "loopback_http_tcp_proxy",
+    "started_at_utc": "2026-08-01T16:20:49.029602+00:00",
+    "completed_at_utc": "2026-08-01T16:20:56.251881+00:00",
+    "scenarios": [
+      {
+        "scenario": "http_429",
+        "injection_layer": "loopback_http_tcp_proxy",
+        "proxy_requests": 1,
+        "request_body_sha256": "5760d1ac3843a7f82c7d14cc2b9812c3cf8f8a4f1b217394b19ab8f559f49870",
+        "injected_status_code": 429,
+        "observed_status_code": 429,
+        "observed_error_type": "RateLimitError",
+        "fault_detected": true,
+        "false_success": false,
+        "retry_proxy_requests": 2,
+        "automatic_retry_recovered": true,
+        "retry_content_valid": true,
+        "retry_finish_reason": "stop",
+        "retry_not_truncated": true,
+        "elapsed_ms": 1391.0
+      },
+      {
+        "scenario": "http_503",
+        "injection_layer": "loopback_http_tcp_proxy",
+        "proxy_requests": 1,
+        "request_body_sha256": "5760d1ac3843a7f82c7d14cc2b9812c3cf8f8a4f1b217394b19ab8f559f49870",
+        "injected_status_code": 503,
+        "observed_status_code": 503,
+        "observed_error_type": "InternalServerError",
+        "fault_detected": true,
+        "false_success": false,
+        "retry_proxy_requests": 2,
+        "automatic_retry_recovered": true,
+        "retry_content_valid": true,
+        "retry_finish_reason": "stop",
+        "retry_not_truncated": true,
+        "elapsed_ms": 1281.0
+      },
+      {
+        "scenario": "connection_drop",
+        "injection_layer": "loopback_http_tcp_proxy",
+        "proxy_requests": 1,
+        "request_body_sha256": "5760d1ac3843a7f82c7d14cc2b9812c3cf8f8a4f1b217394b19ab8f559f49870",
+        "injected_status_code": null,
+        "observed_status_code": null,
+        "observed_error_type": "RemoteProtocolError",
+        "fault_detected": true,
+        "false_success": false,
+        "retry_proxy_requests": 2,
+        "automatic_retry_recovered": true,
+        "retry_content_valid": true,
+        "retry_finish_reason": "stop",
+        "retry_not_truncated": true,
+        "elapsed_ms": 1797.0
+      }
+    ],
+    "recovery": {
+      "started_at_utc": "2026-08-01T16:20:54.723283+00:00",
+      "completed_at_utc": "2026-08-01T16:20:56.251881+00:00",
+      "after_all_faults": true,
+      "real_provider_request": true,
+      "content_valid": true,
+      "finish_reason": "stop",
+      "not_truncated": true
+    },
+    "passed": true
+  }
+}

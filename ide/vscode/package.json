@@ -1,0 +1,84 @@
+{
+  "name": "arforge",
+  "displayName": "Arforge",
+  "description": "Arforge coding agent for VS Code",
+  "version": "0.1.0",
+  "publisher": "arforge-agent",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Machine Learning", "Other"],
+  "activationEvents": [
+    "onCommand:arforge.openChat",
+    "onCommand:arforge.newSession",
+    "onCommand:arforge.explainSelection",
+    "onCommand:arforge.fixSelection",
+    "onCommand:arforge.reviewWorkspace",
+    "onCommand:arforge.reviewChanges",
+    "onCommand:arforge.showStatus"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {"command": "arforge.openChat", "title": "Arforge: 打开对话"},
+      {"command": "arforge.newSession", "title": "Arforge: 新建对话"},
+      {"command": "arforge.explainSelection", "title": "Arforge: 解释所选代码"},
+      {"command": "arforge.fixSelection", "title": "Arforge: 修复所选代码"},
+      {"command": "arforge.reviewWorkspace", "title": "Arforge: 审查当前项目"},
+      {"command": "arforge.reviewChanges", "title": "Arforge: 审查工作区变更"},
+      {"command": "arforge.showStatus", "title": "Arforge: 显示运行状态"},
+      {"command": "arforge.restartBridge", "title": "Arforge: 重启 Bridge"}
+    ],
+    "menus": {
+      "editor/context": [
+        {"command": "arforge.explainSelection", "group": "arforge@1", "when": "editorHasSelection"},
+        {"command": "arforge.fixSelection", "group": "arforge@2", "when": "editorHasSelection"}
+      ]
+    },
+    "configuration": {
+      "title": "Arforge",
+      "properties": {
+        "arforge.bridge.command": {
+          "type": "string",
+          "default": "python",
+          "description": "Bridge 可执行命令。默认使用当前 PATH 中的 Python。"
+        },
+        "arforge.bridge.args": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": ["-m", "arforge.bridge"],
+          "description": "传给 Bridge 命令的参数。"
+        },
+        "arforge.bridge.profile": {
+          "type": "string",
+          "default": "",
+          "description": "可选的独立 ARFORGE_HOME。留空时使用默认 Arforge 配置。"
+        },
+        "arforge.reasoningEffort": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "ultra"],
+          "default": "medium",
+          "description": "模型推理强度。IDE 不会覆盖模型自身的推理能力。"
+        },
+        "arforge.permissionMode": {
+          "type": "string",
+          "enum": ["requestApproval", "autoApprove", "fullAccess"],
+          "default": "autoApprove",
+          "description": "Agent 的权限审批模式。"
+        },
+        "arforge.includeDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "将当前文件的 IDE 错误和警告作为结构化上下文发送给 Arforge。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node --check extension.js && node --check bridgeClient.js && node --check ideContext.js",
+    "test": "node --test test/*.test.js",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  }
+}

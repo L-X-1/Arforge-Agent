@@ -1,0 +1,99 @@
+name: Reusable staging validation
+
+on:
+  workflow_call:
+    inputs:
+      formal_artifact_name:
+        required: true
+        type: string
+      token_budget:
+        required: true
+        type: string
+    secrets:
+      DEEPSEEK_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  staging:
+    name: Real staging, load, and long-run validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: staging
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: arforge_app
+          POSTGRES_PASSWORD: arforge_ci_password
+          POSTGRES_DB: arforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U arforge_app -d arforge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NO_COLOR: "1"
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      ARFORGE_DATABASE_MODE: server
+      ARFORGE_DB_URL: postgresql://arforge_app:arforge_ci_password@127.0.0.1:5432/arforge
+      ARFORGE_MULTIAGENT_DB_URL: postgresql://arforge_app:arforge_ci_password@127.0.0.1:5432/arforge_multiagent
+      ARFORGE_EVAL_TOKEN_BUDGET: ${{ inputs.token_budget }}
+      ARFORGE_HOME: ${{ github.workspace }}/.arforge-ci
+      ARFORGE_STAGING_CREDENTIAL_SCOPE: ${{ vars.ARFORGE_STAGING_CREDENTIAL_SCOPE }}
+      ARFORGE_STAGING_ENVIRONMENT_ID: ${{ vars.ARFORGE_STAGING_ENVIRONMENT_ID }}
+      ARFORGE_STAGING_WORKSPACE_PROFILE: ${{ vars.ARFORGE_STAGING_WORKSPACE_PROFILE }}
+      ARFORGE_STAGING_TEST_CREDENTIALS: ${{ vars.ARFORGE_STAGING_TEST_CREDENTIALS }}
+      ARFORGE_STAGING_PRODUCTION_CREDENTIALS_ABSENT: ${{ vars.ARFORGE_STAGING_PRODUCTION_CREDENTIALS_ABSENT }}
+      ARFORGE_STAGING_PRODUCTION_DATA_ABSENT: ${{ vars.ARFORGE_STAGING_PRODUCTION_DATA_ABSENT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install locked development environment
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Install current checkout
+        run: python -m pip install --no-deps -e .
+      - name: Create isolated multi-agent database
+        env:
+          PGPASSWORD: arforge_ci_password
+        run: psql -h 127.0.0.1 -U arforge_app -d arforge -c "CREATE DATABASE arforge_multiagent"
+      - name: Apply database migrations
+        run: python -c "from arforge.database.migration import upgrade_database; upgrade_database('main'); upgrade_database('multiagent')"
+      - name: Download complete formal long-run report
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.formal_artifact_name }}
+          path: formal-evidence
+      - name: Run real staging E2E and paced provider load
+        run: >-
+          python scripts/run_staging_validation.py
+          --formal-report formal-evidence/formal.json
+          --output-dir build/release-evidence
+          --release-candidate-id "${{ github.sha }}"
+          --artifact-set-id "formal-evidence-${{ github.run_id }}"
+          --workflow-run-id "${{ github.run_id }}"
+          --requests 100
+          --concurrency 4
+          --duration-minutes 15
+          --token-budget "${{ inputs.token_budget }}"
+      - name: Produce fail-closed STAGE-01 audit
+        continue-on-error: true
+        run: arforge staging-audit build/staging-audit.json
+      - name: Upload staging and load evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-evidence-${{ github.run_id }}
+          path: |
+            build/release-evidence/
+            build/staging-audit.json
+          if-no-files-found: warn
+          retention-days: 30

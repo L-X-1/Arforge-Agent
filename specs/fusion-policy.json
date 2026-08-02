@@ -1,0 +1,73 @@
+{
+  "canonicalRootName": "Arforge-Agent",
+  "canonicalVersion": "1.0.0-test.1",
+  "canonicalPackageScope": "@arforge-ai/",
+  "externalReferenceRoots": [
+    "E:/Arforge"
+  ],
+  "excludeDirectories": [
+    ".arforge",
+    ".arforge-acceptance-workspaces",
+    ".arforge-bridge-smoke",
+    ".arforge-run",
+    ".arforge-worktrees",
+    ".codex-doc-review",
+    ".git",
+    ".mypy_cache",
+    ".pytest-tmp",
+    ".pytest_cache",
+    ".recovery_pyc",
+    ".ruff_cache",
+    ".tmp",
+    ".tools",
+    ".turbo",
+    ".venv",
+    "arforge_agent.egg-info",
+    "artifacts",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "target",
+    "tmp",
+    "venv",
+    "workspace"
+  ],
+  "externalReferenceDocumentation": [
+    "README.md",
+    "README.cn.md",
+    "docs/DELETE_CANDIDATES_2026-07-27.md",
+    "docs/USER_GUIDE.md",
+    "packages/script/src/fusion-audit.test.ts",
+    "specs/fusion-policy.json",
+    "specs/fusion-worklist.md"
+  ],
+  "compatibleVendoredPackages": [
+    "ghostty-web",
+    "gitlab-ai-provider"
+  ],
+  "versionedManifests": [
+    "package.json",
+    "packages/agent-python/package.json",
+    "packages/app/package.json",
+    "packages/arforge/package.json",
+    "packages/cli/package.json",
+    "packages/core/package.json",
+    "packages/desktop/package.json",
+    "packages/server/package.json",
+    "packages/tui/package.json"
+  ],
+  "defaultScripts": {
+    "dev": "bun --conditions=browser packages/arforge/src/index.ts",
+    "dev:desktop": "bun --cwd packages/desktop dev",
+    "dev:web": "bun --cwd packages/app dev",
+    "cli": "bun --conditions=browser packages/arforge/src/index.ts"
+  },
+  "requiredEntrypoints": [
+    "packages/arforge/src/index.ts",
+    "packages/desktop/src/main/index.ts",
+    "packages/desktop/src/renderer/index.tsx",
+    "packages/app/src/entry.tsx"
+  ]
+}

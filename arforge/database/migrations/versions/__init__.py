@@ -1,0 +1,1 @@
+"""Arforge database migration revisions."""

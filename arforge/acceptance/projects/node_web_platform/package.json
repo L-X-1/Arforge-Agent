@@ -1,0 +1,23 @@
+{
+  "name": "arforge-acceptance-node-web-platform",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "src/service.js",
+  "files": ["src", "build"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "5.1.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "vue": "3.5.18"
+  },
+  "devDependencies": {
+    "jest": "30.0.5",
+    "supertest": "7.1.4",
+    "typescript": "5.9.2"
+  }
+}

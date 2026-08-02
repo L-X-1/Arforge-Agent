@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "arforge-acceptance-python-web"
+version = "0.1.0"
+description = "Django, Flask, Poetry and Selenium project-depth acceptance"
+authors = ["Arforge"]
+packages = [{include = "web_platform", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+django = "5.2.4"
+flask = "3.1.1"
+selenium = "4.34.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "8.4.1"
+
+[build-system]
+requires = ["poetry-core>=2.1.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

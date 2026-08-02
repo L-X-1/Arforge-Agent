@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "totals": {},
+  "categories": {
+    "product": 0,
+    "distribution": 0,
+    "generated": 0,
+    "fixture": 0,
+    "compatibility": 0,
+    "legal": 0,
+    "audit": 0
+  },
+  "files": 0,
+  "visitedFiles": 6392,
+  "scannedTextFiles": 5786,
+  "generatedAt": "2026-07-27T16:03:28.935+08:00"
+}

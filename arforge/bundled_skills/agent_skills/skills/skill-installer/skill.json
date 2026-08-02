@@ -1,0 +1,6 @@
+{
+  "id": "skill-installer",
+  "name": "Skill Installer",
+  "description": "Install skills into the Arforge skills directory from curated list or GitHub.",
+  "version": "1.0.0"
+}

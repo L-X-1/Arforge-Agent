@@ -1,0 +1,78 @@
+{
+  "schema_version": 2,
+  "name": "engineering_delivery",
+  "description": "Inspect, plan, approve, implement, verify, and review a complex engineering change.",
+  "steps": [
+    {
+      "id": "inspect",
+      "title": "Inspect project facts",
+      "kind": "agent",
+      "access": "read",
+      "prompt": "Inspect the requested change, relevant code, tests, constraints, and existing behavior. Return concrete evidence and risks without modifying files."
+    },
+    {
+      "id": "plan",
+      "title": "Build an implementation plan",
+      "kind": "agent",
+      "access": "read",
+      "prompt": "Using the inspection result, produce a minimal implementation plan with affected files, verification commands, safety boundaries, and rollback points.",
+      "depends_on": [
+        "inspect"
+      ]
+    },
+    {
+      "id": "approval",
+      "title": "Approve implementation",
+      "kind": "approval",
+      "prompt": "Review the inspection evidence and implementation plan before workspace mutation.",
+      "depends_on": [
+        "plan"
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Implement the approved change",
+      "kind": "agent",
+      "access": "write",
+      "prompt": "Implement the approved plan in the current workspace. Preserve existing behavior, keep changes scoped, and do not publish, commit, or push.",
+      "depends_on": [
+        "approval"
+      ],
+      "when": {
+        "step": "approval",
+        "status": "approved"
+      },
+      "max_attempts": 2
+    },
+    {
+      "id": "verify",
+      "title": "Run verification",
+      "kind": "agent",
+      "access": "write",
+      "prompt": "Run the most relevant automated tests and static checks. Fix only regressions caused by this workflow and report fresh evidence.",
+      "depends_on": [
+        "implement"
+      ],
+      "max_attempts": 2
+    },
+    {
+      "id": "review",
+      "title": "Review final state",
+      "kind": "agent",
+      "access": "read",
+      "prompt": "Review the final diff and verification evidence for correctness, security, compatibility, and unrequested changes. Do not modify files.",
+      "depends_on": [
+        "verify"
+      ]
+    },
+    {
+      "id": "complete",
+      "title": "Delivery checkpoint",
+      "kind": "checkpoint",
+      "prompt": "Implementation, verification, and final review completed.",
+      "depends_on": [
+        "review"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "canonical": {
+    "product": "Arforge",
+    "cli": "arforge",
+    "packageScope": "@arforge-ai",
+    "environmentPrefix": "ARFORGE_",
+    "configDirectory": ".arforge"
+  },
+  "terms": [
+    {
+      "id": "former-product",
+      "pattern": "\\b\\u006f\\u0070\\u0065\\u006e\\u0063\\u006f\\u0064\\u0065\\b"
+    },
+    {
+      "id": "former-package-scope",
+      "pattern": "@\\u006f\\u0070\\u0065\\u006e\\u0063\\u006f\\u0064\\u0065-ai\\b"
+    },
+    {
+      "id": "former-short-domain",
+      "pattern": "\\bopncd\\.ai\\b"
+    },
+    {
+      "id": "former-publisher",
+      "pattern": "\\banomalyco\\b(?=/(?:\\u006f\\u0070\\u0065\\u006e\\u0063\\u006f\\u0064\\u0065|homebrew-tap|build|arforge(?:-beta)?)(?:\\b|/))"
+    }
+  ],
+  "excludeDirectories": [
+    ".arforge",
+    ".arforge-bridge-smoke",
+    ".arforge-run",
+    ".codex-doc-review",
+    ".git",
+    ".pytest-tmp",
+    ".pytest_cache",
+    ".playwright-temp",
+    ".tools",
+    ".turbo",
+    ".venv",
+    "artifacts",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "venv",
+    "workspace",
+    "tmp"
+  ],
+  "auditArtifacts": [
+    "script/brand-audit.ts",
+    "script/rebrand-provider-docs.ts",
+    "script/consolidate-localized-readmes.ts",
+    "script/disable-unowned-hosted-docs.ts",
+    "script/rebrand-docs.ts",
+    "script/disable-unowned-integration-docs.ts",
+    "packages/core/test/brand-audit.test.ts",
+    "specs/brand-baseline.json",
+    "specs/brand-policy.json"
+  ],
+  "finalBudgets": {
+    "product": 0,
+    "distribution": 0,
+    "generated": 0,
+    "fixture": 0,
+    "compatibility": 0,
+    "legal": 100,
+    "audit": 100
+  }
+}

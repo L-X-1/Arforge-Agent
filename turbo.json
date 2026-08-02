@@ -1,0 +1,33 @@
+{
+  "$schema": "https://v2-8-13.turborepo.dev/schema.json",
+  "globalEnv": ["CI", "ARFORGE_DISABLE_SHARE"],
+  "globalPassThroughEnv": ["CI", "ARFORGE_DISABLE_SHARE"],
+  "tasks": {
+    "typecheck": {},
+    "build": {
+      "dependsOn": [],
+      "outputs": ["dist/**"]
+    },
+    "arforge#test": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "passThroughEnv": ["*"]
+    },
+    "@arforge-ai/core#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@arforge-ai/app#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@arforge-ai/ui#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@arforge-ai/session-ui#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    }
+  }
+}
