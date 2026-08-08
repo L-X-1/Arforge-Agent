@@ -98,7 +98,7 @@ export const SemanticHit = Schema.Struct({
 export interface SemanticHit extends Schema.Schema.Type<typeof SemanticHit> {}
 
 export const SemanticResults = Schema.Struct({
-  algorithm: Schema.Literal("hybrid_bm25_hashing_vector"),
+  algorithm: Schema.Literals(["hybrid_bm25_embedding_api", "hybrid_bm25_hashing_vector"]),
   localOnly: Schema.Literal(true),
   items: Schema.Array(SemanticHit),
   count: NonNegativeInt,
@@ -125,6 +125,7 @@ export const Status = Schema.Struct({
   workspace: NonNegativeInt,
   global: NonNegativeInt,
   quarantined: NonNegativeInt,
+  pendingConflicts: NonNegativeInt,
   recent: Schema.Array(Info),
 }).annotate({ identifier: "Memory.Status" })
 export interface Status extends Schema.Schema.Type<typeof Status> {}
@@ -152,6 +153,129 @@ export const DeleteResult = Schema.Struct({
   notFound: Schema.Array(ID),
 }).annotate({ identifier: "Memory.DeleteResult" })
 export interface DeleteResult extends Schema.Schema.Type<typeof DeleteResult> {}
+
+export const CorrectionID = Schema.String.check(Schema.isStartsWith("mcor_")).pipe(
+  Schema.brand("MemoryCorrectionID"),
+  statics((schema) => ({
+    create: () => schema.make("mcor_" + ascending()),
+  })),
+)
+export type CorrectionID = typeof CorrectionID.Type
+
+export const CorrectionReason = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(500),
+).annotate({ identifier: "MemoryCorrectionReason" })
+export type CorrectionReason = typeof CorrectionReason.Type
+
+export const CorrectionStatus = Schema.Literals(["active", "undone"]).annotate({
+  identifier: "MemoryCorrectionStatus",
+})
+export type CorrectionStatus = typeof CorrectionStatus.Type
+
+export const CorrectionInfo = Schema.Struct({
+  id: CorrectionID,
+  originalMemoryID: ID,
+  successorMemoryID: ID,
+  originalSource: Source,
+  reason: CorrectionReason,
+  status: CorrectionStatus,
+  time: Schema.Struct({
+    created: DateTimeUtcFromMillis,
+    undone: DateTimeUtcFromMillis.pipe(optional),
+  }),
+}).annotate({ identifier: "Memory.CorrectionInfo" })
+export interface CorrectionInfo extends Schema.Schema.Type<typeof CorrectionInfo> {}
+
+export const CorrectionResult = Schema.Struct({
+  correction: CorrectionInfo,
+  original: Info,
+  successor: Info,
+}).annotate({ identifier: "Memory.CorrectionResult" })
+export interface CorrectionResult extends Schema.Schema.Type<typeof CorrectionResult> {}
+
+export const CorrectionHistory = Schema.Struct({
+  items: Schema.Array(CorrectionInfo),
+  count: NonNegativeInt,
+}).annotate({ identifier: "Memory.CorrectionHistory" })
+export interface CorrectionHistory extends Schema.Schema.Type<typeof CorrectionHistory> {}
+
+export const ConflictID = Schema.String.check(Schema.isStartsWith("mcf_")).pipe(
+  Schema.brand("MemoryConflictID"),
+  statics((schema) => ({
+    create: () => schema.make("mcf_" + ascending()),
+  })),
+)
+export type ConflictID = typeof ConflictID.Type
+
+export const ConflictKey = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(160),
+).annotate({ identifier: "MemoryConflictKey" })
+export type ConflictKey = typeof ConflictKey.Type
+
+export const ConflictReason = Schema.String.check(
+  Schema.isTrimmed(),
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(500),
+).annotate({ identifier: "MemoryConflictReason" })
+export type ConflictReason = typeof ConflictReason.Type
+
+export const ConflictBasis = Schema.Literals(["explicit-tag", "deterministic-pattern-v1"]).annotate({
+  identifier: "MemoryConflictBasis",
+})
+export type ConflictBasis = typeof ConflictBasis.Type
+
+export const ConflictStatus = Schema.Literals(["pending", "resolved", "dismissed", "undone"]).annotate({
+  identifier: "MemoryConflictStatus",
+})
+export type ConflictStatus = typeof ConflictStatus.Type
+
+export const ConflictInfo = Schema.Struct({
+  id: ConflictID,
+  conflictKey: ConflictKey,
+  basis: ConflictBasis,
+  leftMemoryID: ID,
+  rightMemoryID: ID,
+  status: ConflictStatus,
+  chosenMemoryID: ID.pipe(optional),
+  retiredMemoryID: ID.pipe(optional),
+  decisionReason: ConflictReason.pipe(optional),
+  time: Schema.Struct({
+    created: DateTimeUtcFromMillis,
+    updated: DateTimeUtcFromMillis,
+    decided: DateTimeUtcFromMillis.pipe(optional),
+    undone: DateTimeUtcFromMillis.pipe(optional),
+  }),
+}).annotate({ identifier: "Memory.ConflictInfo" })
+export interface ConflictInfo extends Schema.Schema.Type<typeof ConflictInfo> {}
+
+export const ConflictCandidate = Schema.Struct({
+  conflict: ConflictInfo,
+  left: Info,
+  right: Info,
+}).annotate({ identifier: "Memory.ConflictCandidate" })
+export interface ConflictCandidate extends Schema.Schema.Type<typeof ConflictCandidate> {}
+
+export const ConflictPage = Schema.Struct({
+  detectorVersion: Schema.Literal("deterministic-v1"),
+  scanned: NonNegativeInt,
+  detected: NonNegativeInt,
+  newCandidates: NonNegativeInt,
+  items: Schema.Array(ConflictCandidate),
+  count: NonNegativeInt,
+  truncated: Schema.Boolean,
+}).annotate({ identifier: "Memory.ConflictPage" })
+export interface ConflictPage extends Schema.Schema.Type<typeof ConflictPage> {}
+
+export const ConflictDecisionResult = Schema.Struct({
+  conflict: ConflictInfo,
+  left: Info,
+  right: Info,
+}).annotate({ identifier: "Memory.ConflictDecisionResult" })
+export interface ConflictDecisionResult extends Schema.Schema.Type<typeof ConflictDecisionResult> {}
 
 export const GovernanceCandidate = Schema.Struct({
   id: ID,

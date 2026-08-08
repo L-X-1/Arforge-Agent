@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.product.session_runtime import SessionRuntime
 from arforge.product.state_store import BridgeStateStore
 

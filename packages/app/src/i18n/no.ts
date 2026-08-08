@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Ny sesjon",
   "command.file.open": "Åpne fil",
+  "command.tab.expand": "Utvid faneområdet",
+  "command.tab.collapse": "Skjul faneområdet",
   "command.tab.close": "Lukk fane",
   "command.context.addSelection": "Legg til markering i kontekst",
   "command.context.addSelection.description": "Legg til valgte linjer fra gjeldende fil",
@@ -883,6 +885,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Spor, gjennomgå og angre endringer i dette prosjektet",
   "session.review.noVcs.createGit.actionLoading": "Oppretter Git-depot...",
   "session.review.noVcs.createGit.action": "Opprett Git-depot",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{done}} av {{total}} oppgaver fullført",
   "session.question.progress": "{{current}} av {{total}} spørsmål",
   "session.header.open.finder": "Finder",
@@ -1365,4 +1368,8 @@ export const dict = {
   "controlCenter.m220": "Ukjent kontrollsenterfeil",
   "controlCenter.m221": "Ukjent Agent utvidelsesfeil",
   "controlCenter.m222": "Ukjent dypdiagnostisk feil",
+  "controlCenter.m223": "Styrt evolusjon",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Gjennomgå policykandidater foreslått fra læringsbevis, og styr kapabilitetsendringer med isolert evaluering, menneskelig godkjenning, gradvis utrulling og tilbakeføring.",
 } satisfies Partial<Record<Keys, string>>

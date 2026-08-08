@@ -25,6 +25,8 @@ dist-ssr
 out/
 
 resources/arforge-cli*
+resources/agent-python-dist/
+resources/.agent-python-build/
 resources/icons/*
 !resources/icons/icon.ico
 !resources/icons/icon.png

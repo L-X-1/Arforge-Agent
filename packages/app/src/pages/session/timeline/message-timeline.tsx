@@ -1108,7 +1108,7 @@ export function MessageTimeline(props: {
         data-timeline-row={input.row()._tag}
         classList={{
           "min-w-0 w-full max-w-full": true,
-          "md:max-w-[920px] 2xl:max-w-[1040px]": props.centered,
+          "md:max-w-[820px] 2xl:max-w-[1040px]": props.centered,
           "md:mx-auto": props.centered,
           "pt-3": previousAssistantPart(),
         }}
@@ -1123,7 +1123,7 @@ export function MessageTimeline(props: {
   const renderTimelineRow = (row: Accessor<TimelineRow.TimelineRow>, onSizeChange?: () => void) => {
     switch (row()._tag) {
       case "TurnGap":
-        return <div data-timeline-row="TurnGap" aria-hidden="true" class="h-6" />
+        return <div data-timeline-row="TurnGap" aria-hidden="true" class="h-7" />
       case "CommentStrip": {
         const commentStripRow = row as Accessor<TimelineRowByTag<"CommentStrip">>
         const comments = createMemo(() =>

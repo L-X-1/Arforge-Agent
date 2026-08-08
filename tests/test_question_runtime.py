@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.product.question_runtime import (
     QuestionRuntimeError,
     question_handler,

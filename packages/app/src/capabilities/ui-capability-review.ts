@@ -61,12 +61,12 @@ export const UI_CAPABILITY_REVIEW = [
       "The component binds the Goal group once as an alias and completes the revisioned lifecycle through that typed adapter.",
   },
   {
-    id: "memory-detail-transport",
+    id: "evolution-candidate-detail-transport",
     disposition: "transport-internal",
-    methods: ["memories.get"],
-    evidence: ["packages/schema/src/memory.ts", "packages/app/src/components/control-center/dialog-control-center.tsx"],
+    methods: ["agentCapabilities.evolutionCandidateGet"],
+    evidence: ["packages/app/src/components/control-center/evolution-workbench.tsx"],
     rationale:
-      "Memory.list already returns the complete Memory.Info used by the inline detail card; a second user action for single-item GET would be artificial.",
+      "The bounded candidate list returns the complete manifest, lifecycle state, and current evaluation used by each card; the single-candidate endpoint remains available for deep links and refresh recovery without adding a duplicate button.",
   },
   {
     id: "learning-ingestion-internal",

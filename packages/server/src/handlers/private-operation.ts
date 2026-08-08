@@ -1,4 +1,4 @@
-import { AgentPython } from "@arforge-ai/core/agent-python"
+import { nativeHealth } from "@arforge-ai/core/capability-catalog"
 import { Database } from "@arforge-ai/core/database/database"
 import { usesPostgres } from "@arforge-ai/core/database/dialect"
 import { Global } from "@arforge-ai/core/global"
@@ -49,7 +49,6 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
     "privateOperation.overview",
     Effect.fn(function* () {
       const { db } = yield* Database.Service
-      const bridge = yield* AgentPython.Service
       const sessions = yield* db.select().from(SessionTable).all().pipe(Effect.orDie)
       const storage = yield* Effect.promise(() =>
         Promise.all(
@@ -64,7 +63,7 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
           (error) => ({ ok: false, detail: message(error) }),
         ),
       )
-      const agent = yield* bridge.call<{ status?: unknown; version?: unknown }>("health").pipe(
+      const agent = yield* Effect.succeed(nativeHealth()).pipe(
         Effect.map((health) => ({
           ok: health.status === "ok",
           detail: health.status === "ok" ? `Arforge Agent ${String(health.version ?? "")}` : "Agent 健康响应异常",

@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Nova sesija",
   "command.file.open": "Otvori datoteku",
+  "command.tab.expand": "Proširi traku kartica",
+  "command.tab.collapse": "Sažmi traku kartica",
   "command.tab.close": "Zatvori karticu",
   "command.tab.reopenClosed": "Ponovo otvori zatvorenu karticu",
   "command.context.addSelection": "Dodaj odabir u kontekst",
@@ -1038,6 +1040,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Pratite, pregledajte i poništite promjene u ovom projektu",
   "session.review.noVcs.createGit.actionLoading": "Kreiranje Git repozitorija...",
   "session.review.noVcs.createGit.action": "Kreiraj Git repozitorij",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{done}} od {{total}} zadataka završeno",
   "session.question.progress": "{{current}} od {{total}} pitanja",
   "session.header.open.finder": "Finder",
@@ -1352,4 +1355,8 @@ export const dict = {
   "controlCenter.m220": "Nepoznata greška kontrolnog centra",
   "controlCenter.m221": "Nepoznata greška ekstenzije Agent",
   "controlCenter.m222": "Nepoznata greška dubinske dijagnostike",
+  "controlCenter.m223": "Upravljana evolucija",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Pregledajte kandidate politika predložene na osnovu dokaza učenja i upravljajte promjenama sposobnosti kroz izolovanu evaluaciju, ljudsko odobrenje, postepeno uvođenje i vraćanje.",
 }

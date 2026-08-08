@@ -1,0 +1,9 @@
+---
+interface Props { label?: string; compact?: boolean }
+const { label = "Arforge", compact = false } = Astro.props
+---
+
+<span class="brand" aria-label={label}>
+  <img class="brand__image" src="/favicon.svg" width="30" height="30" alt="" aria-hidden="true" />
+  {!compact && <span class="brand__word">Arforge</span>}
+</span>

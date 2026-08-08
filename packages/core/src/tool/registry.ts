@@ -13,6 +13,7 @@ import { definition, permission, settle, validateName, type AnyTool, type Regist
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
 import { DeferredTools } from "./deferred"
+import { RuntimeInsight } from "../runtime/insight"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -81,6 +82,17 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
+      RuntimeInsight.auditRecord({
+        actor: "agent",
+        action: "tool.execute.start",
+        resource: input.call.name,
+        metadata: {
+          sessionID: input.sessionID,
+          agent: input.agent,
+          assistantMessageID: input.assistantMessageID,
+          toolCallID: input.call.id,
+        },
+      })
       const pending = yield* settle(registration.tool, input.call, {
         sessionID: input.sessionID,
         agent: input.agent,
@@ -90,6 +102,21 @@ const registryLayer = Layer.effect(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
           Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
+        ),
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            RuntimeInsight.auditRecord({
+              actor: "agent",
+              action: "tool.execute.end",
+              resource: input.call.name,
+              reason: "result" in result && result.result.type === "error" ? "error" : "success",
+              metadata: {
+                sessionID: input.sessionID,
+                toolCallID: input.call.id,
+                status: "result" in result ? result.result.type : "success",
+              },
+            })
+          }),
         ),
       )
       if ("result" in pending) return pending

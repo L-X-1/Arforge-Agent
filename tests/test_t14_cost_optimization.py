@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from arforge.core.file_state import reset_file_state_tracker
+from arforge.product.direct_dispatch import dispatch
 
 
 @pytest.fixture
@@ -67,25 +68,13 @@ def test_cost_optimization_does_not_count_stale_files_as_avoidable(file_tools, t
     assert any("Re-read changed files" in rec for rec in report["recommendations"])
 
 
-def test_bridge_exposes_cost_optimization_as_read_only(file_tools, tmp_path):
-    from arforge.bridge import dispatch
+def test_bridge_exposes_cost_optimization_as_read_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "cost.optimization"})
 
-    target = tmp_path / "cost.txt"
-    target.write_text("cost", encoding="utf-8")
-    file_tools.read_file("cost.txt")
-    file_tools.read_file("cost.txt")
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-    response = dispatch({"id": 2, "version": "1.1", "method": "cost.optimization", "params": {"limit": 10}})
-    rejected = dispatch({"id": 3, "version": "1.1", "method": "cost.optimization", "params": {"leak": True}})
-
-    assert "cost.optimization" in described["data"]["methods"]
-    assert "cost.optimization" not in described["data"]["mutating_methods"]
-    assert response["ok"] is True
-    assert response["data"]["observed_files"] == 1
-    assert response["data"]["avoidable_reread_bytes"] == target.stat().st_size
-    assert rejected["ok"] is False
-    assert rejected["error"]["code"] == "INVALID_PARAMS"
 
 
 def test_cli_cost_optimization_and_stats_render_report(file_tools, tmp_path, monkeypatch, capsys):

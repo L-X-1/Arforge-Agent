@@ -30,6 +30,9 @@ import { MultimodalDiagnosisHandler } from "./handlers/multimodal-diagnosis"
 import { AgentCapabilityHandler } from "./handlers/agent-capability"
 import { McpHandler } from "./handlers/mcp"
 import { PrivateOperationHandler } from "./handlers/private-operation"
+import { RuntimeInsightHandler } from "./handlers/runtime-insight"
+
+export { RuntimeInsightPersistence } from "./handlers/runtime-insight"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -49,6 +52,7 @@ export const handlers = Layer.mergeAll(
   AgentCapabilityHandler,
   McpHandler,
   PrivateOperationHandler,
+  RuntimeInsightHandler,
   MessageHandler,
   ModelHandler,
   ProviderHandler,

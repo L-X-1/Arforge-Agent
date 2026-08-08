@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Нова сесія",
   "command.file.open": "Відкрити файл",
+  "command.tab.expand": "Розгорнути панель вкладок",
+  "command.tab.collapse": "Згорнути панель вкладок",
   "command.tab.close": "Закрити вкладку",
   "command.tab.reopenClosed": "Повторно відкрити закриту вкладку",
   "command.context.addSelection": "Додати виділення до контексту",
@@ -673,6 +675,7 @@ export const dict = {
   "session.todo.title": "Завдання",
   "session.todo.collapse": "Згорнути",
   "session.todo.expand": "Розгорнути",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "Виконано {{done}} з {{total}} завдань",
   "session.question.progress": "{{current}} з {{total}} запитань",
   "session.question.minimize": "Згорнути запитання",
@@ -1359,4 +1362,8 @@ export const dict = {
   "controlCenter.m220": "Невідома помилка центру керування",
   "controlCenter.m221": "Невідома помилка розширення Agent",
   "controlCenter.m222": "Невідома помилка глибокої діагностики",
+  "controlCenter.m223": "Керована еволюція",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Переглядайте кандидатів політик, запропонованих на основі даних навчання, і керуйте змінами можливостей за допомогою ізольованого оцінювання, схвалення людиною, поетапного розгортання та відкату.",
 }

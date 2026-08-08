@@ -316,16 +316,12 @@ export const makeAgentCapabilityGroup = <I extends HttpApiMiddleware.AnyId, S>(l
         .annotateMerge(locationQueryOpenApi),
     )
     .add(
-      HttpApiEndpoint.get(
-        "agentCapability.workflowRunEvents",
-        "/api/agent-capabilities/workflow-runs/:runID/events",
-        {
-          params: { runID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(128)) },
-          query: WorkflowEventQuery,
-          success: Location.response(AgentCapability.WorkflowEventList),
-          error: [InvalidRequestError, ServiceUnavailableError],
-        },
-      )
+      HttpApiEndpoint.get("agentCapability.workflowRunEvents", "/api/agent-capabilities/workflow-runs/:runID/events", {
+        params: { runID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(128)) },
+        query: WorkflowEventQuery,
+        success: Location.response(AgentCapability.WorkflowEventList),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi),
     )
@@ -408,6 +404,288 @@ export const makeAgentCapabilityGroup = <I extends HttpApiMiddleware.AnyId, S>(l
           includeDescendants: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Location.response(AgentCapability.WorkflowRun),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("agentCapability.evolutionStatus", "/api/agent-capabilities/evolution/status", {
+        query: LocationQuery,
+        success: Location.response(AgentCapability.EvolutionStatus),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("agentCapability.evolutionCandidates", "/api/agent-capabilities/evolution/candidates", {
+        query: Schema.Struct({
+          ...LocationQuery.fields,
+          status: Schema.String.check(Schema.isTrimmed(), Schema.isMaxLength(32)).pipe(Schema.optional),
+          limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).pipe(Schema.optional),
+        }),
+        success: Location.response(AgentCapability.EvolutionCandidateList),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("agentCapability.evolutionExposures", "/api/agent-capabilities/evolution/exposures", {
+        query: Schema.Struct({
+          ...LocationQuery.fields,
+          status: Schema.Literals(["pending", "recorded"]).pipe(Schema.optional),
+          limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).pipe(Schema.optional),
+        }),
+        success: Location.response(AgentCapability.EvolutionExposureList),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionExposureArchivePreview",
+        "/api/agent-capabilities/evolution/exposures/archive",
+        {
+          query: Schema.Struct({
+            ...LocationQuery.fields,
+            keepRecorded: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10_000 })).pipe(Schema.optional),
+          }),
+          success: Location.response(AgentCapability.EvolutionExposureArchivePlan),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post(
+        "agentCapability.evolutionExposureArchiveApply",
+        "/api/agent-capabilities/evolution/exposures/archive/apply",
+        {
+          query: LocationQuery,
+          payload: Schema.Struct({
+            keepRecorded: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10_000 })),
+            expectedPlanDigest: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^[0-9a-f]{64}$/)),
+            reason: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(500)),
+          }),
+          success: Location.response(AgentCapability.EvolutionExposureArchiveResult),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionExposureArchives",
+        "/api/agent-capabilities/evolution/exposures/archives",
+        {
+          query: Schema.Struct({
+            ...LocationQuery.fields,
+            limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).pipe(Schema.optional),
+          }),
+          success: Location.response(AgentCapability.EvolutionExposureArchiveList),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionExposureArchiveGet",
+        "/api/agent-capabilities/evolution/exposures/archives/:archiveID",
+        {
+          params: {
+            archiveID: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+          },
+          query: Schema.Struct({
+            ...LocationQuery.fields,
+            limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).pipe(Schema.optional),
+          }),
+          success: Location.response(AgentCapability.EvolutionExposureArchiveDetail),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionExposureRestorePreview",
+        "/api/agent-capabilities/evolution/exposures/archives/:archiveID/restore",
+        {
+          params: {
+            archiveID: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+          },
+          query: LocationQuery,
+          success: Location.response(AgentCapability.EvolutionExposureRestorePlan),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post(
+        "agentCapability.evolutionExposureRestoreApply",
+        "/api/agent-capabilities/evolution/exposures/archives/:archiveID/restore/apply",
+        {
+          params: {
+            archiveID: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+          },
+          query: LocationQuery,
+          payload: Schema.Struct({
+            expectedPlanDigest: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^[0-9a-f]{64}$/)),
+            reason: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(500)),
+          }),
+          success: Location.response(AgentCapability.EvolutionExposureRestoreResult),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionExposureArchiveExport",
+        "/api/agent-capabilities/evolution/exposures/archives/:archiveID/export",
+        {
+          params: {
+            archiveID: Schema.String.check(Schema.isTrimmed(), Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+          },
+          query: LocationQuery,
+          success: Location.response(AgentCapability.EvolutionExposureArchiveExport),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("agentCapability.evolutionAuditEvents", "/api/agent-capabilities/evolution/audit/events", {
+        query: Schema.Struct({
+          ...LocationQuery.fields,
+          limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).pipe(Schema.optional),
+          beforeSequence: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 2_147_483_647 })).pipe(
+            Schema.optional,
+          ),
+        }),
+        success: Location.response(AgentCapability.EvolutionAuditEventList),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionCandidateGet",
+        "/api/agent-capabilities/evolution/candidates/:candidateID",
+        {
+          params: { candidateID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(32)) },
+          query: LocationQuery,
+          success: Location.response(AgentCapability.EvolutionCandidate),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("agentCapability.evolutionOpportunities", "/api/agent-capabilities/evolution/opportunities", {
+        query: Schema.Struct({
+          ...LocationQuery.fields,
+          limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 })).pipe(Schema.optional),
+        }),
+        success: Location.response(AgentCapability.EvolutionOpportunityList),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("agentCapability.evolutionCreate", "/api/agent-capabilities/evolution/candidates", {
+        query: LocationQuery,
+        payload: Schema.Struct({
+          title: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(200)),
+          target: Schema.Literals([
+            "learning.failure",
+            "learning.fix",
+            "learning.preference",
+            "routing.advice",
+            "tool.advice",
+          ]),
+          instruction: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(4_000)),
+          rationale: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(2_000)),
+          evidenceRefs: Schema.Array(
+            Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(256)),
+          ).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+        }),
+        success: Location.response(AgentCapability.EvolutionCandidate),
+        error: [InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post(
+        "agentCapability.evolutionFromPattern",
+        "/api/agent-capabilities/evolution/patterns/:patternID/candidate",
+        {
+          params: { patternID: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)) },
+          query: LocationQuery,
+          success: Location.response(AgentCapability.EvolutionCandidate),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post(
+        "agentCapability.evolutionTransition",
+        "/api/agent-capabilities/evolution/candidates/:candidateID/transition",
+        {
+          params: { candidateID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(32)) },
+          query: LocationQuery,
+          payload: Schema.Struct({
+            action: Schema.Literals(["evaluate", "approve", "reject", "startCanary", "promote", "rollback"]),
+            expectedRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+            reason: Schema.String.check(Schema.isTrimmed(), Schema.isMaxLength(500)).pipe(Schema.optional),
+            trafficPercent: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
+          }),
+          success: Location.response(AgentCapability.EvolutionCandidate),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get(
+        "agentCapability.evolutionCanaryReport",
+        "/api/agent-capabilities/evolution/candidates/:candidateID/canary",
+        {
+          params: { candidateID: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(32)) },
+          query: LocationQuery,
+          success: Location.response(AgentCapability.EvolutionCanaryReport),
+          error: [InvalidRequestError, ServiceUnavailableError],
+        },
+      )
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("agentCapability.evolutionContextPreview", "/api/agent-capabilities/evolution/context", {
+        query: LocationQuery,
+        payload: Schema.Struct({
+          userInput: Schema.String.check(Schema.isMaxLength(20_000)),
+          cohortKey: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(500)),
+        }),
+        success: Location.response(AgentCapability.EvolutionContextPreview),
         error: [InvalidRequestError, ServiceUnavailableError],
       })
         .middleware(locationMiddleware)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arforge.bridge import PROTOCOL, dispatch
+from arforge.product.direct_dispatch import PROTOCOL, dispatch
 from arforge.product.goal_runtime import GoalRuntime, GoalRuntimeError
 
 

@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Ny session",
   "command.file.open": "Åbn fil",
+  "command.tab.expand": "Udvid fanelinje",
+  "command.tab.collapse": "Skjul fanelinje",
   "command.tab.close": "Luk fane",
   "command.tab.reopenClosed": "Åbn lukket fane igen",
   "command.context.addSelection": "Tilføj markering til kontekst",
@@ -1030,6 +1032,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Spor, gennemgå og fortryd ændringer i dette projekt",
   "session.review.noVcs.createGit.actionLoading": "Opretter Git-repository...",
   "session.review.noVcs.createGit.action": "Opret Git-repository",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{done}} af {{total}} opgaver fuldført",
   "session.question.progress": "{{current}} af {{total}} spørgsmål",
   "session.header.open.finder": "Finder",
@@ -1348,4 +1351,8 @@ export const dict = {
   "controlCenter.m220": "Ukendt kontrolcenterfejl",
   "controlCenter.m221": "Ukendt Agent udvidelsesfejl",
   "controlCenter.m222": "Ukendt dyb-diagnostisk fejl",
+  "controlCenter.m223": "Styret evolution",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Gennemgå politikforslag baseret på læringsevidens, og styr kapabilitetsændringer med isoleret evaluering, menneskelig godkendelse, gradvis udrulning og tilbagerulning.",
 }

@@ -7,6 +7,7 @@ const serverPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
 const command = `bun run dev -- --host 0.0.0.0 --port ${port}`
 const reuse = !process.env.CI
 const workers = Number(process.env.PLAYWRIGHT_WORKERS ?? (process.env.CI ? 5 : 0)) || undefined
+const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH
 export default defineConfig({
   testDir: "./e2e",
   testIgnore: process.env.ARFORGE_PERFORMANCE === "1" ? "performance/**/*.test.ts" : "performance/**",
@@ -39,7 +40,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(executablePath ? { launchOptions: { executablePath } } : {}),
+      },
     },
   ],
 })

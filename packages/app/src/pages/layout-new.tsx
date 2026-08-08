@@ -4,12 +4,20 @@ import { useNavigate } from "@solidjs/router"
 import { DebugBar } from "@/components/debug-bar"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { usePlatform } from "@/context/platform"
+import { useLayout } from "@/context/layout"
+import { useCommand } from "@/context/command"
+import { useLanguage } from "@/context/language"
 import { setNavigate } from "@/utils/notification-click"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
+import { WorkspaceSidebar } from "@/pages/layout/workspace-sidebar"
+import { TitlebarVerticalTabs } from "@/components/titlebar-vertical-tabs"
 
 export default function NewLayout(props: ParentProps) {
   const platform = usePlatform()
   const navigate = useNavigate()
+  const layout = useLayout()
+  const command = useCommand()
+  const language = useLanguage()
   const debugToolsEnabled = import.meta.env.DEV && import.meta.env.VITE_ARFORGE_DEBUG_TOOLS === "1"
   setNavigate(navigate)
   // Keep diagnostics opt-in. The debug HUD updates on every animation frame and
@@ -17,6 +25,16 @@ export default function NewLayout(props: ParentProps) {
   const [state, setState] = createStore({ debugTools: false })
 
   createEffect(() => setV2Toast(true))
+
+  command.register("workspace-sidebar", () => [
+    {
+      id: "sidebar.toggle",
+      title: language.t("command.sidebar.toggle"),
+      category: language.t("command.category.view"),
+      keybind: "mod+b",
+      onSelect: () => layout.sidebar.toggle(),
+    },
+  ])
 
   const update: TitlebarUpdate = {
     version: () => {
@@ -45,9 +63,13 @@ export default function NewLayout(props: ParentProps) {
             : undefined
         }
       />
-      <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
-        {props.children}
-      </main>
+      <div class="flex min-h-0 min-w-0 flex-1">
+        <WorkspaceSidebar />
+        <TitlebarVerticalTabs />
+        <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
+          {props.children}
+        </main>
+      </div>
       {debugToolsEnabled && state.debugTools && <DebugBar inline />}
       <ToastRegion v2 />
     </div>

@@ -4,7 +4,7 @@ import threading
 import time
 from pathlib import Path
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.product.prompt_queue_runtime import PromptQueueRuntime
 from arforge.product.session_runtime import SessionRuntime
 

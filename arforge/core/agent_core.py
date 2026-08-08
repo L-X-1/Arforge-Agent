@@ -194,6 +194,7 @@ class ArforgeAgent:
         self.multiagent_enabled = multiagent_enabled
         self._master = None
         self._memory_tokens = 0
+        self._last_memory_recall_report = None
         self._last_usage: dict = {}
         self._last_context_messages: list[dict] = []
         self._last_usage_message_tokens = 0
@@ -206,6 +207,9 @@ class ArforgeAgent:
         self._checkpoint_restored = False
         self._compaction_history_complete = True
         self._context_checkpoint_active = False
+        self._last_context_package = None
+        self._context_package_recovery_state = "none"
+        self._restored_context_package_status: dict = {}
 
     @property
     def adapter(self):
@@ -249,6 +253,7 @@ class ArforgeAgent:
 
         project_id, workspace_path = workspace_memory_scope(current_workspace(Path.cwd()))
         ranked: list[dict] = []
+        report: dict | None = None
         if query:
             report = semantic_search_memories(
                 query,
@@ -289,18 +294,41 @@ class ArforgeAgent:
         from arforge.core.memory_context import render_untrusted_memories
 
         self.memory_text = render_untrusted_memories(selected)
+        self._last_memory_recall_report = (
+            {**report, "items": selected}
+            if isinstance(report, dict) and report.get("retrieval_uid")
+            else None
+        )
         return self.memory_text
 
     def prepare_context_messages(self, messages: list[dict]) -> list[dict]:
-        """Apply model-aware compaction to non-agentic model calls."""
+        """Compact when required, then compile a verified provider package."""
         from arforge.core.compaction import compact, needs_compaction
+        from arforge.core.context import resolve_context_budget, resolve_context_window
+        from arforge.core.context_os import (
+            ContextCompiler,
+            unit_from_memory_recall,
+            units_from_messages,
+        )
 
         adapter = self.adapter
         model = getattr(adapter, "model_name", "")
         configured = getattr(adapter, "context_window_tokens", None)
-        prepared = messages
-        if needs_compaction(messages, model, configured):
-            compacted, stats = compact(messages, adapter, model, persist_durable=True)
+        prepared = [dict(message) for message in messages]
+        memory_unit = None
+        if self.memory_text and isinstance(self._last_memory_recall_report, dict):
+            embedded = f"## Relevant Memory\n{self.memory_text}"
+            for message in prepared:
+                if message.get("role") == "system" and embedded in str(
+                    message.get("content", "")
+                ):
+                    message["content"] = str(message.get("content", "")).replace(
+                        embedded, ""
+                    )
+                    break
+            memory_unit = unit_from_memory_recall(self._last_memory_recall_report)
+        if needs_compaction(prepared, model, configured):
+            compacted, stats = compact(prepared, adapter, model, persist_durable=True)
             if stats.get("compacted"):
                 prepared = compacted
                 self._compaction_count += 1
@@ -317,6 +345,40 @@ class ArforgeAgent:
                 if without_system and without_system[-1].get("role") == "user":
                     without_system = without_system[:-1]
                 self.conversation_history = without_system
+        window = resolve_context_window(model, configured)
+        budget = resolve_context_budget(window.tokens)
+        previous_package = self._last_context_package
+        previous_recovery_state = self._context_package_recovery_state
+        units = list(units_from_messages(prepared, source_id="agent-live"))
+        if memory_unit is not None:
+            insert_at = next(
+                (
+                    index
+                    for index, unit in enumerate(units)
+                    if unit.layer == "current_request"
+                ),
+                len(units),
+            )
+            units.insert(insert_at, memory_unit)
+        package = ContextCompiler().compile(
+            units,
+            model=model,
+            usable_input_tokens=budget["usable_input_tokens"],
+        )
+        self._last_context_package = package
+        if previous_package is not None and (
+            previous_package.model != package.model
+            or previous_package.usable_input_tokens != package.usable_input_tokens
+        ):
+            self._context_package_recovery_state = "recompiled_model_switch"
+        elif previous_recovery_state == "rebuild_pending_stale":
+            self._context_package_recovery_state = "rebuilt_stale_checkpoint"
+        elif self._checkpoint_restored:
+            self._context_package_recovery_state = "recompiled_checkpoint"
+        else:
+            self._context_package_recovery_state = "compiled"
+        self._restored_context_package_status = {}
+        prepared = package.messages
         self._last_context_messages = [dict(item) for item in prepared]
         return prepared
 
@@ -341,7 +403,9 @@ class ArforgeAgent:
         resolved = get_model_config().get_resolved_config()
         model = str(resolved.get("model", ""))
         messages = self._last_context_messages or list(self.conversation_history)
-        return build_context_status(
+        from arforge.core.context_os import context_messages_digest
+
+        status = build_context_status(
             messages,
             model,
             configured_tokens=resolved.get("context_window_tokens"),
@@ -356,7 +420,22 @@ class ArforgeAgent:
             compacted_tokens_total=self._compacted_tokens_total,
             checkpoint_restored=self._checkpoint_restored,
             compaction_history_complete=self._compaction_history_complete,
+            context_package=(
+                self._last_context_package.to_dict()
+                if self._last_context_package is not None
+                else None
+            ),
+            context_package_messages_digest=(
+                context_messages_digest(self._last_context_package.messages)
+                if self._last_context_package is not None
+                else ""
+            ),
+            context_package_recovery_state=self._context_package_recovery_state,
         )
+        if self._last_context_package is None and self._restored_context_package_status:
+            status.update(self._restored_context_package_status)
+            status["context_package_recovery_state"] = self._context_package_recovery_state
+        return status
 
     def _classify_task(self, user_input: str) -> str:
         """Lightweight keyword classification for reasoning prompt selection."""

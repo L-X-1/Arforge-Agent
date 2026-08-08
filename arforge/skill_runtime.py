@@ -57,6 +57,14 @@ _CAPABILITY_SKILL_TERMS = {
         "营销页", "作品集网站", "官网设计", "网站重设计", "页面重设计", "设计一个网站",
         "重新设计这个页面", "重做这个页面",
     ),
+    "vision-tools": (
+        "image", "images", "screenshot", "screenshots", "photo", "picture", "pixel",
+        "ocr", "design mockup", "look at this image", "what is in this image",
+        "what's in this image", "analyze the image", "compare these images", "image diff",
+        "看图", "看下图片", "图片", "截图", "截屏", "照片", "图像", "设计稿", "设计图",
+        "界面元素", "像素级", "图像识别", "识别图片", "识别这张图", "看看这张图",
+        "图片内容", "图片里的", "图片中", "对比图片", "还原设计稿", "描述图片",
+    ),
     "documents": (
         "docx", "word document", "word file", "microsoft word",
         "word 文档", "文档", "论文", "开题报告", "毕业论文",

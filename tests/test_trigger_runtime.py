@@ -10,7 +10,7 @@ from urllib.error import URLError
 
 import pytest
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.mcp_client_runtime import EnvironmentTokenProvider
 from arforge.product.session_runtime import SessionRuntime
 from arforge.scheduled_prompt_runtime import ScheduledPromptManager

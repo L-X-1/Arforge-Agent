@@ -149,6 +149,16 @@ export const TuiThreadCommand = cmd({
     }
     const noReplay = args.replay === false || args.noReplay === true
 
+    const hasTty = process.stdin.isTTY && process.stdout.isTTY && process.stderr.isTTY
+    if (!hasTty) {
+      UI.error("当前终端不支持 Arforge TUI（stdin/stdout/stderr 不是 TTY）")
+      UI.println("")
+      UI.error("请改用：bun run cli run \"你的问题\"（非交互模式）")
+      UI.println("如果你需要界面模式，请在普通 PowerShell/Windows Terminal 里直接运行 bun run cli")
+      process.exitCode = 1
+      return
+    }
+
     if (args.mini) {
       const network = ["--port", "--hostname", "--mdns", "--no-mdns", "--mdns-domain", "--cors"].find((option) =>
         process.argv.some((arg) => arg === option || arg.startsWith(option + "=")),

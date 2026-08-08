@@ -1,9 +1,8 @@
-import { AgentPython } from "@arforge-ai/core/agent-python"
 import { Database } from "@arforge-ai/core/database/database"
 import { usesPostgres } from "@arforge-ai/core/database/dialect"
+import { nativeHealth } from "@arforge-ai/core/capability-catalog"
 import { Global } from "@arforge-ai/core/global"
 import { InstallationVersion } from "@arforge-ai/core/installation/version"
-import { AgentCapability } from "@arforge-ai/schema/agent-capability"
 import { Effect, Schema } from "effect"
 import { constants } from "node:fs"
 import fs from "node:fs/promises"
@@ -117,27 +116,11 @@ export const DoctorCommand = effectCmd({
     }
     checks.push({ id: "database", label: "数据库", ...database })
 
-    const bridge = yield* AgentPython.Service.pipe(
-      Effect.flatMap((service) => service.call("health")),
-      Effect.flatMap(Schema.decodeUnknownEffect(AgentCapability.Health)),
-      Effect.map((health) => {
-        const ok = health.status === "ok" && health.brand.startsWith("Arforge")
-        return {
-          ok,
-          detail: ok ? `Arforge Agent ${health.version}` : "Agent 健康响应不符合契约",
-        }
-      }),
-      Effect.provide(
-        AgentPython.layer({
-          runtimeRoot,
-          workspace,
-          pythonExecutable: process.env.ARFORGE_AGENT_PYTHON || undefined,
-          home: process.env.ARFORGE_HOME || undefined,
-        }),
-      ),
-      Effect.scoped,
-      Effect.catch((error) => Effect.succeed({ ok: false, detail: safeMessage(error) })),
-    )
+    const health = nativeHealth()
+    const bridge = {
+      ok: health.status === "ok" && health.brand.startsWith("Arforge"),
+      detail: health.status === "ok" ? `Arforge Agent ${health.version}（原生 TS）` : "Agent 健康响应不符合契约",
+    }
     checks.push({ id: "agent-bridge", label: "Agent 能力引擎", ...bridge })
 
     const passed = checks.filter((item) => item.ok).length

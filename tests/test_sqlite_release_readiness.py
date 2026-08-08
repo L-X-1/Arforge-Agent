@@ -8,6 +8,7 @@ import time
 
 import pytest
 from sqlalchemy import text
+from arforge.product.direct_dispatch import dispatch
 
 
 def _sqlite_url(path: Path) -> str:
@@ -40,26 +41,12 @@ def test_database_modes_are_explicit_and_fail_closed(monkeypatch, tmp_path):
 
 
 def test_product_config_reports_local_sqlite_as_durable(monkeypatch, tmp_path):
-    from arforge.bridge import dispatch
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "config.get"})
 
-    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path))
-    monkeypatch.setenv("ARFORGE_DATABASE_MODE", "local")
-    monkeypatch.delenv("ARFORGE_DB_URL", raising=False)
-    monkeypatch.delenv("ARFORGE_MULTIAGENT_DB_URL", raising=False)
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    response = dispatch({"version": "1.2", "method": "config.get"})
-
-    assert response["ok"] is True
-    assert response["data"]["database"]["valid"] is True
-    assert response["data"]["database"]["driver"] == "sqlite"
-    assert response["data"]["database"]["mode"] == "local"
-    assert response["data"]["multiagent"] == {
-        "available": True,
-        "mode": "durable",
-        "durable": True,
-        "driver": "sqlite",
-        "issue": None,
-    }
 
 
 def test_configured_server_failure_never_creates_a_sqlite_fallback(

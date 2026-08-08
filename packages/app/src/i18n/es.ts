@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Nueva sesión",
   "command.file.open": "Abrir archivo",
+  "command.tab.expand": "Expandir barra de pestañas",
+  "command.tab.collapse": "Contraer barra de pestañas",
   "command.tab.close": "Cerrar pestaña",
   "command.tab.reopenClosed": "Reabrir pestaña cerrada",
   "command.context.addSelection": "Añadir selección al contexto",
@@ -1047,6 +1049,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Rastrea, revisa y deshaz cambios en este proyecto",
   "session.review.noVcs.createGit.actionLoading": "Creando repositorio Git...",
   "session.review.noVcs.createGit.action": "Crear repositorio Git",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{done}} de {{total}} tareas completadas",
   "session.question.progress": "{{current}} de {{total}} preguntas",
   "session.header.open.finder": "Finder",
@@ -1367,4 +1370,8 @@ export const dict = {
   "controlCenter.m220": "Error desconocido del centro de control",
   "controlCenter.m221": "Error de extensión Agent desconocido",
   "controlCenter.m222": "Error de diagnóstico profundo desconocido",
+  "controlCenter.m223": "Evolución gobernada",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Revisa candidatos de políticas propuestos a partir de evidencias de aprendizaje y controla los cambios de capacidad mediante evaluación aislada, aprobación humana, despliegue gradual y reversión.",
 }

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -52,6 +51,8 @@ def init_memory_db():
 
 def _similar_existing(content: str, project_id: str = "", workspace_path: str = "") -> Optional[int]:
     for item in query_memories(project_id=project_id, workspace_path=workspace_path, limit=500):
+        if item.get("lifecycle", "active") != "active":
+            continue
         if SequenceMatcher(None, content, item["content"]).ratio() > 0.92:
             return item["id"]
     return None
@@ -81,24 +82,30 @@ def save_memory_v2(
         existing = _similar_existing(content, project_id=project_id, workspace_path=workspace_path)
         if existing is not None:
             return existing
-    now = datetime.now().isoformat(timespec="seconds")
     tags = tags or auto_extract_tags(content)
-    with get_session() as session:
-        mem = Memory(
-            created_at=now,
-            updated_at=now,
-            content=content.strip(),
-            mem_type=mem_type,
-            tags=tags,
-            importance=importance,
-            source=source,
-            project_id=project_id,
-            workspace_path=workspace_path,
-            related_to=related_to,
-        )
-        session.add(mem)
-        session.flush()
-        return int(mem.id)
+    from arforge.memory_os import MemoryOS
+
+    actor = source if source in {"user", "user-corrected", "imported"} else f"runtime:{source}"
+    memory = MemoryOS().create(
+        content,
+        mem_type=mem_type,
+        tags=tags,
+        importance=importance,
+        source=source,
+        related_to=related_to,
+        project_id=project_id,
+        workspace_path=workspace_path,
+        provenance={"kind": "compatibility_api", "source": source},
+        actor=actor,
+        reason="created through save_memory_v2",
+    )
+    try:
+        from arforge.core.memory_digest import refresh_digest_file
+
+        refresh_digest_file()
+    except Exception:
+        pass
+    return int(memory["id"])
 
 
 def query_memories(
@@ -110,6 +117,7 @@ def query_memories(
     workspace_path: str = "",
     importance_min: int = 0,
     limit: int = 20,
+    lifecycle_filter: str = "",
 ) -> list[dict]:
     with get_session() as session:
         q = session.query(Memory)
@@ -127,6 +135,8 @@ def query_memories(
             q = q.filter(Memory.workspace_path == workspace_path)
         if importance_min:
             q = q.filter(Memory.importance >= importance_min)
+        if lifecycle_filter:
+            q = q.filter(Memory.lifecycle == lifecycle_filter)
         q = q.order_by(Memory.importance.desc(), Memory.id.desc()).limit(limit)
         rows = q.all()
     return [_memory_record(row) for row in rows]
@@ -158,6 +168,7 @@ def query_memories_for_scope(
         rows = (
             session.query(Memory)
             .filter(or_(*clauses))
+            .filter(Memory.lifecycle == "active")
             .filter(~Memory.source.like("quarantined:%"))
             .order_by(Memory.importance.desc(), Memory.id.desc())
             .limit(limit)
@@ -167,26 +178,35 @@ def query_memories_for_scope(
 
 
 def load_memories(limit: int = 20) -> list[str]:
-    return [item["content"] for item in query_memories(limit=limit)]
+    return [item["content"] for item in query_memories(lifecycle_filter="active", limit=limit)]
 
 
 def search_memories(keywords: str, limit: int = 10) -> list[dict]:
-    return query_memories(query_text=keywords, limit=limit)
+    return query_memories(query_text=keywords, lifecycle_filter="active", limit=limit)
 
 
 def update_memory(memory_id: int, content: str = "", importance: int = 0) -> bool:
-    with get_session() as session:
-        mem = session.get(Memory, memory_id)
-        if mem is None:
-            return False
-        if content:
-            from arforge.security_guard import sanitize_for_storage
+    from arforge.memory_os import MemoryNotFoundError, MemoryOS
 
-            mem.content = sanitize_for_storage(content)
-        if importance:
-            mem.importance = importance
-        mem.updated_at = datetime.now().isoformat(timespec="seconds")
-        return True
+    memory_os = MemoryOS()
+    try:
+        current = memory_os.get(memory_id)
+    except MemoryNotFoundError:
+        return False
+    fields: dict = {}
+    if content:
+        fields["content"] = content
+    if importance:
+        fields["importance"] = importance
+    if fields:
+        memory_os.update(
+            memory_id,
+            expected_version=current["version"],
+            actor="compatibility",
+            reason="updated through update_memory",
+            **fields,
+        )
+    return True
 
 
 def update_memory_fields(
@@ -199,37 +219,45 @@ def update_memory_fields(
     source: str | None = None,
 ) -> dict | None:
     """Update an explicit set of memory fields and return the final record."""
-    with get_session() as session:
-        mem = session.get(Memory, memory_id)
-        if mem is None:
-            return None
-        if content is not None:
-            from arforge.security_guard import sanitize_for_storage
+    from arforge.memory_os import MemoryNotFoundError, MemoryOS
 
-            cleaned = sanitize_for_storage(content).strip()
-            if not cleaned:
-                raise ValueError("content must not be empty")
-            mem.content = cleaned
-        if mem_type is not None:
-            mem.mem_type = mem_type
-        if tags is not None:
-            mem.tags = tags
-        if importance is not None:
-            mem.importance = importance
-        if source is not None:
-            mem.source = source
-        mem.updated_at = datetime.now().isoformat(timespec="seconds")
-        session.flush()
-        return _memory_record(mem)
+    memory_os = MemoryOS()
+    try:
+        current = memory_os.get(memory_id)
+    except MemoryNotFoundError:
+        return None
+    fields = {
+        key: value
+        for key, value in {
+            "content": content,
+            "mem_type": mem_type,
+            "tags": tags,
+            "importance": importance,
+            "source": source,
+        }.items()
+        if value is not None
+    }
+    if not fields:
+        return current
+    return memory_os.update(
+        memory_id,
+        expected_version=current["version"],
+        actor=source or "compatibility",
+        reason="updated through update_memory_fields",
+        **fields,
+    )
 
 
 def delete_memory(memory_id: int) -> bool:
-    with get_session() as session:
-        mem = session.get(Memory, memory_id)
-        if mem is None:
-            return False
-        session.delete(mem)
-        return True
+    from arforge.memory_os import MemoryOS
+
+    return bool(
+        MemoryOS().delete(
+            memory_id,
+            actor="compatibility",
+            reason="deleted through delete_memory",
+        )["deleted"]
+    )
 
 
 def delete_memories(memory_ids: list[int]) -> dict[str, list[int] | int]:
@@ -242,14 +270,16 @@ def delete_memories(memory_ids: list[int]) -> dict[str, list[int] | int]:
             seen.add(memory_id)
     deleted: list[int] = []
     not_found: list[int] = []
-    with get_session() as session:
-        for memory_id in requested:
-            mem = session.get(Memory, memory_id)
-            if mem is None:
-                not_found.append(memory_id)
-            else:
-                session.delete(mem)
-                deleted.append(memory_id)
+    from arforge.memory_os import MemoryOS
+
+    memory_os = MemoryOS()
+    for memory_id in requested:
+        result = memory_os.delete(
+            memory_id,
+            actor="compatibility",
+            reason="deleted through delete_memories",
+        )
+        (deleted if result["deleted"] else not_found).append(memory_id)
     return {"requested": len(requested), "deleted": deleted, "not_found": not_found}
 
 
@@ -353,22 +383,21 @@ def apply_memory_governance(limit: int = 10_000) -> dict:
     candidates = {item["id"]: _governance_reason(item) for item in items}
     candidates = {memory_id: reason for memory_id, reason in candidates.items() if reason}
     quarantined: list[int] = []
-    with get_session() as session:
-        for memory_id, reason in candidates.items():
-            mem = session.get(Memory, memory_id)
-            if mem is None or str(mem.source).casefold().startswith("quarantined:"):
-                continue
-            original_source = mem.source
-            mem.source = f"quarantined:{original_source}"
-            mem.importance = 1
-            mem.strength = 0.1
-            reason_tag = f"quarantine:{reason}"
-            existing_tags = [tag.strip() for tag in str(mem.tags).split(",") if tag.strip()]
-            if reason_tag not in existing_tags:
-                existing_tags.append(reason_tag)
-            mem.tags = ",".join(existing_tags)
-            mem.updated_at = datetime.now().isoformat(timespec="seconds")
+    from arforge.memory_os import MemoryNotFoundError, MemoryOS, MemoryValidationError
+
+    memory_os = MemoryOS()
+    for memory_id, reason in candidates.items():
+        try:
+            current = memory_os.get(memory_id)
+            memory_os.quarantine(
+                memory_id,
+                expected_version=current["version"],
+                actor="runtime:governance",
+                reason=str(reason),
+            )
             quarantined.append(memory_id)
+        except (MemoryNotFoundError, MemoryValidationError):
+            continue
     return {
         "schema_version": 1,
         "scanned": len(items),
@@ -402,15 +431,20 @@ def _memory_record(memory: Memory) -> dict:
         "strength": memory.strength,
         "review_level": memory.review_level,
         "last_reviewed_at": memory.last_reviewed_at,
+        "memory_uid": memory.memory_uid,
+        "memory_class": memory.memory_class,
+        "lifecycle": memory.lifecycle,
+        "confidence": memory.confidence,
+        "version": memory.version,
+        "content_digest": memory.content_digest,
+        "provenance": dict(memory.provenance or {}),
     }
 
 
 def decay_memory_strength(dry_run: bool = False) -> dict:
     if dry_run:
         return {"success": True, "updated": 0, "dry_run": True}
-    with get_session() as session:
-        updated = session.query(Memory).update(
-            {Memory.strength: func.max(0.1, Memory.strength * 0.99)},
-            synchronize_session="fetch",
-        )
-        return {"success": True, "updated": updated, "dry_run": False}
+    from arforge.memory_os import MemoryOS
+
+    updated = MemoryOS().decay()
+    return {"success": True, "updated": updated, "dry_run": False}

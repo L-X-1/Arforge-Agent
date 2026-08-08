@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from arforge.memory import auto_extract_tags, save_memory_v2
+from arforge.memory_writes import record_write_decision
 
 
 _AUTO_PERSISTENT_TYPES = {"preference", "identity", "convention", "workflow", "constraint"}
@@ -187,6 +188,10 @@ def extract_memories_from_turn(
 
             scoped_project, scoped_workspace = workspace_memory_scope(current_workspace(Path.cwd()))
         scoped_project = project_id or scoped_project
+    else:
+        scoped_workspace = workspace_path
+    saved_fingerprints: set[str] = set()
+    if auto_save:
         for item in candidates:
             if not item["auto_save_eligible"]:
                 continue
@@ -201,8 +206,21 @@ def extract_memories_from_turn(
                     project_id=scoped_project,
                     workspace_path=scoped_workspace,
                 )
+                if item["id"] is not None:
+                    saved_fingerprints.add(item["content"][:80])
             except Exception:
                 pass
+
+    for item in candidates:
+        record_write_decision(
+            content=item["content"],
+            mem_type=item.get("mem_type", "knowledge"),
+            eligible=item["auto_save_eligible"],
+            reason=item["governance_reason"],
+            source="rule",
+            saved=item["auto_save_eligible"] and item["content"][:80] in saved_fingerprints,
+            workspace_path=scoped_workspace,
+        )
 
     return candidates
 
@@ -266,6 +284,7 @@ def extract_memories_with_model(
                         candidate["auto_save_eligible"] = eligible
                         candidate["governance_reason"] = reason
                         candidates.append(candidate)
+                    saved_fingerprints: set[str] = set()
                     if candidates and auto_save:
                         if workspace_path:
                             scoped_project, scoped_workspace = workspace_memory_scope(workspace_path)
@@ -288,8 +307,23 @@ def extract_memories_with_model(
                                     project_id=scoped_project,
                                     workspace_path=scoped_workspace,
                                 )
+                                if item["id"] is not None:
+                                    saved_fingerprints.add(item["content"][:80])
                             except Exception:
                                 pass
+                    else:
+                        scoped_workspace = workspace_path
+
+                    for item in candidates:
+                        record_write_decision(
+                            content=item["content"],
+                            mem_type=item.get("mem_type", "knowledge"),
+                            eligible=item["auto_save_eligible"],
+                            reason=item["governance_reason"],
+                            source="model",
+                            saved=item["auto_save_eligible"] and item["content"][:80] in saved_fingerprints,
+                            workspace_path=scoped_workspace,
+                        )
                     return candidates
         except Exception:
             pass

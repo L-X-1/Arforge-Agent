@@ -58,6 +58,8 @@ export const dict = {
 
   "command.file.open": "打开文件",
 
+  "command.tab.expand": "展开标签栏",
+  "command.tab.collapse": "收起标签栏",
   "command.tab.close": "关闭标签页",
   "command.tab.reopenClosed": "重新打开已关闭的标签页",
 
@@ -1035,6 +1037,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "在此项目中跟踪、审查和撤消更改",
   "session.review.noVcs.createGit.actionLoading": "正在创建 Git 仓库...",
   "session.review.noVcs.createGit.action": "创建 Git 仓库",
+  "execution.status.bar": "执行",
   "session.todo.progress": "已完成 {{done}} 个任务（共 {{total}} 个）",
   "session.question.progress": "{{current}}/{{total}} 个问题",
   "session.header.open.finder": "访达",
@@ -1330,4 +1333,8 @@ export const dict = {
   "controlCenter.m220": "Unknown control-center error",
   "controlCenter.m221": "Unknown Agent extension error",
   "controlCenter.m222": "Unknown deep-diagnostics error",
+  "controlCenter.m223": "受控自主进化",
+  "controlCenter.m225": "运行时透视",
+  "controlCenter.m226": "上下文分层编译、模型路由决策、独立验证、审计链与运行状态的可视化。",
+  "controlCenter.m224": "审查学习证据提出的策略候选，并通过隔离评测、人工批准、灰度和回滚治理能力变化。",
 } satisfies Partial<Record<Keys, string>>

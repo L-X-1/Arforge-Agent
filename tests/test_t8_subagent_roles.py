@@ -14,17 +14,15 @@ def test_permission_classifier_uses_subagent_role_category():
     assert classify_tool("spawn_write_subagent", {"role": "admin"}) == "dangerous"
 
 
-def test_bridge_exposes_lightweight_subagent_roles():
-    from arforge.bridge import dispatch
+def test_bridge_no_longer_exposes_subagent_roles():
+    from arforge.product.direct_dispatch import dispatch
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     response = dispatch({"id": 2, "version": "1.1", "method": "subagents.roles"})
 
-    assert "subagents.roles" in described["data"]["methods"]
-    assert response["ok"] is True
-    roles = {item["role"]: item for item in response["data"]["items"]}
-    assert roles["reviewer"]["category"] == "read"
-    assert roles["test-writer"]["category"] == "workspace_write"
+    assert "subagents.roles" not in described["data"]["methods"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_cli_agents_shows_lightweight_roles(capsys):

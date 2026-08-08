@@ -216,6 +216,200 @@
   background: linear-gradient(to top, color-mix(in srgb, var(--background-base) 82%, transparent), transparent 88%);
 }
 
+/* ── Session workspace v2 ── */
+
+/* V4: one faint static accent glow on the continuous canvas */
+[data-arforge-session-panel]::before,
+[data-component="home-launchpad"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    52rem 34rem at 78% -12%,
+    color-mix(in srgb, var(--arforge-accent) 5%, transparent),
+    transparent 62%
+  );
+}
+
+[data-color-scheme="dark"] [data-arforge-session-panel]::before,
+[data-color-scheme="dark"] [data-component="home-launchpad"]::before {
+  background: radial-gradient(
+    52rem 34rem at 78% -12%,
+    color-mix(in srgb, var(--arforge-accent) 7%, transparent),
+    transparent 62%
+  );
+}
+
+[data-arforge-session-panel] > *,
+[data-component="home-launchpad"] > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* M2: session canvas fade-in when the keyed panel remounts on tab switch */
+@keyframes session-canvas-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+[data-arforge-session-panel] {
+  animation: session-canvas-enter 160ms ease-out;
+}
+
+/* M1: side panel body entrance (width transition + fade/slide) */
+@keyframes session-side-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+[data-session-side-panel-body] {
+  animation: session-side-panel-enter 260ms ease-out;
+}
+
+/* Execution status bar running dot */
+[data-component="execution-status-bar"] [data-running] {
+  background: var(--v2-background-bg-accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
+  animation: execution-status-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+[data-component="execution-status-bar"] [data-running]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--v2-background-bg-accent) 35%, transparent);
+}
+
+@keyframes execution-status-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="execution-status-bar"] [data-running] {
+    animation: none;
+  }
+}
+
+/* Agent busy badge — brand mark with a breathing accent halo */
+[data-component="agent-busy-badge"]::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
+  animation: agent-busy-pulse 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes agent-busy-pulse {
+  0% {
+    opacity: 1;
+    transform: scale(0.92);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+/* Execution indicator — top-bar status dot */
+[data-component="execution-indicator"] [data-running] {
+  background: var(--v2-background-bg-accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
+  animation: exec-indicator-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+[data-component="execution-indicator"] [data-running]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--v2-background-bg-accent) 35%, transparent);
+  animation: exec-indicator-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes exec-indicator-pulse {
+  0% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
+  }
+  70% {
+    opacity: 0;
+    box-shadow: 0 0 0 4px transparent;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="agent-busy-badge"]::after {
+    animation: none;
+    opacity: 0.5;
+  }
+
+  [data-component="execution-indicator"] [data-running],
+  [data-component="execution-indicator"] [data-running]::after {
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+/* A4: unified composer bar — todo dock and input share one continuous surface */
+[data-component="prompt-input-v2"] {
+  border-radius: 16px;
+  background-color: color-mix(in srgb, var(--v2-background-bg-layer-01) 72%, transparent);
+}
+
+[data-component="prompt-input-v2"]:focus-within {
+  box-shadow:
+    var(--dock-shell-visual-shadow, var(--v2-elevation-raised)),
+    0 0 0 var(--dock-shell-border-underlay-width, 1px)
+      var(--dock-shell-border-underlay-background, transparent),
+    0 0 0 2px var(--v2-border-border-focus);
+}
+
+[data-arforge-composer-region]:has([data-component="session-todo-dock"]) [data-component="session-todo-dock"] {
+  border-radius: 16px 16px 0 0;
+  border-bottom: none;
+}
+
+[data-arforge-composer-region]:has([data-component="session-todo-dock"]) [data-component="prompt-input-v2"] {
+  border-radius: 0 0 16px 16px;
+  border-top: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-arforge-session-panel],
+  [data-session-side-panel-body] {
+    animation: none;
+  }
+}
+
 [data-component="prompt-input-v2"] [data-slot="prompt-input-controls"] > * {
   min-width: 0;
   max-width: min(220px, 100%);

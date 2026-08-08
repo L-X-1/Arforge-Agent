@@ -1,0 +1,7 @@
+---
+import "../styles/global.css"
+import BrandMark from "./BrandMark.astro"
+interface Props { page: string }
+const { page } = Astro.props
+---
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><meta name="robots" content="noindex,follow"/><title>选择语言 — Arforge</title></head><body><main class="legacy-gate"><BrandMark/><p>请选择语言 · Choose your language</p><div class="hero__actions"><a class="button" href={`/zh-CN/${page}/`}>简体中文</a><a class="button button--secondary" href={`/en/${page}/`}>English</a></div></main><style>.legacy-gate{width:var(--container);min-height:100vh;margin:0 auto;display:grid;place-content:center;justify-items:center;text-align:center;gap:24px}.legacy-gate p{font-size:clamp(24px,4vw,46px);letter-spacing:-.04em}</style><script define:vars={{page}} is:inline>try{const lang=localStorage.getItem("arforge-locale");if(lang==="zh-CN"||lang==="en")location.replace(`/${lang}/${page}/`)}catch{}</script></body></html>

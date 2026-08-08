@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from "node:fs"
 import * as http from "node:http"
 import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
 import { app } from "electron"
@@ -119,6 +119,11 @@ const main = Effect.gen(function* () {
   process.env.ARFORGE_DISABLE_EMBEDDED_WEB_UI = "true"
 
   const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.arforge.desktop.dev"
+  const acceptanceUserData = app.commandLine.getSwitchValue("user-data-dir")
+  const isolatedAcceptanceInstance =
+    process.env.ARFORGE_DESKTOP_ISOLATED_ACCEPTANCE === "1" &&
+    isAbsolute(acceptanceUserData) &&
+    resolve(acceptanceUserData) === acceptanceUserData
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
 
@@ -138,9 +143,14 @@ const main = Effect.gen(function* () {
   app.setAppUserModelId(appId)
   app.setPath(
     "userData",
-    onboardingTestRoot ? join(onboardingTestRoot, "desktop") : join(app.getPath("appData"), appId),
+    isolatedAcceptanceInstance
+      ? acceptanceUserData
+      : onboardingTestRoot
+        ? join(onboardingTestRoot, "desktop")
+        : join(app.getPath("appData"), appId),
   )
-  if (onboardingTestRoot) app.setPath("sessionData", join(onboardingTestRoot, "session"))
+  if (isolatedAcceptanceInstance) app.setPath("sessionData", join(acceptanceUserData, "session"))
+  else if (onboardingTestRoot) app.setPath("sessionData", join(onboardingTestRoot, "session"))
   initializeOldLayoutEligibility(app.getPath("userData"))
   logger = initLogging()
   initCrashReporter()
@@ -200,7 +210,7 @@ const main = Effect.gen(function* () {
   app.commandLine.appendSwitch("enable-features", features ? `${jsCallStackFeature},${features}` : jsCallStackFeature)
   if (!app.isPackaged) app.commandLine.appendSwitch("remote-debugging-port", "9222")
 
-  if (!app.requestSingleInstanceLock()) {
+  if (!isolatedAcceptanceInstance && !app.requestSingleInstanceLock()) {
     app.quit()
     return
   }
@@ -341,7 +351,11 @@ const main = Effect.gen(function* () {
   })
   const hostname = "127.0.0.1"
   const url = `http://${hostname}:${port}`
-  const password = randomUUID()
+  // Fixed credentials from the environment take precedence over the default
+  // random per-launch password, so the local server can be accessed with a
+  // stable account (e.g. ARFORGE_SERVER_USERNAME / ARFORGE_SERVER_PASSWORD).
+  const username = process.env.ARFORGE_SERVER_USERNAME ?? "arforge"
+  const password = process.env.ARFORGE_SERVER_PASSWORD ?? randomUUID()
 
   const loadingTask = yield* Effect.gen(function* () {
     logger.log("sidecar connection started", { url })
@@ -351,7 +365,7 @@ const main = Effect.gen(function* () {
 
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, password, {
+      spawnLocalServer(hostname, port, username, password, {
         userDataPath: app.getPath("userData"),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
@@ -361,7 +375,7 @@ const main = Effect.gen(function* () {
     server = listener
     yield* Deferred.succeed(serverReady, {
       url,
-      username: "arforge",
+      username,
       password,
     })
 

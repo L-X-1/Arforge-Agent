@@ -172,6 +172,56 @@ export const PostgresSchemaMigrations = [
       "DO $$\nDECLARE\n  business_table text;\n  ownership_tables text[] := ARRAY[\n    'account', 'account_state', 'control_account', 'workspace', 'credential',\n    'event_sequence', 'event', 'feedback', 'goal', 'learning_outcome',\n    'learning_pattern', 'learning_outcome_pattern', 'memory', 'permission',\n    'project', 'project_directory', 'session', 'session_tag', 'message', 'part',\n    'todo', 'session_message', 'session_checkpoint', 'scheduled_prompt',\n    'session_input', 'session_context_epoch', 'session_share', 'task_graph_task',\n    'task_graph_edge', 'team', 'team_member', 'team_message', 'team_shutdown',\n    'workflow_graph_runs', 'workflow_graph_nodes', 'workflow_graph_events'\n  ];\nBEGIN\n  FOREACH business_table IN ARRAY ownership_tables LOOP\n    EXECUTE format(\n      'ALTER TABLE %I ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT %L',\n      business_table,\n      'ten_local'\n    );\n    EXECUTE format(\n      'ALTER TABLE %I ADD COLUMN IF NOT EXISTS owner_user_id text NOT NULL DEFAULT %L',\n      business_table,\n      'usr_local'\n    );\n    EXECUTE format(\n      'ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT COALESCE(NULLIF(current_setting(''arforge.tenant_id'', true), ''''), ''ten_local'')',\n      business_table\n    );\n    EXECUTE format(\n      'ALTER TABLE %I ALTER COLUMN owner_user_id SET DEFAULT COALESCE(NULLIF(current_setting(''arforge.user_id'', true), ''''), ''usr_local'')',\n      business_table\n    );\n    EXECUTE format(\n      'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (tenant_id) REFERENCES identity_tenant(id) ON DELETE RESTRICT',\n      business_table,\n      left(business_table || '_tenant_owner_fk', 63)\n    );\n    EXECUTE format(\n      'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (owner_user_id) REFERENCES identity_user(id) ON DELETE RESTRICT',\n      business_table,\n      left(business_table || '_user_owner_fk', 63)\n    );\n    EXECUTE format(\n      'CREATE INDEX %I ON %I (tenant_id, owner_user_id)',\n      left(business_table || '_tenant_owner_idx', 63),\n      business_table\n    );\n    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', business_table);\n    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', business_table);\n    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', business_table);\n    EXECUTE format(\n      'CREATE POLICY tenant_isolation ON %I USING (tenant_id = arforge_current_tenant_id() AND arforge_has_tenant_access(tenant_id)) WITH CHECK (tenant_id = arforge_current_tenant_id() AND owner_user_id = arforge_current_user_id() AND arforge_has_tenant_access(tenant_id))',\n      business_table\n    );\n  END LOOP;\nEND\n$$;",
       "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arforge_app') THEN\n    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE\n      identity_user, identity_tenant, identity_tenant_member, identity_token,\n      identity_session, identity_rate_limit\n    TO arforge_app;\n    GRANT EXECUTE ON FUNCTION arforge_current_tenant_id(), arforge_current_user_id(), arforge_has_tenant_access(text)\n    TO arforge_app;\n  END IF;\nEND\n$$;"
     ]
+  },
+  {
+    "id": "20260803060000_memory_corrections",
+    "statements": [
+      "CREATE TABLE memory_correction (\n  tenant_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.tenant_id', true), ''), 'ten_local'),\n  owner_user_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.user_id', true), ''), 'usr_local'),\n  id text PRIMARY KEY,\n  original_memory_id text NOT NULL,\n  successor_memory_id text NOT NULL,\n  original_source text NOT NULL,\n  reason text NOT NULL,\n  status text NOT NULL DEFAULT 'active',\n  time_created bigint NOT NULL,\n  time_undone bigint,\n  CONSTRAINT memory_correction_original_memory_fk FOREIGN KEY (original_memory_id) REFERENCES memory(id) ON DELETE CASCADE,\n  CONSTRAINT memory_correction_successor_memory_fk FOREIGN KEY (successor_memory_id) REFERENCES memory(id) ON DELETE CASCADE,\n  CONSTRAINT memory_correction_tenant_owner_fk FOREIGN KEY (tenant_id) REFERENCES identity_tenant(id) ON DELETE RESTRICT,\n  CONSTRAINT memory_correction_user_owner_fk FOREIGN KEY (owner_user_id) REFERENCES identity_user(id) ON DELETE RESTRICT\n);",
+      "CREATE INDEX memory_correction_original_idx ON memory_correction (original_memory_id, time_created);",
+      "CREATE INDEX memory_correction_successor_idx ON memory_correction (successor_memory_id);",
+      "CREATE INDEX memory_correction_status_idx ON memory_correction (status, time_created);",
+      "CREATE INDEX memory_correction_tenant_owner_idx ON memory_correction (tenant_id, owner_user_id);",
+      "ALTER TABLE memory_correction ENABLE ROW LEVEL SECURITY;",
+      "ALTER TABLE memory_correction FORCE ROW LEVEL SECURITY;",
+      "CREATE POLICY tenant_isolation ON memory_correction\n  USING (tenant_id = arforge_current_tenant_id() AND arforge_has_tenant_access(tenant_id))\n  WITH CHECK (\n    tenant_id = arforge_current_tenant_id()\n    AND owner_user_id = arforge_current_user_id()\n    AND arforge_has_tenant_access(tenant_id)\n  );",
+      "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arforge_app') THEN\n    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE memory_correction TO arforge_app;\n  END IF;\nEND\n$$;"
+    ]
+  },
+  {
+    "id": "20260803070000_memory_conflicts",
+    "statements": [
+      "CREATE TABLE memory_conflict (\n  tenant_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.tenant_id', true), ''), 'ten_local'),\n  owner_user_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.user_id', true), ''), 'usr_local'),\n  id text PRIMARY KEY,\n  signature text NOT NULL,\n  conflict_key text NOT NULL,\n  basis text NOT NULL,\n  left_memory_id text NOT NULL,\n  right_memory_id text NOT NULL,\n  left_fingerprint text NOT NULL,\n  right_fingerprint text NOT NULL,\n  status text NOT NULL DEFAULT 'pending',\n  chosen_memory_id text,\n  retired_memory_id text,\n  retired_original_source text,\n  decision_reason text,\n  time_created bigint NOT NULL,\n  time_updated bigint NOT NULL,\n  time_decided bigint,\n  time_undone bigint,\n  CONSTRAINT memory_conflict_left_memory_fk FOREIGN KEY (left_memory_id) REFERENCES memory(id) ON DELETE CASCADE,\n  CONSTRAINT memory_conflict_right_memory_fk FOREIGN KEY (right_memory_id) REFERENCES memory(id) ON DELETE CASCADE,\n  CONSTRAINT memory_conflict_tenant_owner_fk FOREIGN KEY (tenant_id) REFERENCES identity_tenant(id) ON DELETE RESTRICT,\n  CONSTRAINT memory_conflict_user_owner_fk FOREIGN KEY (owner_user_id) REFERENCES identity_user(id) ON DELETE RESTRICT\n);",
+      "CREATE UNIQUE INDEX memory_conflict_signature_idx ON memory_conflict (signature);",
+      "CREATE INDEX memory_conflict_status_idx ON memory_conflict (status, time_updated);",
+      "CREATE INDEX memory_conflict_left_idx ON memory_conflict (left_memory_id);",
+      "CREATE INDEX memory_conflict_right_idx ON memory_conflict (right_memory_id);",
+      "CREATE INDEX memory_conflict_tenant_owner_idx ON memory_conflict (tenant_id, owner_user_id);",
+      "ALTER TABLE memory_conflict ENABLE ROW LEVEL SECURITY;",
+      "ALTER TABLE memory_conflict FORCE ROW LEVEL SECURITY;",
+      "CREATE POLICY tenant_isolation ON memory_conflict\n  USING (tenant_id = arforge_current_tenant_id() AND arforge_has_tenant_access(tenant_id))\n  WITH CHECK (\n    tenant_id = arforge_current_tenant_id()\n    AND owner_user_id = arforge_current_user_id()\n    AND arforge_has_tenant_access(tenant_id)\n  );",
+      "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arforge_app') THEN\n    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE memory_conflict TO arforge_app;\n  END IF;\nEND\n$$;"
+    ]
+  },
+  {
+    "id": "20260804090000_runtime_insight",
+    "statements": [
+      "CREATE TABLE audit_entry (\n  tenant_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.tenant_id', true), ''), 'ten_local'),\n  owner_user_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.user_id', true), ''), 'usr_local'),\n  id text PRIMARY KEY,\n  seq bigint NOT NULL,\n  recorded_at bigint NOT NULL,\n  actor text NOT NULL,\n  action text NOT NULL,\n  resource text NOT NULL,\n  reason text,\n  metadata text,\n  previous_hash text NOT NULL,\n  record_hash text NOT NULL,\n  CONSTRAINT audit_entry_tenant_owner_fk FOREIGN KEY (tenant_id) REFERENCES identity_tenant(id) ON DELETE RESTRICT,\n  CONSTRAINT audit_entry_user_owner_fk FOREIGN KEY (owner_user_id) REFERENCES identity_user(id) ON DELETE RESTRICT\n);",
+      "CREATE UNIQUE INDEX audit_entry_seq_idx ON audit_entry (seq);",
+      "CREATE INDEX audit_entry_action_idx ON audit_entry (action, recorded_at);",
+      "CREATE INDEX audit_entry_actor_idx ON audit_entry (actor, recorded_at);",
+      "CREATE INDEX audit_entry_tenant_owner_idx ON audit_entry (tenant_id, owner_user_id);",
+      "ALTER TABLE audit_entry ENABLE ROW LEVEL SECURITY;",
+      "ALTER TABLE audit_entry FORCE ROW LEVEL SECURITY;",
+      "CREATE POLICY tenant_isolation ON audit_entry\n  USING (tenant_id = arforge_current_tenant_id() AND arforge_has_tenant_access(tenant_id))\n  WITH CHECK (\n    tenant_id = arforge_current_tenant_id()\n    AND owner_user_id = arforge_current_user_id()\n    AND arforge_has_tenant_access(tenant_id)\n  );",
+      "CREATE TABLE session_run (\n  tenant_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.tenant_id', true), ''), 'ten_local'),\n  owner_user_id text NOT NULL DEFAULT COALESCE(NULLIF(current_setting('arforge.user_id', true), ''), 'usr_local'),\n  id text PRIMARY KEY,\n  session_id text NOT NULL,\n  status text NOT NULL,\n  started_at bigint NOT NULL,\n  finished_at bigint,\n  last_seq bigint,\n  error text,\n  CONSTRAINT session_run_tenant_owner_fk FOREIGN KEY (tenant_id) REFERENCES identity_tenant(id) ON DELETE RESTRICT,\n  CONSTRAINT session_run_user_owner_fk FOREIGN KEY (owner_user_id) REFERENCES identity_user(id) ON DELETE RESTRICT\n);",
+      "CREATE INDEX session_run_session_idx ON session_run (session_id, started_at);",
+      "CREATE INDEX session_run_status_idx ON session_run (status, started_at);",
+      "CREATE INDEX session_run_tenant_owner_idx ON session_run (tenant_id, owner_user_id);",
+      "ALTER TABLE session_run ENABLE ROW LEVEL SECURITY;",
+      "ALTER TABLE session_run FORCE ROW LEVEL SECURITY;",
+      "CREATE POLICY tenant_isolation ON session_run\n  USING (tenant_id = arforge_current_tenant_id() AND arforge_has_tenant_access(tenant_id))\n  WITH CHECK (\n    tenant_id = arforge_current_tenant_id()\n    AND owner_user_id = arforge_current_user_id()\n    AND arforge_has_tenant_access(tenant_id)\n  );",
+      "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arforge_app') THEN\n    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE audit_entry, session_run TO arforge_app;\n  END IF;\nEND\n$$;"
+    ]
   }
 ] as const
 export const PostgresSchemaVersion = PostgresSchemaMigrations.at(-1)!.id

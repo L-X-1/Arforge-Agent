@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.product.action_runtime import ActionRuntime, ActionRuntimeError
 from arforge.product.session_runtime import SessionRuntime
 from arforge.product.task_runtime import TaskRuntime, TaskRuntimeError, TaskStore

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.customization import list_customizations, render_custom_command
 
 
@@ -107,49 +107,21 @@ def test_slash_dispatcher_falls_back_to_custom_command(monkeypatch, tmp_path):
 
 
 def test_bridge_exposes_customizations_list(monkeypatch, tmp_path):
-    root = tmp_path / "custom"
-    commands = root / "commands"
-    commands.mkdir(parents=True)
-    (commands / "note.json").write_text(
-        json.dumps({"name": "note", "description": "Draft a note.", "template": "Draft: {{args}}"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ARFORGE_CUSTOM_PATHS", str(root))
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "customizations.list"})
 
-    described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-    response = dispatch({"id": 2, "version": "1.1", "method": "customizations.list"})
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    assert "customizations.list" in described["data"]["methods"]
-    assert response["ok"] is True
-    assert response["data"]["commands"]["count"] == 1
-    assert response["data"]["commands"]["items"][0]["name"] == "note"
 
 
 def test_bridge_renders_custom_command(monkeypatch, tmp_path):
-    root = tmp_path / "custom"
-    commands = root / "commands"
-    commands.mkdir(parents=True)
-    (commands / "note.json").write_text(
-        json.dumps({"name": "note", "description": "Draft a note.", "template": "Draft: {{args}}"}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ARFORGE_CUSTOM_PATHS", str(root))
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "customizations.render"})
 
-    described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-    response = dispatch(
-        {
-            "id": 2,
-            "version": "1.1",
-            "method": "customizations.render",
-            "params": {"name": "note", "args": "ship notes"},
-        }
-    )
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    assert "customizations.render" in described["data"]["methods"]
-    assert response["ok"] is True
-    assert response["data"]["rendered"] == "Draft: ship notes"
 
 
 def test_cli_custom_render(monkeypatch, tmp_path, capsys):

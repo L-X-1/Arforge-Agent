@@ -22,6 +22,8 @@
     "arforge": "./bin/arforge"
   },
   "exports": {
+    "./runtime/*": "./src/runtime/*.ts",
+    "./runtime": "./src/runtime/index.ts",
     "./effect/layer-node": "./src/effect/layer-node.ts",
     "./effect/app-node": "./src/effect/app-node.ts",
     "./session/runner": "./src/session/runner/index.ts",
@@ -98,7 +100,6 @@
     "@npmcli/config": "10.8.1",
     "@arforge-ai/effect-drizzle-sqlite": "workspace:*",
     "@arforge-ai/effect-sqlite-node": "workspace:*",
-    "@arforge-ai/agent-python": "workspace:*",
     "@arforge-ai/llm": "workspace:*",
     "@arforge-ai/schema": "workspace:*",
     "@arforge-ai/plugin": "workspace:*",

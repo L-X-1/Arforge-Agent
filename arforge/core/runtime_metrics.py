@@ -32,6 +32,7 @@ class RunMetrics:
     success: bool = False
     steps: int = 0
     tool_calls: int = 0
+    failed_tool_calls: int = 0
     llm_calls: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -53,6 +54,7 @@ class RunMetrics:
             "success": self.success,
             "steps": self.steps,
             "tool_calls": self.tool_calls,
+            "failed_tool_calls": self.failed_tool_calls,
             "llm_calls": self.llm_calls,
             "tokens_in": self.tokens_in,
             "tokens_out": self.tokens_out,

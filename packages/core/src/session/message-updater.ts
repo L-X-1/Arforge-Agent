@@ -148,6 +148,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             time: { created: event.data.timestamp },
           }),
         ),
+      "session.next.memory.context.prepared": () => Effect.void,
+      "session.next.context.fusion.prepared": () => Effect.void,
       "session.next.synthetic": (event) => {
         return adapter.appendMessage(
           SessionMessage.Synthetic.make({

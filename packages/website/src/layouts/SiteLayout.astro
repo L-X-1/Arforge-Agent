@@ -1,0 +1,69 @@
+---
+import SiteFooter from "../components/SiteFooter.astro"
+import SiteHeader from "../components/SiteHeader.astro"
+import { alternateLocale, siteCopy, type Locale, type PublicPage } from "../content"
+import "../styles/global.css"
+
+interface Props {
+  locale: Locale
+  title: string
+  description: string
+  page?: PublicPage | "home"
+  image?: string
+}
+
+const { locale, title, description, page = "home", image = "/og-default.svg" } = Astro.props
+const alternate = alternateLocale(locale)
+const pathname = page === "home" ? `/${locale}/` : `/${locale}/${page}/`
+const alternatePath = page === "home" ? `/${alternate}/` : `/${alternate}/${page}/`
+const canonical = new URL(pathname, Astro.site)
+---
+
+<!doctype html>
+<html lang={locale}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#17191d" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content={description} />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang={locale} href={canonical} />
+    <link rel="alternate" hreflang={alternate} href={new URL(alternatePath, Astro.site)} />
+    <link rel="alternate" hreflang="x-default" href={new URL("/", Astro.site)} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>{title} — Arforge</title>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Arforge" />
+    <meta property="og:title" content={`${title} — Arforge`} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL(image, Astro.site)} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline type="application/ld+json" set:html={JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: "Arforge",
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Windows",
+      url: "https://arforgeagent.com",
+      description,
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD", availability: "https://schema.org/PreOrder" },
+    })} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{siteCopy[locale].skip}</a>
+    <SiteHeader locale={locale} page={page} />
+    <main id="main"><slot /></main>
+    <SiteFooter locale={locale} />
+    <script>
+      document.querySelectorAll<HTMLAnchorElement>("a[hreflang]").forEach((link) => {
+        link.addEventListener("click", () => {
+          const nextLocale = link.getAttribute("hreflang")
+          if (nextLocale === "zh-CN" || nextLocale === "en") localStorage.setItem("arforge-locale", nextLocale)
+        })
+      })
+    </script>
+  </body>
+</html>

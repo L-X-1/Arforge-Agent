@@ -1,11 +1,10 @@
 import { ScrollView } from "@arforge-ai/ui/scroll-view"
-import { createSignal, Show } from "solid-js"
+import { Mark } from "@arforge-ai/ui/logo"
+import { createEffect, createSignal, Show } from "solid-js"
+import { useSearchParams } from "@solidjs/router"
 import { createHomeArchivedSessionsController } from "./home/home-archived-sessions-controller"
 import { HomeArchivedSessionsView } from "./home/home-archived-sessions-view"
 import { createHomeController } from "./home/home-controller"
-import { createHomeProjectsController } from "./home/home-projects-controller"
-import { HomeUtilityNav } from "./home/home-projects-view"
-import { HomeProjects } from "./home/home-projects"
 import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
@@ -13,22 +12,44 @@ import { HomeSessions } from "./home/home-sessions"
 
 export function NewHome() {
   const home = createHomeController()
+  const [searchParams, setSearchParams] = useSearchParams<{ archived?: string }>()
   const [page, setPage] = createSignal<"sessions" | "archived">("sessions")
-  const projects = createHomeProjectsController(home)
+  // The archived view is driven by the URL so sidebar navigation can switch
+  // between overview and archive without remounting this route.
+  createEffect(() => {
+    setPage(searchParams.archived === "1" ? "archived" : "sessions")
+  })
+  // Selecting a project (e.g. from the sidebar) while on the archived view
+  // returns to that project's session overview. Only reacts to an actual
+  // directory change, never to the archived query itself.
+  let lastSelectionDir: string | undefined
+  let selectionInitialized = false
+  createEffect(() => {
+    const directory = home.selection.value().directory
+    if (!selectionInitialized) {
+      selectionInitialized = true
+      lastSelectionDir = directory
+      return
+    }
+    if (directory === lastSelectionDir) return
+    lastSelectionDir = directory
+    if (searchParams.archived === "1" && directory) {
+      setSearchParams({ archived: undefined })
+    }
+  })
   const sessions = createHomeSessionsController(home)
   const archived = createHomeArchivedSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
   const openSessions = () => setPage("sessions")
   const openArchived = () => setPage("archived")
+  const channel = import.meta.env.VITE_ARFORGE_CHANNEL
   return (
     <div
       data-component="home-launchpad"
       data-arforge-material="main"
       class={`
-        m-2 min-h-0 flex-1 self-stretch overflow-hidden rounded-[16px]
-        border border-v2-border-border-muted bg-transparent
-        shadow-[inset_0_1px_0_var(--arforge-highlight),var(--v2-elevation-raised)]
+        relative min-h-0 flex-1 self-stretch overflow-hidden rounded-tl-[16px] rounded-bl-[16px]
       `}
     >
       <ScrollView
@@ -39,35 +60,24 @@ export function NewHome() {
         onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
         onWheel={scroll.viewport.containOuterWheel}
       >
-        <div
-          class={`
-            mx-auto grid min-h-full w-full max-w-[1080px] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 px-3
-            lg:grid-cols-[280px_minmax(0,720px)] lg:grid-rows-1 lg:gap-8 lg:px-6
-          `}
-        >
-          <HomeProjects
-            projects={projects}
-            scroll={scroll}
-            archiveSelected={() => page() === "archived"}
-            archiveCount={archived.data.count}
-            onOpenArchive={openArchived}
-            onOpenSessions={openSessions}
-          />
+        <div class="mx-auto flex w-full max-w-[880px] items-center gap-2.5 px-3 pt-4 lg:px-4">
+          <Mark class="size-5" />
+          <span class="font-mono text-[15px] font-bold leading-none tracking-[0.14em] text-v2-text-text-base">
+            ARFORGE
+          </span>
+          <Show when={channel && ["beta", "dev"].includes(channel)}>
+            <span class="rounded-[6px] bg-v2-background-bg-accent/12 px-1.5 py-0.5 text-[10px] font-[530] leading-none uppercase tracking-wide text-v2-text-text-accent">
+              {channel}
+            </span>
+          </Show>
+        </div>
+        <div class="mx-auto min-h-full w-full max-w-[880px] px-3 pb-16 lg:px-4">
           <Show
             when={page() === "archived"}
             fallback={<HomeSessions sessions={sessions} search={search} scroll={scroll} />}
           >
             <HomeArchivedSessionsView archived={archived} />
           </Show>
-          <HomeUtilityNav
-            class="flex lg:hidden"
-            archiveSelected={() => page() === "archived"}
-            archiveCount={archived.data.count}
-            onOpenArchive={openArchived}
-            onOpenSettings={projects.utility.settings}
-            onOpenHelp={projects.utility.help}
-            language={projects.copy.language}
-          />
         </div>
       </ScrollView>
     </div>

@@ -4,8 +4,11 @@ export * as SkillPlugin from "./skill"
 
 import { define } from "./definition"
 import { Effect } from "effect"
+import { existsSync } from "node:fs"
+import path from "node:path"
 import { AbsolutePath } from "../schema"
 import { SkillV2 } from "../skill"
+import { findDevelopmentRuntimeRoot } from "../skill/runtime-root"
 import customizeArforgeContent from "./skill/customize-arforge.md" with { type: "text" }
 import grillMeContent from "./skill/grill-me.md" with { type: "text" }
 import openspecContent from "./skill/openspec.md" with { type: "text" }
@@ -13,6 +16,20 @@ import trellisContent from "./skill/trellis.md" with { type: "text" }
 import superpowersContent from "./skill/superpowers.md" with { type: "text" }
 
 export const CustomizeArforgeContent = customizeArforgeContent
+
+// Capability skills ship with the Python runtime bundle (dev checkout or the
+// packaged desktop resources). Registering them as a directory source keeps a
+// single upstream copy while making them routable by SkillGuidance.
+function bundledAgentSkillsRoot(): string | undefined {
+  const runtimeRoot = process.env.ARFORGE_AGENT_RUNTIME_ROOT || findDevelopmentRuntimeRoot(process.cwd())
+  if (!runtimeRoot) return
+  for (const candidate of [
+    path.join(runtimeRoot, "arforge", "bundled_skills", "agent_skills", "skills"),
+    path.join(runtimeRoot, "_internal", "arforge", "bundled_skills", "agent_skills", "skills"),
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+}
 
 const developmentSkills = [
   {
@@ -67,6 +84,18 @@ export const Plugin = define({
               location: AbsolutePath.make(`/builtin/${skill.name}.md`),
               content: skill.content,
             }),
+          }),
+        )
+      }
+      // Full-capability skills (design-taste-frontend and friends) are kept in
+      // the Python bundle; directory-source loading reuses the same copy and
+      // silently no-ops when the runtime root is unavailable.
+      const bundledRoot = bundledAgentSkillsRoot()
+      if (bundledRoot) {
+        draft.source(
+          SkillV2.DirectorySource.make({
+            type: "directory",
+            path: AbsolutePath.make(path.join(bundledRoot, "design-taste-frontend")),
           }),
         )
       }

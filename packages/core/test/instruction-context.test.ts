@@ -109,6 +109,55 @@ describe("InstructionContext", () => {
     ),
   )
 
+  it.live("loads ARFORGE.md alongside AGENTS.md as ambient instructions", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const project = path.join(tmp.path, "project")
+          const directory = path.join(project, "packages", "core")
+          const arforgeFile = path.join(project, "ARFORGE.md")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(directory, { recursive: true })
+            await fs.writeFile(arforgeFile, "# Arforge 行为准则")
+          })
+
+          const load = SystemContextRegistry.Service.pipe(
+            Effect.flatMap((service) => service.load()),
+            Effect.provide(
+              instructionLayer({
+                config: global,
+                locationServiceLayer: Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(
+                    location(
+                      { directory: AbsolutePath.make(directory) },
+                      { projectDirectory: AbsolutePath.make(project) },
+                    ),
+                  ),
+                ),
+              }),
+            ),
+          )
+
+          const initialized = yield* SystemContext.initialize(yield* load)
+          expect(initialized.baseline).toBe(
+            [`Instructions from: ${arforgeFile}\n# Arforge 行为准则`].join("\n\n"),
+          )
+
+          yield* Effect.promise(() => fs.writeFile(arforgeFile, "# 更新后的准则"))
+          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toMatchObject({
+            _tag: "Updated",
+            text: expect.stringContaining("# 更新后的准则"),
+          })
+        }),
+      ),
+    ),
+  )
+
   it.live("keeps an empty AGENTS.md as available context", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -248,7 +297,7 @@ describe("InstructionContext", () => {
       )
 
       expect(observed).toEqual({
-        targets: ["AGENTS.md"],
+        targets: ["AGENTS.md", "ARFORGE.md"],
         start: FSUtil.resolve("/repo"),
         stop: FSUtil.resolve("/repo"),
       })

@@ -155,10 +155,10 @@ class AcpServer:
         self._threads: set[threading.Thread] = set()
         self._threads_lock = threading.Lock()
 
-        from arforge.bridge import _install_agentic_hooks, _register_builtin_tools
+        from arforge.product.direct_dispatch import install_agentic_hooks, register_builtin_tools
 
-        _register_builtin_tools()
-        _install_agentic_hooks()
+        register_builtin_tools()
+        install_agentic_hooks()
         self.runtime = SessionRuntime(
             self._on_runtime_event,
             agent_factory=agent_factory,

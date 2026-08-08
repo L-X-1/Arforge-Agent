@@ -1,4 +1,4 @@
-"""Rank context snippets."""
+"""Legacy snippet ranking helper; it does not allocate provider context."""
 
 from __future__ import annotations
 

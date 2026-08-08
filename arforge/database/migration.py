@@ -5,9 +5,12 @@ from __future__ import annotations
 from arforge.database.base import Base
 
 
-LATEST_REVISION = "0004_cache_evidence"
+LATEST_REVISION = "0005_memory_os"
 MAIN_TABLES = {
     "memories",
+    "memory_revisions",
+    "memory_relations",
+    "memory_retrieval_events",
     "learning_experiences",
     "learning_outcomes",
     "learning_patterns",

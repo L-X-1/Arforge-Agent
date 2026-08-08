@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -118,50 +116,16 @@ def test_run_script_defaults_to_no_timeout_and_keeps_explicit_limits_optional():
         run_script("python", "print('x')", timeout_seconds=-1)
 
 
-def test_frozen_run_script_uses_authenticated_sidecar_mode(tmp_path, monkeypatch):
+def test_frozen_run_script_uses_plain_python_invocation(tmp_path, monkeypatch):
     from arforge.tools.basic_tools import _python_script_command
 
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
     process_env: dict[str, str] = {}
     script = Path(tempfile.gettempdir()) / "arforge-validation-command.py"
 
-    command = _python_script_command("bridge.exe", script, process_env, tmp_path)
+    command = _python_script_command("python", script, process_env, tmp_path)
 
-    assert command[0:2] == ["bridge.exe", "--arforge-run-python-script"]
-    assert command[2] == process_env["ARFORGE_INTERNAL_SCRIPT_TOKEN"]
-    assert command[3] == str(script)
-    assert process_env["ARFORGE_INTERNAL_SCRIPT_WORKSPACE"] == str(tmp_path.resolve())
-
-
-def test_frozen_sidecar_script_mode_executes_only_authenticated_temp_script(
-    tmp_path, monkeypatch, capsys
-):
-    from arforge.bridge import _run_frozen_script_mode
-
-    token = "unit-test-token"
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        prefix="arforge-validation-",
-        suffix=".py",
-        encoding="utf-8",
-        delete=False,
-    ) as handle:
-        handle.write("print('FROZEN_RUN_OK')\n")
-        script = Path(handle.name)
-    try:
-        monkeypatch.setenv("ARFORGE_INTERNAL_SCRIPT_TOKEN", token)
-        monkeypatch.setenv("ARFORGE_INTERNAL_SCRIPT_WORKSPACE", str(tmp_path))
-        monkeypatch.setattr(sys, "argv", ["bridge"])
-
-        result = _run_frozen_script_mode(
-            ["bridge", "--arforge-run-python-script", token, str(script)]
-        )
-
-        assert result == 0
-        assert capsys.readouterr().out.strip() == "FROZEN_RUN_OK"
-        assert os.environ.get("ARFORGE_INTERNAL_SCRIPT_TOKEN") is None
-    finally:
-        script.unlink(missing_ok=True)
+    assert command == ["python", str(script)]
+    assert process_env == {}
 
 
 def test_run_script_drains_large_output_without_pipe_deadlock():

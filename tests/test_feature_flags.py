@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import arforge.bridge as bridge_module
+import arforge.product.direct_dispatch as bridge_module
 import arforge.feature_flags as feature_flags_module
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.feature_flags import FeatureFlagRegistry
 from arforge.product.action_runtime import ActionRuntime
 from arforge.product.session_runtime import SessionRuntime
@@ -65,7 +65,7 @@ def test_invalid_local_and_environment_values_are_reported_without_enabling(tmp_
     assert "invalid environment override ignored: ARFORGE_FEATURE_FILE_HISTORY" in result["problems"]
 
 
-def test_bridge_exposes_flags_and_enforces_disabled_file_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_bridge_list_is_native_but_mutation_still_enforced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     registry = FeatureFlagRegistry(state_path=tmp_path / "state" / "feature_flags.json")
     monkeypatch.setattr(feature_flags_module, "get_feature_flags", lambda: registry)
     monkeypatch.setattr(bridge_module, "get_feature_flags", lambda: registry)
@@ -93,13 +93,8 @@ def test_bridge_exposes_flags_and_enforces_disabled_file_history(tmp_path: Path,
         actions=actions,
     )
 
-    assert listed["ok"] is True
-    assert listed["data"]["count"] == 5
-    modal_keyboard = next(
-        item for item in listed["data"]["items"] if item["flag_id"] == "desktop_modal_keyboard"
-    )
-    assert modal_keyboard["enabled"] is False
-    assert modal_keyboard["source"] == "default"
+    assert listed["ok"] is False
+    assert listed["error"]["code"] == "METHOD_NOT_FOUND"
     assert updated["ok"] is True
     assert updated["data"]["enabled"] is False
     assert blocked["ok"] is False

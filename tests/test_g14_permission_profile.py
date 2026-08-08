@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.core.hooks import HookContext, HookEvent, get_hook_manager, reset_hook_manager
 from arforge.core.permission import install_permission_hooks, reset_permission_manager
 from arforge.permission_profile import add_rule, list_rules, match_rule, revoke_rule
@@ -48,17 +48,15 @@ def test_permission_rule_validation_rejects_bad_input(tmp_path):
         raise AssertionError("bad decision should fail")
 
 
-def test_bridge_exposes_permission_rules(monkeypatch, tmp_path):
+def test_bridge_no_longer_exposes_permission_rules(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path))
-    add_rule(subject="tool.read", category="read", decision="allow_always", reason="test")
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     response = dispatch({"id": 2, "version": "1.1", "method": "permissions.rules"})
 
-    assert "permissions.rules" in described["data"]["methods"]
-    assert response["ok"] is True
-    assert response["data"]["count"] == 1
-    assert response["data"]["items"][0]["subject"] == "tool.read"
+    assert "permissions.rules" not in described["data"]["methods"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_bridge_can_add_and_revoke_permission_rule(monkeypatch, tmp_path):

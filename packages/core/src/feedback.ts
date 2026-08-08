@@ -8,6 +8,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { FeedbackTable } from "./feedback/sql"
 import { LearningV2 } from "./learning"
 import { Location } from "./location"
+import { redact } from "./redact"
 import { SessionSchema } from "./session/schema"
 import { SessionTable } from "./session/sql"
 
@@ -248,17 +249,4 @@ function toFiniteNumber(value: number | string | bigint | null | undefined) {
   return Number.isFinite(normalized) ? normalized : 0
 }
 
-export function redact(value: string) {
-  return value
-    .replace(/\b(?:sk|pk)-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED_SECRET]")
-    .replace(/\bghp_[A-Za-z0-9]{36}\b/g, "[REDACTED_SECRET]")
-    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_SECRET]")
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}\b/g, "[REDACTED_SECRET]")
-    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED_SECRET]")
-    .replace(/\b(postgresql|postgres|mysql):\/\/([^\s:/]+):([^@\s]+)@/gi, "$1://[REDACTED_SECRET]:[REDACTED_SECRET]@")
-    .replace(
-      /\b(api[_-]?key|secret|token|password|passwd|pwd|authorization)\s*[:=]\s*[^\s,;]+/gi,
-      "$1=[REDACTED_SECRET]",
-    )
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/gi, "Bearer [REDACTED_SECRET]")
-}
+export { redact } from "./redact"

@@ -75,7 +75,7 @@ class SemanticIndex:
         self.avg_doc_len: float = 0.0
 
     def rebuild(self):
-        return self.rebuild_from_items(query_memories(limit=10000))
+        return self.rebuild_from_items(query_memories(lifecycle_filter="active", limit=10000))
 
     def rebuild_from_items(self, items: list[dict]):
         self.inverted.clear()
@@ -172,31 +172,16 @@ def semantic_search_memories(
     scope_project = project_id or ""
     scope_workspace = workspace_path or ""
     scope_limit = limit if limit is not None else 200
-    if scope_project or scope_workspace:
-        from arforge.memory import query_memories_for_scope
+    from arforge.memory_os import MemoryOS
 
-        items = query_memories_for_scope(
-            project_id=scope_project,
-            workspace_path=scope_workspace,
-            limit=scope_limit,
-        )
-    else:
-        items = query_memories(limit=scope_limit)
-    index = SemanticIndex().rebuild_from_items(items)
-    results = index.search(query, top_k, min_score)
-    return {
-        "schema_version": 1,
-        "algorithm": "hybrid_bm25_hashing_vector",
-        "scope": {
-            "project_id": scope_project,
-            "workspace_path": scope_workspace,
-            "top_k": top_k,
-            "limit": scope_limit,
-        },
-        "indexed": len(items),
-        "items": [{**item, "id": str(item["id"])} for item in results],
-        "note": "Local hybrid memory recall using BM25 plus deterministic hashing embeddings; no external provider is required.",
-    }
+    return MemoryOS().recall(
+        query,
+        project_id=scope_project,
+        workspace_path=scope_workspace,
+        top_k=top_k,
+        min_score=min_score,
+        limit=scope_limit,
+    )
 
 
 def _quality_query(item: dict) -> str:
@@ -220,7 +205,12 @@ def recall_quality_report(
     This is an operational BM25 self-recall smoke test, not a causal quality
     proof and not an external embedding benchmark.
     """
-    items = query_memories(project_id=project_id, workspace_path=workspace_path, limit=limit)
+    items = query_memories(
+        project_id=project_id,
+        workspace_path=workspace_path,
+        lifecycle_filter="active",
+        limit=limit,
+    )
     index = SemanticIndex().rebuild_from_items(items)
     evaluated = 0
     top1_hits = 0

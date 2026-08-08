@@ -29,30 +29,86 @@ def builtin_capability_eval_tasks() -> list[CapabilityEvalTask]:
     return [
         CapabilityEvalTask("g6-resume-artifacts", "resume", _eval_resume_artifacts),
         CapabilityEvalTask("g11-impacted-tests", "regression", _eval_impacted_tests),
-        CapabilityEvalTask("g13-interrupt-control-file", "interrupt", _eval_interrupt_control_file),
+        CapabilityEvalTask(
+            "g13-interrupt-control-file", "interrupt", _eval_interrupt_control_file
+        ),
         CapabilityEvalTask("g19-danger-guard", "security", _eval_danger_guard),
         CapabilityEvalTask("g20-replay-report", "replay", _eval_replay_report),
-        CapabilityEvalTask("ma1-hard-timeout", "multiagent", _eval_multiagent_hard_timeout),
-        CapabilityEvalTask("ma2-progress-cancel", "multiagent", _eval_multiagent_progress_cancel),
-        CapabilityEvalTask("ma3-role-boundaries", "multiagent", _eval_multiagent_role_boundaries),
-        CapabilityEvalTask("ma4-unified-worker-runtime", "multiagent", _eval_unified_worker_runtime),
-        CapabilityEvalTask("pr1-thinking-tool-choice", "provider", _eval_thinking_tool_choice),
+        CapabilityEvalTask(
+            "ma1-hard-timeout", "multiagent", _eval_multiagent_hard_timeout
+        ),
+        CapabilityEvalTask(
+            "ma2-progress-cancel", "multiagent", _eval_multiagent_progress_cancel
+        ),
+        CapabilityEvalTask(
+            "ma3-role-boundaries", "multiagent", _eval_multiagent_role_boundaries
+        ),
+        CapabilityEvalTask(
+            "ma4-unified-worker-runtime", "multiagent", _eval_unified_worker_runtime
+        ),
+        CapabilityEvalTask(
+            "pr1-thinking-tool-choice", "provider", _eval_thinking_tool_choice
+        ),
         CapabilityEvalTask("rd1-package-version", "readiness", _eval_package_version),
-        CapabilityEvalTask("ci1-quality-workflow", "automation", _eval_quality_workflow),
-        CapabilityEvalTask("ob1-telemetry-isolation", "observability", _eval_telemetry_isolation),
-        CapabilityEvalTask("sc0-created-test-order", "self_correct", _eval_created_test_order),
-        CapabilityEvalTask("sc1-failure-feedback", "self_correct", _eval_self_correct_failure_feedback),
-        CapabilityEvalTask("sc2-repeat-call-block", "self_correct", _eval_self_correct_repeat_block),
-        CapabilityEvalTask("sc3-syntax-reflection", "self_correct", _eval_self_correct_syntax_reflection),
-        CapabilityEvalTask("sc4-tool-message-order", "self_correct", _eval_self_correct_tool_message_order),
-        CapabilityEvalTask("sc5-unexecuted-tool-text-block", "self_correct", _eval_self_correct_unexecuted_tool_text_block),
-        CapabilityEvalTask("sc6-cleanup-tool-switch", "self_correct", _eval_self_correct_cleanup_tool_switch),
-        CapabilityEvalTask("sc7-verification-gate", "self_correct", _eval_self_correct_verification_gate),
-        CapabilityEvalTask("sc8-post-edit-consistency", "self_correct", _eval_self_correct_post_edit_consistency),
-        CapabilityEvalTask("sc9-test-fix-loop", "self_correct", _eval_self_correct_test_fix_loop),
-        CapabilityEvalTask("sc10-cross-file-imports", "self_correct", _eval_self_correct_cross_file_imports),
-        CapabilityEvalTask("sc11-transient-retry", "self_correct", _eval_self_correct_transient_retry),
-        CapabilityEvalTask("sc12-auto-test-loop", "self_correct", _eval_self_correct_auto_test_loop),
+        CapabilityEvalTask(
+            "ci1-quality-workflow", "automation", _eval_quality_workflow
+        ),
+        CapabilityEvalTask(
+            "ob1-telemetry-isolation", "observability", _eval_telemetry_isolation
+        ),
+        CapabilityEvalTask(
+            "sc0-created-test-order", "self_correct", _eval_created_test_order
+        ),
+        CapabilityEvalTask(
+            "sc1-failure-feedback", "self_correct", _eval_self_correct_failure_feedback
+        ),
+        CapabilityEvalTask(
+            "sc2-repeat-call-block", "self_correct", _eval_self_correct_repeat_block
+        ),
+        CapabilityEvalTask(
+            "sc3-syntax-reflection",
+            "self_correct",
+            _eval_self_correct_syntax_reflection,
+        ),
+        CapabilityEvalTask(
+            "sc4-tool-message-order",
+            "self_correct",
+            _eval_self_correct_tool_message_order,
+        ),
+        CapabilityEvalTask(
+            "sc5-unexecuted-tool-text-block",
+            "self_correct",
+            _eval_self_correct_unexecuted_tool_text_block,
+        ),
+        CapabilityEvalTask(
+            "sc6-cleanup-tool-switch",
+            "self_correct",
+            _eval_self_correct_cleanup_tool_switch,
+        ),
+        CapabilityEvalTask(
+            "sc7-verification-gate",
+            "self_correct",
+            _eval_self_correct_verification_gate,
+        ),
+        CapabilityEvalTask(
+            "sc8-post-edit-consistency",
+            "self_correct",
+            _eval_self_correct_post_edit_consistency,
+        ),
+        CapabilityEvalTask(
+            "sc9-test-fix-loop", "self_correct", _eval_self_correct_test_fix_loop
+        ),
+        CapabilityEvalTask(
+            "sc10-cross-file-imports",
+            "self_correct",
+            _eval_self_correct_cross_file_imports,
+        ),
+        CapabilityEvalTask(
+            "sc11-transient-retry", "self_correct", _eval_self_correct_transient_retry
+        ),
+        CapabilityEvalTask(
+            "sc12-auto-test-loop", "self_correct", _eval_self_correct_auto_test_loop
+        ),
     ]
 
 
@@ -117,7 +173,11 @@ def format_capability_eval_report(report: EvalReport) -> str:
 
 def self_correct_eval_tasks() -> list[CapabilityEvalTask]:
     """Return deterministic evals focused on failure recovery behavior."""
-    return [task for task in builtin_capability_eval_tasks() if task.category == "self_correct"]
+    return [
+        task
+        for task in builtin_capability_eval_tasks()
+        if task.category == "self_correct"
+    ]
 
 
 def report_to_dict(report: EvalReport) -> dict:
@@ -170,21 +230,31 @@ def _eval_impacted_tests(root: Path) -> tuple[bool, str]:
     workspace = root / "workspace"
     tests = workspace / "tests"
     tests.mkdir(parents=True, exist_ok=True)
-    (workspace / "foo.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    (workspace / "foo.py").write_text(
+        "def add(a, b):\n    return a + b\n", encoding="utf-8"
+    )
     (tests / "test_foo.py").write_text(
-        "from foo import add\n\n"
-        "def test_add():\n"
-        "    assert add(1, 2) == 3\n",
+        "from foo import add\n\ndef test_add():\n    assert add(1, 2) == 3\n",
         encoding="utf-8",
     )
     impacted = locate_impacted_tests(["foo.py"], workspace)
     result = run_pytest(impacted, workspace)
-    ok = len(impacted) == 1 and result["ran"] and result["returncode"] == 0 and result["passed"] >= 1
+    ok = (
+        len(impacted) == 1
+        and result["ran"]
+        and result["returncode"] == 0
+        and result["passed"] >= 1
+    )
     return ok, f"impacted={len(impacted)} summary={result['summary']}"
 
 
 def _eval_interrupt_control_file(root: Path) -> tuple[bool, str]:
-    from arforge.core.hooks import HookContext, HookEvent, get_hook_manager, reset_hook_manager
+    from arforge.core.hooks import (
+        HookContext,
+        HookEvent,
+        get_hook_manager,
+        reset_hook_manager,
+    )
     from arforge.core.interrupt import (
         get_interrupt_state,
         install_interrupt_hook,
@@ -203,9 +273,13 @@ def _eval_interrupt_control_file(root: Path) -> tuple[bool, str]:
         deadline = time.time() + 2
         while time.time() < deadline and not get_interrupt_state().has_instructions():
             time.sleep(0.02)
-        ctx = HookContext(HookEvent.PRE_LLM_CALL, messages=[{"role": "system", "content": "x"}])
+        ctx = HookContext(
+            HookEvent.PRE_LLM_CALL, messages=[{"role": "system", "content": "x"}]
+        )
         decision = get_hook_manager().fire(ctx)
-        injected = bool(ctx.messages and "inspect tests first" in ctx.messages[-1]["content"])
+        injected = bool(
+            ctx.messages and "inspect tests first" in ctx.messages[-1]["content"]
+        )
         ok = decision.action == "modify" and injected
         return ok, f"decision={decision.action} injected={injected}"
     finally:
@@ -222,7 +296,11 @@ def _eval_danger_guard(root: Path) -> tuple[bool, str]:
 
 
 def _eval_replay_report(root: Path) -> tuple[bool, str]:
-    from arforge.core.run_transaction import build_run_report, save_run_messages, save_run_trace
+    from arforge.core.run_transaction import (
+        build_run_report,
+        save_run_messages,
+        save_run_trace,
+    )
 
     with _isolated_home(root):
         run_id = "cap-replay-001"
@@ -234,8 +312,16 @@ def _eval_replay_report(root: Path) -> tuple[bool, str]:
             "done",
         )
         report = build_run_report(run_id)
-        ok = report["has_trace"] and report["has_messages"] and report["trace_events"] == 1 and report["answer"] == "done"
-        return ok, f"trace_events={report['trace_events']} messages={report['messages_count']}"
+        ok = (
+            report["has_trace"]
+            and report["has_messages"]
+            and report["trace_events"] == 1
+            and report["answer"] == "done"
+        )
+        return (
+            ok,
+            f"trace_events={report['trace_events']} messages={report['messages_count']}",
+        )
 
 
 def _eval_multiagent_hard_timeout(root: Path) -> tuple[bool, str]:
@@ -300,16 +386,15 @@ def _eval_multiagent_progress_cancel(root: Path) -> tuple[bool, str]:
 
     events: list[str] = []
     conversation = Conversation(master_goal="observable eval")
-    conversation.set_progress_callback(
-        lambda event, _data: events.append(event)
-    )
+    conversation.set_progress_callback(lambda event, _data: events.append(event))
     conversation.emit_progress("phase_start", phase="dispatch")
     conversation.reset_task_cancellation("task-1")
     conversation.cancel_task("task-1", "eval deadline")
     conversation.cancel("eval stop")
 
     ok = (
-        events == [
+        events
+        == [
             "phase_start",
             "task_cancel_requested",
             "conversation_cancelled",
@@ -346,7 +431,10 @@ def _eval_multiagent_role_boundaries(root: Path) -> tuple[bool, str]:
         role
         for role, item in lightweight.items()
         if item["category"] == "read"
-        and any(tool in {"write_file", "edit_file", "run_cmd", "run_tests"} for tool in item["tools"])
+        and any(
+            tool in {"write_file", "edit_file", "run_cmd", "run_tests"}
+            for tool in item["tools"]
+        )
     )
     drift: list[str] = []
     for spec in orchestrator_subagent_role_specs():
@@ -532,25 +620,48 @@ def _eval_self_correct_failure_feedback(root: Path) -> tuple[bool, str]:
 
     def second_turn(messages):
         joined = "\n".join(str(item.get("content", "")) for item in messages)
-        if "Tool failure recovery required" not in joined or "Before your next tool call" not in joined:
+        if (
+            "Tool failure recovery required" not in joined
+            or "Before your next tool call" not in joined
+        ):
             return _EvalResponse("missing feedback")
-        return _EvalResponse("", [_EvalToolCall("c2", "run_cmd", '{"command":"python -m pytest -q"}')])
+        return _EvalResponse(
+            "", [_EvalToolCall("c2", "run_cmd", '{"command":"python -m pytest -q"}')]
+        )
 
-    adapter = _EvalAdapter([
-        _EvalResponse("", [_EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}')]),
-        second_turn,
-        _EvalResponse("recovered"),
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                "", [_EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}')]
+            ),
+            second_turn,
+            _EvalResponse("recovered"),
+        ]
+    )
     executed: list[str] = []
 
     def executor(name: str, args: dict) -> ToolResult:
         executed.append(args["command"])
         if args["command"] == "pytest -q":
-            return ToolResult(name, False, "", "command returned non-zero exit code 1: pytest not found")
+            return ToolResult(
+                name,
+                False,
+                "",
+                "command returned non-zero exit code 1: pytest not found",
+            )
         return ToolResult(name, True, "1 passed", "")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "fix failing tests"}], tools=[], max_steps=5, executor=executor)
-    ok = result.answer == "recovered" and executed == ["pytest -q", "python -m pytest -q"]
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "fix failing tests"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
+    ok = result.answer == "recovered" and executed == [
+        "pytest -q",
+        "python -m pytest -q",
+    ]
     return ok, f"executed={executed} answer={result.answer}"
 
 
@@ -558,11 +669,17 @@ def _eval_self_correct_repeat_block(root: Path) -> tuple[bool, str]:
     from arforge.core.agentic import run_tool_loop
     from arforge.tool_registry import ToolResult
 
-    adapter = _EvalAdapter([
-        _EvalResponse("", [_EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}')]),
-        _EvalResponse("", [_EvalToolCall("c2", "run_cmd", '{"command":"pytest -q"}')]),
-        _EvalResponse("repeat stopped"),
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                "", [_EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}')]
+            ),
+            _EvalResponse(
+                "", [_EvalToolCall("c2", "run_cmd", '{"command":"pytest -q"}')]
+            ),
+            _EvalResponse("repeat stopped"),
+        ]
+    )
     executed = 0
 
     def executor(name: str, args: dict) -> ToolResult:
@@ -570,7 +687,13 @@ def _eval_self_correct_repeat_block(root: Path) -> tuple[bool, str]:
         executed += 1
         return ToolResult(name, False, "", "command returned non-zero exit code 1")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "fix failing tests"}], tools=[], max_steps=5, executor=executor)
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "fix failing tests"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
     events = {item.get("event") for item in result.trace}
     ok = executed == 1 and "self_correct_repeat_blocked" in events
     return ok, f"executed={executed} events={sorted(events)}"
@@ -580,8 +703,14 @@ def _eval_self_correct_syntax_reflection(root: Path) -> tuple[bool, str]:
     from arforge.core.self_correct import SelfCorrectState
 
     state = SelfCorrectState()
-    state.record(error_text="SyntaxError: invalid syntax at line 1", tool_name="run_cmd", step=1)
-    state.record(error_text="SyntaxError: unexpected indent at line 2", tool_name="run_cmd", step=2)
+    state.record(
+        error_text="SyntaxError: invalid syntax at line 1", tool_name="run_cmd", step=1
+    )
+    state.record(
+        error_text="SyntaxError: unexpected indent at line 2",
+        tool_name="run_cmd",
+        step=2,
+    )
     reflection = state.reflection_needed(current_step=3) or ""
     ok = "SYNTAX" in reflection and "Do NOT retry the same fix" in reflection
     return ok, reflection[:180]
@@ -594,28 +723,41 @@ def _eval_self_correct_tool_message_order(root: Path) -> tuple[bool, str]:
     roles_seen: list[str] = []
 
     def second_turn(messages):
-        assistant_index = next(i for i, item in enumerate(messages) if item.get("role") == "assistant")
+        assistant_index = next(
+            i for i, item in enumerate(messages) if item.get("role") == "assistant"
+        )
         if not roles_seen:
-            roles_seen.extend(item.get("role", "") for item in messages[assistant_index + 1 : assistant_index + 4])
+            roles_seen.extend(
+                item.get("role", "")
+                for item in messages[assistant_index + 1 : assistant_index + 4]
+            )
         return _EvalResponse("ordered")
 
-    adapter = _EvalAdapter([
-        _EvalResponse(
-            "",
-            [
-                _EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}'),
-                _EvalToolCall("c2", "read_file", '{"filename":"README.md"}'),
-            ],
-        ),
-        second_turn,
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                "",
+                [
+                    _EvalToolCall("c1", "run_cmd", '{"command":"pytest -q"}'),
+                    _EvalToolCall("c2", "read_file", '{"filename":"README.md"}'),
+                ],
+            ),
+            second_turn,
+        ]
+    )
 
     def executor(name: str, args: dict) -> ToolResult:
         if name == "run_cmd":
             return ToolResult(name, False, "", "command returned non-zero exit code 1")
         return ToolResult(name, True, "content", "")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "fix failing tests"}], tools=[], max_steps=3, executor=executor)
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "fix failing tests"}],
+        tools=[],
+        max_steps=3,
+        executor=executor,
+    )
     ok = result.answer == "ordered" and roles_seen == ["tool", "tool", "user"]
     return ok, f"roles={roles_seen}"
 
@@ -624,18 +766,37 @@ def _eval_self_correct_unexecuted_tool_text_block(root: Path) -> tuple[bool, str
     from arforge.core.agentic import run_tool_loop
     from arforge.tool_registry import ToolResult
 
-    adapter = _EvalAdapter([
-        _EvalResponse('<tool_calls><invoke name="write_file"></invoke></tool_calls>'),
-        _EvalResponse("", [_EvalToolCall("c1", "write_file", '{"filename":"ABC.txt","content":"hello，world"}')]),
-        _EvalResponse("completed after real tool call"),
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                '<tool_calls><invoke name="write_file"></invoke></tool_calls>'
+            ),
+            _EvalResponse(
+                "",
+                [
+                    _EvalToolCall(
+                        "c1",
+                        "write_file",
+                        '{"filename":"ABC.txt","content":"hello，world"}',
+                    )
+                ],
+            ),
+            _EvalResponse("completed after real tool call"),
+        ]
+    )
     executed: list[str] = []
 
     def executor(name: str, args: dict) -> ToolResult:
         executed.append(f"{name}:{args.get('filename', '')}:{args.get('content', '')}")
         return ToolResult(name, True, "wrote ABC.txt", "")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "write ABC.txt"}], tools=[], max_steps=5, executor=executor)
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "write ABC.txt"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
     events = {item.get("event") for item in result.trace}
     ok = (
         result.answer == "completed after real tool call"
@@ -653,24 +814,28 @@ def _eval_self_correct_cleanup_tool_switch(root: Path) -> tuple[bool, str]:
         joined = "\n".join(str(item.get("content", "")) for item in messages)
         if "Tool failure recovery required" not in joined:
             return _EvalResponse("missing cleanup feedback")
-        return _EvalResponse("", [_EvalToolCall("c2", "delete_file", '{"filename":"_verify_abc.py"}')])
+        return _EvalResponse(
+            "", [_EvalToolCall("c2", "delete_file", '{"filename":"_verify_abc.py"}')]
+        )
 
-    adapter = _EvalAdapter([
-        _EvalResponse(
-            "",
-            [
-                _EvalToolCall(
-                    "c1",
-                    "run_cmd",
-                    '{"command":"python -c \\"import sys; sys.exit(1)\\""}',
-                )
-            ],
-        ),
-        second_turn,
-        _EvalResponse("temporary helper removed"),
-        _EvalResponse("", [_EvalToolCall("c3", "verify_work", '{}')]),
-        _EvalResponse("temporary helper removed and verified"),
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                "",
+                [
+                    _EvalToolCall(
+                        "c1",
+                        "run_cmd",
+                        '{"command":"python -c \\"import sys; sys.exit(1)\\""}',
+                    )
+                ],
+            ),
+            second_turn,
+            _EvalResponse("temporary helper removed"),
+            _EvalResponse("", [_EvalToolCall("c3", "verify_work", "{}")]),
+            _EvalResponse("temporary helper removed and verified"),
+        ]
+    )
     executed: list[str] = []
 
     def executor(name: str, args: dict) -> ToolResult:
@@ -679,7 +844,13 @@ def _eval_self_correct_cleanup_tool_switch(root: Path) -> tuple[bool, str]:
             return ToolResult(name, False, "", "command returned non-zero exit code 1")
         return ToolResult(name, True, "deleted _verify_abc.py", "")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "clean up temporary helper"}], tools=[], max_steps=5, executor=executor)
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "clean up temporary helper"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
     events = {item.get("event") for item in result.trace}
     ok = (
         result.answer == "temporary helper removed and verified"
@@ -690,7 +861,10 @@ def _eval_self_correct_cleanup_tool_switch(root: Path) -> tuple[bool, str]:
             "verify_work:None",
         ]
         and "self_correct_feedback" in events
-        and any(call.get("tool") == "run_cmd" and not call.get("success") for call in result.tool_calls)
+        and any(
+            call.get("tool") == "run_cmd" and not call.get("success")
+            for call in result.tool_calls
+        )
     )
     return ok, f"executed={executed} events={sorted(events)} answer={result.answer}"
 
@@ -699,16 +873,32 @@ def _eval_self_correct_verification_gate(root: Path) -> tuple[bool, str]:
     from arforge.core.agentic import run_tool_loop
     from arforge.tool_registry import ToolResult
 
-    adapter = _EvalAdapter([
-        _EvalResponse("", [_EvalToolCall("c1", "write_file", '{"filename":"x.py","content":"print(1)"}')]),
-        _EvalResponse("all done"),
-        _EvalResponse("", [_EvalToolCall("c2", "verify_work", '{}')]),
-        _EvalResponse("verified, done"),
-    ])
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse(
+                "",
+                [
+                    _EvalToolCall(
+                        "c1", "write_file", '{"filename":"x.py","content":"print(1)"}'
+                    )
+                ],
+            ),
+            _EvalResponse("all done"),
+            _EvalResponse("", [_EvalToolCall("c2", "verify_work", "{}")]),
+            _EvalResponse("verified, done"),
+        ]
+    )
+
     def executor(name: str, args: dict) -> ToolResult:
         return ToolResult(name, True, "ok", "")
 
-    result = run_tool_loop(adapter, [{"role": "user", "content": "create x.py"}], tools=[], max_steps=5, executor=executor)
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "create x.py"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
     events = {item.get("event") for item in result.trace}
     ok = (
         result.answer == "verified, done"
@@ -716,7 +906,6 @@ def _eval_self_correct_verification_gate(root: Path) -> tuple[bool, str]:
         and "final" in events  # normal final after verification
     )
     return ok, f"events={sorted(events)} answer={result.answer[:60]}"
-
 
 
 def _eval_self_correct_test_fix_loop(root: Path) -> tuple[bool, str]:
@@ -766,7 +955,10 @@ FAILED test_math.py::test_add
 
 def _eval_self_correct_post_edit_consistency(root: Path) -> tuple[bool, str]:
     """sc8: post-edit consistency check catches syntax errors in modified files."""
-    from arforge.core.self_correct import verify_edited_files, build_consistency_feedback
+    from arforge.core.self_correct import (
+        verify_edited_files,
+        build_consistency_feedback,
+    )
 
     root.mkdir(parents=True, exist_ok=True)
 
@@ -798,7 +990,6 @@ def _eval_self_correct_post_edit_consistency(root: Path) -> tuple[bool, str]:
     return True, f"caught {len(issues)} syntax issue(s)"
 
 
-
 def _eval_self_correct_cross_file_imports(root: Path) -> tuple[bool, str]:
     """sc10: cross-file import resolution catches unresolved imports."""
     from arforge.core.self_correct import verify_imports_resolve, verify_all_imports
@@ -808,12 +999,18 @@ def _eval_self_correct_cross_file_imports(root: Path) -> tuple[bool, str]:
     # Create a small package
     pkg = root / "mypkg"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("from mypkg.utils import helper\n", encoding="utf-8")
-    (pkg / "utils.py").write_text("def helper() -> int:\n    return 42\n", encoding="utf-8")
+    (pkg / "__init__.py").write_text(
+        "from mypkg.utils import helper\n", encoding="utf-8"
+    )
+    (pkg / "utils.py").write_text(
+        "def helper() -> int:\n    return 42\n", encoding="utf-8"
+    )
 
     # File with a valid import
     good = root / "good.py"
-    good.write_text("from mypkg.utils import helper\nprint(helper())\n", encoding="utf-8")
+    good.write_text(
+        "from mypkg.utils import helper\nprint(helper())\n", encoding="utf-8"
+    )
     ok, issues = verify_imports_resolve(str(good), str(root))
     assert ok, f"good.py should pass: {issues}"
 
@@ -863,19 +1060,77 @@ def _eval_self_correct_transient_retry(root: Path) -> tuple[bool, str]:
 
 
 def _eval_self_correct_auto_test_loop(root: Path) -> tuple[bool, str]:
-    """sc12: auto test-fix loop tracking variables are present in agentic."""
+    """sc12: a parsed test failure, edit, and passing rerun complete the recovery loop."""
     from arforge.core.agentic import run_tool_loop
-    import inspect
+    from arforge.tool_registry import ToolResult
 
-    # Verify the auto test loop tracking variables exist in run_tool_loop source
-    source = inspect.getsource(run_tool_loop)
-    assert "_test_fix_active" in source, "Missing _test_fix_active"
-    assert "_test_fix_rerun_count" in source, "Missing _test_fix_rerun_count"
-    assert "_MAX_TEST_RERUN" in source, "Missing _MAX_TEST_RERUN"
-    assert "auto_test_rerun_prompt" in source, "Missing auto re-run prompt"
-    assert "test_fix_resolved" in source, "Missing test fix resolved"
+    failing_output = """test_math.py::test_add FAILED
 
-    return True, "auto test-fix loop tracking verified"
+=================================== FAILURES ===================================
+____________________________ test_add ____________________________
+>       assert add(2, 3) == 6
+E       assert 5 == 6
+test_math.py:4: AssertionError
+1 failed
+"""
+    rerun_prompt_seen = False
+
+    def request_rerun(messages):
+        nonlocal rerun_prompt_seen
+        joined = "\n".join(str(item.get("content", "")) for item in messages)
+        rerun_prompt_seen = "Code changes applied. Re-run the tests now" in joined
+        return _EvalResponse("", [_EvalToolCall("c3", "run_tests", "{}")])
+
+    adapter = _EvalAdapter(
+        [
+            _EvalResponse("", [_EvalToolCall("c1", "run_tests", "{}")]),
+            _EvalResponse(
+                "",
+                [
+                    _EvalToolCall(
+                        "c2",
+                        "write_file",
+                        '{"filename":"test_math.py","content":"def add(a, b):\\n    return a + b\\n"}',
+                    )
+                ],
+            ),
+            request_rerun,
+            _EvalResponse("tests fixed and verified"),
+        ]
+    )
+    test_runs = 0
+
+    def executor(name: str, args: dict) -> ToolResult:
+        nonlocal test_runs
+        if name == "run_tests":
+            test_runs += 1
+            if test_runs == 1:
+                return ToolResult(name, False, "", failing_output)
+            return ToolResult(name, True, "1 passed", "")
+        if name == "write_file":
+            return ToolResult(name, True, f"wrote {args.get('filename', '')}", "")
+        return ToolResult(name, False, "", f"unexpected tool: {name}")
+
+    result = run_tool_loop(
+        adapter,
+        [{"role": "user", "content": "fix failing tests"}],
+        tools=[],
+        max_steps=5,
+        executor=executor,
+    )
+    events = {item.get("event") for item in result.trace}
+    ok = (
+        result.answer == "tests fixed and verified"
+        and test_runs == 2
+        and rerun_prompt_seen
+        and "test_fix_feedback" in events
+        and "auto_test_rerun_prompt" in events
+        and "test_fix_resolved" in events
+    )
+    return (
+        ok,
+        f"test_runs={test_runs} rerun_prompt={rerun_prompt_seen} events={sorted(events)}",
+    )
 
 
 @contextmanager

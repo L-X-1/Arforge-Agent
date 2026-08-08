@@ -1,0 +1,40 @@
+---
+import { siteCopy, type Locale, type PublicPage } from "../content"
+import windowsManifest from "../../public/releases/windows.json"
+import { publicWindowsRelease, type WindowsRelease } from "../lib/security"
+interface Props { locale: Locale; page: PublicPage }
+const { locale, page } = Astro.props
+const copy = siteCopy[locale]
+const zh = locale === "zh-CN"
+const release = windowsManifest as WindowsRelease
+const releaseAvailable = publicWindowsRelease(release)
+---
+
+{page === "product" && <>
+  <section class="page-hero"><p class="eyebrow">{copy.product.eyebrow}</p><h1>{copy.product.title}</h1><p class="page-hero__lede">{copy.product.intro}</p></section>
+  <section class="section section--line"><div class="section-heading"><p class="eyebrow">Workflow</p><h2 class="section-title">{zh ? "理解、计划、执行、验证。每一段都可以检查。" : "Understand, plan, execute, verify. Inspect every stage."}</h2></div><div class="lifecycle">{copy.home.stages.map((stage) => <article class="lifecycle-row"><span class="lifecycle-row__number">{stage[0]}</span><h2>{stage[1]}</h2><p>{stage[2]}</p></article>)}</div></section>
+  <section class="section section--line"><div class="section-heading"><p class="eyebrow">Surfaces</p><h2 class="section-title">{copy.product.relationshipTitle}</h2></div><div class="surface-grid">{copy.product.relationship.map((item, i) => <article class="surface-card"><span class="surface-card__icon">{["UI", ">_", "WEB"][i]}</span><h3>{item[0]}</h3><p>{item[1]}</p></article>)}</div></section>
+  <section class="section section--line"><div class="section-heading"><p class="eyebrow">Safety</p><h2 class="section-title">{copy.product.safetyTitle}</h2></div><ul class="safety-list">{copy.product.safety.map((item) => <li>{item}</li>)}</ul></section>
+</>}
+
+{page === "download" && <>
+  <section class="page-hero"><p class="eyebrow">{copy.download.eyebrow}</p><h1>{copy.download.title}</h1><p class="page-hero__lede">{copy.download.intro}</p></section>
+  <section class="section section--line"><div class="release-card"><div><span class="status-label">{releaseAvailable ? release.version : copy.download.status}</span><h2>Arforge for Windows</h2><p>{copy.download.integrity}</p>{releaseAvailable ? <a class="button" href={release.downloadUrl}>{copy.downloadWindows}</a> : <span class="button" aria-disabled="true">{copy.download.unavailable}</span>}{releaseAvailable && <p class="release-meta">SHA-256 · <code>{release.sha256}</code></p>}</div><div class="release-lock" aria-hidden="true"><svg viewBox="0 0 48 48"><rect x="10" y="21" width="28" height="21" rx="5"/><path d="M16 21v-7a8 8 0 0 1 16 0v7M24 29v6"/></svg></div></div></section>
+  <section class="section section--line"><div class="section-heading"><p class="eyebrow">Platforms</p><h2 class="section-title">{zh ? "平台状态" : "Platform status"}</h2></div><div class="platform-table">{copy.download.platforms.map((item) => <div class="platform-row"><strong>{item[0]}</strong><span>{item[1]}</span></div>)}</div></section>
+  <section class="section section--line"><div class="section-heading"><p class="eyebrow">Requirements</p><h2 class="section-title">{copy.download.requirementsTitle}</h2></div><ul class="requirements-list">{copy.download.requirements.map((item) => <li>{item}</li>)}</ul></section>
+</>}
+
+{page === "docs" && <>
+  <section class="page-hero"><p class="eyebrow">{copy.docs.eyebrow}</p><h1>{copy.docs.title}</h1><p class="page-hero__lede">{copy.docs.intro}</p></section>
+  <section class="section section--line doc-grid"><nav class="doc-nav" aria-label={zh ? "文档章节" : "Documentation sections"}>{copy.docs.sections.map((item) => <a href={`#step-${item[0]}`}>{item[0]} · {item[1]}</a>)}</nav><div class="doc-content">{copy.docs.sections.map((item) => <section id={`step-${item[0]}`}><p class="eyebrow">{item[0]}</p><h2>{item[1]}</h2><p>{item[2]}</p>{item[0] === "02" && <div class="callout">{zh ? "密钥只应填写在产品的凭据设置中。不要把它放入任务提示、截图或支持工单。" : "Enter credentials only in the product credential settings. Never place them in prompts, screenshots, or support tickets."}</div>}</section>)}</div></section>
+</>}
+
+{page === "changelog" && <>
+  <section class="page-hero"><p class="eyebrow">{copy.changelog.eyebrow}</p><h1>{copy.changelog.title}</h1><p class="page-hero__lede">{copy.changelog.intro}</p></section>
+  <section class="section section--line"><div class="empty-state"><p>{copy.changelog.empty}</p><a class="text-link" href={`/${locale}/download/`}>{copy.nav.download} →</a></div></section>
+</>}
+
+{(page === "privacy" || page === "terms") && <>
+  <section class="page-hero" style="width: var(--reading)"><p class="eyebrow">{copy[page].eyebrow}</p><h1>{copy[page].title}</h1><p class="page-hero__lede">{copy[page].intro}</p></section>
+  <article class="legal"><div class="legal__notice">{zh ? "发布草案 · 正式开放注册前必须完成所有者与法律审阅。" : "Release draft · Owner and legal review are required before public registration opens."}</div>{copy[page].sections.map((section) => <section><h2>{section[0]}</h2><p>{section[1]}</p></section>)}</article>
+</>}

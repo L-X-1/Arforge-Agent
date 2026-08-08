@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.cli import main
 from arforge.core.quality_gate import (
     assess_changed_files,
@@ -187,7 +187,7 @@ def test_quality_cli_reads_patch_file(tmp_path, monkeypatch, capsys):
     assert "Diff: 1 files, +1/-1, 1 hunks" in output
 
 
-def test_bridge_quality_assess_is_read_only(tmp_path, monkeypatch):
+def test_bridge_quality_assess_is_retired(tmp_path, monkeypatch):
     target = tmp_path / "module.py"
     target.write_text("x = 2\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -197,23 +197,13 @@ def test_bridge_quality_assess_is_read_only(tmp_path, monkeypatch):
             "id": 2,
             "version": "1.1",
             "method": "quality.assess",
-            "params": {
-                "patch_text": """diff --git a/module.py b/module.py
---- a/module.py
-+++ b/module.py
-@@ -1 +1 @@
--x = 1
-+x = 2
-""",
-            },
+            "params": {"files": ["module.py"]},
         }
     )
 
-    assert "quality.assess" in described["data"]["methods"]
-    assert "quality.assess" not in described["data"]["mutating_methods"]
-    assert response["ok"]
-    assert response["data"]["passed"]
-    assert response["data"]["diff_stats"]["files_changed"] == 1
+    assert "quality.assess" not in described["data"]["methods"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_bridge_quality_assess_confines_files_to_workspace(tmp_path, monkeypatch):
@@ -232,6 +222,5 @@ def test_bridge_quality_assess_confines_files_to_workspace(tmp_path, monkeypatch
         }
     )
 
-    assert response["ok"]
-    assert response["data"]["files_checked"] == 0
-    assert [issue["code"] for issue in response["data"]["issues"]] == ["unresolved-path"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"

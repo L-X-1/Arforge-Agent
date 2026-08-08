@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "New session",
   "command.file.open": "Open file",
+  "command.tab.expand": "Expand tab bar",
+  "command.tab.collapse": "Collapse tab bar",
   "command.tab.close": "Close tab",
   "command.tab.reopenClosed": "Reopen closed tab",
   "command.context.addSelection": "Add selection to context",
@@ -688,6 +690,7 @@ export const dict = {
   "session.todo.title": "Todos",
   "session.todo.collapse": "Collapse",
   "session.todo.expand": "Expand",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{done}} of {{total}} todos completed",
   "session.question.progress": "{{current}} of {{total}} questions",
   "session.question.minimize": "Minimize question",
@@ -1364,4 +1367,9 @@ export const dict = {
   "controlCenter.m220": "Unknown control-center error",
   "controlCenter.m221": "Unknown Agent extension error",
   "controlCenter.m222": "Unknown deep-diagnostics error",
+  "controlCenter.m223": "Governed Evolution",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Review strategy candidates proposed from learning evidence, then govern capability changes through isolated evaluation, human approval, canary rollout, and rollback.",
 }

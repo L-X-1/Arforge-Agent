@@ -32,6 +32,7 @@ import { SystemContextRegistry } from "@arforge-ai/core/system-context/registry"
 import { SystemContext } from "@arforge-ai/core/system-context"
 import { SkillGuidance } from "@arforge-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@arforge-ai/core/reference/guidance"
+import { EvolutionV2 } from "@arforge-ai/core/evolution"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
@@ -74,6 +75,20 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
   route: () => Effect.succeed(undefined),
 })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
+const evolution = Layer.mock(EvolutionV2.Service, {
+  prepare: () => Effect.succeed(EvolutionV2.emptyContext),
+  recordOutcome: () => Effect.succeed(0),
+  syncLearningPatterns: (patterns) =>
+    Effect.succeed({
+      schema_version: 1 as const,
+      seen: patterns.length,
+      created: 0,
+      existing: 0,
+      skipped: patterns.length,
+      failed: 0,
+      items: [],
+    }),
+})
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
@@ -83,6 +98,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
   [SkillGuidance.node, skillGuidance],
   [ReferenceGuidance.node, referenceGuidance],
+  [EvolutionV2.node, evolution],
   [Config.node, config],
   [PermissionV2.node, permission],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -115,6 +131,7 @@ const it = testEffect(
       SystemContextRegistry.node,
       SkillGuidance.node,
       ReferenceGuidance.node,
+      EvolutionV2.node,
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
@@ -129,6 +146,7 @@ const it = testEffect(
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
+      [EvolutionV2.node, evolution],
       [Config.node, config],
       [Snapshot.node, Snapshot.noopLayer],
       [SessionExecution.node, execution],

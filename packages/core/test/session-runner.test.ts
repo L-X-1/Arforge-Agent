@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { beforeEach, describe, expect } from "bun:test"
 import {
   LLMClient,
   LLMError,
@@ -29,6 +29,7 @@ import { ContextSnapshotDecodeError } from "@arforge-ai/core/session/error"
 import { SessionEvent } from "@arforge-ai/core/session/event"
 import { SessionInput } from "@arforge-ai/core/session/input"
 import { SessionMessage } from "@arforge-ai/core/session/message"
+import { SessionOrganization } from "@arforge-ai/core/session/organization"
 import { Prompt } from "@arforge-ai/core/session/prompt"
 import { SessionProjector } from "@arforge-ai/core/session/projector"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
@@ -59,6 +60,7 @@ import { Location } from "@arforge-ai/core/location"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { MemoryV2 } from "@arforge-ai/core/memory"
 import { LearningV2 } from "@arforge-ai/core/learning"
+import { EvolutionV2 } from "@arforge-ai/core/evolution"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -75,6 +77,21 @@ let toolExecutionsStarted: Deferred.Deferred<void> | undefined
 let toolExecutionsReady = 5
 let activeToolExecutions = 0
 let maxActiveToolExecutions = 0
+let evolutionPrepared: EvolutionV2.PreparedContext = EvolutionV2.emptyContext
+let evolutionPrepareFailure = false
+const evolutionOutcomes: Array<{
+  readonly exposureID: string
+  readonly success: boolean
+  readonly stopReason?: string
+}> = []
+const evolutionLearningSyncs: Array<ReadonlyArray<EvolutionV2.LearningPatternEvidence>> = []
+
+beforeEach(() => {
+  evolutionPrepared = EvolutionV2.emptyContext
+  evolutionPrepareFailure = false
+  evolutionOutcomes.length = 0
+  evolutionLearningSyncs.length = 0
+})
 const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
@@ -246,6 +263,32 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
     ),
 })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
+const evolution = Layer.mock(EvolutionV2.Service, {
+  prepare: () => (evolutionPrepareFailure ? Effect.fail("capability unavailable") : Effect.succeed(evolutionPrepared)),
+  recordOutcome: (input) =>
+    Effect.sync(() => {
+      evolutionOutcomes.push(input)
+      return 1
+    }),
+  syncLearningPatterns: (patterns) =>
+    Effect.sync(() => {
+      evolutionLearningSyncs.push(patterns)
+      return {
+        schema_version: 1 as const,
+        seen: patterns.length,
+        created: patterns.length,
+        existing: 0,
+        skipped: 0,
+        failed: 0,
+        items: patterns.map((pattern) => ({
+          source_ref: `core-learning-pattern:${pattern.id}`,
+          status: "created" as const,
+          candidate_id: "ev_mock",
+          reason: "test",
+        })),
+      }
+    }),
+})
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -271,6 +314,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
   [SkillGuidance.node, skillGuidance],
   [ReferenceGuidance.node, referenceGuidance],
+  [EvolutionV2.node, evolution],
   [PermissionV2.node, permission],
   [Config.node, config],
 ])
@@ -311,6 +355,7 @@ const it = testEffect(
       Snapshot.node,
       MemoryV2.node,
       LearningV2.node,
+      EvolutionV2.node,
       SessionRunnerLLM.node,
       SessionExecution.node,
       SessionV2.node,
@@ -323,6 +368,7 @@ const it = testEffect(
       [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
       [SkillGuidance.node, skillGuidance],
       [ReferenceGuidance.node, referenceGuidance],
+      [EvolutionV2.node, evolution],
       [Snapshot.node, Snapshot.noopLayer],
       [SessionExecution.node, execution],
       [Config.node, config],
@@ -600,6 +646,12 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       requests.length = 0
+      evolutionPrepared = {
+        text: "## Governed Evolution Context\n<untrusted_evolution_context>[]</untrusted_evolution_context>",
+        activeCandidateIDs: ["evo_test"],
+        injectedCandidateIDs: ["evo_test"],
+        exposureID: "ex-1234567890abcdef1234567890abcdef",
+      }
       const memory = yield* MemoryV2.Service
       const learning = yield* LearningV2.Service
       yield* memory.create({
@@ -629,6 +681,14 @@ describe("SessionRunnerLLM", () => {
       const system = requests.at(-1)?.system.map((part) => part.text) ?? []
       expect(system.some((part) => part.startsWith("## Relevant Memories (untrusted data)"))).toBe(true)
       expect(system.some((part) => part.startsWith("## Learning System Context (untrusted observations)"))).toBe(true)
+      expect(system.some((part) => part.startsWith("## Governed Evolution Context"))).toBe(true)
+      expect(evolutionOutcomes).toEqual([
+        expect.objectContaining({
+          exposureID: "ex-1234567890abcdef1234567890abcdef",
+          success: true,
+          stopReason: "completed",
+        }),
+      ])
       const status = yield* learning.status()
       expect(status.totalTurns).toBe(2)
       expect(status.injectionCount).toBe(1)
@@ -638,9 +698,223 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("carries an explicitly learned memory into a different Session and injects it into the model request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* insertSession(otherSessionID)
+      requests.length = 0
+      const session = yield* SessionV2.Service
+      const memory = yield* MemoryV2.Service
+
+      response = fragmentFixture("text", "cross-session-memory-source", [
+        "I will retain that constraint.",
+      ]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Please remember that production deployments require a verified rollback plan." }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      const retained = (yield* memory.list()).items.find((item) =>
+        item.content.includes("production deployments require a verified rollback plan"),
+      )
+      expect(retained).toMatchObject({ source: "auto", scope: "workspace" })
+
+      requests.length = 0
+      response = fragmentFixture("text", "cross-session-memory-destination", [
+        "Use the verified rollback plan.",
+      ]).completeEvents
+      yield* session.prompt({
+        sessionID: otherSessionID,
+        prompt: Prompt.make({ text: "What must I verify before a production deployment?" }),
+        resume: false,
+      })
+      yield* session.resume(otherSessionID)
+
+      const destinationRequest = requests.at(-1)
+      expect(destinationRequest?.system.some((part) => part.text.includes(retained!.id))).toBe(true)
+      expect(
+        destinationRequest?.system.some((part) =>
+          part.text.includes("production deployments require a verified rollback plan"),
+        ),
+      ).toBe(true)
+      expect(userTexts(destinationRequest!)).toEqual(["What must I verify before a production deployment?"])
+      const history = yield* session.history({ sessionID: otherSessionID, limit: 100 })
+      const recallEvidence = history.events.find((event) => event.type === "session.next.memory.context.prepared")
+      expect(recallEvidence?.data).toMatchObject({
+        sessionID: otherSessionID,
+        userMessageID: expect.stringMatching(/^msg_/),
+        turnStep: 1,
+        status: "prepared",
+        algorithm: "hybrid_bm25_hashing_vector",
+        localOnly: true,
+        candidates: [{ memoryID: retained!.id, rank: 1 }],
+      })
+      expect(recallEvidence?.data.queryDigest).toHaveLength(64)
+      expect(recallEvidence?.data.contextDigest).toHaveLength(64)
+      expect(recallEvidence?.data.injectedBytes).toBeGreaterThan(0)
+      const fusionEvidence = history.events.find((event) => event.type === "session.next.context.fusion.prepared")
+      expect(fusionEvidence?.data).toMatchObject({
+        sessionID: otherSessionID,
+        userMessageID: expect.stringMatching(/^msg_/),
+        turnStep: 1,
+        providerCallReady: true,
+        degraded: false,
+        bridgeProtocol: "arforge.bridge/1.2",
+        memory: {
+          runtime: "typescript-core",
+          status: "prepared",
+          candidateCount: 1,
+        },
+        learning: {
+          runtime: "typescript-core",
+          status: "prepared",
+        },
+        evolution: {
+          runtime: "python-sidecar",
+          status: "prepared",
+          activeCandidateCount: 0,
+          injectedCandidateCount: 0,
+        },
+      })
+      expect(fusionEvidence?.data.queryDigest).toHaveLength(64)
+      expect(fusionEvidence?.data.combinedContextDigest).toHaveLength(64)
+      expect(fusionEvidence?.data.totalInjectedBytes).toBeGreaterThan(0)
+    }),
+  )
+
+  it.effect("rebuilds durable context and reinjects memory after conversation rewind", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const memory = yield* MemoryV2.Service
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* memory.create({
+        content: MemoryV2.Content.make("Recovery protocol requires a verified backup before migration."),
+        type: MemoryV2.Type.make("constraint"),
+        importance: MemoryV2.Importance.make(5),
+      })
+
+      response = fragmentFixture("text", "rewind-baseline", ["Baseline recorded."]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Record the recovery protocol for future migration work." }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      const checkpoint = yield* session.checkpoints.create({
+        sessionID,
+        label: SessionOrganization.CheckpointLabel.make("Before temporary branch"),
+      })
+
+      response = fragmentFixture("text", "rewind-temporary", ["Temporary answer."]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "This temporary branch should be removed by rewind." }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      const preview = yield* session.rewind.preview({ sessionID, checkpointID: checkpoint.id })
+      expect(preview.affectedMessages).toBeGreaterThan(0)
+      yield* session.rewind.apply({
+        sessionID,
+        checkpointID: checkpoint.id,
+        expectedLastSequence: preview.expectedLastSequence,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .get(),
+      ).toBeUndefined()
+
+      requests.length = 0
+      response = fragmentFixture("text", "rewind-recovery", ["Recovery context restored."]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Before migration, remind me of the recovery protocol." }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      const request = requests.at(-1)
+      expect(request?.system.map((part) => part.text)).toContain("Initial context")
+      expect(request?.system.some((part) => part.text.includes("Recovery protocol requires a verified backup"))).toBe(
+        true,
+      )
+      expect(userTexts(request!)).not.toContain("This temporary branch should be removed by rewind.")
+      expect(userTexts(request!)).toContain("Before migration, remind me of the recovery protocol.")
+    }),
+  )
+
+  it.effect("continues the desktop turn when governed evolution context is unavailable", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      evolutionPrepareFailure = true
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Continue without optional evolution advice." }),
+        resume: false,
+      })
+      response = fragmentFixture("text", "evolution-fallback", ["Continuing."]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      const system = requests.at(-1)?.system.map((part) => part.text) ?? []
+      expect(system.some((part) => part.startsWith("## Governed Evolution Context"))).toBe(false)
+      expect(evolutionOutcomes).toEqual([])
+      const history = yield* session.history({ sessionID, limit: 100 })
+      const fusionEvidence = history.events.findLast((event) => event.type === "session.next.context.fusion.prepared")
+      expect(fusionEvidence?.data).toMatchObject({
+        providerCallReady: true,
+        degraded: true,
+        memory: { runtime: "typescript-core", status: "prepared" },
+        learning: { runtime: "typescript-core", status: "prepared" },
+        evolution: { runtime: "python-sidecar", status: "unavailable", injectedBytes: 0 },
+      })
+      requests.length = 0
+    }),
+  )
+
+  it.effect("turns a third repeated failure into a review-only Evolution proposal sync", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      evolutionLearningSyncs.length = 0
+      const failure = providerUnavailable()
+      const learning = yield* LearningV2.Service
+      for (let index = 0; index < 2; index++)
+        yield* learning.record({
+          sessionID,
+          userInput: "Retry the unavailable provider",
+          success: false,
+          errorType: failure.constructor.name,
+          errorMessage: failure.message,
+        })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Retry the unavailable provider" }),
+        resume: false,
+      })
+      streamFailure = failure
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(evolutionLearningSyncs).toHaveLength(1)
+      expect(evolutionLearningSyncs[0]).toMatchObject([{ type: "failure", frequency: 3, confidence: 0.7 }])
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
+      requests.length = 0
       const applicationTools = yield* ApplicationTools.Service
       const session = yield* SessionV2.Service
       const contexts: Tool.Context[] = []

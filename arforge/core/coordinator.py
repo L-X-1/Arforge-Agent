@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from arforge.core.agent_run import AgentRun, RunResult
@@ -138,6 +139,9 @@ class CoordinatorAgent:
     force_multi: bool = False           # Always use multi-agent
     max_iterations: int = 3             # Max refinement iterations
     budget: WorkBudget | None = None    # Shared budget across all agents
+    governed_lifecycle: bool = True
+    cognitive_persistence_root: str | Path | None = None
+    workspace_root: str | Path | None = None
 
     # Runtime state
     agent: Any = None
@@ -187,13 +191,24 @@ class CoordinatorAgent:
     # -- single-agent path ---------------------------------------------------
 
     def _execute_single(self, user_input: str, **kwargs) -> RunResult:
-        run = AgentRun(budget=self.budget)
+        run = AgentRun(
+            budget=self.budget,
+            governed_lifecycle=self.governed_lifecycle,
+            cognitive_persistence_root=self._resolve_cognitive_root(),
+        )
         run.user_input = user_input
         run.agent = self.agent
         run.extra_system = kwargs.get("extra_system", "")
         run.max_steps = kwargs.get("max_steps")
         run.on_token = kwargs.get("on_token")
         return run.execute()
+
+    def _resolve_cognitive_root(self) -> Path:
+        if self.cognitive_persistence_root is not None:
+            return Path(self.cognitive_persistence_root)
+        from arforge.core.cognitive_paths import workspace_cognitive_root
+
+        return workspace_cognitive_root(self.workspace_root or Path.cwd())
 
     # -- multi-agent path ----------------------------------------------------
 
@@ -268,7 +283,11 @@ class CoordinatorAgent:
 
         # Create a restricted AgentRun for this worker
         worker_budget = WorkBudget(max_steps=role.max_steps)
-        run = AgentRun(budget=worker_budget)
+        run = AgentRun(
+            budget=worker_budget,
+            governed_lifecycle=self.governed_lifecycle,
+            cognitive_persistence_root=self._resolve_cognitive_root(),
+        )
         run.user_input = task
         run.agent = self.agent
         run.extra_system = role.system_prompt_suffix
@@ -283,7 +302,6 @@ class CoordinatorAgent:
             REGISTRY.pop_filter()  # Restore full tool set
 
         return run_result
-        return run.execute()
 
     def file_stats(self) -> dict:
         """Return file tracking statistics for the current session."""

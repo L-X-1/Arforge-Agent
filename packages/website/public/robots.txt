@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://arforgeagent.com/sitemap-index.xml

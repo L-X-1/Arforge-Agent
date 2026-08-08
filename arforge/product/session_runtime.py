@@ -590,6 +590,29 @@ class SessionRuntime:
             self._refresh_context_status(session)
             return session.public()
 
+    def get_context_package(self, session_id: str) -> dict[str, Any]:
+        """Return the live verified package or bounded persisted telemetry."""
+        with self._lock:
+            session = self._require_session(session_id)
+            package = getattr(session.agent, "_last_context_package", None)
+            if package is not None:
+                package.verify()
+                return {
+                    "schema_version": 1,
+                    "available": True,
+                    "live": True,
+                    "package": package.to_dict(),
+                    "telemetry": dict(session.context_status),
+                }
+            return {
+                "schema_version": 1,
+                "available": False,
+                "live": False,
+                "package": None,
+                "telemetry": dict(session.context_status),
+                "reason": "live_package_requires_an_active_compiled_agent",
+            }
+
     def refresh_session_agent(self, session_id: str) -> dict[str, Any]:
         """Recreate one idle session agent after an explicit model change.
 
@@ -3222,6 +3245,12 @@ class SessionRuntime:
                     int(persisted.get("schema_version", 0) or 0) >= 2,
                 ),
             )
+            # An inactive session has no live agent from which to rebuild a
+            # package. Preserve the last verified bounded telemetry until
+            # resume recompiles it against the active model/checkpoint.
+            for key, value in persisted.items():
+                if key.startswith("context_package_") or key == "protected_fact_coverage":
+                    session.context_status[key] = value
         except Exception:  # noqa: BLE001
             session.context_status = {}
         return session.context_status
@@ -3286,6 +3315,42 @@ class SessionRuntime:
             for message in session.context_checkpoint
             if isinstance(message, dict) and message.get("role") != "system"
         ]
+        status = session.context_status if isinstance(session.context_status, dict) else {}
+        expected_package_messages_digest = str(
+            status.get("context_package_messages_digest", "") or ""
+        )
+        if checkpoint:
+            from arforge.core.context_os import context_messages_digest
+
+            checkpoint_messages_digest = context_messages_digest(checkpoint)
+            if expected_package_messages_digest == checkpoint_messages_digest:
+                recovery_state = "verified_checkpoint"
+            elif expected_package_messages_digest:
+                recovery_state = "rebuild_pending_stale"
+                numeric_package_fields = {
+                    "context_package_schema_version",
+                    "context_package_used_tokens",
+                    "context_package_budget_tokens",
+                    "context_package_omitted_units",
+                    "context_package_manifest_units",
+                }
+                for key in tuple(status):
+                    if key.startswith("context_package_"):
+                        status[key] = 0 if key in numeric_package_fields else ""
+            else:
+                recovery_state = "rebuild_pending_missing"
+        else:
+            recovery_state = "transcript_rebuild_pending"
+        try:
+            from arforge.core.recovery_metrics import record_recovery_outcome
+
+            record_recovery_outcome(
+                session_id=session.session_id,
+                recovery_state=recovery_state,
+                verified=recovery_state == "verified_checkpoint",
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never break restore
+            pass
         history = checkpoint or [
             dict(message) for message in fallback_history if isinstance(message, dict)
         ]
@@ -3293,7 +3358,14 @@ class SessionRuntime:
             agent.conversation_history = history
         if hasattr(agent, "_last_context_messages"):
             agent._last_context_messages = [dict(message) for message in history]
-        status = session.context_status if isinstance(session.context_status, dict) else {}
+        if hasattr(agent, "_context_package_recovery_state"):
+            agent._context_package_recovery_state = recovery_state
+        if hasattr(agent, "_restored_context_package_status"):
+            agent._restored_context_package_status = {
+                key: value
+                for key, value in status.items()
+                if key.startswith("context_package_")
+            }
         for attribute, key in (
             ("_compaction_count", "compaction_count"),
             ("_cumulative_prompt_tokens", "cumulative_prompt_tokens"),

@@ -230,6 +230,10 @@ export const controlCenterMessageKeys = {
   "Unknown control-center error": "controlCenter.m220",
   "Unknown Agent extension error": "controlCenter.m221",
   "Unknown deep-diagnostics error": "controlCenter.m222",
+  受控自主进化: "controlCenter.m223",
+  "审查学习证据提出的策略候选，并通过隔离评测、人工批准、灰度和回滚治理能力变化。": "controlCenter.m224",
+  运行时透视: "controlCenter.m225",
+  "上下文分层编译、模型路由决策、独立验证、审计链与运行状态的可视化。": "controlCenter.m226",
 } as const
 
 export type ControlCenterMessage = keyof typeof controlCenterMessageKeys

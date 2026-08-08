@@ -23,13 +23,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from arforge.bridge import (
-    PROTOCOL,
-    PROTOCOL_VERSION,
-    _install_agentic_hooks,
-    _register_builtin_tools,
-    dispatch,
-)
 from arforge.paths import data_path
 from arforge.product.action_runtime import ActionRuntime
 from arforge.product.feedback_runtime import FeedbackRuntime
@@ -40,13 +33,26 @@ from arforge.product.prompt_queue_runtime import PromptQueueRuntime
 from arforge.product.session_runtime import SessionRuntime
 from arforge.product.settings_runtime import SettingsRuntime
 from arforge.product.state_store import BridgeStateStore
+from arforge.product.direct_dispatch import install_agentic_hooks, register_builtin_tools
 from arforge.product.task_runtime import TaskRuntime, TaskStore
 from arforge.security_guard import sanitize_for_storage
+
+WEB_PROTOCOL = "arforge.web-control"
+WEB_PROTOCOL_VERSION = "1.0"
 
 MAX_WEB_REQUEST_BYTES = 256 * 1024
 MAX_WEB_EVENT_BYTES = 128 * 1024
 MAX_WEB_EVENTS = 1_000
 MAX_WEB_SUBSCRIBER_QUEUE = 256
+
+
+class WebControlError(Exception):
+    """Error surfaced through the web control request envelope."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 @dataclass(frozen=True)
@@ -146,8 +152,8 @@ class WebControlBundle:
                     os.environ["ARFORGE_WORKSPACE"] = "trust-cwd"
             except Exception:  # noqa: BLE001 - trust probing must not block startup
                 pass
-        _register_builtin_tools()
-        _install_agentic_hooks()
+        register_builtin_tools()
+        install_agentic_hooks()
         from arforge.scheduled_prompt_runtime import get_scheduled_prompt_manager
 
         self.scheduler = get_scheduled_prompt_manager()
@@ -193,28 +199,163 @@ class WebControlBundle:
         with self._request_lock:
             request_id = self._next_request_id
             self._next_request_id += 1
-            response = dispatch(
-                {
-                    "protocol": PROTOCOL,
-                    "version": PROTOCOL_VERSION,
+            try:
+                data = self._dispatch(method, params)
+            except WebControlError as exc:
+                return {
+                    "protocol": WEB_PROTOCOL,
+                    "version": WEB_PROTOCOL_VERSION,
                     "id": request_id,
-                    "method": method,
-                    "params": params,
-                },
-                runtime=self.runtime,
-                goals=self.goals,
-                actions=self.actions,
-                tasks=self.tasks,
-                logs=self.logs,
-                settings=self.settings,
-                keybindings=self.keybindings,
-                feedback=self.feedback,
-            )
-            if method == "chat.start" and response.get("ok"):
+                    "ok": False,
+                    "error": {"code": exc.code, "message": exc.message},
+                }
+            except ValueError as exc:
+                return {
+                    "protocol": WEB_PROTOCOL,
+                    "version": WEB_PROTOCOL_VERSION,
+                    "id": request_id,
+                    "ok": False,
+                    "error": {"code": "INVALID_PARAMS", "message": str(exc)},
+                }
+            except Exception as exc:  # noqa: BLE001 - surface a stable envelope
+                return {
+                    "protocol": WEB_PROTOCOL,
+                    "version": WEB_PROTOCOL_VERSION,
+                    "id": request_id,
+                    "ok": False,
+                    "error": {"code": "BACKEND_ERROR", "message": sanitize_for_storage(str(exc))[:1000]},
+                }
+            response: dict[str, Any] = {
+                "protocol": WEB_PROTOCOL,
+                "version": WEB_PROTOCOL_VERSION,
+                "id": request_id,
+                "ok": True,
+                "data": data,
+            }
+            if method == "chat.start":
                 self.runtime.release_operation(response["data"]["operation_id"])
-            if method == "tool.execute_async" and response.get("ok"):
+            if method == "tool.execute_async":
                 self.tasks.release_task(response["data"]["task_id"])
             return response
+
+    def _dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Dispatch session/chat methods straight to the shared runtimes.
+
+        The web control center is a thin client over the canonical agent
+        runtime; it never re-implements the loop, permissions, or persistence.
+        """
+        runtime = self.runtime
+        if method == "project.list":
+            return runtime.list_projects()
+        if method == "session.create":
+            return runtime.create_session(project_id=params.get("project_id"))
+        if method == "session.fork":
+            return runtime.fork_session(params.get("session_id"), params.get("message_id"))
+        if method == "session.get":
+            return runtime.get_session(params.get("session_id"))
+        if method == "session.rename":
+            return runtime.rename_session(params.get("session_id"), params.get("title"))
+        if method == "session.tags.update":
+            return runtime.update_session_tags(params.get("session_id"), params.get("tags"))
+        if method == "session.list":
+            return runtime.filter_sessions(
+                limit=params.get("limit", 50),
+                project_id=params.get("project_id"),
+                tags=params.get("tags"),
+                status=params.get("status"),
+                query=params.get("query"),
+                archive=params.get("archive", "exclude"),
+            )
+        if method == "session.messages":
+            return runtime.get_messages(params.get("session_id"), params.get("limit", 500))
+        if method == "session.export":
+            return runtime.export_session(params.get("session_id"), params.get("format", "markdown"))
+        if method == "session.import":
+            return runtime.import_session(params.get("content"))
+        if method == "session.context.import":
+            return runtime.import_context(
+                params.get("session_id"),
+                content=params.get("content"),
+                source=params.get("source"),
+                source_session_id=params.get("source_session_id"),
+            )
+        if method == "session.compact":
+            return runtime.compact_session(params.get("session_id"), params.get("focus", ""))
+        if method == "session.archive":
+            return runtime.archive_session(params.get("session_id"))
+        if method == "session.resume":
+            return runtime.resume_session(params.get("session_id"))
+        if method == "session.close":
+            return runtime.close_session(params.get("session_id"))
+        if method == "session.checkpoint.create":
+            return runtime.create_checkpoint(
+                params.get("session_id"),
+                description=params.get("description", ""),
+            )
+        if method == "session.checkpoint.list":
+            return runtime.list_checkpoints(params.get("session_id"))
+        if method == "session.rewind.preview":
+            return runtime.preview_rewind(params.get("session_id"), params.get("checkpoint_id"))
+        if method == "session.rewind.apply":
+            return runtime.apply_rewind(params.get("session_id"), params.get("checkpoint_id"))
+        if method == "chat.start":
+            return runtime.start_chat(
+                params.get("session_id"),
+                params.get("input"),
+                params.get("timeout_ms"),
+                reasoning_effort=params.get("reasoning_effort", "medium"),
+                permission_mode=params.get("permission_mode"),
+                context=params.get("context"),
+            )
+        if method == "chat.resume":
+            return runtime.resume_incomplete_chat(
+                params.get("session_id"),
+                params.get("timeout_ms"),
+                reasoning_effort=params.get("reasoning_effort", "medium"),
+                permission_mode=params.get("permission_mode"),
+                context=params.get("context"),
+            )
+        if method == "chat.enqueue":
+            return runtime.enqueue_chat(
+                params.get("session_id"),
+                params.get("input"),
+                params.get("timeout_ms"),
+                reasoning_effort=params.get("reasoning_effort", "medium"),
+                permission_mode=params.get("permission_mode"),
+                context=params.get("context"),
+            )
+        if method == "chat.queue.list":
+            return runtime.list_queued_chats(params.get("session_id"))
+        if method == "chat.queue.delete":
+            return runtime.delete_queued_chat(params.get("session_id"), params.get("queue_id"))
+        if method == "chat.side.ask":
+            return runtime.start_side_question(
+                params.get("session_id"),
+                params.get("question"),
+                params.get("timeout_ms"),
+                reasoning_effort=params.get("reasoning_effort", "low"),
+            )
+        if method == "chat.side.get":
+            return runtime.get_side_question(params.get("session_id"), params.get("side_question_id"))
+        if method == "chat.side.list":
+            return runtime.list_side_questions(params.get("session_id"))
+        if method == "chat.side.cancel":
+            return runtime.cancel_side_question(params.get("session_id"), params.get("side_question_id"))
+        if method == "chat.steer":
+            return runtime.steer_operation(params.get("operation_id"), params.get("instruction"))
+        if method == "history.search":
+            return runtime.search_history(params.get("query"), params.get("limit", 50))
+        if method == "chat.cancel":
+            return runtime.cancel_operation(params.get("operation_id"))
+        if method == "operation.get":
+            return runtime.get_operation(params.get("operation_id"))
+        if method == "tool.execute_async":
+            return self.tasks.submit_tool(
+                params.get("session_id"),
+                params.get("action_id"),
+                params.get("approval_id"),
+            )
+        raise WebControlError("METHOD_NOT_FOUND", f"unknown method: {method}")
 
     def close(self) -> None:
         self.scheduler.stop()
@@ -307,7 +448,7 @@ def create_web_control_app(
             "data": {
                 "status": "ready",
                 "workspace": str(control.workspace),
-                "protocol": PROTOCOL_VERSION,
+                "protocol": WEB_PROTOCOL_VERSION,
             },
         }
 

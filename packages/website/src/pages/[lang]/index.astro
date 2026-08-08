@@ -1,0 +1,10 @@
+---
+import HomePage from "../../components/HomePage.astro"
+import SiteLayout from "../../layouts/SiteLayout.astro"
+import { isLocale, locales, siteCopy } from "../../content"
+export function getStaticPaths() { return locales.map((lang) => ({ params: { lang } })) }
+const { lang } = Astro.params
+if (!isLocale(lang)) throw new Error(`Unsupported locale: ${lang}`)
+const copy = siteCopy[lang]
+---
+<SiteLayout locale={lang} title={copy.home.title} description={copy.home.description} page="home"><HomePage locale={lang} /></SiteLayout>

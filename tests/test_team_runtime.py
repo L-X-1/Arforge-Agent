@@ -8,7 +8,7 @@ import pytest
 
 import arforge.tools.basic_tools  # noqa: F401
 import arforge.tools.team_tools  # noqa: F401
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.multiagent.protocol import AgentRole
 from arforge.multiagent.security import role_scope
 from arforge.multiagent.sub_agent import SubAgent

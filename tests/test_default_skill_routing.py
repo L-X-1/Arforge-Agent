@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 
 
 ALL_DEVELOPMENT_SKILLS = {"grill-me", "openspec", "trellis", "superpowers"}
@@ -158,6 +158,44 @@ def test_non_frontend_design_does_not_load_the_taste_skill():
     assert "design-taste-frontend" not in prompt
 
 
+def test_image_tasks_automatically_route_vision_tools_capability(tmp_path, monkeypatch):
+    from arforge.skill_runtime import build_skill_system_prompt, route_skills
+
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    skill_root = tmp_path / "skills"
+    vision = skill_root / "vision-tools"
+    vision.mkdir(parents=True)
+    (vision / "SKILL.md").write_text(
+        "---\n"
+        "name: vision-tools\n"
+        "description: Local vision CLIs for screenshots and design files.\n"
+        "---\n"
+        "# vision-tools\n"
+        "Use glance / ground / detect / trace.\n",
+        encoding="utf-8",
+    )
+
+    request = "这张截图里有什么报错？请识别截图内容并修复对应问题。"
+    route = route_skills(
+        request,
+        available_ids=ALL_DEVELOPMENT_SKILLS | {"vision-tools"},
+    )
+    prompt = build_skill_system_prompt(request, roots=[skill_root])
+
+    assert route.capabilities == ("vision-tools",)
+    assert "Activated capability skills: vision-tools" in prompt
+    assert '<skill id="vision-tools">' in prompt
+    assert "Use glance / ground / detect / trace" in prompt
+
+
+def test_plain_text_tasks_do_not_load_vision_tools():
+    from arforge.skill_runtime import build_skill_system_prompt
+
+    prompt = build_skill_system_prompt("请重构这个模块并补充测试。")
+
+    assert "vision-tools" not in prompt
+
+
 def test_agent_build_messages_automatically_injects_skill_route(monkeypatch):
     from arforge.core.agent_core import ArforgeAgent
 
@@ -173,7 +211,7 @@ def test_agent_build_messages_automatically_injects_skill_route(monkeypatch):
     assert "## Automatic Skill Route\nroute-marker" in system
 
 
-def test_bridge_exposes_installed_development_skills_and_route(monkeypatch, tmp_path):
+def test_bridge_no_longer_exposes_skills_after_native_migration(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
     monkeypatch.delenv("ARFORGE_SKILL_PATHS", raising=False)
 
@@ -185,10 +223,10 @@ def test_bridge_exposes_installed_development_skills_and_route(monkeypatch, tmp_
         "params": {"request": "请完整实现跨前后端功能并测试后交付。"},
     })
 
-    ids = {item["id"] for item in listed["data"]["items"]}
-    assert ALL_DEVELOPMENT_SKILLS <= ids
-    assert routed["ok"] is True
-    assert routed["data"]["selected"] == ["openspec", "trellis", "superpowers"]
+    assert listed["ok"] is False
+    assert listed["error"]["code"] == "METHOD_NOT_FOUND"
+    assert routed["ok"] is False
+    assert routed["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_cli_can_explain_the_automatic_skill_route(capsys):

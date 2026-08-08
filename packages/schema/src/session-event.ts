@@ -6,13 +6,14 @@ import { Event } from "./event"
 import { ProviderMetadata, ToolContent } from "./llm"
 import { Delivery } from "./session-delivery"
 import { Model } from "./model"
-import { DateTimeUtcFromMillis, NonNegativeInt, RelativePath } from "./schema"
+import { DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath } from "./schema"
 import { FileAttachment, Prompt } from "./prompt"
 import { SessionID } from "./session-id"
 import { Location } from "./location"
 import { SessionMessage } from "./session-message"
 import { Revert } from "./revert"
 import { PrimaryDelivery } from "./primary-delivery"
+import { Memory } from "./memory"
 
 export { FileAttachment }
 
@@ -130,6 +131,69 @@ export const ContextUpdated = Event.define({
   },
 })
 export type ContextUpdated = typeof ContextUpdated.Type
+
+const Sha256Digest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
+
+export const MemoryContextPrepared = Event.define({
+  type: "session.next.memory.context.prepared",
+  ...options,
+  schema: {
+    ...Base,
+    userMessageID: SessionMessage.ID,
+    turnStep: NonNegativeInt,
+    queryDigest: Sha256Digest,
+    contextDigest: Sha256Digest,
+    injectedBytes: NonNegativeInt,
+    status: Schema.Literals(["prepared", "unavailable"]),
+    algorithm: Schema.Literal("hybrid_bm25_hashing_vector"),
+    localOnly: Schema.Literal(true),
+    candidates: Schema.Array(
+      Schema.Struct({
+        memoryID: Memory.ID,
+        rank: PositiveInt,
+        score: Schema.Finite,
+        lexicalScore: Schema.Finite,
+        vectorScore: Schema.Finite,
+      }),
+    ),
+  },
+})
+export type MemoryContextPrepared = typeof MemoryContextPrepared.Type
+
+const FusionContextComponent = Schema.Struct({
+  status: Schema.Literals(["prepared", "unavailable"]),
+  contextDigest: Sha256Digest,
+  injectedBytes: NonNegativeInt,
+})
+
+export const ContextFusionPrepared = Event.define({
+  type: "session.next.context.fusion.prepared",
+  ...options,
+  schema: {
+    ...Base,
+    userMessageID: SessionMessage.ID,
+    turnStep: NonNegativeInt,
+    queryDigest: Sha256Digest,
+    combinedContextDigest: Sha256Digest,
+    totalInjectedBytes: NonNegativeInt,
+    providerCallReady: Schema.Literal(true),
+    degraded: Schema.Boolean,
+    bridgeProtocol: Schema.Literal("arforge.bridge/1.2"),
+    memory: Schema.Struct({
+      runtime: Schema.Literal("typescript-core"),
+      ...FusionContextComponent.fields,
+      candidateCount: NonNegativeInt,
+    }),
+    learning: Schema.Struct({ runtime: Schema.Literal("typescript-core"), ...FusionContextComponent.fields }),
+    evolution: Schema.Struct({
+      runtime: Schema.Literal("python-sidecar"),
+      ...FusionContextComponent.fields,
+      activeCandidateCount: NonNegativeInt,
+      injectedCandidateCount: NonNegativeInt,
+    }),
+  },
+})
+export type ContextFusionPrepared = typeof ContextFusionPrepared.Type
 
 export const Synthetic = Event.define({
   type: "session.next.synthetic",
@@ -489,6 +553,8 @@ export const DurableDefinitions = Event.inventory(
   PromptQueueUpdated,
   PromptQueueRemoved,
   ContextUpdated,
+  MemoryContextPrepared,
+  ContextFusionPrepared,
   Synthetic,
   Shell.Started,
   Shell.Ended,
@@ -523,6 +589,8 @@ export const Definitions = Event.inventory(
   PromptQueueUpdated,
   PromptQueueRemoved,
   ContextUpdated,
+  MemoryContextPrepared,
+  ContextFusionPrepared,
   Synthetic,
   Shell.Started,
   Shell.Ended,

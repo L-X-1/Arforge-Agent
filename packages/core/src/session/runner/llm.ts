@@ -45,6 +45,17 @@ import { llmClient } from "../../effect/app-node-platform"
 import { PrimaryDeliveryState } from "../../primary-delivery-state"
 import { MemoryV2 } from "../../memory"
 import { LearningV2 } from "../../learning"
+import { EvolutionV2 } from "../../evolution"
+import { RuntimeInsight, type ContextLayerReport } from "../../runtime/insight"
+import * as RuntimeCompiler from "../../runtime/compiler"
+import * as RuntimeStrategy from "../../runtime/strategy"
+import { createHash } from "node:crypto"
+
+/** Prepared evolution exposure per session, reused across the steps of one user turn. */
+const evolutionContextCache = new Map<
+  string,
+  { userMessageID: string; prepared: EvolutionV2.PreparedContext }
+>()
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -117,6 +128,7 @@ const layer = Layer.effect(
     const primaryDeliveries = yield* PrimaryDeliveryState.Service
     const memory = yield* MemoryV2.Service
     const learning = yield* LearningV2.Service
+    const evolution = yield* EvolutionV2.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -217,34 +229,198 @@ const layer = Layer.effect(
         (yield* goals.list({ sessionID: session.id, includeHistory: false })).active?.status === "running"
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
-      const latestRequest = context.findLast((message) => message.type === "user")?.text
-      const [routedSkills, memoryContext, learningContext] =
+      const latestUserMessage = context.findLast((message) => message.type === "user")
+      const latestRequest = latestUserMessage?.text
+      const [routedSkills, memoryPreparation, learningPreparation] =
         latestRequest === undefined
-          ? ([undefined, "", ""] as const)
+          ? ([undefined, undefined, undefined] as const)
           : yield* Effect.all(
               [
                 skillGuidance.route(agent, latestRequest),
-                memory.context(latestRequest).pipe(Effect.catch(() => Effect.succeed(""))),
-                learning.context(latestRequest).pipe(Effect.catch(() => Effect.succeed(""))),
+                memory.prepareContext(latestRequest).pipe(
+                  Effect.map((prepared) => ({ status: "prepared" as const, prepared })),
+                  Effect.catch(() => Effect.succeed({ status: "unavailable" as const })),
+                ),
+                learning.context(latestRequest).pipe(
+                  Effect.map((text) => ({ status: "prepared" as const, text })),
+                  Effect.catch(() => Effect.succeed({ status: "unavailable" as const, text: "" })),
+                ),
               ],
               { concurrency: "unbounded" },
             )
+      // Evolution exposure is prepared once per user turn and reused across its
+      // steps, so multi-step turns settle a single exposure at the terminal step
+      // instead of leaving intermediate exposures permanently pending.
+      let evolutionPreparation:
+        | { status: "prepared"; prepared: EvolutionV2.PreparedContext }
+        | { status: "unavailable"; prepared: EvolutionV2.PreparedContext }
+        | undefined
+      if (latestRequest !== undefined && latestUserMessage) {
+        const cached = evolutionContextCache.get(session.id)
+        if (cached?.userMessageID === latestUserMessage.id) {
+          evolutionPreparation = { status: "prepared", prepared: cached.prepared }
+        } else {
+          const prepared = yield* evolution
+            .prepare({
+              userInput: latestRequest,
+              cohortKey: EvolutionV2.cohortKeyForSession(session.id),
+              source: {
+                sessionID: session.id,
+                userMessageID: latestUserMessage.id,
+                turnStep: currentStep,
+              },
+            })
+            .pipe(
+              Effect.map((value) => ({ status: "prepared" as const, prepared: value })),
+              Effect.catch(() =>
+                Effect.succeed({ status: "unavailable" as const, prepared: EvolutionV2.emptyContext }),
+              ),
+            )
+          if (prepared.status === "prepared")
+            evolutionContextCache.set(session.id, { userMessageID: latestUserMessage.id, prepared: prepared.prepared })
+          evolutionPreparation = prepared
+        }
+      } else {
+        evolutionPreparation = undefined
+      }
+      const memoryContext = memoryPreparation?.status === "prepared" ? memoryPreparation.prepared.text : ""
+      const learningContext = learningPreparation?.text ?? ""
+      const evolutionContext = evolutionPreparation?.prepared ?? EvolutionV2.emptyContext
       const injectedLearningBytes = new TextEncoder().encode(learningContext).byteLength
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions, session.id)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      if (latestRequest !== undefined) {
+        try {
+          RuntimeInsight.recordRoutingDecision({
+            timestamp: Date.now(),
+            sessionID: session.id,
+            task: latestRequest.slice(0, 200),
+            providerID: String((model as { providerID?: string }).providerID ?? ""),
+            modelID: model.id,
+            inputCost: Number((model as { cost?: { input?: number } }).cost?.input ?? 0),
+            outputCost: Number((model as { cost?: { output?: number } }).cost?.output ?? 0),
+            reason: "会话/默认模型选择",
+            candidates: [],
+          })
+        } catch (error) {
+          console.error("runtime: routing record failed", error)
+        }
+      }
+      const strategyLayer =
+        latestRequest !== undefined && RuntimeStrategy.selectStrategy(latestRequest).id === "hypothesis-test"
+          ? RuntimeStrategy.strategyPrompt(latestRequest)
+          : ""
+      let compiledParts: string[] = []
+      let compiledLayers: ContextLayerReport[] = []
+      try {
+        const compiled = RuntimeCompiler.compileContext(
+          [
+            ...(agent.info?.system ? [{ layer: "L1", name: "agent", text: agent.info.system }] : []),
+            ...(system.baseline ? [{ layer: "L3", name: "baseline", text: system.baseline }] : []),
+            ...(memoryContext ? [{ layer: "L5", name: "memory", text: memoryContext }] : []),
+            ...(learningContext ? [{ layer: "L4", name: "learning", text: learningContext }] : []),
+            ...(evolutionContext.text ? [{ layer: "L4", name: "evolution", text: evolutionContext.text }] : []),
+            ...(routedSkills ? [{ layer: "L4", name: "routedSkills", text: routedSkills }] : []),
+            ...(strategyLayer ? [{ layer: "L4", name: "strategy", text: strategyLayer }] : []),
+          ],
+          null,
+        )
+        compiledParts = compiled.parts as string[]
+        compiledLayers = compiled.layers as ContextLayerReport[]
+        RuntimeInsight.recordContextLayers({
+          sessionID: session.id,
+          timestamp: Date.now(),
+          model: `${(model as { providerID?: string }).providerID ?? ""}/${model.id}`,
+          totalTokens: compiled.totalTokens,
+          layers: compiledLayers,
+        })
+      } catch (error) {
+        console.error("runtime: compile failed", error)
+      }
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline, memoryContext, learningContext, routedSkills]
-          .filter((part): part is string => part !== undefined && part.length > 0)
-          .map(SystemPart.make),
+        system: compiledParts.map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
+      if (latestRequest !== undefined && latestUserMessage && memoryPreparation) {
+        const prepared = memoryPreparation.status === "prepared" ? memoryPreparation.prepared : undefined
+        yield* events.publish(SessionEvent.MemoryContextPrepared, {
+          sessionID: session.id,
+          timestamp: yield* DateTime.now,
+          userMessageID: latestUserMessage.id,
+          turnStep: currentStep,
+          queryDigest: createHash("sha256").update(latestRequest).digest("hex"),
+          contextDigest: createHash("sha256")
+            .update(prepared?.text ?? "")
+            .digest("hex"),
+          injectedBytes: new TextEncoder().encode(prepared?.text ?? "").byteLength,
+          status: memoryPreparation.status,
+          algorithm: "hybrid_bm25_hashing_vector",
+          localOnly: true,
+          candidates:
+            prepared?.results.items.map((hit, index) => ({
+              memoryID: hit.memory.id,
+              rank: index + 1,
+              score: hit.score,
+              lexicalScore: hit.lexicalScore,
+              vectorScore: hit.vectorScore,
+            })) ?? [],
+        })
+      }
+      if (
+        latestRequest !== undefined &&
+        latestUserMessage &&
+        memoryPreparation &&
+        learningPreparation &&
+        evolutionPreparation
+      ) {
+        const memoryPrepared = memoryPreparation.status === "prepared" ? memoryPreparation.prepared : undefined
+        const fusionContexts = [memoryContext, learningContext, evolutionContext.text]
+        const bytes = fusionContexts.map((text) => new TextEncoder().encode(text).byteLength)
+        const digest = (text: string) => createHash("sha256").update(text).digest("hex")
+        yield* events.publish(SessionEvent.ContextFusionPrepared, {
+          sessionID: session.id,
+          timestamp: yield* DateTime.now,
+          userMessageID: latestUserMessage.id,
+          turnStep: currentStep,
+          queryDigest: digest(latestRequest),
+          combinedContextDigest: digest(fusionContexts.join("\0")),
+          totalInjectedBytes: bytes.reduce((sum, value) => sum + value, 0),
+          providerCallReady: true,
+          degraded:
+            memoryPreparation.status === "unavailable" ||
+            learningPreparation.status === "unavailable" ||
+            evolutionPreparation.status === "unavailable",
+          bridgeProtocol: "arforge.bridge/1.2",
+          memory: {
+            runtime: "typescript-core",
+            status: memoryPreparation.status,
+            contextDigest: digest(memoryContext),
+            injectedBytes: bytes[0]!,
+            candidateCount: memoryPrepared?.results.items.length ?? 0,
+          },
+          learning: {
+            runtime: "typescript-core",
+            status: learningPreparation.status,
+            contextDigest: digest(learningContext),
+            injectedBytes: bytes[1]!,
+          },
+          evolution: {
+            runtime: "python-sidecar",
+            status: evolutionPreparation.status,
+            contextDigest: digest(evolutionContext.text),
+            injectedBytes: bytes[2]!,
+            activeCandidateCount: evolutionContext.activeCandidateIDs.length,
+            injectedCandidateCount: evolutionContext.injectedCandidateIDs.length,
+          },
+        })
+      }
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
@@ -380,25 +556,63 @@ const layer = Layer.effect(
             const tokenCount = tokens
               ? tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
               : 0
+            const learningMaintenance = learning
+              .record({
+                sessionID: session.id,
+                turnIndex: currentStep,
+                userInput: latestRequest,
+                route: "agentic",
+                tools: [...toolsUsed],
+                success,
+                errorType,
+                errorMessage,
+                tokenCount: Math.max(0, Math.trunc(tokenCount)),
+                injectedContextSize: injectedLearningBytes,
+                tags: ["runtime"],
+              })
+              .pipe(
+                Effect.andThen(learning.proposalCandidates()),
+                Effect.flatMap((patterns) =>
+                  patterns.length > 0 ? evolution.syncLearningPatterns(patterns) : Effect.void,
+                ),
+                Effect.catch((error) =>
+                  Effect.sync(() => {
+                    console.warn(`runtime: learning sync failed for ${session.id}:`, error)
+                    RuntimeInsight.auditRecord({
+                      actor: "runtime",
+                      action: "learning.sync.failed",
+                      resource: session.id,
+                      reason: error instanceof Error ? error.message : String(error),
+                    })
+                  }),
+                ),
+              )
+            const evolutionMaintenance =
+              evolutionContext.activeCandidateIDs.length > 0 && evolutionContext.exposureID
+                ? publisher.startAssistant().pipe(
+                    Effect.flatMap((assistantMessageID) =>
+                      evolution.recordOutcome({
+                        exposureID: evolutionContext.exposureID!,
+                        success,
+                        stopReason: success ? "completed" : `${errorType}: ${errorMessage}`,
+                        assistantMessageID,
+                      }),
+                    ),
+                    Effect.catch((error) =>
+                      Effect.sync(() => {
+                        console.warn(`runtime: evolution outcome record failed for ${session.id}:`, error)
+                        RuntimeInsight.auditRecord({
+                          actor: "runtime",
+                          action: "evolution.outcome.record.failed",
+                          resource: session.id,
+                          reason: error instanceof Error ? error.message : String(error),
+                        })
+                      }),
+                    ),
+                  )
+                : Effect.void
             return Effect.all(
-              [
-                learning
-                  .record({
-                    sessionID: session.id,
-                    turnIndex: currentStep,
-                    userInput: latestRequest,
-                    route: "agentic",
-                    tools: [...toolsUsed],
-                    success,
-                    errorType,
-                    errorMessage,
-                    tokenCount: Math.max(0, Math.trunc(tokenCount)),
-                    injectedContextSize: injectedLearningBytes,
-                    tags: ["runtime"],
-                  })
-                  .pipe(Effect.ignore),
-                memory.extract(latestRequest).pipe(Effect.ignore),
-              ],
+              [learningMaintenance, memory.extract(latestRequest).pipe(Effect.ignore), evolutionMaintenance],
               { concurrency: "unbounded", discard: true },
             )
           }
@@ -510,10 +724,30 @@ const layer = Layer.effect(
         .pipe(Effect.ignore)
     })
 
-    const run: Interface["run"] = (input) =>
-      deferredTools
-        .withinRun(input.sessionID, primaryDeliveries.withinRun(input.sessionID, runLoop(input)))
-        .pipe(Effect.onExit((exit) => settleRunningGoal(input.sessionID, exit)))
+    const run: Interface["run"] = (input) => {
+      const runID = `run_${input.sessionID}_${Date.now()}`
+      try {
+        RuntimeInsight.runBegin(input.sessionID, runID)
+      } catch (error) {
+        console.error("runtime: runBegin failed", error)
+      }
+      const effect = deferredTools.withinRun(
+        input.sessionID,
+        primaryDeliveries.withinRun(input.sessionID, runLoop(input)),
+      )
+      return Effect.onExit(effect, (exit) =>
+        Effect.gen(function* () {
+          yield* settleRunningGoal(input.sessionID, exit)
+          try {
+            RuntimeInsight.runFinish(runID, Exit.isSuccess(exit) ? "completed" : "failed", {
+              error: Exit.isSuccess(exit) ? undefined : Cause.pretty(exit.cause).slice(0, 500),
+            })
+          } catch (error) {
+            console.error("runtime: runFinish failed", error)
+          }
+        }),
+      )
+    }
 
     return Service.of({
       run,
@@ -544,5 +778,6 @@ export const node = makeLocationNode({
     PrimaryDeliveryState.node,
     MemoryV2.node,
     LearningV2.node,
+    EvolutionV2.node,
   ],
 })

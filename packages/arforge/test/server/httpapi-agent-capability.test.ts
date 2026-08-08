@@ -25,6 +25,70 @@ afterEach(async () => {
 })
 
 describe("Python Agent capability HttpApi", () => {
+  test("routes governed evolution and actual recall APIs through the typed HTTP surface", async () => {
+    await using workspace = await tmpdir()
+
+    const evolutionStatusResponse = await request("/api/agent-capabilities/evolution/status", workspace.path)
+    expect(evolutionStatusResponse.status).toBe(200)
+    expect(await evolutionStatusResponse.json()).toMatchObject({
+      location: { directory: workspace.path },
+      data: {
+        schema_version: 1,
+        total: expect.any(Number),
+        active: expect.any(Number),
+        constitution: {
+          self_approval_allowed: false,
+          source_mutation_allowed: false,
+        },
+        audit: {
+          schema_version: 1,
+          valid: true,
+        },
+      },
+    })
+
+    const candidatesResponse = await request("/api/agent-capabilities/evolution/candidates", workspace.path)
+    expect(candidatesResponse.status).toBe(200)
+    expect(await candidatesResponse.json()).toMatchObject({
+      location: { directory: workspace.path },
+      data: { schema_version: 1, count: expect.any(Number), items: expect.any(Array) },
+    })
+
+    const opportunitiesResponse = await request("/api/agent-capabilities/evolution/opportunities", workspace.path)
+    expect(opportunitiesResponse.status).toBe(200)
+    expect(await opportunitiesResponse.json()).toMatchObject({
+      location: { directory: workspace.path },
+      data: { schema_version: 1, count: expect.any(Number), items: expect.any(Array) },
+    })
+
+    const contextResponse = await request("/api/agent-capabilities/evolution/context", workspace.path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userInput: "review the current task safely", cohortKey: "httpapi-regression" }),
+    })
+    expect(contextResponse.status).toBe(200)
+    expect(await contextResponse.json()).toMatchObject({
+      location: { directory: workspace.path },
+      data: {
+        schema_version: 1,
+        text: expect.any(String),
+        candidate_ids: expect.any(Array),
+        cohorts: expect.any(Object),
+      },
+    })
+
+    const recallQualityResponse = await request("/api/agent-capabilities/memory/actual-recall-quality", workspace.path)
+    expect(recallQualityResponse.status).toBe(200)
+    expect(await recallQualityResponse.json()).toMatchObject({
+      location: { directory: workspace.path },
+      data: {
+        schema_version: 1,
+        measurement: "actual_recall",
+        synthetic_self_recall: false,
+      },
+    })
+  }, 30_000)
+
   test("exposes the preserved capability engine through the selected Core location", async () => {
     await using workspace = await tmpdir()
 

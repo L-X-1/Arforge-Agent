@@ -1,0 +1,62 @@
+---
+import WorkflowPanel from "./WorkflowPanel.astro"
+import { siteCopy, type Locale } from "../content"
+interface Props { locale: Locale }
+const { locale } = Astro.props
+const copy = siteCopy[locale]
+const home = copy.home
+const localPoints = locale === "zh-CN"
+  ? [["设备执行", "文件、命令和工具操作发生在你控制的设备。"], ["Web 控制", "账户、设备、会话状态和远程连接集中管理。"], ["明确审批", "危险操作继续经过设备端权限与确认。"]]
+  : [["Device execution", "Files, commands, and tools stay on a device you control."], ["Web control", "Manage accounts, devices, session status, and connections."], ["Explicit approval", "High-risk actions still pass through device-side permissions."]]
+---
+
+<section class="hero">
+  <div class="hero__copy">
+    <p class="eyebrow">{copy.beta}</p>
+    <h1>{home.title}</h1>
+    <p class="hero__lede">{home.description}</p>
+    <div class="hero__actions">
+      <a class="button" href={`/${locale}/download/`}>{copy.downloadWindows}</a>
+      <a class="button button--secondary" href="/app/">{copy.openConsole}</a>
+    </div>
+    <p class="hero__note">{locale === "zh-CN" ? "Windows 公开版正在完成签名与发布验收。" : "The public Windows build is completing signing and release acceptance."}</p>
+  </div>
+</section>
+
+<section class="proof" aria-labelledby="proof-title">
+  <div class="proof__intro">
+    <div><p class="eyebrow">{home.evidenceLabel}</p><h2 class="section-title" id="proof-title">{home.evidenceTitle}</h2></div>
+    <p class="section-lede">{home.evidenceDescription}</p>
+  </div>
+  <WorkflowPanel locale={locale} />
+</section>
+
+<section class="section section--line" id="how-it-works" aria-labelledby="lifecycle-title">
+  <div class="section-heading"><p class="eyebrow">{copy.howItWorks}</p><h2 class="section-title" id="lifecycle-title">{locale === "zh-CN" ? "从目标到交付，是一条连续的任务线。" : "From goal to delivery, one continuous task line."}</h2></div>
+  <div class="lifecycle">
+    {home.stages.map((stage) => <article class="lifecycle-row"><span class="lifecycle-row__number">{stage[0]}</span><h3>{stage[1]}</h3><p>{stage[2]}</p></article>)}
+  </div>
+</section>
+
+<section class="section section--line" aria-labelledby="capabilities-title">
+  <div class="section-heading"><p class="eyebrow">{locale === "zh-CN" ? "核心能力" : "Core capabilities"}</p><h2 class="section-title" id="capabilities-title">{home.capabilitiesTitle}</h2></div>
+  <div class="feature-grid">
+    {home.capabilities.map((item, index) => <article class="feature"><span class="feature__number">{String(index + 1).padStart(2, "0")}</span><h3>{item[0]}</h3><p>{item[1]}</p></article>)}
+  </div>
+</section>
+
+<section class="section section--line split-section" aria-labelledby="local-title">
+  <div class="split-section__copy"><p class="eyebrow">Local-first</p><h2 class="section-title" id="local-title">{home.localTitle}</h2><p class="section-lede" style="margin-top: 28px">{home.localDescription}</p></div>
+  <div class="split-section__details">
+    {localPoints.map((item) => <article class="boundary-card"><strong>{item[0]}</strong><p>{item[1]}</p></article>)}
+  </div>
+</section>
+
+<section class="section section--line" aria-labelledby="byok-title">
+  <div class="byok-strip"><div class="byok-strip__inner"><div><p class="eyebrow">Bring your own model</p><h2 class="section-title" id="byok-title">{home.byokTitle}</h2><p class="section-lede" style="margin-top: 22px">{home.byokDescription}</p></div><div class="provider-list" aria-label="Model provider examples"><span>OpenAI</span><span>Anthropic</span><span>Google</span><span>OpenRouter</span><span>Local models</span><span>OAuth</span></div></div></div>
+</section>
+
+<section class="section section--line final-cta">
+  <p class="eyebrow">{copy.beta}</p><h2 class="section-title">{home.finalTitle}</h2>
+  <div class="hero__actions"><a class="button" href={`/${locale}/download/`}>{copy.downloadWindows}</a><a class="button button--secondary" href="/app/">{copy.openConsole}</a></div>
+</section>

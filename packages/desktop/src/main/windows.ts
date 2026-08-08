@@ -213,6 +213,7 @@ export function createMainWindow(id: string = randomUUID()) {
           titleBarStyle: "hidden" as const,
           titleBarOverlay: overlay({ mode }),
           backgroundMaterial: "mica" as const,
+          roundedCorners: true,
         }
       : {}),
     webPreferences: {

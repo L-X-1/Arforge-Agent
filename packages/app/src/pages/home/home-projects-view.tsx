@@ -63,7 +63,7 @@ export type HomeProjectsViewProps = {
   onOpenHelp: () => void
 }
 
-export function HomeProjectsView(props: HomeProjectsViewProps) {
+export function HomeProjectsView(props: HomeProjectsViewProps & { embedded?: boolean }) {
   const [contextMenu, setContextMenu] = createStore({ open: undefined as string | undefined })
   const contextMenuProps = {
     contextMenuOpen: (id: string) => contextMenu.open === id,
@@ -71,18 +71,19 @@ export function HomeProjectsView(props: HomeProjectsViewProps) {
   }
   return (
     <aside
-      class={`
-        mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden
+      class={props.embedded
+        ? "flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden"
+        : `mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden
         lg:sticky lg:top-14 lg:mt-14 lg:h-[calc(100cqh-56px)] lg:self-start lg:pt-10
-      `}
+        lg:border-r lg:border-v2-border-border-muted`}
       aria-label={props.language.t("home.projects")}
       onWheel={(event) => {
         if (event.target === event.currentTarget) return
         props.onWheel(event)
       }}
     >
-      <div class="flex h-7 min-w-0 shrink-0 items-center justify-between pl-1.5 pr-3">
-        <div class="text-v2-text-text-muted [font-weight:530]">{props.language.t("home.projects")}</div>
+      <div class="flex h-8 min-w-0 shrink-0 items-center justify-between pl-2 pr-3">
+        <div class="text-[13px] text-v2-text-text-base [font-weight:530]">{props.language.t("home.projects")}</div>
         <Show
           when={props.servers().length === 1 && !(props.projects().length === 0 && props.recentlyClosed().length > 0)}
         >
@@ -151,15 +152,6 @@ export function HomeProjectsView(props: HomeProjectsViewProps) {
           </div>
         </Show>
       </ScrollView>
-      <HomeUtilityNav
-        class="mb-8 mt-4 hidden shrink-0 lg:flex"
-        archiveSelected={props.archiveSelected}
-        archiveCount={props.archiveCount}
-        onOpenArchive={props.onOpenArchive}
-        onOpenSettings={props.onOpenSettings}
-        onOpenHelp={props.onOpenHelp}
-        language={props.language}
-      />
     </aside>
   )
 }
@@ -508,13 +500,13 @@ function HomeProjectRow(
   return (
     <div
       ref={sortable.ref}
-      class="group/project relative flex h-7 min-w-0 items-center rounded-[6px]"
+      class="group/project relative flex h-11 min-w-0 items-center rounded-[12px]"
       classList={{ "z-10": sortable.isDragSource() }}
     >
       <HomeProjectNavButton
         type="button"
         data-component="home-project-row"
-        class="pr-16 disabled:opacity-60"
+        class="h-11 rounded-[12px] gap-3 px-2 pr-16 disabled:opacity-60"
         classList={{
           "bg-v2-background-bg-layer-01 text-v2-text-text-base": sortable.isDragSource(),
           "[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)]": sortable.isDragSource(),
@@ -626,8 +618,8 @@ function HomeProjectNavButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>
         flex h-7 min-w-0 w-full shrink-0 cursor-default items-center gap-2 rounded-[8px] bg-transparent px-1.5 text-left
         text-v2-text-text-muted [font-weight:440] transition-[background-color,color,box-shadow] duration-[120ms] ease-in-out
         hover:bg-v2-background-bg-layer-01 hover:text-v2-text-text-base hover:[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)]
-        data-[selected]:bg-v2-background-bg-layer-03 data-[selected]:text-v2-text-text-base
-        data-[selected]:[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)] data-[selected]:hover:bg-v2-background-bg-layer-03
+        data-[selected]:bg-v2-background-bg-layer-02 data-[selected]:text-v2-text-text-base
+        data-[selected]:[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)] data-[selected]:hover:bg-v2-background-bg-layer-02
         focus-visible:bg-v2-background-bg-layer-01 focus-visible:text-v2-text-text-base focus-visible:outline-none
         focus-visible:[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)]
         ${local.class ?? ""}
@@ -643,6 +635,7 @@ function HomeProjectAvatar(props: { project: LocalProject; outline?: boolean }) 
   const name = createMemo(() => displayName(props.project))
   return (
     <ProjectAvatar
+      class="!size-10"
       fallback={name()}
       src={props.outline ? undefined : getProjectAvatarSource(props.project.id, props.project.icon)}
       variant={props.outline ? "outline" : getProjectAvatarVariant(props.project.icon?.color)}

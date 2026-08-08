@@ -12,7 +12,7 @@ from arforge.database.migration import (
     upgrade_database,
 )
 
-LATEST_REVISION = "0004_cache_evidence"
+LATEST_REVISION = "0005_memory_os"
 
 
 def test_main_and_multiagent_migrations_are_isolated(tmp_path, monkeypatch):
@@ -41,7 +41,19 @@ def test_compatible_legacy_schema_can_be_stamped(tmp_path, monkeypatch):
     import arforge.database.models  # noqa: F401
 
     engine = create_engine(url)
-    selected = [Base.metadata.tables[name] for name in ("memories", "learning_experiences", "learning_outcomes", "learning_patterns", "token_usage")]
+    selected = [
+        Base.metadata.tables[name]
+        for name in (
+            "memories",
+            "memory_revisions",
+            "memory_relations",
+            "memory_retrieval_events",
+            "learning_experiences",
+            "learning_outcomes",
+            "learning_patterns",
+            "token_usage",
+        )
+    ]
     Base.metadata.create_all(engine, tables=selected)
     engine.dispose()
 

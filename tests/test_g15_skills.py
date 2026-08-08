@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.skills import list_skills, load_skill_manifest, read_skill
 
 
@@ -107,24 +107,16 @@ def test_skills_list_honors_env_roots(monkeypatch, tmp_path):
     assert str(root.resolve()) in data["roots"]
 
 
-def test_bridge_exposes_skills_list(monkeypatch, tmp_path):
-    root = tmp_path / "skills"
-    skill = root / "ops"
-    skill.mkdir(parents=True)
-    (skill / "skill.json").write_text(
-        json.dumps({"id": "ops", "name": "Ops", "description": "Operational runbook helper."}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ARFORGE_SKILL_PATHS", str(root))
+def test_bridge_no_longer_exposes_skills_list(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    monkeypatch.delenv("ARFORGE_SKILL_PATHS", raising=False)
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     response = dispatch({"id": 2, "version": "1.1", "method": "skills.list"})
 
-    assert "skills.list" in described["data"]["methods"]
-    assert response["ok"] is True
-    by_id = {item["id"]: item for item in response["data"]["items"]}
-    assert "ops" in by_id
+    assert "skills.list" not in described["data"]["methods"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_default_listing_includes_bundled_agent_skills(monkeypatch, tmp_path):
@@ -224,58 +216,37 @@ def test_cli_skills_enable_disable_roundtrip(monkeypatch, tmp_path, capsys):
     assert skills.is_skill_enabled("ops") is True
 
 
-def test_bridge_exposes_skill_enable_disable(monkeypatch, tmp_path):
-    root = tmp_path / "skills"
-    skill = root / "ops"
-    skill.mkdir(parents=True)
-    (skill / "skill.json").write_text(
-        json.dumps({"id": "ops", "name": "Ops", "description": "Operational runbook helper."}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ARFORGE_SKILL_PATHS", str(root))
+def test_bridge_no_longer_exposes_skill_enable_disable(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
-    import arforge.skills as skills
-
-    skills._cache_loaded = False
-    skills._skills_disabled.clear()
+    monkeypatch.delenv("ARFORGE_SKILL_PATHS", raising=False)
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     disabled = dispatch(
         {"id": 2, "version": "1.1", "method": "skills.disable", "params": {"skill_id": "ops"}}
     )
-    listed = dispatch({"id": 3, "version": "1.1", "method": "skills.list"})
     enabled = dispatch(
-        {"id": 4, "version": "1.1", "method": "skills.enable", "params": {"skill_id": "ops"}}
+        {"id": 3, "version": "1.1", "method": "skills.enable", "params": {"skill_id": "ops"}}
     )
 
-    assert "skills.disable" in described["data"]["methods"]
-    assert "skills.enable" in described["data"]["methods"]
-    assert disabled["ok"] is True
-    by_id = {item["id"]: item for item in listed["data"]["items"]}
-    assert by_id["ops"]["enabled"] is False
-    assert enabled["ok"] is True
+    assert "skills.disable" not in described["data"]["methods"]
+    assert "skills.enable" not in described["data"]["methods"]
+    assert disabled["ok"] is False
+    assert disabled["error"]["code"] == "METHOD_NOT_FOUND"
+    assert enabled["ok"] is False
 
 
-def test_bridge_exposes_skill_read(monkeypatch, tmp_path):
-    root = tmp_path / "skills"
-    skill = root / "ops"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text(
-        "---\nname: ops\ndescription: Operational runbook helper.\n---\n# Ops\nUse the runbook.\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("ARFORGE_SKILL_PATHS", str(root))
+def test_bridge_no_longer_exposes_skill_read(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    monkeypatch.delenv("ARFORGE_SKILL_PATHS", raising=False)
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     response = dispatch(
         {"id": 2, "version": "1.1", "method": "skills.read", "params": {"skill_id": "ops", "max_chars": 5000}}
     )
 
-    assert "skills.read" in described["data"]["methods"]
-    assert response["ok"] is True
-    assert response["data"]["ok"] is True
-    assert "Use the runbook" in response["data"]["content"]
+    assert "skills.read" not in described["data"]["methods"]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
 
 def test_skill_read_tool_is_registered_and_read_only():

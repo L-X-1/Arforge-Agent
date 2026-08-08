@@ -1,4 +1,4 @@
-﻿"""Command line entry point for Arforge Agent.
+"""Command line entry point for Arforge Agent.
 
 CLI design uses a modern terminal interaction model:
 - Rich Unicode box-drawing and colours
@@ -90,7 +90,7 @@ COMMANDS_HELP: list[tuple[str, str, str]] = [
     ("arforge", "tools [--verbose]", "List registered tools with schemas"),
     ("arforge", "agents", "List multi-agent orchestration roles"),
     ("arforge", "capabilities [test <input>]", "Capability inspection and testing"),
-    ("arforge", "memory", "Memory store statistics"),
+    ("arforge", "memory [status|metrics|conflict|write-stats|recovery|feedback <retrieval_uid>|digest [--path FILE] [--category CATEGORY]]", "Memory statistics, quality metrics, and categorized long-term memory document"),
     ("arforge", "learning [recall|dream]", "Inspect learning and run local reflection"),
     ("arforge", "auth [status|login|logout|use|model|endpoint]", "Manage encrypted model provider credentials"),
     ("arforge", "ssh [list|add|remove|exec]", "Manage audited SSH profiles and remote commands"),
@@ -107,7 +107,8 @@ COMMANDS_HELP: list[tuple[str, str, str]] = [
     ("arforge", "code [--workspace DIR] [--goal] [--resume RUN_ID] [--max-steps N] [prompt]", "Run, persist, or resume the full coding-agent loop"),
     ("arforge", "goals [list|add|next|run|pause|resume|replace|cancel|delete]", "Manage the durable autonomous-goal queue"),
     ("arforge", "acp", "Run the standard IDE agent protocol over stdin/stdout"),
-    ("arforge", "eval [--suite CATEGORY] [--task ID] [--token-budget N] [--formal] [--json]", "Run model-driven isolated workspace evaluation"),
+    ("arforge", "eval [--suite CATEGORY] [--task ID] [--token-budget N] [--formal] [--save-baseline] [--check-regression] [--json]", "Run model-driven isolated workspace evaluation"),
+    ("arforge", "eval-ablation [--suite core|formal|formal-multistack] [--models provider[/model],...] [--weak provider/model] [--judge provider/model] [--skip-bare] [--json]", "Enhanced-vs-bare A/B capability uplift across models"),
     ("arforge", "capability-eval [--json]", "Evaluate local infrastructure contracts (no model)"),
     ("arforge", "stack-acceptance [--run] [--capability ID] [--json]", "Run or show fail-closed V1 technology acceptance evidence"),
     ("arforge", "project-acceptance [--run] [--project ID] [--json]", "Run or show strict project-depth lifecycle evidence"),
@@ -126,6 +127,7 @@ COMMANDS_HELP: list[tuple[str, str, str]] = [
     ("arforge", "workspace [list|trust|add|remove]", "Manage explicitly trusted additional workspace directories"),
     ("arforge", "custom-agents [status|list|validate]", "Inspect and validate project specialized agent profiles"),
     ("arforge", "stats", "Show cumulative token usage and cost statistics"),
+    ("arforge", "agent-metrics [--clear]", "Unified Agent quality metrics (success/tools/recovery/verification/regression)"),
     ("arforge", "cost-optimization", "Analyze repeated reads and cache hit opportunities"),
     ("arforge", "repo-scale <path>", "Analyse large repository and report metrics"),
     ("arforge", "file-state", "Show tracked file read/write state for the current run"),
@@ -338,9 +340,25 @@ def _command_usage(command: str) -> str:
 
 def _validate_command_args(command: str, args: list[str]) -> str | None:
     """Return usage when arguments do not match the public CLI contract."""
-    no_args = {"chat", "doctor", "privacy", "status", "tools", "agents", "memory", "config"}
+    no_args = {"chat", "doctor", "privacy", "status", "tools", "agents", "config"}
     if command in no_args and args:
         return _command_usage(command)
+    if command == "agent-metrics" and args:
+        if args != ["--clear"]:
+            return _command_usage(command)
+    if command == "memory" and args:
+        sub = args[0].casefold()
+        valid = False
+        if sub in {"metrics", "conflict"} and len(args) == 1:
+            valid = True
+        if sub == "digest" and len(args) >= 1:
+            valid = True
+        if sub in {"write-stats", "recovery"} and len(args) in {1, 2}:
+            valid = len(args) == 1 or args[1] == "--clear"
+        if sub == "feedback" and len(args) >= 2:
+            valid = True
+        if not valid:
+            return _command_usage(command)
     if command in {
         "export",
         "logs-prune",
@@ -1674,8 +1692,23 @@ def _run_capabilities(args: list[str]) -> int:
     return 0
 
 
-def _run_memory_cmd() -> int:
-    """Memory store statistics."""
+def _run_memory_cmd(args: list[str] | None = None, *, json_output: bool = False) -> int:
+    """Memory store statistics and governed memory quality metrics."""
+    args = list(args or [])
+    command = args[0].casefold() if args else "status"
+
+    if command in {"metrics", "conflict", "write-stats", "recovery"}:
+        return _run_memory_metrics_cmd(command, args, json_output=json_output)
+    if command == "feedback":
+        return _run_memory_feedback_cmd(args, json_output=json_output)
+    if command == "digest":
+        return _run_memory_digest_cmd(args, json_output=json_output)
+    if command != "status" or len(args) != 0:
+        print_error(
+            "Usage: arforge memory [status|metrics|conflict|write-stats|recovery|feedback <retrieval_uid> [--useful 1,2] [--irrelevant 3]|digest [--path FILE] [--category CATEGORY]]"
+        )
+        return 2
+
     from arforge.memory import get_memory_stats, query_memories
     from arforge.database.config import describe_database_url
 
@@ -1704,6 +1737,358 @@ def _run_memory_cmd() -> int:
     return 0
 
 
+def _memory_metric_rows(prefix: str, metrics: dict) -> list[tuple[str, str]]:
+    """Flatten a metric dict into (label, value) rows with a shared prefix."""
+    rows: list[tuple[str, str]] = []
+    for key, value in metrics.items():
+        if isinstance(value, (dict, list)):
+            continue
+        if isinstance(value, float):
+            text = f"{value:.4f}"
+        else:
+            text = str(value)
+        rows.append((f"{prefix}.{key}", text))
+    return rows
+
+
+def _run_memory_metrics_cmd(subcommand: str, args: list[str], *, json_output: bool) -> int:
+    """Governed memory quality metrics: golden retrieval, conflict, write, recovery."""
+    if subcommand == "metrics" :
+        from arforge.memory_metrics import (
+            memory_metrics_report,
+            run_memory_golden_eval,
+        )
+
+        golden = run_memory_golden_eval()
+        payload = memory_metrics_report()
+        payload["golden_eval"] = golden
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            return 0
+        golden = payload.get("golden_eval") or {}
+        coverage = payload.get("source_coverage") or {}
+        telemetry = payload.get("recall_telemetry") or {}
+        print()
+        print(section_header("Memory Golden Metrics"))
+        rows = _memory_metric_rows("recall@", golden)
+        rows = [
+            (f"Recall@{k}", f"{golden.get(f'mean_recall_at_{k}', 0.0):.4f}")
+            for k in (1, 5, 10)
+        ] + [
+            (f"Precision@{k}", f"{golden.get(f'mean_precision_at_{k}', 0.0):.4f}")
+            for k in (1, 5, 10)
+        ] + [
+            ("Hit@1", f"{golden.get('hit_rate_at_1', 0.0):.4f}"),
+            ("MRR", f"{golden.get('mean_mrr', 0.0):.4f}"),
+        ]
+        print(key_value(rows))
+        print()
+        print(section_header("Fact Source Coverage"))
+        print(key_value([
+            ("Active memories", str(coverage.get("active_total", 0))),
+            ("Traceable", str(coverage.get("traceable", 0))),
+            ("Coverage rate", f"{coverage.get('source_coverage_rate', 0.0):.4f}"),
+        ]))
+        print()
+        print(section_header("Actual Recall Telemetry"))
+        print(key_value([
+            ("Recalls", str(telemetry.get("recalls", 0))),
+            ("Empty recall rate", f"{telemetry.get('empty_recall_rate', 0.0):.4f}"),
+            ("Feedback coverage", f"{telemetry.get('feedback_coverage', 0.0):.4f}"),
+            ("Useful recall rate", f"{telemetry.get('useful_recall_rate', 0.0):.4f}"),
+            ("Conflicting recall rate", f"{telemetry.get('conflicting_recall_rate', 0.0):.4f}"),
+        ]))
+        print()
+        return 0
+
+    if subcommand == "conflict":
+        from arforge.memory_conflict import (
+            conflict_relation_coverage,
+            run_conflict_benchmark,
+        )
+
+        benchmark = run_conflict_benchmark()
+        coverage = conflict_relation_coverage()
+        payload = {"benchmark": benchmark, "relation_coverage": coverage}
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            return 0
+        print()
+        print(section_header("Memory Conflict Detection Benchmark"))
+        print(key_value([
+            ("Detection rate", f"{benchmark.get('detection_rate', 0.0):.4f}"),
+            ("False positive rate", f"{benchmark.get('false_positive_rate', 0.0):.4f}"),
+            ("Precision", f"{benchmark.get('precision', 0.0):.4f}"),
+            ("Recall", f"{benchmark.get('recall', 0.0):.4f}"),
+            ("Cases", str(len(benchmark.get("case_results", [])))),
+        ]))
+        relation = coverage.get("relation_coverage")
+        if isinstance(relation, dict):
+            print()
+            print(section_header("Conflict Relation Coverage (real store)"))
+            print(key_value([
+                ("Auto-detected pairs", str(relation.get("auto_detected", 0))),
+                ("Already labelled", str(relation.get("manual_labelled", 0))),
+                ("Coverage rate", f"{relation.get('coverage_rate', 0.0):.4f}"),
+            ]))
+        elif coverage.get("error"):
+            print()
+            print(warn(f"  Relation coverage unavailable: {coverage['error']}"))
+        print()
+        return 0
+
+    if subcommand == "write-stats":
+        from arforge.memory_writes import clear_write_metrics, memory_write_stats
+
+        if len(args) == 2 and args[1] == "--clear":
+            removed = clear_write_metrics()
+            if json_output:
+                print(json.dumps({"cleared_rows": removed}, ensure_ascii=False, sort_keys=True))
+                return 0
+            print_ok(f"Cleared {removed} recorded write decisions.")
+            return 0
+        payload = memory_write_stats()
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            return 0
+        database = payload.get("database") or {}
+        if isinstance(database, dict) and database.get("error"):
+            database = {}
+        print()
+        print(section_header("Memory Write Governance"))
+        print(key_value([
+            ("Decisions", str(payload.get("decisions_total", 0))),
+            ("Saved", str(payload.get("saved_total", 0))),
+            ("Saved rate", f"{payload.get('saved_rate', 0.0):.4f}"),
+            ("Rejected", str(payload.get("rejected_total", 0))),
+            ("Rejection rate", f"{payload.get('rejection_rate', 0.0):.4f}"),
+            ("Rejection effectiveness", f"{payload.get('write_rejection_effectiveness', 0.0):.4f}"),
+            ("Quarantined", str(database.get("quarantined_count", "n/a"))),
+            ("Corrected", str(database.get("correction_count", "n/a"))),
+            ("Correction rate", f"{database.get('correction_rate', 0.0):.4f}"),
+            ("Candidates", str(database.get("candidate_count", "n/a"))),
+        ]))
+        db_error = (payload.get("database") or {}).get("error")
+        if db_error:
+            print(warn(f"  Database governance metrics unavailable: {db_error}"))
+        reasons = payload.get("rejection_reasons_top") or {}
+        if isinstance(reasons, dict) and reasons:
+            print()
+            print(bold("  Top rejection reasons:"))
+            for reason, count in list(reasons.items())[:5]:
+                print(f"    {reason}: {count}")
+        print()
+        return 0
+
+    if subcommand == "recovery":
+        from arforge.core.recovery_metrics import (
+            clear_recovery_metrics,
+            recovery_accuracy_report,
+        )
+
+        if len(args) == 2 and args[1] == "--clear":
+            removed = clear_recovery_metrics()
+            if json_output:
+                print(json.dumps({"cleared_rows": removed}, ensure_ascii=False, sort_keys=True))
+                return 0
+            print_ok(f"Cleared {removed} recorded recovery outcomes.")
+            return 0
+        payload = recovery_accuracy_report()
+        if json_output:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+            return 0
+        print()
+        print(section_header("Task State Recovery Accuracy"))
+        print(key_value([
+            ("Recovery events", str(payload.get("events_total", 0))),
+            ("Verified restores", str(payload.get("verified_count", 0))),
+            ("Restore success rate", f"{payload.get('restore_success_rate', 0.0):.4f}"),
+            ("Pending rebuild rate", f"{payload.get('pending_rebuild_rate', 0.0):.4f}"),
+        ]))
+        states = payload.get("states") or {}
+        if isinstance(states, dict) and states:
+            print()
+            print(bold("  Recovery state distribution:"))
+            for state, entry in states.items():
+                count = entry.get("count", 0) if isinstance(entry, dict) else entry
+                ratio = entry.get("ratio", 0.0) if isinstance(entry, dict) else 0.0
+                print(f"    {state}: {count} ({ratio:.1%})")
+        print()
+        return 0
+
+    print_error(f"Unknown memory subcommand: {subcommand}")
+    return 2
+
+
+def _run_memory_digest_cmd(args: list[str], *, json_output: bool) -> int:
+    """Organize long-term memories by category into a readable document."""
+    path_arg = ""
+    category_filter = ""
+    for i, arg in enumerate(args):
+        if arg == "--path" and i + 1 < len(args):
+            path_arg = args[i + 1]
+        elif arg == "--category" and i + 1 < len(args):
+            category_filter = args[i + 1].strip().casefold()
+        elif arg == "--json":
+            json_output = True
+    from arforge.core.memory_digest import (
+        CATEGORY_LABELS,
+        default_digest_path,
+        digest_report,
+        render_markdown,
+        write_digest_markdown,
+        load_memory_items,
+        group_by_category,
+    )
+
+    if path_arg:
+        target = write_digest_markdown(path_arg, category_filter=category_filter)
+        if json_output:
+            print(json.dumps({"path": target}, ensure_ascii=False, sort_keys=True))
+            return 0
+        print_ok(f"记忆档案已写入：{target}")
+        return 0
+
+    if json_output:
+        print(json.dumps(digest_report(category_filter=category_filter), ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+
+    items = load_memory_items(limit=1000)
+    groups = group_by_category(items)
+    document = render_markdown(groups, category_filter=category_filter)
+    print()
+    print(section_header("Memory Digest"))
+    print(document)
+    try:
+        auto_path = default_digest_path()
+        write_digest_markdown(auto_path, category_filter=category_filter)
+        print(dim(f"已同步写入档案文件：{auto_path}"))
+    except Exception:
+        pass
+    if category_filter and category_filter not in CATEGORY_LABELS:
+        print()
+        print(warn(f"未知类别 {category_filter!r}，可用类别：{', '.join(sorted(set(CATEGORY_LABELS)))}"))
+    print()
+    return 0
+
+
+def _run_memory_feedback_cmd(args: list[str], *, json_output: bool) -> int:
+    """Record recall feedback for a retrieval to measure memory usage effectiveness."""
+    if len(args) < 2 or not args[1].strip():
+        print_error("Usage: arforge memory feedback <retrieval_uid> [--useful 1,2] [--irrelevant 3]")
+        return 2
+    retrieval_uid = args[1].strip()
+    useful: list[int] = []
+    irrelevant: list[int] = []
+    index = 2
+    while index < len(args):
+        flag = args[index].casefold()
+        if flag not in {"--useful", "--irrelevant"} or index + 1 >= len(args):
+            print_error("Usage: arforge memory feedback <retrieval_uid> [--useful 1,2] [--irrelevant 3]")
+            return 2
+        try:
+            ids = [int(part) for part in args[index + 1].split(",") if part.strip()]
+        except ValueError:
+            print_error("Memory IDs must be integers separated by commas.")
+            return 2
+        if flag == "--useful":
+            useful.extend(ids)
+        else:
+            irrelevant.extend(ids)
+        index += 2
+    if not useful and not irrelevant:
+        print_error("At least one --useful or --irrelevant memory ID is required.")
+        return 2
+    from arforge.memory_os import MemoryOS, MemoryOSError
+
+    try:
+        payload = MemoryOS().record_recall_feedback(
+            retrieval_uid,
+            useful_memory_ids=useful,
+            irrelevant_memory_ids=irrelevant,
+            actor="user:cli",
+        )
+    except MemoryOSError as exc:
+        print_error(str(exc))
+        return 2
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    print_ok(
+        f"Feedback recorded for retrieval {retrieval_uid}: "
+        f"{len(useful)} useful, {len(irrelevant)} irrelevant."
+    )
+    return 0
+
+
+
+
+def _run_agent_metrics_cmd(args: list[str] | None = None, *, json_output: bool = False) -> int:
+    """Unified Agent quality metrics: success, tool usage, recovery, verification, regression."""
+    args = list(args or [])
+    clear = any(arg == "--clear" for arg in args)
+    if clear:
+        from arforge.core.agent_metrics import clear_agent_metrics_history
+
+        removed = clear_agent_metrics_history()
+        if json_output:
+            print(json.dumps({"cleared_rows": removed}, ensure_ascii=False, sort_keys=True))
+            return 0
+        print_ok(f"Cleared {removed} recorded agent metric snapshots.")
+        return 0
+    from arforge.core.agent_metrics import agent_metrics_report
+
+    payload = agent_metrics_report()
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    metrics = payload.get("metrics") or {}
+    print()
+    print(section_header("Agent Quality Metrics"))
+    rows: list[tuple[str, str]] = []
+    for key in (
+        "success_rate",
+        "avg_tool_calls",
+        "invalid_action_rate",
+        "first_attempt_success_rate",
+        "recovery_success_rate",
+        "verification_coverage",
+        "verification_pass_rate",
+        "patch_regression_rate",
+    ):
+        entry = metrics.get(key) or {}
+        value = entry.get("value")
+        if value is None:
+            text = "n/a"
+        elif isinstance(value, float):
+            text = f"{value:.4f}"
+        else:
+            text = str(value)
+        rows.append((key.replace("_", " ").title(), text))
+    print(key_value(rows))
+    gates = payload.get("gates") or {}
+    if gates:
+        print()
+        print(section_header("Release Gates"))
+        print(key_value([
+            ("Formal dogfood", str(gates.get("formal_dogfood", "n/a"))),
+            ("Longitudinal", str(gates.get("longitudinal_dogfood", "n/a"))),
+        ]))
+    sources = payload.get("sources") or {}
+    if sources:
+        print()
+        print(section_header("Data Sources"))
+        source_rows = []
+        for name, info in sources.items():
+            if isinstance(info, dict):
+                status = info.get("status", "unknown")
+                detail = f"rows={info.get('rows', 'n/a')}" if info.get("rows") is not None else ""
+                source_rows.append((name, f"{status} {detail}".strip()))
+            else:
+                source_rows.append((name, str(info)))
+        print(key_value(source_rows))
+    print()
+    return 0
 
 
 def _run_config_cmd() -> int:
@@ -4096,6 +4481,8 @@ def _run_eval(args: list[str] | None = None, *, json_output: bool = False) -> in
     task_filters: list[str] = []
     token_budget_override: int | None = None
     formal = "--formal" in args
+    save_baseline_flag = "--save-baseline" in args
+    check_regression_flag = "--check-regression" in args
     if "--token-budget" in args and args.index("--token-budget") == len(args) - 1:
         import sys
         print("--token-budget requires a positive integer", file=sys.stderr)
@@ -4162,14 +4549,181 @@ def _run_eval(args: list[str] | None = None, *, json_output: bool = False) -> in
         failure_artifacts_dir=Path.cwd() / ".arforge" / "eval-failures",
         formal=formal,
     )
+    from arforge.core.eval_baseline import check_regression, load_baseline, save_baseline
+
+    if save_baseline_flag:
+        try:
+            save_baseline(report)
+        except Exception as exc:
+            print_error(f"Failed to save eval baseline: {exc}")
+            return 1
+    regression_ok, regression_msg = check_regression(report, load_baseline())
     if json_output:
         import json
-        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        payload = report.to_dict()
+        if save_baseline_flag:
+            payload["baseline_saved"] = True
+        payload["regression_check"] = {"ok": regression_ok, "message": regression_msg}
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if check_regression_flag and not regression_ok:
+            return 1
         return 0 if report.success_rate >= 0.8 else 1
     print(f"  Passed: {report.passed}/{report.total}")
     print(f"  Success rate: {report.success_rate:.0%}")
+    if save_baseline_flag:
+        from arforge.i18n import t
+
+        print("  " + t("eval.baseline_updated", get_lang()))
+    print(f"  Regression check: {regression_msg}")
     print()
+    if check_regression_flag and not regression_ok:
+        return 1
     return 0 if report.success_rate >= 0.8 else 1
+
+
+def _run_eval_ablation(
+    args: list[str] | None = None,
+    *,
+    json_output: bool = False,
+) -> int:
+    """Run enhanced-vs-bare ablation across models and report capability uplift."""
+    from arforge.eval.ablation import (
+        create_adapter_for,
+        parse_model_spec,
+        run_ablation_eval,
+    )
+
+    if args is None:
+        args = []
+    suite = "core"
+    model_specs: list[str] = []
+    weak_model_spec: str | None = None
+    judge_spec: str | None = None
+    skip_bare = "--skip-bare" in args
+    token_budget: int | None = None
+    for i, arg in enumerate(args):
+        if arg == "--suite" and i + 1 < len(args):
+            suite = args[i + 1]
+        elif arg == "--models" and i + 1 < len(args):
+            model_specs = [s.strip() for s in args[i + 1].split(",") if s.strip()]
+        elif arg == "--weak" and i + 1 < len(args):
+            weak_model_spec = args[i + 1].strip()
+        elif arg == "--judge" and i + 1 < len(args):
+            judge_spec = args[i + 1].strip()
+        elif arg == "--token-budget" and i + 1 < len(args):
+            try:
+                token_budget = int(args[i + 1])
+            except ValueError:
+                print_error("--token-budget must be a positive integer")
+                return 2
+            if token_budget <= 0:
+                print_error("--token-budget must be a positive integer")
+                return 2
+
+    if suite == "formal":
+        from arforge.eval.formal_tasks import builtin_formal_tasks
+
+        tasks = builtin_formal_tasks()
+    elif suite == "formal-multistack":
+        from arforge.eval.multistack_formal_tasks import builtin_multistack_formal_tasks
+
+        tasks = builtin_multistack_formal_tasks()
+    elif suite == "core":
+        from arforge.eval.tasks import builtin_tasks
+
+        tasks = builtin_tasks()
+    else:
+        print_error("--suite must be one of: core, formal, formal-multistack")
+        return 2
+
+    if not model_specs:
+        from arforge.product.model_config_runtime import get_model_config
+
+        runtime = get_model_config()
+        active = runtime.get_active_provider()
+        model_specs = [active]
+    try:
+        for spec in model_specs:
+            parse_model_spec(spec)
+        if weak_model_spec is not None and weak_model_spec not in model_specs:
+            print_error(f"--weak model {weak_model_spec!r} must be one of --models")
+            return 2
+        if weak_model_spec is not None:
+            parse_model_spec(weak_model_spec)
+        judge_adapter = create_adapter_for(*parse_model_spec(judge_spec)) if judge_spec else None
+    except ValueError as exc:
+        print_error(f"Invalid model specification: {exc}")
+        return 2
+
+    if token_budget is not None:
+        import os as _os
+
+        _os.environ["ARFORGE_EVAL_TOKEN_BUDGET"] = str(token_budget)
+
+    if not json_output:
+        print()
+        print(section_header("Ablation Evaluation"))
+        print(f"  Suite: {suite} ({len(tasks)} tasks)")
+        print(f"  Models: {', '.join(model_specs)}")
+        print(f"  Bare path: {'skipped' if skip_bare else 'enabled'}")
+        print(f"  Weak model: {weak_model_spec or 'not marked'}")
+        print(f"  Judge: {judge_spec or 'per-model self-judge'}")
+    payload = run_ablation_eval(
+        tasks,
+        model_specs=model_specs,
+        judge_adapter=judge_adapter,
+        skip_bare=skip_bare,
+        verbose=not json_output,
+        suite=f"ablation-{suite}",
+        weak_model_spec=weak_model_spec,
+    )
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+
+    models = payload.get("models") or {}
+    for spec, data in models.items():
+        enhanced = data.get("enhanced") or {}
+        bare = data.get("bare")
+        print()
+        print(section_header(f"Model: {spec}"))
+        rows = [
+            ("Enhanced success rate", f"{enhanced.get('success_rate', 0.0):.1%}"),
+            ("Enhanced tasks", f"{enhanced.get('passed', 0)}/{enhanced.get('total', 0)}"),
+            ("Tokens", str(enhanced.get("total_tokens", 0))),
+            ("Cost (CNY)", f"{enhanced.get('total_cost_cny', 0.0):.6f}"),
+            ("Elapsed (s)", f"{enhanced.get('total_elapsed_sec', 0.0):.1f}"),
+        ]
+        if bare is not None:
+            bare_unsupported = bare.get("bare_unsupported", 0)
+            rows += [
+                ("Bare success rate (comparable)", f"{data.get('bare_rate_on_comparable', 0.0):.1%}"),
+                ("Bare unsupported", str(bare_unsupported)),
+                ("Uplift", f"{data.get('uplift', 0.0):+.1%}"),
+            ]
+        efficiency = data.get("efficiency") or {}
+        rows += [
+            ("Success per CNY", f"{efficiency.get('success_per_cost_cny') if efficiency.get('success_per_cost_cny') is not None else 'n/a'}"),
+            ("Success per second", f"{efficiency.get('success_per_elapsed_sec') if efficiency.get('success_per_elapsed_sec') is not None else 'n/a'}"),
+        ]
+        print(key_value(rows))
+    summary = payload.get("summary") or {}
+    if summary:
+        print()
+        print(section_header("Cross-Model Summary"))
+        print(key_value([
+            ("Cross-model spread", f"{summary.get('cross_model_spread', 0.0):.1%}"),
+            ("Cross-model std", f"{summary.get('cross_model_std', 0.0):.4f}"),
+            ("Best model", str(summary.get("best_model", "n/a"))),
+            ("Worst model", str(summary.get("worst_model", "n/a"))),
+        ]))
+        if summary.get("weak_model_uplift") is not None:
+            print(key_value([
+                ("Weak model uplift", f"{summary['weak_model_uplift']:+.1%}"),
+            ]))
+    print()
+    return 0
+
 
 
 def _run_capability_eval(
@@ -4587,7 +5141,7 @@ _COMMAND_MAP = {
     "tools": lambda args, ns: _run_tools(ns.verbose),
     "agents": lambda args, ns: _run_agents(),
     "capabilities": lambda args, ns: _run_capabilities(args),
-    "memory": lambda args, ns: _run_memory_cmd(),
+    "memory": lambda args, ns: _run_memory_cmd(args, json_output=ns.json_output),
     "learning": lambda args, ns: _run_learning_cmd(args, json_output=ns.json_output),
     "auth": lambda args, ns: _run_auth(args, json_output=ns.json_output),
     "ssh": lambda args, ns: _run_ssh(args, json_output=ns.json_output),
@@ -4640,6 +5194,10 @@ _COMMAND_MAP = {
     "multimodal-diagnose": lambda args, ns: _run_multimodal_diagnose(args),
     "cost-optimization": lambda args, ns: _run_cost_optimization(),
     "stats": lambda args, ns: _run_stats(args),
+    "agent-metrics": lambda args, ns: _run_agent_metrics_cmd(
+        args,
+        json_output=ns.json_output,
+    ),
     "patch-batch": lambda args, ns: _run_patch_batch(args),
     "quality": lambda args, ns: _run_quality(args),
     "self-correct-dogfood": lambda args, ns: _run_self_correct_dogfood(
@@ -4650,6 +5208,10 @@ _COMMAND_MAP = {
     "goals": lambda args, ns: _run_goals(args, ns),
     "acp": lambda args, ns: _run_acp(args),
     "eval": lambda args, ns: _run_eval(args, json_output=ns.json_output),
+    "eval-ablation": lambda args, ns: _run_eval_ablation(
+        args,
+        json_output=ns.json_output,
+    ),
     "capability-eval": lambda args, ns: _run_capability_eval(
         args,
         json_output=ns.json_output,

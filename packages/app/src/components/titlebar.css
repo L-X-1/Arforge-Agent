@@ -75,3 +75,68 @@
     animation-range: calc(100% - 1.1px) calc(100% - 1px);
   }
 }
+
+/* ── Titlebar view switch (iOS-style segmented control) ── */
+[data-component="titlebar-view-switch"] {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  border: 0.5px solid var(--v2-border-border-muted);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--v2-background-bg-layer-02) 6%, transparent);
+}
+
+[data-component="titlebar-view-switch"] > button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  cursor: pointer;
+  transition: color 160ms ease-out;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+[data-component="titlebar-view-switch"] > button:hover,
+[data-component="titlebar-view-switch"] > button[data-active] {
+  color: var(--v2-text-text-base);
+}
+
+[data-component="titlebar-view-switch"] > button:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: -2px;
+}
+
+[data-slot="view-switch-thumb"] {
+  position: absolute;
+  inset: 3px;
+  left: 4px;
+  width: calc(50% - 4px);
+  height: calc(100% - 6px);
+  border: 0.5px solid var(--v2-border-border-muted);
+  border-radius: 9px;
+  background: var(--v2-background-bg-layer-01);
+  box-shadow: var(--v2-elevation-button-neutral);
+  pointer-events: none;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-slot="view-switch-thumb"][data-active="session"] {
+  transform: translateX(calc(100% + 2px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="view-switch-thumb"] {
+    transition: none;
+  }
+}

@@ -27,14 +27,14 @@ export function SessionComposerRegion(props: {
       data-component="session-prompt-dock"
       data-arforge-composer-region
       classList={{
-        "w-full shrink-0 flex flex-col justify-center items-center pb-3 pointer-events-none": true,
+        "w-full shrink-0 flex flex-col justify-center items-center pb-4 pointer-events-none": true,
         "bg-transparent": true,
       }}
     >
       <div
         classList={{
-          "w-full px-3 pointer-events-auto": true,
-          "md:max-w-[920px] md:mx-auto 2xl:max-w-[1040px]": controller.centered(),
+          "w-full px-4 pointer-events-auto": true,
+          "md:max-w-[820px] md:mx-auto 2xl:max-w-[1040px]": controller.centered(),
         }}
       >
         <Show when={controller.state.questionRequest()} keyed>

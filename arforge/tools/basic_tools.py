@@ -6,7 +6,6 @@ import ast
 import operator
 import os
 import re
-import secrets
 import shlex
 import shutil
 import subprocess
@@ -29,9 +28,6 @@ _COMMAND_CANCEL_EVENT: ContextVar[threading.Event | None] = ContextVar(
     "arforge_command_cancel_event",
     default=None,
 )
-_FROZEN_SCRIPT_MODE = "--arforge-run-python-script"
-_FROZEN_SCRIPT_TOKEN_ENV = "ARFORGE_INTERNAL_SCRIPT_TOKEN"
-_FROZEN_SCRIPT_WORKSPACE_ENV = "ARFORGE_INTERNAL_SCRIPT_WORKSPACE"
 
 
 @contextmanager
@@ -55,13 +51,9 @@ def _python_script_command(
     process_env: dict[str, str],
     workspace: Path,
 ) -> list[str]:
-    """Build a Python invocation that also works inside the frozen Sidecar."""
-    if not getattr(sys, "frozen", False):
-        return [str(executable), str(script_path)]
-    token = secrets.token_urlsafe(32)
-    process_env[_FROZEN_SCRIPT_TOKEN_ENV] = token
-    process_env[_FROZEN_SCRIPT_WORKSPACE_ENV] = str(workspace.resolve())
-    return [str(executable), _FROZEN_SCRIPT_MODE, token, str(script_path)]
+    """Build a plain Python invocation for the script tool."""
+    del workspace, process_env
+    return [str(executable), str(script_path)]
 
 
 # ---------------------------------------------------------------------------

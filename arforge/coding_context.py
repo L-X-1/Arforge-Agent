@@ -1,4 +1,4 @@
-"""Coding context facade."""
+"""Compatibility coding-source facade; final input is owned by Context OS."""
 
 from __future__ import annotations
 

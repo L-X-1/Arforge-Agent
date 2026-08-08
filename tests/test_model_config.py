@@ -430,7 +430,7 @@ class TestModelConfigRuntime:
         assert stored != "sk-super-secret-12345"
 
     def test_bridge_preserves_model_config_error_codes(self, mc, monkeypatch):
-        from arforge import bridge
+        from arforge.product import direct_dispatch as bridge
         from arforge.product import model_config_runtime
 
         monkeypatch.setenv("ARFORGE_PROVIDER", "openai")
@@ -469,7 +469,7 @@ class TestModelConfigRuntime:
 
 def test_bridge_exposes_model_config_read_methods(monkeypatch, tmp_path):
     monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
-    from arforge.bridge import dispatch
+    from arforge.product.direct_dispatch import dispatch
 
     described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
     listed = dispatch({"id": 2, "version": "1.1", "method": "model_config.list"})

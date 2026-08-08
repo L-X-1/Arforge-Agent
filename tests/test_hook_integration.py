@@ -1,5 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
-"""Hook integration tests — prove learning + memory hooks fire during agent execution."""
+"""Hook integration tests — prove memory hooks fire during agent execution.
+
+The learning hook was retired with the Python evolution runtime; the remaining
+governed evolution path is native TypeScript (packages/core/src/evolution).
+"""
 
 from __future__ import annotations
 
@@ -42,14 +46,6 @@ def ctx():
 
 
 class TestHookRegistration:
-    def test_learning_hooks_register(self):
-        from arforge.core.learning_hook import install_learning_hooks
-        install_learning_hooks()
-        mgr = get_hook_manager()
-        assert mgr.handler_count(HookEvent.PRE_LLM_CALL) >= 1
-        assert mgr.handler_count(HookEvent.STOP) >= 1
-        assert mgr.handler_count(HookEvent.SESSION_END) >= 1
-
     def test_memory_hooks_register(self):
         from arforge.core.memory_hook import install_memory_hooks
         install_memory_hooks()
@@ -58,39 +54,16 @@ class TestHookRegistration:
         assert mgr.handler_count(HookEvent.PRE_LLM_CALL) >= 1
         assert mgr.handler_count(HookEvent.SESSION_END) >= 1
 
-    def test_both_register(self):
-        from arforge.core.learning_hook import install_learning_hooks
-        from arforge.core.memory_hook import install_memory_hooks
-        install_learning_hooks()
-        install_memory_hooks()
-        mgr = get_hook_manager()
-        assert mgr.handler_count(HookEvent.PRE_LLM_CALL) == 2
-        # learning_hooks now also registers POST_LLM_CALL for periodic consolidation (3.3)
-        assert mgr.handler_count(HookEvent.POST_LLM_CALL) == 2
-        assert mgr.handler_count(HookEvent.STOP) == 1
-        assert mgr.handler_count(HookEvent.SESSION_END) == 2
-
     def test_hooks_idempotent(self):
-        from arforge.core.learning_hook import install_learning_hooks
         from arforge.core.memory_hook import install_memory_hooks
         for _ in range(3):
-            install_learning_hooks()
             install_memory_hooks()
         mgr = get_hook_manager()
-        assert mgr.handler_count(HookEvent.PRE_LLM_CALL) == 2
-        assert mgr.handler_count(HookEvent.SESSION_END) == 2
+        assert mgr.handler_count(HookEvent.PRE_LLM_CALL) == 1
+        assert mgr.handler_count(HookEvent.SESSION_END) == 1
 
 
 class TestHookExecution:
-    def test_pre_llm_fires(self, ctx):
-        from arforge.core.learning_hook import install_learning_hooks
-        from arforge.core.memory_hook import install_memory_hooks
-        install_learning_hooks()
-        install_memory_hooks()
-        ctx.event = HookEvent.PRE_LLM_CALL
-        decision = get_hook_manager().fire(ctx)
-        assert isinstance(decision, HookDecision)
-
     def test_post_llm_fires(self, ctx):
         from arforge.core.memory_hook import install_memory_hooks
         install_memory_hooks()
@@ -98,41 +71,25 @@ class TestHookExecution:
         decision = get_hook_manager().fire(ctx)
         assert isinstance(decision, HookDecision)
 
-    def test_stop_fires(self, ctx):
-        from arforge.core.learning_hook import install_learning_hooks
-        install_learning_hooks()
-        ctx.event = HookEvent.STOP
+    def test_pre_llm_fires(self, ctx):
+        from arforge.core.memory_hook import install_memory_hooks
+        install_memory_hooks()
+        ctx.event = HookEvent.PRE_LLM_CALL
         decision = get_hook_manager().fire(ctx)
         assert isinstance(decision, HookDecision)
 
     def test_session_end_fires(self):
-        from arforge.core.learning_hook import install_learning_hooks
         from arforge.core.memory_hook import install_memory_hooks
-        install_learning_hooks()
         install_memory_hooks()
         end_ctx = HookContext(event=HookEvent.SESSION_END, messages=[], metadata={})
         decision = get_hook_manager().fire(end_ctx)
         assert isinstance(decision, HookDecision)
 
-    def test_full_pipeline(self, ctx):
-        from arforge.core.learning_hook import install_learning_hooks
-        from arforge.core.memory_hook import install_memory_hooks
-        install_learning_hooks()
-        install_memory_hooks()
-        mgr = get_hook_manager()
-        for evt in (HookEvent.PRE_LLM_CALL, HookEvent.POST_LLM_CALL, HookEvent.STOP):
-            ctx.event = evt
-            assert isinstance(mgr.fire(ctx), HookDecision)
-        end_ctx = HookContext(event=HookEvent.SESSION_END, messages=[], metadata={})
-        assert isinstance(mgr.fire(end_ctx), HookDecision)
-
     def test_empty_context_safe(self):
-        from arforge.core.learning_hook import install_learning_hooks
         from arforge.core.memory_hook import install_memory_hooks
-        install_learning_hooks()
         install_memory_hooks()
         mgr = get_hook_manager()
-        for evt in (HookEvent.PRE_LLM_CALL, HookEvent.POST_LLM_CALL, HookEvent.STOP, HookEvent.SESSION_END):
+        for evt in (HookEvent.PRE_LLM_CALL, HookEvent.POST_LLM_CALL, HookEvent.SESSION_END):
             empty = HookContext(event=evt, messages=[], metadata={})
             mgr.fire(empty)
 

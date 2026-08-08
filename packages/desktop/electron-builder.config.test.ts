@@ -48,6 +48,33 @@ test("keeps a hidden prod launcher for old Linux pins", async () => {
   expect(desktop).toContain("NoDisplay=true")
 })
 
+test("does not ship the retired Python capability Sidecar", async () => {
+  const module = await import("./electron-builder.config.ts?agent-python=resource")
+  const config = module.default as Configuration
+  const resources = config.extraResources ?? []
+  expect(resources.some((entry) => JSON.stringify(entry).includes("agent-python"))).toBe(false)
+  expect(config.files).not.toContain("!resources/agent-python-dist/**/*")
+})
+
+test("does not ship bundled Core TypeScript source inside app.asar", async () => {
+  const module = await import("./electron-builder.config.ts?core=bundled")
+  const config = module.default as Configuration
+  expect(config.files).toContain("!node_modules/@arforge-ai/core/**/*")
+})
+
+test("uses the installed Electron runtime for reproducible offline packaging", async () => {
+  const module = await import("./electron-builder.config.ts?electron-dist=installed")
+  const config = module.default as Configuration
+  expect(config.electronDist?.replaceAll("\\", "/")).toEndWith("/packages/desktop/node_modules/electron/dist")
+})
+
+test("does not emit a missing native-resource entry", async () => {
+  const module = await import("./electron-builder.config.ts?native-resource=optional")
+  const config = module.default as Configuration
+  const resources = config.extraResources ?? []
+  expect(resources.some((resource) => typeof resource === "object" && resource.from === "native/")).toBe(false)
+})
+
 test("fails closed into the DigiCert signer for a signed Beta build", async () => {
   const previous = {
     channel: process.env.ARFORGE_CHANNEL,
@@ -63,9 +90,7 @@ test("fails closed into the DigiCert signer for a signed Beta build", async () =
     const config = module.default as Configuration
 
     expect(config.win?.forceCodeSigning).toBe(true)
-    expect(String(config.win?.signtoolOptions?.sign).replaceAll("\\", "/")).toEndWith(
-      "/scripts/windows-sign.cjs",
-    )
+    expect(String(config.win?.signtoolOptions?.sign).replaceAll("\\", "/")).toEndWith("/scripts/windows-sign.cjs")
     expect(config.win?.verifyUpdateCodeSignature).toBe(true)
   } finally {
     for (const [name, value] of Object.entries({

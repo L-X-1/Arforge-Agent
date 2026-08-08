@@ -85,6 +85,7 @@ import {
 } from "@/pages/session/session-panel-width"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { SessionExecutionDock } from "@/pages/session/session-execution-dock"
+import { buildExecutionTrace, type ExecutionTraceStep } from "@/pages/session/execution-trace-model"
 import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
 import { SessionReviewEmptyChangesV2 } from "@arforge-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@arforge-ai/session-ui/v2/session-review-empty-no-git-v2"
@@ -334,8 +335,15 @@ function SessionProviders(props: ParentProps) {
 }
 
 function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
+  const settings = useSettings()
   return (
-    <div class="relative size-full overflow-hidden flex flex-col" classList={{ "p-2": props.padded }}>
+    <div
+      class="relative size-full overflow-hidden flex flex-col"
+      classList={{
+        "rounded-tl-[16px] rounded-bl-[16px]": props.padded && settings.general.newLayoutDesigns(),
+        "p-2": props.padded && !settings.general.newLayoutDesigns(),
+      }}
+    >
       {props.children}
     </div>
   )
@@ -349,8 +357,7 @@ function SessionPanelFrame(props: ParentProps<{ newLayout: boolean; raised?: boo
       classList={{
         "w-full h-full max-h-full flex-1 min-h-0 flex flex-col": true,
         "bg-background-stronger": !props.newLayout,
-        "rounded-[16px] overflow-hidden border border-v2-border-border-muted": props.newLayout,
-        "shadow-[var(--v2-elevation-raised)]": props.newLayout && props.raised,
+        "relative overflow-hidden": props.newLayout,
       }}
     >
       {props.children}
@@ -456,12 +463,30 @@ export default function Page() {
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const size = createSizing()
-  const [executionDock, setExecutionDock] = createStore({ opened: true })
+  const [executionDock, setExecutionDock] = createStore({ opened: false })
   const executionDockVisible = createMemo(() => newSessionDesign() && isDesktop() && !!params.id)
+  const executionTrace = createMemo(() => {
+    const sessionID = params.id
+    if (!sessionID) return { steps: [] as ExecutionTraceStep[], status: "idle" as const }
+    return buildExecutionTrace({
+      messages: sync().data.message[sessionID] ?? [],
+      parts: (messageID) => sync().data.part[messageID] ?? [],
+      status: sync().data.session_status[sessionID] ?? { type: "idle" },
+    })
+  })
+  const executionRunning = createMemo(() => executionTrace().status !== "idle")
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
   const terminalOpen = createMemo(() => view().terminal.opened())
   const desktopTerminalOpen = createMemo(() => isDesktop() && terminalOpen())
+  // Opening the review or terminal panels reclaims the right column from the
+  // execution dock so the inspection surfaces are always reachable.
+  createEffect(() => {
+    if (!executionDockVisible()) return
+    if (desktopV2ReviewOpen() || desktopTerminalOpen()) {
+      if (executionDock.opened) setExecutionDock("opened", false)
+    }
+  })
   const desktopInlineTerminalOnlyOpen = createMemo(
     () => newSessionDesign() && desktopTerminalOpen() && !desktopV2ReviewOpen(),
   )
@@ -491,8 +516,8 @@ export default function Page() {
   const sessionPanelAvailable = createMemo(() => {
     const width = panelRowWidth()
     if (width === undefined) return undefined
-    const dock = executionDockVisible() ? (executionDock.opened ? Math.min(344, width * 0.36) : 44) + 8 : 0
-    return width - (settings.general.newLayoutDesigns() ? 8 : 0) - dock
+    const dock = executionDockVisible() && executionDock.opened ? Math.min(380, width * 0.36) : 0
+    return width - (settings.general.newLayoutDesigns() ? 12 : 0) - dock
   })
   const sessionPanelMax = createMemo(() => {
     const available = sessionPanelAvailable()
@@ -515,12 +540,11 @@ export default function Page() {
   )
   const sessionPanelWidth = createMemo(() => {
     const row = panelRowWidth()
-    const dockWidth = executionDockVisible()
-      ? executionDock.opened
-        ? Math.min(344, (row ?? (typeof window === "undefined" ? 1200 : window.innerWidth)) * 0.36)
-        : 44
-      : 0
-    const dockOffset = executionDockVisible() ? dockWidth + 8 : 0
+    const dockWidth =
+      executionDockVisible() && executionDock.opened
+        ? Math.min(380, (row ?? (typeof window === "undefined" ? 1200 : window.innerWidth)) * 0.36)
+        : 0
+    const dockOffset = dockWidth ? dockWidth : 0
     if (!desktopSidePanelOpen()) return dockOffset ? `calc(100% - ${dockOffset}px)` : "100%"
     if (desktopSessionResizeOpen()) return `${sessionPanelResizedWidth()}px`
     return `calc(100% - ${layout.fileTree.width() + dockOffset}px)`
@@ -748,6 +772,15 @@ export default function Page() {
     if (reviewMode() === "git" || reviewMode() === "branch") return !vcsQuery.isPending
     return true
   }
+  // Warm the first diff right after the review list arrives so opening the
+  // panel does not stall on a per-file request when the user selects it.
+  createEffect(() => {
+    if (!wantsReview()) return
+    if (!reviewReady()) return
+    const file = activeReviewFile()
+    if (!file) return
+    void loadReviewDiff(file).catch(() => undefined)
+  })
   const loadReviewDiff = async (file: string, version?: number): Promise<VcsFileDiff | undefined> => {
     const mode = vcsMode()
     if (!mode) return
@@ -778,12 +811,20 @@ export default function Page() {
         .then((diffs) => diffs.find((diff) => diff.file === file))
 
     if (directory !== root) {
-      try {
-        const scoped = valid(await request(directory))
-        if (scoped) return scoped
-      } catch (error) {
-        console.debug("[session-review] failed to load scoped vcs diff", { mode, file, directory, error })
+      const [scoped, bounded] = await Promise.allSettled([request(directory), request(root, 3)])
+      const scopedValue = scoped.status === "fulfilled" ? scoped.value : undefined
+      const boundedValue = bounded.status === "fulfilled" ? bounded.value : undefined
+      const scopedDiff = valid(scopedValue)
+      if (scopedDiff) return scopedDiff
+      const boundedDiff = valid(boundedValue)
+      if (boundedDiff) return boundedDiff
+      if (scoped.status === "rejected") {
+        console.debug("[session-review] failed to load scoped vcs diff", { mode, file, directory, error: scoped.reason })
       }
+      if (bounded.status === "rejected") {
+        console.debug("[session-review] failed to load bounded vcs diff", { mode, file, root, error: bounded.reason })
+      }
+      return
     }
     try {
       const bounded = valid(await request(root, 3))
@@ -2202,6 +2243,12 @@ export default function Page() {
           background session refreshes. `latest` keeps the rendered
           conversation mounted while a refresh completes. */}
       {sessionSync.latest ?? ""}
+      <Show when={!!params.id && newSessionDesign()}>
+        <div
+          id="arforge-session-header"
+          class="relative z-10 flex h-11 shrink-0 items-center border-b border-v2-border-border-muted"
+        />
+      </Show>
       <div
         data-arforge-session-content
         class="flex-1 min-h-0 w-full max-h-full overflow-hidden flex flex-col md:grid md:grid-rows-[minmax(0,1fr)_auto]"
@@ -2401,13 +2448,17 @@ export default function Page() {
   )
 
   return (
-    <SessionRouteFrame>
-      <SessionHeader />
+    <SessionRouteFrame padded={isDesktop()}>
+      <SessionHeader
+        executionRunning={executionRunning()}
+        executionStepCount={executionTrace().steps.length}
+        onOpenExecution={() => setExecutionDock("opened", !executionDock.opened)}
+      />
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
         classList={{
-          "gap-2 p-2": settings.general.newLayoutDesigns(),
+          "gap-3": settings.general.newLayoutDesigns(),
         }}
       >
         <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
@@ -2531,11 +2582,13 @@ export default function Page() {
             </div>
           </Show>
         </Show>
-        <Show when={executionDockVisible()}>
-          <SessionExecutionDock
-            opened={executionDock.opened}
-            onOpenChange={(opened) => setExecutionDock("opened", opened)}
-          />
+        <Show when={executionDockVisible() && executionDock.opened}>
+          <div
+            class="absolute inset-y-0 right-0 z-30 w-[min(380px,36vw)] rounded-l-[16px] shadow-[var(--v2-elevation-floating)]"
+            style={{ animation: "session-side-panel-enter 260ms ease-out" }}
+          >
+            <SessionExecutionDock opened onOpenChange={(opened) => setExecutionDock("opened", opened)} />
+          </div>
         </Show>
       </div>
 

@@ -32,6 +32,12 @@ def run_impacted_tests() -> str:
     if not tests:
         return "回归保护：未找到与本次改动关联的测试文件（按 test_<name>.py 约定）。"
     res = run_pytest(tests, workspace)
+    try:
+        from arforge.core.regression_metrics import record_regression_run
+
+        record_regression_run(changed, res, workspace=str(workspace))
+    except Exception:
+        pass
     if not res["ran"]:
         return "回归保护：" + res["summary"]
     ok = res["failed"] == 0 and res["returncode"] == 0

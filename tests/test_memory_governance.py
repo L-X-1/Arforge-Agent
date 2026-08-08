@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from arforge.auto_memory import extract_memories_from_turn, workspace_memory_scope
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.memory import (
     apply_memory_governance,
     memory_governance_audit,
@@ -54,6 +54,8 @@ def test_unverified_error_response_never_auto_persists(tmp_path):
 
 
 def test_governance_quarantines_legacy_auto_memories_reversibly(tmp_path):
+    from arforge.memory_os import MemoryOS
+
     project_id, workspace_path = workspace_memory_scope(tmp_path)
     unsafe_id = save_memory_v2(
         "现在只做收尾，不要创建临时脚本",
@@ -81,34 +83,22 @@ def test_governance_quarantines_legacy_auto_memories_reversibly(tmp_path):
     assert preview["reversible"] is True
     assert applied["quarantined_ids"] == [unsafe_id]
     assert records[unsafe_id]["source"] == "quarantined:auto"
+    assert records[unsafe_id]["lifecycle"] == "quarantined"
     assert records[unsafe_id]["importance"] == 1
     assert records[unsafe_id]["strength"] == 0.1
     assert unsafe_id not in active
     assert safe_id in active
+    assert [entry["operation"] for entry in MemoryOS().history(unsafe_id)] == [
+        "create",
+        "quarantine",
+    ]
 
 
-def test_bridge_exposes_preview_and_explicit_apply_as_separate_methods(tmp_path):
-    project_id, workspace_path = workspace_memory_scope(tmp_path)
-    memory_id = save_memory_v2(
-        "继续完成最终验收",
-        mem_type="workflow",
-        source="auto",
-        importance=3,
-        project_id=project_id,
-        workspace_path=workspace_path,
-    )
+def test_bridge_exposes_preview_and_explicit_apply_as_separate_methods():
+    response = dispatch({"id": 1, "version": "1.2", "method": "memory.governance.preview"})
 
-    described = dispatch({"id": 1, "version": "1.2", "method": "protocol.describe", "params": {}})
-    preview = dispatch(
-        {"id": 2, "version": "1.2", "method": "memory.governance.preview", "params": {"sample_limit": 10}}
-    )
-    applied = dispatch({"id": 3, "version": "1.2", "method": "memory.governance.apply", "params": {}})
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    assert preview["ok"] is True
-    assert preview["data"]["candidate_count"] == 1
-    assert applied["ok"] is True
-    assert applied["data"]["quarantined_ids"] == [memory_id]
-    assert "memory.governance.preview" in described["data"]["methods"]
-    assert "memory.governance.preview" not in described["data"]["mutating_methods"]
-    assert "memory.governance.apply" in described["data"]["mutating_methods"]
-    assert "memory.governance.apply" not in described["data"]["workspace_mutating_methods"]
+
+

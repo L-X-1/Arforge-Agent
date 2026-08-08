@@ -89,6 +89,135 @@ export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handler
       }),
     )
     .handle(
+      "memory.correct",
+      Effect.fn(function* (ctx) {
+        const memory = yield* MemoryV2.Service
+        return {
+          data: yield* memory.correct({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTag(
+              "Memory.DuplicateError",
+              (error) =>
+                new ConflictError({
+                  resource: error.memoryID,
+                  message: `A near-duplicate memory already exists (${error.similarity.toFixed(3)} similarity).`,
+                }),
+            ),
+            Effect.catchTag(
+              "Memory.NotFoundError",
+              (error) =>
+                new MemoryNotFoundError({
+                  memoryID: error.memoryID,
+                  message: `Memory not found in the current workspace scope: ${error.memoryID}`,
+                }),
+            ),
+            Effect.catchTag(
+              "Memory.CorrectionConflictError",
+              (error) => new ConflictError({ resource: error.resource, message: error.message }),
+            ),
+          ),
+        }
+      }),
+    )
+    .handle(
+      "memory.correctionHistory",
+      Effect.fn(function* (ctx) {
+        const memory = yield* MemoryV2.Service
+        return {
+          data: yield* memory.correctionHistory(ctx.params.memoryID).pipe(
+            Effect.catchTag(
+              "Memory.NotFoundError",
+              (error) =>
+                new MemoryNotFoundError({
+                  memoryID: error.memoryID,
+                  message: `Memory not found in the current workspace scope: ${error.memoryID}`,
+                }),
+            ),
+          ),
+        }
+      }),
+    )
+    .handle(
+      "memory.undoCorrection",
+      Effect.fn(function* (ctx) {
+        const memory = yield* MemoryV2.Service
+        return {
+          data: yield* memory.undoCorrection({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTags({
+              "Memory.CorrectionNotFoundError": (error) =>
+                new ConflictError({
+                  resource: error.correctionID,
+                  message: `Memory correction not found: ${error.correctionID}`,
+                }),
+              "Memory.CorrectionConflictError": (error) =>
+                new ConflictError({ resource: error.resource, message: error.message }),
+            }),
+          ),
+        }
+      }),
+    )
+    .handle(
+      "memory.conflictList",
+      Effect.fn(function* (ctx) {
+        return {
+          data: yield* (yield* MemoryV2.Service).conflictList({
+            includeClosed: ctx.query.includeClosed === "true",
+            limit: ctx.query.limit,
+          }),
+        }
+      }),
+    )
+    .handle(
+      "memory.conflictScan",
+      Effect.fn(function* (ctx) {
+        return { data: yield* (yield* MemoryV2.Service).conflictScan(ctx.payload) }
+      }),
+    )
+    .handle(
+      "memory.resolveConflict",
+      Effect.fn(function* (ctx) {
+        return {
+          data: yield* (yield* MemoryV2.Service).resolveConflict({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTags({
+              "Memory.ConflictNotFoundError": (error) =>
+                new ConflictError({ resource: error.conflictID, message: "Memory conflict not found." }),
+              "Memory.ConflictDecisionError": (error) =>
+                new ConflictError({ resource: error.resource, message: error.message }),
+            }),
+          ),
+        }
+      }),
+    )
+    .handle(
+      "memory.dismissConflict",
+      Effect.fn(function* (ctx) {
+        return {
+          data: yield* (yield* MemoryV2.Service).dismissConflict({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTags({
+              "Memory.ConflictNotFoundError": (error) =>
+                new ConflictError({ resource: error.conflictID, message: "Memory conflict not found." }),
+              "Memory.ConflictDecisionError": (error) =>
+                new ConflictError({ resource: error.resource, message: error.message }),
+            }),
+          ),
+        }
+      }),
+    )
+    .handle(
+      "memory.undoConflict",
+      Effect.fn(function* (ctx) {
+        return {
+          data: yield* (yield* MemoryV2.Service).undoConflict({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTags({
+              "Memory.ConflictNotFoundError": (error) =>
+                new ConflictError({ resource: error.conflictID, message: "Memory conflict not found." }),
+              "Memory.ConflictDecisionError": (error) =>
+                new ConflictError({ resource: error.resource, message: error.message }),
+            }),
+          ),
+        }
+      }),
+    )
+    .handle(
       "memory.delete",
       Effect.fn(function* (ctx) {
         const memory = yield* MemoryV2.Service

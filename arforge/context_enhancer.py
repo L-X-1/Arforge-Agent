@@ -1,4 +1,4 @@
-"""Context enhancement helpers."""
+"""Legacy source-fragment helper; Context OS validates final provider input."""
 
 from __future__ import annotations
 

@@ -50,5 +50,8 @@ export const migrations = (
     import("./migration/20260726104149_feedback_learning_link"),
     import("./migration/20260726215226_feedback_workspace_scope"),
     import("./migration/20260802044607_identity_and_tenant_ownership"),
+    import("./migration/20260803055810_memory_corrections"),
+    import("./migration/20260803064956_memory_conflicts"),
+    import("./migration/20260804090000_runtime_insight"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

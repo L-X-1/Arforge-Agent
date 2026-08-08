@@ -104,7 +104,7 @@ def test_cli_features_refresh_uses_existing_registry(monkeypatch, capsys):
 
 def test_bridge_features_refresh_uses_versioned_product_method(monkeypatch):
     import arforge.feature_flags as flags_module
-    from arforge.bridge import dispatch
+    from arforge.product.direct_dispatch import dispatch
 
     class FakeRegistry:
         def refresh_remote_config(self):

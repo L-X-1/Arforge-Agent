@@ -271,6 +271,47 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`memory_conflict\` (
+          \`tenant_id\` text DEFAULT 'ten_local' NOT NULL,
+          \`owner_user_id\` text DEFAULT 'usr_local' NOT NULL,
+          \`id\` text PRIMARY KEY,
+          \`signature\` text NOT NULL,
+          \`conflict_key\` text NOT NULL,
+          \`basis\` text NOT NULL,
+          \`left_memory_id\` text NOT NULL,
+          \`right_memory_id\` text NOT NULL,
+          \`left_fingerprint\` text NOT NULL,
+          \`right_fingerprint\` text NOT NULL,
+          \`status\` text DEFAULT 'pending' NOT NULL,
+          \`chosen_memory_id\` text,
+          \`retired_memory_id\` text,
+          \`retired_original_source\` text,
+          \`decision_reason\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`time_decided\` integer,
+          \`time_undone\` integer,
+          CONSTRAINT \`fk_memory_conflict_left_memory_id_memory_id_fk\` FOREIGN KEY (\`left_memory_id\`) REFERENCES \`memory\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_memory_conflict_right_memory_id_memory_id_fk\` FOREIGN KEY (\`right_memory_id\`) REFERENCES \`memory\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`memory_correction\` (
+          \`tenant_id\` text DEFAULT 'ten_local' NOT NULL,
+          \`owner_user_id\` text DEFAULT 'usr_local' NOT NULL,
+          \`id\` text PRIMARY KEY,
+          \`original_memory_id\` text NOT NULL,
+          \`successor_memory_id\` text NOT NULL,
+          \`original_source\` text NOT NULL,
+          \`reason\` text NOT NULL,
+          \`status\` text DEFAULT 'active' NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_undone\` integer,
+          CONSTRAINT \`fk_memory_correction_original_memory_id_memory_id_fk\` FOREIGN KEY (\`original_memory_id\`) REFERENCES \`memory\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_memory_correction_successor_memory_id_memory_id_fk\` FOREIGN KEY (\`successor_memory_id\`) REFERENCES \`memory\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`memory\` (
           \`tenant_id\` text DEFAULT 'ten_local' NOT NULL,
           \`owner_user_id\` text DEFAULT 'usr_local' NOT NULL,
@@ -732,6 +773,19 @@ export default {
         `CREATE INDEX \`learning_pattern_type_frequency_idx\` ON \`learning_pattern\` (\`project_id\`,\`workspace_path\`,\`type\`,\`frequency\`);`,
       )
       yield* tx.run(`CREATE INDEX \`learning_pattern_updated_idx\` ON \`learning_pattern\` (\`time_updated\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`memory_conflict_signature_idx\` ON \`memory_conflict\` (\`signature\`);`)
+      yield* tx.run(`CREATE INDEX \`memory_conflict_status_idx\` ON \`memory_conflict\` (\`status\`,\`time_updated\`);`)
+      yield* tx.run(`CREATE INDEX \`memory_conflict_left_idx\` ON \`memory_conflict\` (\`left_memory_id\`);`)
+      yield* tx.run(`CREATE INDEX \`memory_conflict_right_idx\` ON \`memory_conflict\` (\`right_memory_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`memory_correction_original_idx\` ON \`memory_correction\` (\`original_memory_id\`,\`time_created\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`memory_correction_successor_idx\` ON \`memory_correction\` (\`successor_memory_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`memory_correction_status_idx\` ON \`memory_correction\` (\`status\`,\`time_created\`);`,
+      )
       yield* tx.run(
         `CREATE INDEX \`memory_scope_workspace_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`workspace_path\`);`,
       )
@@ -826,6 +880,17 @@ export default {
       yield* tx.run(
         `CREATE INDEX \`workflow_graph_run_status_lease_idx\` ON \`workflow_graph_runs\` (\`status\`,\`lease_expires_at\`);`,
       )
+      yield* tx.run(
+        `CREATE TABLE \`audit_entry\` (\`tenant_id\` text DEFAULT 'ten_local' NOT NULL, \`owner_user_id\` text DEFAULT 'usr_local' NOT NULL, \`id\` text PRIMARY KEY, \`seq\` integer NOT NULL, \`recorded_at\` integer NOT NULL, \`actor\` text NOT NULL, \`action\` text NOT NULL, \`resource\` text NOT NULL, \`reason\` text, \`metadata\` text, \`previous_hash\` text NOT NULL, \`record_hash\` text NOT NULL);`,
+      )
+      yield* tx.run(`CREATE UNIQUE INDEX \`audit_entry_seq_idx\` ON \`audit_entry\` (\`seq\`);`)
+      yield* tx.run(`CREATE INDEX \`audit_entry_action_idx\` ON \`audit_entry\` (\`action\`,\`recorded_at\`);`)
+      yield* tx.run(`CREATE INDEX \`audit_entry_actor_idx\` ON \`audit_entry\` (\`actor\`,\`recorded_at\`);`)
+      yield* tx.run(
+        `CREATE TABLE \`session_run\` (\`tenant_id\` text DEFAULT 'ten_local' NOT NULL, \`owner_user_id\` text DEFAULT 'usr_local' NOT NULL, \`id\` text PRIMARY KEY, \`session_id\` text NOT NULL, \`status\` text NOT NULL, \`started_at\` integer NOT NULL, \`finished_at\` integer, \`last_seq\` integer, \`error\` text);`,
+      )
+      yield* tx.run(`CREATE INDEX \`session_run_session_idx\` ON \`session_run\` (\`session_id\`,\`started_at\`);`)
+      yield* tx.run(`CREATE INDEX \`session_run_status_idx\` ON \`session_run\` (\`status\`,\`started_at\`);`)
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">

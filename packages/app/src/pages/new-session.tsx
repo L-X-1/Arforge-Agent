@@ -166,13 +166,13 @@ export default function NewSessionPage() {
           </Portal>
         )}
       </Show>
-      <div class="flex-1 min-h-0 flex flex-col gap-2 p-2">
+      <div class="flex-1 min-h-0 flex flex-col gap-2">
         <div class="@container relative flex flex-col min-h-0 h-full flex-1">
-          <div class="flex-1 min-h-0 overflow-hidden rounded-[10px]">
+          <div class="flex-1 min-h-0 overflow-hidden">
             <NewSessionDesignView>
               <div class={NEW_SESSION_CONTENT_WIDTH}>
                 <div class="flex flex-col gap-8">
-                  <PromptInputV2Composer controller={promptInputV2Controller} />
+                  <PromptInputV2Composer controller={promptInputV2Controller} borderUnderlay />
                   <Show when={projectController.empty()}>
                     <PromptProjectAddButton controller={projectController} />
                   </Show>

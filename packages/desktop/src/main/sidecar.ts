@@ -14,6 +14,7 @@ type StartCommand = {
   type: "start"
   hostname: string
   port: number
+  username: string
   password: string
   userDataPath: string
 }
@@ -50,7 +51,7 @@ parentPort.on("message", (event) => {
 
 async function start(command: StartCommand) {
   try {
-    prepareSidecarEnv(command.password, command.userDataPath)
+    prepareSidecarEnv(command.username, command.userDataPath)
     ensureLoopbackNoProxy()
     useSystemCertificates()
     useEnvProxy()
@@ -59,8 +60,7 @@ async function start(command: StartCommand) {
     listener = await Server.listen({
       port: command.port,
       hostname: command.hostname,
-      username: "arforge",
-      password: command.password,
+      username: command.username,
       cors: ["arforge://renderer"],
     })
     parentPort.postMessage({ type: "ready" })
@@ -80,10 +80,13 @@ async function stop() {
   }
 }
 
-function prepareSidecarEnv(password: string, userDataPath: string) {
+function prepareSidecarEnv(username: string, userDataPath: string) {
+  // The desktop local server runs without authentication so the renderer
+  // never shows a login screen. Clear any credentials inherited from the
+  // parent environment; the username stays for the server identity.
+  delete process.env.ARFORGE_SERVER_PASSWORD
   Object.assign(process.env, {
-    ARFORGE_SERVER_USERNAME: "arforge",
-    ARFORGE_SERVER_PASSWORD: password,
+    ARFORGE_SERVER_USERNAME: username,
     XDG_STATE_HOME: process.env.XDG_STATE_HOME ?? userDataPath,
   })
 }
@@ -134,12 +137,14 @@ function parseCommand(value: unknown): SidecarCommand | undefined {
   if (command.type !== "start") return
   if (typeof command.hostname !== "string") return
   if (typeof command.port !== "number") return
+  if (typeof command.username !== "string") return
   if (typeof command.password !== "string") return
   if (typeof command.userDataPath !== "string") return
   return {
     type: "start",
     hostname: command.hostname,
     port: command.port,
+    username: command.username,
     password: command.password,
     userDataPath: command.userDataPath,
   }

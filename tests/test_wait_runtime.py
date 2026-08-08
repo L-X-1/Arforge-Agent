@@ -10,7 +10,7 @@ import pytest
 
 import arforge.tools.basic_tools  # noqa: F401 - register calculate probe
 import arforge.tools.wait_tools  # noqa: F401 - register cooperative_wait
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.core.agent_loop_v2 import AgentLoopV2
 from arforge.product.session_runtime import SessionRuntime
 from arforge.tool_registry import REGISTRY

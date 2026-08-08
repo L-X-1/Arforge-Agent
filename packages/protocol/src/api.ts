@@ -34,6 +34,7 @@ import { makeMultimodalDiagnosisGroup } from "./groups/multimodal-diagnosis"
 import { makeAgentCapabilityGroup } from "./groups/agent-capability"
 import { makeMcpGroup } from "./groups/mcp"
 import { makePrivateOperationGroup } from "./groups/private-operation"
+import { makeRuntimeInsightGroup } from "./groups/runtime-insight"
 
 // Protocol owns middleware placement, while Server injects concrete keys so Core service identities stay downstream.
 const makeApiFromGroup = <
@@ -65,6 +66,7 @@ const makeApiFromGroup = <
     .add(makeAgentCapabilityGroup(locationMiddleware))
     .add(makeMcpGroup(locationMiddleware))
     .add(makePrivateOperationGroup(locationMiddleware))
+    .add(makeRuntimeInsightGroup(locationMiddleware))
     .add(MessageGroup.middleware(sessionLocationMiddleware))
     .add(ModelGroup.middleware(locationMiddleware))
     .add(ProviderGroup.middleware(locationMiddleware))

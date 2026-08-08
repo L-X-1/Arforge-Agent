@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "909714dc-d892-4607-87e7-90acf9d6cdfd",
+  "id": "514d7437-72c2-42d1-87c0-d6ffe7379a02",
   "prevIds": [
-    "bad21aa1-fafd-497b-ad40-5e1b5b7a7be5"
+    "c1b6693e-52f5-45b1-90fc-20a647ac52fe"
   ],
   "ddl": [
     {
@@ -80,6 +80,14 @@
     },
     {
       "name": "learning_pattern",
+      "entityType": "tables"
+    },
+    {
+      "name": "memory_conflict",
+      "entityType": "tables"
+    },
+    {
+      "name": "memory_correction",
       "entityType": "tables"
     },
     {
@@ -1887,6 +1895,296 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "learning_pattern"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'ten_local'",
+      "generated": null,
+      "name": "tenant_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'usr_local'",
+      "generated": null,
+      "name": "owner_user_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "signature",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conflict_key",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "basis",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "left_memory_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "right_memory_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "left_fingerprint",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "right_fingerprint",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'pending'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "chosen_memory_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "retired_memory_id",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "retired_original_source",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "decision_reason",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_decided",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_undone",
+      "entityType": "columns",
+      "table": "memory_conflict"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'ten_local'",
+      "generated": null,
+      "name": "tenant_id",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'usr_local'",
+      "generated": null,
+      "name": "owner_user_id",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "original_memory_id",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "successor_memory_id",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "original_source",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reason",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'active'",
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "memory_correction"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_undone",
+      "entityType": "columns",
+      "table": "memory_correction"
     },
     {
       "type": "text",
@@ -4945,6 +5243,66 @@
     },
     {
       "columns": [
+        "left_memory_id"
+      ],
+      "tableTo": "memory",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_memory_conflict_left_memory_id_memory_id_fk",
+      "entityType": "fks",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        "right_memory_id"
+      ],
+      "tableTo": "memory",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_memory_conflict_right_memory_id_memory_id_fk",
+      "entityType": "fks",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        "original_memory_id"
+      ],
+      "tableTo": "memory",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_memory_correction_original_memory_id_memory_id_fk",
+      "entityType": "fks",
+      "table": "memory_correction"
+    },
+    {
+      "columns": [
+        "successor_memory_id"
+      ],
+      "tableTo": "memory",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_memory_correction_successor_memory_id_memory_id_fk",
+      "entityType": "fks",
+      "table": "memory_correction"
+    },
+    {
+      "columns": [
         "project_id"
       ],
       "tableTo": "project",
@@ -5553,6 +5911,24 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "memory_conflict_pk",
+      "table": "memory_conflict",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "memory_correction_pk",
+      "table": "memory_correction",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "memory_pk",
       "table": "memory",
       "entityType": "pks"
@@ -6124,6 +6500,116 @@
       "name": "learning_pattern_updated_idx",
       "entityType": "indexes",
       "table": "learning_pattern"
+    },
+    {
+      "columns": [
+        {
+          "value": "signature",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_conflict_signature_idx",
+      "entityType": "indexes",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_conflict_status_idx",
+      "entityType": "indexes",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        {
+          "value": "left_memory_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_conflict_left_idx",
+      "entityType": "indexes",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        {
+          "value": "right_memory_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_conflict_right_idx",
+      "entityType": "indexes",
+      "table": "memory_conflict"
+    },
+    {
+      "columns": [
+        {
+          "value": "original_memory_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_correction_original_idx",
+      "entityType": "indexes",
+      "table": "memory_correction"
+    },
+    {
+      "columns": [
+        {
+          "value": "successor_memory_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_correction_successor_idx",
+      "entityType": "indexes",
+      "table": "memory_correction"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "memory_correction_status_idx",
+      "entityType": "indexes",
+      "table": "memory_correction"
     },
     {
       "columns": [

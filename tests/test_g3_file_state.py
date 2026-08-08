@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from arforge.core.file_state import FileStateTracker, reset_file_state_tracker
+from arforge.product.direct_dispatch import dispatch
 
 
 @pytest.fixture
@@ -125,24 +126,13 @@ def test_code_read_records_file_state(file_tools, tmp_path):
     assert state["changed_since_observed"] is False
 
 
-def test_bridge_file_state_list_reports_stale_files(file_tools, tmp_path):
-    from arforge.bridge import dispatch
+def test_bridge_file_state_list_reports_stale_files(monkeypatch, tmp_path):
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "file_state.list"})
 
-    target = tmp_path / "app.py"
-    target.write_text("def run():\n    return 1\n", encoding="utf-8")
-    file_tools.read_file("app.py")
-    target.write_text("def run():\n    return 2\n", encoding="utf-8")
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-    response = dispatch({"id": 2, "version": "1.1", "method": "file_state.list", "params": {"limit": 10}})
-
-    assert "file_state.list" in described["data"]["methods"]
-    assert response["ok"] is True
-    assert response["data"]["count"] == 1
-    item = response["data"]["items"][0]
-    assert item["changed_since_observed"] is True
-    assert item["missing"] is False
-    assert item["observed"]["sha256"] != item["current"]["sha256"]
 
 
 def test_cli_file_state_lists_observed_files(file_tools, tmp_path, capsys):

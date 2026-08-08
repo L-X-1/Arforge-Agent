@@ -19,7 +19,7 @@ import {
   type OpenSessionOptions,
 } from "./home-sessions-controller"
 
-const HOME_SECTION_LABEL = "text-v2-text-text-muted [font-weight:440]"
+const HOME_SECTION_LABEL = "text-[13px] text-v2-text-text-base [font-weight:530]"
 const HOME_SESSION_SEARCH_RESULTS_ID = "home-session-search-results"
 
 // Middle-click or Cmd+click on macOS (Ctrl+click elsewhere) opens a session
@@ -136,7 +136,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
                       elevated={index() === 0}
                     />
                     <div
-                      class={`flex min-w-0 flex-col gap-px pt-4 ${index() === props.groups().length - 1 ? "" : "mb-6"}`}
+                      class={`flex min-w-0 flex-col gap-1 pt-5 ${index() === props.groups().length - 1 ? "" : "mb-8"}`}
                     >
                       <For each={group.sessions}>{(record) => <HomeSessionRow {...props} record={record} />}</For>
                     </div>
@@ -275,7 +275,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
         <label
           data-arforge-material="floating"
           class={`
-            relative z-20 flex h-9 w-full items-center gap-2 rounded-[12px] border
+            relative z-20 flex h-10 w-full items-center gap-2 rounded-[14px] border
             border-v2-border-border-muted bg-transparent py-1 pl-3 pr-2 text-v2-icon-icon-muted
             shadow-[inset_0_1px_0_var(--arforge-highlight)]
             transition-[background-color,box-shadow,border-color] duration-[150ms] ease-out
@@ -437,14 +437,14 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
 
   return (
     <div
-      class="group/session relative flex h-10 min-w-0 items-center rounded-[8px]"
+      class="group/session relative flex h-11 min-w-0 items-center rounded-[12px]"
       classList={{ group: !!showProjectName() }}
     >
       <button
         type="button"
         data-component="home-session-row"
         class={`
-          flex h-10 min-w-0 w-full flex-1 shrink-0 cursor-default items-center gap-2 rounded-[8px] border-0
+          flex h-11 min-w-0 w-full flex-1 shrink-0 cursor-default items-center gap-2 rounded-[12px] border-0
           bg-transparent py-3 pl-3 pr-3 text-left text-v2-text-text-muted [font-weight:530]
           transition-[background-color,color,box-shadow] duration-[160ms] ease-out
           motion-reduce:transition-none

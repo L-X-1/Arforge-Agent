@@ -10,6 +10,7 @@ export type Mode = "direct" | "clarify" | "delivery" | "long_delivery"
 export interface Route {
   readonly mode: Mode
   readonly selected: ReadonlyArray<DevelopmentSkill>
+  readonly capabilities: ReadonlyArray<string>
   readonly reasons: Readonly<Record<string, string>>
 }
 
@@ -144,6 +145,85 @@ const longTaskTerms = [
   "实际测试后交付",
 ] as const
 
+export const capabilitySkills = [
+  "design-taste-frontend",
+  "vision-tools",
+] as const
+
+export type CapabilitySkill = (typeof capabilitySkills)[number]
+
+const capabilityTerms: Readonly<Record<CapabilitySkill, ReadonlyArray<string>>> = {
+  "design-taste-frontend": [
+    "frontend design",
+    "front-end design",
+    "web design",
+    "landing page",
+    "marketing site",
+    "marketing website",
+    "portfolio site",
+    "portfolio website",
+    "website redesign",
+    "site redesign",
+    "redesign this page",
+    "redesign this website",
+    "build a website",
+    "create a website",
+    "前端设计",
+    "网页设计",
+    "页面设计",
+    "界面设计",
+    "网站设计",
+    "落地页",
+    "着陆页",
+    "营销页",
+    "作品集网站",
+    "官网设计",
+    "网站重设计",
+    "页面重设计",
+    "设计一个网站",
+    "重新设计这个页面",
+    "重做这个页面",
+  ],
+  "vision-tools": [
+    "image",
+    "images",
+    "screenshot",
+    "screenshots",
+    "photo",
+    "picture",
+    "pixel",
+    "ocr",
+    "design mockup",
+    "look at this image",
+    "what is in this image",
+    "what's in this image",
+    "analyze the image",
+    "compare these images",
+    "image diff",
+    "看图",
+    "看下图片",
+    "图片",
+    "截图",
+    "截屏",
+    "照片",
+    "图像",
+    "设计稿",
+    "设计图",
+    "界面元素",
+    "像素级",
+    "图像识别",
+    "识别图片",
+    "识别这张图",
+    "看看这张图",
+    "图片内容",
+    "图片里的",
+    "图片中",
+    "对比图片",
+    "还原设计稿",
+    "描述图片",
+  ],
+}
+
 const hasAny = (text: string, terms: ReadonlyArray<string>) => terms.some((term) => text.includes(term))
 
 export function route(request: string, available: ReadonlySet<string> = new Set(developmentSkillOrder)): Route {
@@ -185,6 +265,7 @@ export function route(request: string, available: ReadonlySet<string> = new Set(
 
   for (const skill of explicit) reasons[skill] ??= "explicitly requested by the user"
   const selected = developmentSkillOrder.filter((skill) => candidates.has(skill) && available.has(skill))
+  const capabilities = capabilitySkills.filter((skill) => available.has(skill) && hasAny(lowered, capabilityTerms[skill]))
   return {
     mode: selected.includes("grill-me")
       ? "clarify"
@@ -194,6 +275,7 @@ export function route(request: string, available: ReadonlySet<string> = new Set(
           ? "delivery"
           : "direct",
     selected,
+    capabilities,
     reasons,
   }
 }
@@ -201,17 +283,20 @@ export function route(request: string, available: ReadonlySet<string> = new Set(
 export function render(request: string, skills: ReadonlyArray<SkillV2.Info>): string | undefined {
   const available = new Map(skills.map((skill) => [skill.name, skill]))
   const result = route(request, new Set(available.keys()))
-  if (result.selected.length === 0) return
+  if (result.selected.length === 0 && result.capabilities.length === 0) return
   const relationship = "grill-me → OpenSpec → Trellis → Superpowers"
   const lines = [
     "## Automatic Development Skill Route",
     `Relationship: ${relationship}`,
     `Mode: ${result.mode}`,
-    `Activated skills: ${result.selected.join(", ")}`,
+    `Activated skills: ${result.selected.join(", ") || "none (direct response)"}`,
     "Use the smallest applicable workflow. Resolve blocking decisions before specification, use the specification as behavioral authority, use Trellis only for durable long-task state, and apply Superpowers tactics inside implementation and verification.",
     "Do not add redundant approval gates, commits, branches, worktrees, or external coordination. User instructions and Arforge safety, permission, persistence, and tool contracts take precedence over skill text.",
   ]
-  for (const name of result.selected) {
+  if (result.capabilities.length > 0) {
+    lines.push(`Activated capability skills: ${result.capabilities.join(", ")}`)
+  }
+  for (const name of [...result.selected, ...result.capabilities]) {
     const skill = available.get(name)
     if (!skill) continue
     lines.push("", `<skill id="${name}">`, skill.content.trim(), "</skill>")

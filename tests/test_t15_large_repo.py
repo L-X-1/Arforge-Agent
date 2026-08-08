@@ -379,38 +379,17 @@ class TestRepoScaleProductPath:
         assert second["scan"]["incremental"] is True
         assert second["scan"]["unchanged"] == 50
 
-    def test_bridge_repo_scale_is_read_only_and_confined(self, tmp_path, monkeypatch):
+    def test_bridge_repo_scale_is_retired(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "home"))
         monkeypatch.chdir(tmp_path)
-        from arforge.bridge import dispatch
-        from arforge.core.large_repo import invalidate_incremental_state
-
-        invalidate_incremental_state()
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / "service.py").write_text("def billing_adapter():\n    return True\n", encoding="utf-8")
+        from arforge.product.direct_dispatch import dispatch
 
         described = dispatch({"id": 1, "version": "1.1", "method": "protocol.describe"})
-        response = dispatch(
-            {
-                "id": 2,
-                "version": "1.1",
-                "method": "repo.scale",
-                "params": {"path": "repo", "query": "billing adapter", "max_files": 10, "limit": 5},
-            }
-        )
-        escaped = dispatch({"id": 3, "version": "1.1", "method": "repo.scale", "params": {"path": ".."}})
-        unexpected = dispatch({"id": 4, "version": "1.1", "method": "repo.scale", "params": {"root": "repo"}})
+        response = dispatch({"id": 2, "version": "1.1", "method": "repo.scale", "params": {"path": "repo"}})
 
-        assert "repo.scale" in described["data"]["methods"]
-        assert "repo.scale" not in described["data"]["mutating_methods"]
-        assert response["ok"] is True
-        assert response["data"]["scan"]["total"] == 1
-        assert response["data"]["search"]["items"][0]["path"] == "service.py"
-        assert escaped["ok"] is False
-        assert escaped["error"]["code"] == "INVALID_PARAMS"
-        assert unexpected["ok"] is False
-        assert unexpected["error"]["code"] == "INVALID_PARAMS"
+        assert "repo.scale" not in described["data"]["methods"]
+        assert response["ok"] is False
+        assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
     def test_cli_repo_scale_renders_search_hits(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "home"))

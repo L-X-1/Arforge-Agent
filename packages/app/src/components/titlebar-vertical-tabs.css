@@ -1,0 +1,61 @@
+[data-titlebar-vertical-tabs] {
+  --vertical-tabs-width: 208px;
+  background: var(--v2-background-bg-deep, transparent);
+}
+
+/* Tab pill sizing for the vertical rail. */
+[data-titlebar-vertical-tabs] [data-titlebar-tab] {
+  height: 36px;
+  border-radius: 10px;
+  padding-inline: 10px;
+}
+
+[data-titlebar-vertical-tabs] [data-titlebar-tab]:hover {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+[data-titlebar-vertical-tabs] [data-titlebar-tab][data-active="true"] {
+  background: var(--v2-overlay-simple-overlay-active);
+}
+
+/* Active accent bar at the rail's left edge. */
+[data-titlebar-vertical-tabs] [data-titlebar-tab-slot] {
+  position: relative;
+}
+
+[data-titlebar-vertical-tabs]
+  [data-titlebar-tab-slot][data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  translate: 0 -50%;
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--v2-icon-icon-accent);
+}
+
+/* Collapsed rail: icons only, centered. */
+[data-titlebar-vertical-tabs][data-collapsed="true"] {
+  --vertical-tabs-width: 52px;
+}
+
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-title"],
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-close"],
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-new-label"] {
+  display: none;
+}
+
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-titlebar-tab],
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-link"] {
+  justify-content: center;
+  padding: 0;
+  gap: 0;
+}
+
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-header"],
+[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-new"] {
+  justify-content: center;
+  padding-inline: 0;
+}

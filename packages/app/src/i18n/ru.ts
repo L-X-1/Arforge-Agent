@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "Новая сессия",
   "command.file.open": "Открыть файл",
+  "command.tab.expand": "Развернуть панель вкладок",
+  "command.tab.collapse": "Свернуть панель вкладок",
   "command.tab.close": "Закрыть вкладку",
   "command.tab.reopenClosed": "Повторно открыть закрытую вкладку",
   "command.context.addSelection": "Добавить выделение в контекст",
@@ -1041,6 +1043,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Отслеживайте, просматривайте и отменяйте изменения в этом проекте",
   "session.review.noVcs.createGit.actionLoading": "Создание репозитория Git...",
   "session.review.noVcs.createGit.action": "Создать репозиторий Git",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "Выполнено {{done}} из {{total}} задач",
   "session.question.progress": "{{current}} из {{total}} вопросов",
   "session.header.open.finder": "Finder",
@@ -1359,4 +1362,8 @@ export const dict = {
   "controlCenter.m220": "Неизвестная ошибка центра управления",
   "controlCenter.m221": "Неизвестная ошибка расширения Agent",
   "controlCenter.m222": "Неизвестная ошибка глубокой диагностики",
+  "controlCenter.m223": "Управляемая эволюция",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Проверяйте кандидаты политик, предложенные на основе данных обучения, и управляйте изменениями возможностей с помощью изолированной оценки, одобрения человеком, поэтапного развёртывания и отката.",
 }

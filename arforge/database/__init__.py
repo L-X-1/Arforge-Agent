@@ -25,6 +25,7 @@ from arforge.database.models.learning_experience import LearningExperience
 from arforge.database.models.learning_outcome import LearningOutcome
 from arforge.database.models.learning_pattern import LearningPattern
 from arforge.database.models.memory import Memory
+from arforge.database.models.memory_os import MemoryRelation, MemoryRetrievalEvent, MemoryRevision
 from arforge.database.models.multiagent import MultiagentConversation, MultiagentTask
 from arforge.database.models.token_usage import TokenUsage
 
@@ -44,6 +45,9 @@ __all__ = [
     "show_db_info",
     # 模型
     "Memory",
+    "MemoryRevision",
+    "MemoryRelation",
+    "MemoryRetrievalEvent",
     "LearningExperience",
     "LearningOutcome",
     "LearningPattern",

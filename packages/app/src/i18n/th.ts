@@ -47,6 +47,8 @@ export const dict = {
 
   "command.session.new": "เซสชันใหม่",
   "command.file.open": "เปิดไฟล์",
+  "command.tab.expand": "ขยายแถบแท็บ",
+  "command.tab.collapse": "ย่อแถบแท็บ",
   "command.tab.close": "ปิดแท็บ",
   "command.tab.reopenClosed": "เปิดแท็บที่ปิดไปอีกครั้ง",
   "command.context.addSelection": "เพิ่มส่วนที่เลือกไปยังบริบท",
@@ -1025,6 +1027,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "ติดตาม ตรวจสอบ และเลิกทำสิ่งเปลี่ยนแปลงในโปรเจกต์นี้",
   "session.review.noVcs.createGit.actionLoading": "กำลังสร้าง Git รีโพซิทอรี...",
   "session.review.noVcs.createGit.action": "สร้าง Git รีโพซิทอรี",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "เสร็จสิ้น {{done}} จาก {{total}} รายการ",
   "session.question.progress": "{{current}} จาก {{total}} คำถาม",
   "session.header.open.finder": "Finder",
@@ -1334,4 +1337,8 @@ export const dict = {
   "controlCenter.m220": "ข้อผิดพลาดที่ไม่รู้จักของศูนย์ควบคุม",
   "controlCenter.m221": "ข้อผิดพลาดส่วนขยายที่ไม่รู้จัก Agent",
   "controlCenter.m222": "ข้อผิดพลาดการวินิจฉัยเชิงลึกที่ไม่รู้จัก",
+  "controlCenter.m223": "วิวัฒนาการที่มีการกำกับดูแล",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "ตรวจสอบนโยบายที่เสนอจากหลักฐานการเรียนรู้ และกำกับการเปลี่ยนแปลงความสามารถด้วยการประเมินแบบแยกส่วน การอนุมัติโดยมนุษย์ การทยอยเปิดใช้ และการย้อนกลับ",
 }

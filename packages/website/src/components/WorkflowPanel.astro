@@ -1,0 +1,28 @@
+---
+import type { Locale } from "../content"
+interface Props { locale: Locale }
+const { locale } = Astro.props
+const zh = locale === "zh-CN"
+---
+
+<div class="workflow-panel" role="img" aria-label={zh ? "Arforge 任务运行状态示意" : "Arforge task progress representation"}>
+  <div class="workflow-panel__bar">
+    <span class="workflow-panel__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>{zh ? "任务 · 发布前验证" : "Task · Pre-release verification"}</span>
+    <span class="workflow-panel__live"><i></i>{zh ? "设备在线" : "Device online"}</span>
+  </div>
+  <div class="workflow-panel__body">
+    <aside aria-hidden="true">
+      <span class="active"></span><span></span><span></span><span></span>
+    </aside>
+    <div class="workflow-panel__stream">
+      <div class="stream-intent"><span>{zh ? "目标" : "Goal"}</span><strong>{zh ? "完成官网构建并验证发布门槛" : "Build the website and verify release gates"}</strong></div>
+      <ol>
+        <li class="done"><span></span><div><strong>{zh ? "读取项目规范" : "Read project rules"}</strong><small>ARFORGE.md · requirements.md</small></div><b>{zh ? "完成" : "Done"}</b></li>
+        <li class="done"><span></span><div><strong>{zh ? "建立双语页面" : "Build bilingual pages"}</strong><small>Astro · static HTML · hreflang</small></div><b>{zh ? "完成" : "Done"}</b></li>
+        <li class="active"><span></span><div><strong>{zh ? "运行构建与可访问性检查" : "Run build and accessibility checks"}</strong><small>bun run check · playwright</small></div><b>{zh ? "进行中" : "Running"}</b></li>
+        <li><span></span><div><strong>{zh ? "开放公开下载" : "Open public download"}</strong><small>{zh ? "等待签名清单" : "Waiting for signed manifest"}</small></div><b>{zh ? "已阻止" : "Blocked"}</b></li>
+      </ol>
+    </div>
+  </div>
+</div>

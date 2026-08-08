@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.core.hooks import HookContext, HookEvent, get_hook_manager
 from arforge.core.interrupt import install_interrupt_hook
 from arforge.product.prompt_queue_runtime import PromptQueueRuntime

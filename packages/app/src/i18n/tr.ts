@@ -51,6 +51,8 @@ export const dict = {
 
   "command.session.new": "Yeni oturum",
   "command.file.open": "Dosya aç",
+  "command.tab.expand": "Sekme çubuğunu genişlet",
+  "command.tab.collapse": "Sekme çubuğunu daralt",
   "command.tab.close": "Sekmeyi kapat",
   "command.tab.reopenClosed": "Kapatılan sekmeyi yeniden aç",
   "command.context.addSelection": "Seçimi bağlama ekle",
@@ -1045,6 +1047,7 @@ export const dict = {
   "session.review.noVcs.createGit.description": "Bu projedeki değişiklikleri takip et, incele ve geri al",
   "session.review.noVcs.createGit.actionLoading": "Git deposu oluşturuluyor...",
   "session.review.noVcs.createGit.action": "Git deposu oluştur",
+  "execution.status.bar": "Execution",
   "session.todo.progress": "{{total}} görevin {{done}} tanesi tamamlandı",
   "session.question.progress": "{{total}} sorunun {{current}} tanesi",
   "session.header.open.finder": "Finder",
@@ -1358,4 +1361,8 @@ export const dict = {
   "controlCenter.m220": "Bilinmeyen kontrol merkezi hatası",
   "controlCenter.m221": "Bilinmeyen Agent uzantı hatası",
   "controlCenter.m222": "Bilinmeyen derin teşhis hatası",
+  "controlCenter.m223": "Yönetilen evrim",
+  "controlCenter.m225": "Runtime Insight",
+  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224": "Öğrenme kanıtlarından önerilen politika adaylarını inceleyin ve yetenek değişikliklerini yalıtılmış değerlendirme, insan onayı, kademeli dağıtım ve geri alma ile yönetin.",
 } satisfies Partial<Record<Keys, string>>

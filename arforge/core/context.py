@@ -140,6 +140,9 @@ def build_context_status(
     compacted_tokens_total: int = 0,
     checkpoint_restored: bool = False,
     compaction_history_complete: bool = True,
+    context_package: dict[str, Any] | None = None,
+    context_package_messages_digest: str = "",
+    context_package_recovery_state: str = "none",
 ) -> dict[str, Any]:
     """Build the canonical current-conversation meter shared by Bridge/Desktop.
 
@@ -170,6 +173,7 @@ def build_context_status(
     usable = budget["usable_input_tokens"]
     percent = min(100.0, max(0.0, used * 100.0 / window.tokens))
     compact_at = budget["compact_at_tokens"]
+    package = dict(context_package or {})
     payload = {
         "schema_version": 3,
         "model": str(model_name or ""),
@@ -201,5 +205,23 @@ def build_context_status(
         "compaction_history_complete": bool(compaction_history_complete),
         "auto_compact_enabled": True,
         "last_compaction": dict(last_compaction or {}),
+        "context_package_digest": str(package.get("digest", "")),
+        "context_package_schema_version": int(package.get("schema_version", 0) or 0),
+        "context_package_model": str(package.get("model", "")),
+        "context_package_used_tokens": max(
+            0, int(package.get("used_input_tokens", 0) or 0)
+        ),
+        "context_package_budget_tokens": max(
+            0, int(package.get("usable_input_tokens", 0) or 0)
+        ),
+        "context_package_omitted_units": len(package.get("omissions", []) or []),
+        "context_package_manifest_units": len(package.get("manifest", []) or []),
+        "protected_fact_coverage": float(
+            package.get("protected_fact_coverage", 1.0) or 0.0
+        ),
+        "context_package_messages_digest": str(context_package_messages_digest or ""),
+        "context_package_recovery_state": str(
+            context_package_recovery_state or "none"
+        ),
     }
     return payload

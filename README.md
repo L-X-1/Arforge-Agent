@@ -15,8 +15,8 @@ redistribute, or create derivative works unless the repository owner provides a 
 
 ## Unified architecture
 
-- `packages/core`: shared contracts, database, Session Runner and the Python
-  capability bridge.
+- `packages/core`: shared contracts, database, Session Runner and the native
+  TypeScript capability surface.
 - `packages/arforge`: unified CLI, provider, server, tools and session runtime.
 - `packages/app`: shared Solid application for Desktop and Web.
 - `packages/desktop`: current Electron desktop shell.
@@ -25,7 +25,7 @@ redistribute, or create derivative works unless the repository owner provides a 
 
 CLI, Server, App and Desktop use one provider, session, permission and
 PostgreSQL contract. Python capabilities no longer own a second desktop session
-state.
+state; the JSONL capability bridge and its sidecar were retired.
 
 ## Verified state — 2026-07-27
 
@@ -162,6 +162,7 @@ arforge code
 arforge goals
 arforge acp
 arforge eval
+arforge eval-ablation
 arforge capability-eval
 arforge stack-acceptance
 arforge project-acceptance
@@ -180,6 +181,8 @@ arforge workflows
 arforge workspace
 arforge custom-agents
 arforge stats
+arforge agent-metrics
+arforge evolution-metrics
 arforge cost-optimization
 arforge repo-scale
 arforge file-state

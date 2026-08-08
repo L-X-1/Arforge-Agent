@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from arforge.bridge import dispatch
+from arforge.product.direct_dispatch import dispatch
 from arforge.cli import main
 from arforge.core.release_gates import build_release_gates, format_release_gates
 
@@ -109,20 +109,12 @@ def test_release_gates_recognize_successful_signing_inputs_but_require_artifacts
 
 
 def test_release_gates_are_exposed_as_read_only_bridge_method(monkeypatch, tmp_path):
-    _minimal_release_tree(tmp_path)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "release.gates"})
 
-    described = dispatch({"id": 1, "method": "protocol.describe"})
-    response = dispatch({"id": 2, "method": "release.gates"})
-    rejected = dispatch({"id": 3, "method": "release.gates", "params": {"publish": True}})
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    assert described["ok"] is True
-    assert "release.gates" in described["data"]["methods"]
-    assert "release.gates" not in described["data"]["mutating_methods"]
-    assert response["ok"] is True
-    assert response["data"]["verdict"] == "DO_NOT_SHIP"
-    assert rejected["ok"] is False
-    assert rejected["error"]["code"] == "INVALID_PARAMS"
 
 
 def test_ship_gate_cli_returns_nonzero_until_release_gates_pass(monkeypatch, tmp_path, capsys):

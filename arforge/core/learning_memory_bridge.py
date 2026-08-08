@@ -61,6 +61,7 @@ def promote_memories_to_patterns(dry_run: bool = False) -> dict:
             session.query(Memory)
             .filter(Memory.importance >= _MIN_IMPORTANCE)
             .filter(Memory.review_level >= _MIN_REVIEW_LEVEL)
+            .filter(Memory.lifecycle == "active")
             .all()
         )
 
@@ -95,6 +96,12 @@ def promote_memories_to_patterns(dry_run: bool = False) -> dict:
                 existing.confidence = min(0.95, (existing.confidence or 0.5) + 0.1)
                 existing.updated_at = datetime.now().isoformat(timespec="seconds")
                 existing.tags = _merge_tags(existing.tags, mem.tags, pattern_type)
+                existing.provenance = {
+                    "kind": "memory_promotion",
+                    "memory_id": mem.id,
+                    "memory_uid": mem.memory_uid,
+                    "memory_version": mem.version,
+                }
             else:
                 pattern = LearningPattern(
                     created_at=datetime.now().isoformat(timespec="seconds"),
@@ -104,6 +111,12 @@ def promote_memories_to_patterns(dry_run: bool = False) -> dict:
                     frequency=1,
                     confidence=min(0.7, 0.3 + 0.1 * max(1, mem.review_level or 0)),
                     tags=_merge_tags("", mem.tags, pattern_type),
+                    provenance={
+                        "kind": "memory_promotion",
+                        "memory_id": mem.id,
+                        "memory_uid": mem.memory_uid,
+                        "memory_version": mem.version,
+                    },
                 )
                 session.add(pattern)
 

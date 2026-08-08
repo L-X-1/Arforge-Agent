@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f7f8fa"/>
+  <g fill="none" stroke="#007aff" stroke-width="18" transform="translate(94 82)">
+    <ellipse cx="60" cy="30" rx="30" ry="38"/>
+    <ellipse cx="60" cy="30" rx="30" ry="38" transform="rotate(120 60 48)"/>
+    <ellipse cx="60" cy="30" rx="30" ry="38" transform="rotate(240 60 48)"/>
+  </g>
+  <text x="94" y="330" fill="#111318" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="108" font-weight="600" letter-spacing="-5">Arforge</text>
+  <text x="98" y="414" fill="#5f6672" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="38">Local-first AI development agent</text>
+  <path d="M98 500H1102" stroke="#111318" stroke-opacity=".14"/>
+  <text x="98" y="552" fill="#007aff" font-family="Consolas,monospace" font-size="24">PLAN · EXECUTE · VERIFY</text>
+</svg>

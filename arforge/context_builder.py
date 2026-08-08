@@ -1,4 +1,8 @@
-"""Build compact project context."""
+"""Compatibility helpers that produce source fragments, not final model input.
+
+Provider-bound context is authorized, budgeted and verified by
+``arforge.core.context_os`` at ``ArforgeAgent.prepare_context_messages``.
+"""
 
 from __future__ import annotations
 

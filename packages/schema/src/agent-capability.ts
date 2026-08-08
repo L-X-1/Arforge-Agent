@@ -148,9 +148,9 @@ export const RepoScaleReport = Schema.Struct({
 }).annotate({ identifier: "AgentCapability.RepoScaleReport" })
 export interface RepoScaleReport extends Schema.Schema.Type<typeof RepoScaleReport> {}
 
-export const RunID = Schema.String.check(
-  Schema.isPattern(/^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/),
-).annotate({ identifier: "AgentCapability.RunID" })
+export const RunID = Schema.String.check(Schema.isPattern(/^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/)).annotate({
+  identifier: "AgentCapability.RunID",
+})
 export type RunID = typeof RunID.Type
 
 export const RunSummary = Schema.Struct({
@@ -527,3 +527,385 @@ export const WorkflowRunList = Schema.Struct({
   count: NonNegativeInt,
 }).annotate({ identifier: "AgentCapability.WorkflowRunList" })
 export interface WorkflowRunList extends Schema.Schema.Type<typeof WorkflowRunList> {}
+
+export const EvolutionCandidateState = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.NonEmptyString,
+  artifact_digest: Schema.NonEmptyString,
+  status: Schema.Literals(["proposed", "evaluated", "approved", "rejected", "canary", "promoted", "rolled_back"]),
+  revision: PositiveInt,
+  updated_at: Schema.NonEmptyString,
+  evaluation_id: Schema.String,
+  approval: Schema.Unknown,
+  deployment: Schema.Unknown,
+  rollback: Schema.Unknown,
+}).annotate({ identifier: "AgentCapability.EvolutionCandidateState" })
+export interface EvolutionCandidateState extends Schema.Schema.Type<typeof EvolutionCandidateState> {}
+
+export const EvolutionEvaluationCase = Schema.Struct({
+  case_id: Schema.NonEmptyString,
+  category: Schema.NonEmptyString,
+  passed: Schema.Boolean,
+  score: Schema.Finite,
+  baseline_score: Schema.Finite,
+  detail: Schema.String,
+  required: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.EvolutionEvaluationCase" })
+
+export const EvolutionEvaluation = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.NonEmptyString,
+  candidate_digest: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  isolation: Schema.Literal("temporary_directory"),
+  workspace_retained: Schema.Literal(false),
+  gate_passed: Schema.Boolean,
+  cases: Schema.Array(EvolutionEvaluationCase),
+  evaluation_id: Schema.NonEmptyString,
+  report_digest: Schema.NonEmptyString,
+}).annotate({ identifier: "AgentCapability.EvolutionEvaluation" })
+
+export const EvolutionCandidate = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_type: Schema.Literal("strategy_rule"),
+  title: Schema.NonEmptyString,
+  target: Schema.Literals(["learning.failure", "learning.fix", "learning.preference", "routing.advice", "tool.advice"]),
+  instruction: Schema.NonEmptyString,
+  rationale: Schema.NonEmptyString,
+  evidence_refs: Schema.Array(Schema.NonEmptyString),
+  created_by: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  constitution_version: Schema.NonEmptyString,
+  candidate_id: Schema.NonEmptyString,
+  artifact_digest: Schema.NonEmptyString,
+  state: EvolutionCandidateState,
+  evaluation: EvolutionEvaluation.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionCandidate" })
+export interface EvolutionCandidate extends Schema.Schema.Type<typeof EvolutionCandidate> {}
+
+export const EvolutionCandidateList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  items: Schema.Array(EvolutionCandidate),
+}).annotate({ identifier: "AgentCapability.EvolutionCandidateList" })
+export interface EvolutionCandidateList extends Schema.Schema.Type<typeof EvolutionCandidateList> {}
+
+export const EvolutionStatus = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  counts: Schema.Record(Schema.String, NonNegativeInt),
+  total: NonNegativeInt,
+  active: NonNegativeInt,
+  constitution: Schema.Struct({
+    version: Schema.NonEmptyString,
+    allowed_targets: Schema.Array(Schema.String),
+    protected_prefixes: Schema.Array(Schema.String),
+    self_approval_allowed: Schema.Literal(false),
+    source_mutation_allowed: Schema.Literal(false),
+  }),
+  audit: Schema.Struct({
+    schema_version: Schema.Literal(1),
+    valid: Schema.Boolean,
+    events: NonNegativeInt,
+    head_hash: Schema.String.pipe(optional),
+    issue: Schema.String,
+  }),
+  policy: Schema.Struct({
+    min_auto_proposal_frequency: PositiveInt,
+    min_auto_proposal_confidence: Schema.Finite,
+    min_canary_observations: NonNegativeInt,
+    min_control_observations: NonNegativeInt,
+    min_canary_success_rate: Schema.Finite,
+    min_success_rate_delta: Schema.Finite,
+    default_traffic_percent: PositiveInt,
+    auto_rollback_min_observations: NonNegativeInt,
+    auto_rollback_success_rate: Schema.Finite,
+    max_active_candidates: PositiveInt,
+  }),
+}).annotate({ identifier: "AgentCapability.EvolutionStatus" })
+export interface EvolutionStatus extends Schema.Schema.Type<typeof EvolutionStatus> {}
+
+export const EvolutionOpportunity = Schema.Struct({
+  kind: Schema.NonEmptyString,
+  source_ref: Schema.NonEmptyString,
+  category: Schema.String,
+  proposal_available: Schema.Boolean,
+  frequency: NonNegativeInt.pipe(optional),
+  confidence: Schema.Finite.pipe(optional),
+  stop_reason: Schema.String.pipe(optional),
+  count: NonNegativeInt.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionOpportunity" })
+
+export const EvolutionOpportunityList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  items: Schema.Array(EvolutionOpportunity),
+}).annotate({ identifier: "AgentCapability.EvolutionOpportunityList" })
+export interface EvolutionOpportunityList extends Schema.Schema.Type<typeof EvolutionOpportunityList> {}
+
+export const EvolutionCanaryReport = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.NonEmptyString,
+  candidate_digest: Schema.NonEmptyString,
+  candidate_observations: NonNegativeInt,
+  control_observations: NonNegativeInt,
+  candidate_success_rate: Schema.Finite,
+  control_success_rate: Schema.Finite,
+  success_rate_delta: Schema.Finite,
+  safety_incidents: NonNegativeInt,
+  control_safety_incidents: NonNegativeInt,
+  checks: Schema.Record(Schema.String, Schema.Boolean),
+  gate_passed: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.EvolutionCanaryReport" })
+export interface EvolutionCanaryReport extends Schema.Schema.Type<typeof EvolutionCanaryReport> {}
+
+export const EvolutionContextPreview = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  text: Schema.String,
+  candidate_ids: Schema.Array(Schema.String),
+  cohorts: Schema.Record(Schema.String, Schema.String),
+}).annotate({ identifier: "AgentCapability.EvolutionContextPreview" })
+export interface EvolutionContextPreview extends Schema.Schema.Type<typeof EvolutionContextPreview> {}
+
+export const EvolutionExposureAssignment = Schema.Struct({
+  candidate_id: Schema.NonEmptyString,
+  candidate_digest: Schema.NonEmptyString,
+  cohort: Schema.Literals(["candidate", "control"]),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureAssignment" })
+export interface EvolutionExposureAssignment extends Schema.Schema.Type<typeof EvolutionExposureAssignment> {}
+
+export const EvolutionExposureSource = Schema.Struct({
+  kind: Schema.Literal("session_turn"),
+  authority: Schema.Literal("typescript-core"),
+  session_id: Schema.String.check(Schema.isStartsWith("ses"), Schema.isMaxLength(160)),
+  user_message_id: Schema.String.check(Schema.isStartsWith("msg_"), Schema.isMaxLength(160)),
+  turn_step: PositiveInt,
+}).annotate({ identifier: "AgentCapability.EvolutionExposureSource" })
+export interface EvolutionExposureSource extends Schema.Schema.Type<typeof EvolutionExposureSource> {}
+
+export const EvolutionExposureOutcome = Schema.Struct({
+  success: Schema.Boolean,
+  stop_reason: Schema.String,
+  safety_incident: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.EvolutionExposureOutcome" })
+export interface EvolutionExposureOutcome extends Schema.Schema.Type<typeof EvolutionExposureOutcome> {}
+
+export const EvolutionExposureReceipt = Schema.Struct({
+  receipt_digest: Schema.NonEmptyString,
+  recorded_at: Schema.NonEmptyString,
+  outcome: Schema.Union([EvolutionExposureOutcome, Schema.Null]),
+  observation_count: NonNegativeInt,
+  assistant_message_id: Schema.String.check(Schema.isStartsWith("msg_"), Schema.isMaxLength(160)).pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureReceipt" })
+export interface EvolutionExposureReceipt extends Schema.Schema.Type<typeof EvolutionExposureReceipt> {}
+
+export const EvolutionExposure = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  exposure_id: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  cohort_key_digest: Schema.NonEmptyString,
+  context_digest: Schema.NonEmptyString,
+  injected_candidate_ids: Schema.Array(Schema.NonEmptyString),
+  assignments: Schema.Array(EvolutionExposureAssignment),
+  status: Schema.Literals(["pending", "recorded"]),
+  ticket_digest: Schema.NonEmptyString,
+  receipt: Schema.Union([EvolutionExposureReceipt, Schema.Null]),
+  source: EvolutionExposureSource.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionExposure" })
+export interface EvolutionExposure extends Schema.Schema.Type<typeof EvolutionExposure> {}
+
+export const EvolutionExposureList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  total: NonNegativeInt,
+  counts: Schema.Struct({
+    pending: NonNegativeInt,
+    recorded: NonNegativeInt,
+  }),
+  truncated: Schema.Boolean,
+  items: Schema.Array(EvolutionExposure),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureList" })
+export interface EvolutionExposureList extends Schema.Schema.Type<typeof EvolutionExposureList> {}
+
+const Sha256Digest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
+
+export const EvolutionExposureArchiveItem = Schema.Struct({
+  exposure_id: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  ticket_digest: Sha256Digest,
+  receipt_digest: Sha256Digest,
+  source: EvolutionExposureSource.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveItem" })
+export interface EvolutionExposureArchiveItem extends Schema.Schema.Type<typeof EvolutionExposureArchiveItem> {}
+
+export const EvolutionExposureArchivePlan = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  archive_id: Schema.NonEmptyString,
+  plan_digest: Sha256Digest,
+  keep_recorded: NonNegativeInt,
+  eligible_count: NonNegativeInt,
+  counts: Schema.Struct({
+    pending: NonNegativeInt,
+    recorded: NonNegativeInt,
+    retained_recorded: NonNegativeInt,
+  }),
+  truncated: Schema.Boolean,
+  items: Schema.Array(EvolutionExposureArchiveItem),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchivePlan" })
+export interface EvolutionExposureArchivePlan extends Schema.Schema.Type<typeof EvolutionExposureArchivePlan> {}
+
+export const EvolutionExposureArchiveResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  applied: Schema.Boolean,
+  archive_id: Schema.NonEmptyString,
+  plan_digest: Sha256Digest,
+  archived_count: NonNegativeInt,
+  completed_at: Schema.String,
+  active_counts: Schema.Struct({
+    pending: NonNegativeInt,
+    recorded: NonNegativeInt,
+  }),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveResult" })
+export interface EvolutionExposureArchiveResult extends Schema.Schema.Type<typeof EvolutionExposureArchiveResult> {}
+
+const EmptyOrSha256Digest = Schema.Union([Schema.Literal(""), Sha256Digest])
+
+export const EvolutionExposureArchiveRestoreStatus = Schema.Struct({
+  missing: NonNegativeInt,
+  identical: NonNegativeInt,
+  conflicts: NonNegativeInt,
+  can_restore: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveRestoreStatus" })
+
+export const EvolutionExposureArchiveSummary = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  archive_id: Schema.NonEmptyString,
+  integrity: Schema.Struct({
+    valid: Schema.Boolean,
+    issue: Schema.String,
+  }),
+  published_at: Schema.String,
+  completed_at: Schema.String,
+  archived_count: NonNegativeInt,
+  keep_recorded: NonNegativeInt,
+  plan_digest: EmptyOrSha256Digest,
+  manifest_digest: EmptyOrSha256Digest,
+  completion_digest: EmptyOrSha256Digest,
+  evidence_set_digest: EmptyOrSha256Digest,
+  restore: EvolutionExposureArchiveRestoreStatus,
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveSummary" })
+export interface EvolutionExposureArchiveSummary extends Schema.Schema.Type<typeof EvolutionExposureArchiveSummary> {}
+
+export const EvolutionExposureArchiveList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  total: NonNegativeInt,
+  valid_count: NonNegativeInt,
+  invalid_count: NonNegativeInt,
+  truncated: Schema.Boolean,
+  items: Schema.Array(EvolutionExposureArchiveSummary),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveList" })
+export interface EvolutionExposureArchiveList extends Schema.Schema.Type<typeof EvolutionExposureArchiveList> {}
+
+export const EvolutionExposureArchiveEvidenceItem = Schema.Struct({
+  exposure_id: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  ticket_digest: Sha256Digest,
+  receipt_digest: Sha256Digest,
+  ticket_file_digest: Sha256Digest,
+  receipt_file_digest: Sha256Digest,
+  live_status: Schema.Literals(["missing", "identical", "conflict"]),
+  source: EvolutionExposureSource.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveEvidenceItem" })
+
+export const EvolutionExposureArchiveDetail = Schema.Struct({
+  ...EvolutionExposureArchiveSummary.fields,
+  count: NonNegativeInt,
+  truncated: Schema.Boolean,
+  capacity_exceeded: Schema.Boolean,
+  active_total: NonNegativeInt,
+  active_after: NonNegativeInt,
+  items: Schema.Array(EvolutionExposureArchiveEvidenceItem),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveDetail" })
+export interface EvolutionExposureArchiveDetail extends Schema.Schema.Type<typeof EvolutionExposureArchiveDetail> {}
+
+export const EvolutionExposureRestoreItem = Schema.Struct({
+  exposure_id: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  ticket_digest: Sha256Digest,
+  receipt_digest: Sha256Digest,
+  live_status: Schema.Literals(["missing", "identical", "conflict"]),
+  source: EvolutionExposureSource.pipe(optional),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureRestoreItem" })
+
+export const EvolutionExposureRestorePlan = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  restore_id: Schema.String.check(Schema.isPattern(/^xr-[0-9a-f]{24}$/)),
+  archive_id: Schema.String.check(Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+  plan_digest: Sha256Digest,
+  manifest_digest: Sha256Digest,
+  completion_digest: Sha256Digest,
+  archived_count: NonNegativeInt,
+  counts: Schema.Struct({
+    missing: NonNegativeInt,
+    already_present: NonNegativeInt,
+    conflicts: NonNegativeInt,
+    active_total: NonNegativeInt,
+    active_after: NonNegativeInt,
+  }),
+  capacity_exceeded: Schema.Boolean,
+  can_apply: Schema.Boolean,
+  truncated: Schema.Boolean,
+  items: Schema.Array(EvolutionExposureRestoreItem),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureRestorePlan" })
+export interface EvolutionExposureRestorePlan extends Schema.Schema.Type<typeof EvolutionExposureRestorePlan> {}
+
+export const EvolutionExposureRestoreResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  applied: Schema.Boolean,
+  restore_id: Schema.String.check(Schema.isPattern(/^xr-[0-9a-f]{24}$/)),
+  archive_id: Schema.String.check(Schema.isPattern(/^xa-[0-9a-f]{24}$/)),
+  plan_digest: Sha256Digest,
+  restored_count: NonNegativeInt,
+  already_present_count: NonNegativeInt,
+  completed_at: Schema.String,
+  active_counts: Schema.Struct({
+    pending: NonNegativeInt,
+    recorded: NonNegativeInt,
+  }),
+}).annotate({ identifier: "AgentCapability.EvolutionExposureRestoreResult" })
+export interface EvolutionExposureRestoreResult extends Schema.Schema.Type<typeof EvolutionExposureRestoreResult> {}
+
+export const EvolutionExposureArchiveExport = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  filename: Schema.String.check(Schema.isPattern(/^arforge-xa-[0-9a-f]{24}-public-audit\.json$/)),
+  media_type: Schema.Literal("application/json"),
+  sha256: Sha256Digest,
+  content: Schema.NonEmptyString,
+}).annotate({ identifier: "AgentCapability.EvolutionExposureArchiveExport" })
+export interface EvolutionExposureArchiveExport extends Schema.Schema.Type<typeof EvolutionExposureArchiveExport> {}
+
+export const EvolutionAuditEvent = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  sequence: PositiveInt,
+  recorded_at: Schema.NonEmptyString,
+  subject_id: Schema.String,
+  subject_kind: Schema.Literals(["candidate", "archive", "restore", "exposure", "system"]),
+  action: Schema.NonEmptyString,
+  actor: Schema.NonEmptyString,
+  reason: Schema.String,
+  metadata: JsonObject,
+  previous_hash: Schema.String,
+  record_hash: Sha256Digest,
+}).annotate({ identifier: "AgentCapability.EvolutionAuditEvent" })
+export interface EvolutionAuditEvent extends Schema.Schema.Type<typeof EvolutionAuditEvent> {}
+
+export const EvolutionAuditEventList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  valid: Schema.Literal(true),
+  head_hash: Schema.String,
+  total: NonNegativeInt,
+  count: NonNegativeInt,
+  truncated: Schema.Boolean,
+  items: Schema.Array(EvolutionAuditEvent),
+}).annotate({ identifier: "AgentCapability.EvolutionAuditEventList" })
+export interface EvolutionAuditEventList extends Schema.Schema.Type<typeof EvolutionAuditEventList> {}

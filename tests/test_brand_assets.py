@@ -31,7 +31,7 @@ def test_every_product_ico_is_the_owner_supplied_canonical_asset() -> None:
 
     assert len(icons) == 10
     expected = _sha256(CANONICAL)
-    assert expected == "311b8b1dfcb5bb7e5de690c5b0ceda618f1f7f63fe79f327e38e6cd22072a03e"
+    assert expected == "e2a550c73962a1a1b0116913478f267bd34f4da87a10038bad86cff78c7a7637"
     assert all(_sha256(path) == expected for path in icons)
 
 

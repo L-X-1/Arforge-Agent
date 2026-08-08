@@ -72,7 +72,6 @@ migration = []
 
 [project.scripts]
 arforge = "arforge.cli:main"
-arforge-bridge = "arforge.bridge:main"
 
 [tool.setuptools]
 py-modules = ["config"]

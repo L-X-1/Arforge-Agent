@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from arforge.plugin_install import PluginInstallError, PluginInstallRuntime
+from arforge.product.direct_dispatch import dispatch
 
 
 def _plugin(root: Path, name: str = "sample", version: str = "1.0.0") -> Path:
@@ -159,43 +160,12 @@ def test_git_source_supports_explicit_ref_and_safe_subdirectory(monkeypatch, tmp
 
 
 def test_bridge_install_remove_and_restore_contract(monkeypatch, tmp_path):
-    from arforge.bridge import dispatch
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
+    response = dispatch({"id": 1, "version": "1.2", "method": "plugins.list"})
 
-    profile = tmp_path / "profile"
-    monkeypatch.setenv("ARFORGE_HOME", str(profile))
-    source = _plugin(tmp_path / "source")
+    assert response["ok"] is False
+    assert response["error"]["code"] == "METHOD_NOT_FOUND"
 
-    inspected = dispatch(
-        {"id": "inspect", "version": "1.2", "method": "plugins.install.inspect", "params": {"source": str(source)}}
-    )
-    installed = dispatch(
-        {
-            "id": "apply",
-            "version": "1.2",
-            "method": "plugins.install.apply",
-            "params": {"token": inspected["data"]["token"], "name": "", "replace": False},
-        }
-    )
-    removed = dispatch(
-        {"id": "remove", "version": "1.2", "method": "plugins.remove", "params": {"name": "sample"}}
-    )
-    restored = dispatch(
-        {
-            "id": "restore",
-            "version": "1.2",
-            "method": "plugins.restore",
-            "params": {"recovery_id": removed["data"]["transaction"]["recovery"]["recovery_id"]},
-        }
-    )
-
-    assert installed["ok"] is True
-    assert installed["data"]["plugins"]["items"][0]["managed"] is True
-    assert removed["ok"] is True
-    assert restored["data"]["transaction"]["enabled"] is False
-
-    described = dispatch({"id": "describe", "version": "1.2", "method": "protocol.describe", "params": {}})
-    assert "plugins.install.apply" in described["data"]["mutating_methods"]
-    assert "plugins.remove" in described["data"]["mutating_methods"]
 
 
 def test_cli_installs_and_removes_profile_plugin(monkeypatch, tmp_path, capsys):

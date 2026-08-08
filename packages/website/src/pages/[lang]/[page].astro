@@ -1,0 +1,11 @@
+---
+import PublicPageContent from "../../components/PublicPageContent.astro"
+import SiteLayout from "../../layouts/SiteLayout.astro"
+import { isLocale, locales, publicPages, siteCopy, type PublicPage } from "../../content"
+export function getStaticPaths() { return locales.flatMap((lang) => publicPages.map((page) => ({ params: { lang, page } }))) }
+const { lang, page } = Astro.params
+if (!isLocale(lang) || !publicPages.includes(page as PublicPage)) throw new Error("Unsupported route")
+const typedPage = page as PublicPage
+const content = siteCopy[lang][typedPage]
+---
+<SiteLayout locale={lang} title={content.title} description={content.intro} page={typedPage}><PublicPageContent locale={lang} page={typedPage} /></SiteLayout>

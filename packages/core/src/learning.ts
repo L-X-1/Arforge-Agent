@@ -1,12 +1,13 @@
 export * as LearningV2 from "./learning"
 
 import { Learning } from "@arforge-ai/schema/learning"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, gte } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { Database } from "./database/database"
 import { makeLocationNode } from "./effect/app-node"
 import { Location } from "./location"
+import { redact } from "./redact"
 import { LearningOutcomePatternTable, LearningOutcomeTable, LearningPatternTable } from "./learning/sql"
 import { SessionSchema } from "./session/schema"
 
@@ -71,6 +72,8 @@ export interface Interface {
   readonly undo: (outcomeID: OutcomeID) => Effect.Effect<UndoResult>
   readonly status: () => Effect.Effect<Status>
   readonly context: (query: string) => Effect.Effect<string>
+  /** High-confidence, workspace-scoped evidence eligible for review-only Evolution proposals. */
+  readonly proposalCandidates: () => Effect.Effect<ReadonlyArray<Pattern>>
   readonly syncDogfood: (candidates: ReadonlyArray<DogfoodCandidate>) => Effect.Effect<SyncResult, SyncLimitError>
 }
 
@@ -78,6 +81,11 @@ export class Service extends Context.Service<Service, Interface>()("@arforge/v2/
 
 const MaximumSync = 1_000
 const MinimumImpactCohort = 3
+export const ProposalPolicy = {
+  minimumFrequency: 3,
+  minimumConfidence: 0.7,
+  maximumCandidates: 50,
+} as const
 
 const layer = Layer.effect(
   Service,
@@ -104,15 +112,15 @@ const layer = Layer.effect(
           project_id: projectID,
           workspace_path: workspacePath,
           turn_index: boundedInt(input.turnIndex, 0, Number.MAX_SAFE_INTEGER),
-          user_input: boundedText(input.userInput, 500),
+          user_input: boundedText(redact(input.userInput), 500),
           intent: boundedText(input.intent ?? "general", 100),
           route: boundedText(input.route ?? "agentic", 100),
           tools: unique((input.tools ?? []).map((tool) => boundedText(tool, 100))).slice(0, 100),
           success: input.success,
           error_type: boundedText(input.errorType ?? "", 100),
-          error_message: boundedText(input.errorMessage ?? "", 500),
-          user_feedback: boundedText(input.userFeedback ?? "", 500),
-          fix_strategy: boundedText(input.fixStrategy ?? "", 500),
+          error_message: boundedText(redact(input.errorMessage ?? ""), 500),
+          user_feedback: boundedText(redact(input.userFeedback ?? ""), 500),
+          fix_strategy: boundedText(redact(input.fixStrategy ?? ""), 500),
           regression: input.regression ?? false,
           token_count: boundedInt(input.tokenCount, 0, Number.MAX_SAFE_INTEGER),
           response_time_ms: boundedInt(input.responseTimeMs, 0, Number.MAX_SAFE_INTEGER),
@@ -339,6 +347,24 @@ const layer = Layer.effect(
       ].join("\n")
     })
 
+    const proposalCandidates: Interface["proposalCandidates"] = Effect.fn("Learning.proposalCandidates")(function* () {
+      const patterns = yield* db
+        .select()
+        .from(LearningPatternTable)
+        .where(
+          and(
+            patternScope,
+            gte(LearningPatternTable.frequency, ProposalPolicy.minimumFrequency),
+            gte(LearningPatternTable.confidence, ProposalPolicy.minimumConfidence),
+          ),
+        )
+        .orderBy(desc(LearningPatternTable.confidence), desc(LearningPatternTable.frequency))
+        .limit(ProposalPolicy.maximumCandidates)
+        .all()
+        .pipe(Effect.orDie)
+      return patterns.map(toPattern)
+    })
+
     const syncDogfood: Interface["syncDogfood"] = Effect.fn("Learning.syncDogfood")(function* (candidates) {
       if (candidates.length > MaximumSync) return yield* new SyncLimitError({ limit: MaximumSync })
       let imported = 0
@@ -378,7 +404,7 @@ const layer = Layer.effect(
       return SyncResult.make({ seen: candidates.length, imported, skipped, failedCandidates })
     })
 
-    return Service.of({ record, undo, status, context, syncDogfood })
+    return Service.of({ record, undo, status, context, proposalCandidates, syncDogfood })
   }),
 )
 

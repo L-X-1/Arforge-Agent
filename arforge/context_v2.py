@@ -1,4 +1,4 @@
-"""Context v2 facade."""
+"""Compatibility facade; Context OS is the final provider-input authority."""
 
 from arforge.context_builder import build_coding_context, build_context, build_retrieved_context
 

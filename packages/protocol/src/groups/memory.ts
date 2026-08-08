@@ -1,5 +1,5 @@
 import { Memory } from "@arforge-ai/schema/memory"
-import { PositiveInt } from "@arforge-ai/schema/schema"
+import { NonNegativeInt, PositiveInt } from "@arforge-ai/schema/schema"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { ConflictError, InvalidRequestError, MemoryNotFoundError } from "../errors"
@@ -81,6 +81,111 @@ export const makeMemoryGroup = <I extends HttpApiMiddleware.AnyId, S>(locationMi
         }),
         success: Schema.Struct({ data: Memory.Info }),
         error: [...mutationErrors, MemoryNotFoundError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.correct", `${item}/correct`, {
+        params: { memoryID: Memory.ID },
+        query: location,
+        payload: Schema.Struct({
+          content: Memory.Content,
+          reason: Memory.CorrectionReason,
+          expectedUpdatedAt: NonNegativeInt,
+        }),
+        success: Schema.Struct({ data: Memory.CorrectionResult }),
+        error: [...mutationErrors, MemoryNotFoundError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("memory.correctionHistory", `${item}/corrections`, {
+        params: { memoryID: Memory.ID },
+        query: location,
+        success: Schema.Struct({ data: Memory.CorrectionHistory }),
+        error: MemoryNotFoundError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.undoCorrection", `${root}/corrections/:correctionID/undo`, {
+        params: { correctionID: Memory.CorrectionID },
+        query: location,
+        payload: Schema.Struct({ expectedSuccessorUpdatedAt: NonNegativeInt }),
+        success: Schema.Struct({ data: Memory.CorrectionResult }),
+        error: ConflictError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("memory.conflictList", `${root}/conflicts`, {
+        query: {
+          ...location,
+          includeClosed: Schema.Literals(["true", "false"]).pipe(Schema.optional),
+          limit: PositiveInt.check(Schema.isLessThanOrEqualTo(500)).pipe(Schema.optional),
+        },
+        success: Schema.Struct({ data: Memory.ConflictPage }),
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.conflictScan", `${root}/conflicts/scan`, {
+        query: location,
+        payload: Schema.Struct({
+          scanLimit: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)).pipe(Schema.optional),
+          resultLimit: PositiveInt.check(Schema.isLessThanOrEqualTo(500)).pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: Memory.ConflictPage }),
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.resolveConflict", `${root}/conflicts/:conflictID/resolve`, {
+        params: { conflictID: Memory.ConflictID },
+        query: location,
+        payload: Schema.Struct({
+          chosenMemoryID: Memory.ID,
+          reason: Memory.ConflictReason,
+          expectedLeftUpdatedAt: NonNegativeInt,
+          expectedRightUpdatedAt: NonNegativeInt,
+        }),
+        success: Schema.Struct({ data: Memory.ConflictDecisionResult }),
+        error: ConflictError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.dismissConflict", `${root}/conflicts/:conflictID/dismiss`, {
+        params: { conflictID: Memory.ConflictID },
+        query: location,
+        payload: Schema.Struct({
+          reason: Memory.ConflictReason,
+          expectedLeftUpdatedAt: NonNegativeInt,
+          expectedRightUpdatedAt: NonNegativeInt,
+        }),
+        success: Schema.Struct({ data: Memory.ConflictDecisionResult }),
+        error: ConflictError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.undoConflict", `${root}/conflicts/:conflictID/undo`, {
+        params: { conflictID: Memory.ConflictID },
+        query: location,
+        payload: Schema.Struct({
+          expectedLeftUpdatedAt: NonNegativeInt,
+          expectedRightUpdatedAt: NonNegativeInt,
+        }),
+        success: Schema.Struct({ data: Memory.ConflictDecisionResult }),
+        error: ConflictError,
       })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi),

@@ -1,9 +1,18 @@
+import { existsSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import type { Configuration } from "electron-builder"
 
 const packageDir = path.dirname(fileURLToPath(import.meta.url))
+const configuredElectronDist = process.env.ARFORGE_ELECTRON_DIST?.trim()
+const installedElectronDist = path.join(packageDir, "node_modules", "electron", "dist")
+const electronDist = configuredElectronDist
+  ? path.resolve(configuredElectronDist)
+  : existsSync(installedElectronDist)
+    ? installedElectronDist
+    : undefined
+const nativeResources = path.join(packageDir, "native")
 // The Electron 42 packaging update briefly installed Linux launchers/icons under
 // "arforge-desktop". Keep that hidden desktop entry around so existing GNOME/KDE
 // pins still resolve after the canonical app id changes back to ai.arforge.desktop.
@@ -40,9 +49,7 @@ const APP_IDS = {
 } as const
 
 const getBase = (appId: string): Configuration => ({
-  ...(process.env.ARFORGE_ELECTRON_DIST?.trim()
-    ? { electronDist: path.resolve(process.env.ARFORGE_ELECTRON_DIST.trim()) }
-    : {}),
+  ...(electronDist ? { electronDist } : {}),
   artifactName: "arforge-desktop-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
@@ -60,17 +67,29 @@ const getBase = (appId: string): Configuration => ({
   extraMetadata: {
     desktopName: `${appId}.desktop`,
   },
-  files: ["out/**/*", "resources/**/*", "!**/AGENTS.md"],
+  files: [
+    "out/**/*",
+    "resources/**/*",
+    // @arforge-ai/core is compiled into out/main. Leaving its TypeScript source in
+    // app.asar both bloats the package and makes an accidental runtime import fail
+    // with ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING.
+    "!node_modules/@arforge-ai/core/**/*",
+    "!**/AGENTS.md",
+  ],
   extraResources: [
     {
       from: "resources/icons/",
       to: "icons/",
     },
-    {
-      from: "native/",
-      to: "native/",
-      filter: ["index.js", "index.d.ts", "build/Release/mac_window.node", "swift-build/**"],
-    },
+    ...(existsSync(nativeResources)
+      ? [
+          {
+            from: "native/",
+            to: "native/",
+            filter: ["index.js", "index.d.ts", "build/Release/mac_window.node", "swift-build/**"],
+          },
+        ]
+      : []),
   ],
   mac: {
     category: "public.app-category.developer-tools",

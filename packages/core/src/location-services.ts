@@ -48,7 +48,7 @@ import { MemoryV2 } from "./memory"
 import { LearningV2 } from "./learning"
 import { FeedbackV2 } from "./feedback"
 import { MultimodalDiagnosisV2 } from "./multimodal-diagnosis"
-import { AgentPython } from "./agent-python"
+import { EvolutionV2 } from "./evolution"
 
 export { LocationServiceMap } from "./location-service-map"
 
@@ -97,7 +97,7 @@ export const locationServices = LayerNode.group([
   LearningV2.node,
   FeedbackV2.node,
   MultimodalDiagnosisV2.node,
-  AgentPython.node,
+  EvolutionV2.node,
   ReadToolFileSystem.node,
   BuiltInTools.node,
   SessionRunnerModel.node,

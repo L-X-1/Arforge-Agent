@@ -203,7 +203,7 @@ export function TabNavItem(props: {
       data-slot="titlebar-tab-item"
       data-title-overflow={titleOverflowing()}
       data-editing={editing()}
-      class="group relative flex h-[30px] w-full min-w-0 select-none flex-row items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-[8px] px-1.5 [container-type:inline-size]"
+      class="group relative flex h-8 w-full min-w-0 select-none flex-row items-center gap-2 overflow-hidden whitespace-nowrap rounded-[12px] px-2 [container-type:inline-size]"
       classList={{ invisible: props.hidden }}
       data-active={props.active}
       data-dragging={props.dragging}

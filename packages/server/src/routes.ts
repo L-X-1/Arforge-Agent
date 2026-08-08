@@ -18,7 +18,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Layer, Option } from "effect"
 import { Api } from "./api"
 import { ServerAuth } from "./auth"
-import { handlers } from "./handlers"
+import { handlers, RuntimeInsightPersistence } from "./handlers"
 import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
@@ -58,6 +58,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
+    Layer.provide(RuntimeInsightPersistence),
     Layer.provide(sessionLocationLayer),
     Layer.provide(locationLayer),
     Layer.provide(authorizationLayer),

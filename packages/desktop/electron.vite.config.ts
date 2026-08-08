@@ -1,7 +1,7 @@
 import { defineConfig } from "electron-vite"
 import { createAppPlugin } from "@arforge-ai/app/vite"
 import * as fs from "node:fs/promises"
-import { resolve } from "node:path"
+import { dirname, resolve } from "node:path"
 
 const ARFORGE_SERVER_DIST = "../arforge/dist/node"
 const APP_SOURCE = resolve(import.meta.dirname, "../app/src")
@@ -14,6 +14,17 @@ const channel = (() => {
 })()
 
 const nodePtyPkg = `@lydell/node-pty-${process.platform}-${process.arch}`
+
+// Workspace packages publish TypeScript source for Bun-based development. Electron's
+// embedded Node runtime deliberately refuses to strip types below node_modules, so
+// these dependencies must be compiled into the main-process bundle before packaging.
+export const bundledMainProcessDependencies = ["@arforge-ai/core"]
+export const bundledMainProcessAssets = [
+  {
+    source: resolve(import.meta.dirname, "../core/assets/models.json"),
+    output: resolve(import.meta.dirname, "out/main/assets/models.json"),
+  },
+] as const
 
 export default defineConfig({
   main: {
@@ -35,7 +46,10 @@ const require = __cjs_mod__.createRequire(import.meta.url);
 `,
         },
       },
-      externalizeDeps: { include: [nodePtyPkg] },
+      externalizeDeps: {
+        include: [nodePtyPkg],
+        exclude: bundledMainProcessDependencies,
+      },
     },
     plugins: [
       {
@@ -58,6 +72,10 @@ const require = __cjs_mod__.createRequire(import.meta.url);
           for (const l of await fs.readdir(ARFORGE_SERVER_DIST)) {
             if (!l.endsWith(".wasm")) continue
             await fs.writeFile(`./out/main/chunks/${l}`, await fs.readFile(`${ARFORGE_SERVER_DIST}/${l}`))
+          }
+          for (const asset of bundledMainProcessAssets) {
+            await fs.mkdir(dirname(asset.output), { recursive: true })
+            await fs.copyFile(asset.source, asset.output)
           }
         },
       },

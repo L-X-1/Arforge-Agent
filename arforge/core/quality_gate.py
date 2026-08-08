@@ -37,7 +37,6 @@ _CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".toml", ".json"
 _GENERATED_PARTS = {"dist", "build", "target", "__pycache__", ".pytest_cache", "node_modules"}
 _PUBLIC_SURFACE_PREFIXES = (
     "arforge/cli.py",
-    "arforge/bridge.py",
     "arforge/product/",
     "desktop/src/types/",
     "docs/",

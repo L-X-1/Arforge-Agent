@@ -55,6 +55,9 @@ export async function mockArforgeServer(page: Page, config: MockServerConfig) {
     if (url.port !== targetPort && url.port !== appPort) return route.fallback()
 
     const path = url.pathname
+    if (route.request().method() === "OPTIONS") {
+      return route.fulfill({ status: 204, headers: corsHeaders(route) })
+    }
     if (path === "/auth/session") return json(route, { authenticated: true })
     if (path === "/global/event" || path === "/event" || path === "/api/event") {
       const events = config.events?.()
@@ -121,6 +124,12 @@ export async function mockArforgeServer(page: Page, config: MockServerConfig) {
           },
         ],
       })
+    if (path === "/api/provider") {
+      const provider = config.provider as { all?: unknown[] } | unknown[]
+      return json(route, { data: Array.isArray(provider) ? provider : (provider.all ?? []) })
+    }
+    if (path === "/api/model") return json(route, { data: [] })
+    if (path === "/api/model/default") return json(route, { data: null })
     if (path === "/api/command") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp/resource")
@@ -144,6 +153,11 @@ export async function mockArforgeServer(page: Page, config: MockServerConfig) {
         worktree: config.directory,
         directory: config.directory,
         home: "C:/Arforge",
+      })
+    if (path === "/api/location")
+      return json(route, {
+        directory: config.directory,
+        project: { id: (config.project as { id?: string }).id, directory: config.directory },
       })
     if (path === "/api/permission/request")
       return json(route, {
@@ -412,7 +426,7 @@ function json(route: Route, body: unknown, headers?: Record<string, string>, sta
     status,
     contentType: "application/json",
     headers: {
-      "access-control-allow-origin": "*",
+      ...corsHeaders(route),
       "access-control-expose-headers": "x-next-cursor",
       ...headers,
     },
@@ -424,8 +438,20 @@ function sse(route: Route, events?: unknown[], retry?: number) {
   return route.fulfill({
     status: 200,
     contentType: "text/event-stream",
+    headers: corsHeaders(route),
     body: `${retry === undefined ? "" : `retry: ${retry}\n\n`}${events?.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") || ": ok\n\n"}`,
   })
+}
+
+function corsHeaders(route: Route) {
+  const origin = route.request().headers()["origin"]
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+    "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers":
+      route.request().headers()["access-control-request-headers"] ?? "authorization,content-type,x-arforge-directory",
+  }
 }
 
 function currentEvent(input: unknown) {

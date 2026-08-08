@@ -3,6 +3,28 @@
 Arforge separates context management into three layers so reducing a prompt does
 not silently turn temporary execution state into permanent behavior.
 
+The V3 cognitive runtime adds a lower, authoritative recovery layer described in
+`ARCHITECTURE_V3.md` and `COGNITIVE_RUNTIME.md`. Its append-only run journal
+records verified task changes, while structured checkpoints accelerate replay.
+Neither replaces the memory tiers below:
+
+- run events are immutable episodic execution history;
+- Agent IR is the current validated task projection;
+- compacted context is a replaceable prompt representation;
+- long-term memory is governed cross-session knowledge selected from evidence.
+
+The governed long-term layer is implemented by Memory OS. Its lifecycle,
+revision, correction, cognitive-promotion and measured-recall contracts are
+specified in `MEMORY_OS.md`. Context compaction remains a replaceable prompt
+representation and cannot activate a memory candidate or rewrite its history.
+
+Final provider input is now compiled by Context OS as a versioned, digest-bound
+package. See `CONTEXT_OS.md` for allocation, trust, omission and recovery rules.
+
+Compaction and long-term memory MUST NOT overwrite, reinterpret, or become the
+source of truth for the event journal. Recalled journal/memory content remains
+untrusted data when compiled into a prompt.
+
 ## 1. Recent verbatim context
 
 - All system messages and the first user objective remain verbatim.

@@ -18,7 +18,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { canStartTabDrag, isTabCloseTarget } from "./titlebar-tab-gesture"
 import { preloadNewSessionRoute } from "@/utils/new-session-route"
 
-function SessionTabSlot(props: {
+export function SessionTabSlot(props: {
   tab: SessionTab
   id: string
   index: () => number
@@ -27,6 +27,7 @@ function SessionTabSlot(props: {
   serverCtx: () => ServerCtx | undefined
   onNavigate: (element: HTMLDivElement) => void
   onClose: () => void
+  vertical?: boolean
 }) {
   const tabs = useTabs()
   const language = useLanguage()
@@ -89,8 +90,11 @@ function SessionTabSlot(props: {
       data-titlebar-tab-slot
       data-tab-key={props.id}
       data-active={props.active()}
-      class="relative flex w-56 min-w-7 max-w-56 flex-shrink"
-      classList={{ hidden: !session() && !missingSession() && !persisted()?.title }}
+      class="relative flex w-60 min-w-7 max-w-60 flex-shrink"
+      classList={{
+        hidden: !session() && !missingSession() && !persisted()?.title,
+        "w-full max-w-full": props.vertical,
+      }}
     >
       <TabNavItem
         ref={(el) => {
@@ -120,7 +124,7 @@ function SessionTabSlot(props: {
   )
 }
 
-function DraftTabSlot(props: {
+export function DraftTabSlot(props: {
   tab: Extract<Tab, { type: "draft" }>
   id: string
   index: () => number
@@ -128,6 +132,7 @@ function DraftTabSlot(props: {
   title: string
   onNavigate: (element: HTMLDivElement) => void
   onClose: () => void
+  vertical?: boolean
 }) {
   const preload = preloadNewSessionRoute()
   const sortable = useSortable({
@@ -146,7 +151,8 @@ function DraftTabSlot(props: {
       data-titlebar-tab-slot
       data-tab-key={props.id}
       data-active={props.active()}
-      class="relative flex w-56 min-w-7 max-w-56 flex-shrink"
+      class="relative flex w-60 min-w-7 max-w-60 flex-shrink"
+      classList={{ "w-full max-w-full": props.vertical }}
     >
       <DraftTabItem
         ref={(el) => {
@@ -320,7 +326,7 @@ export function TitlebarTabStrip(props: {
   )
 }
 
-function useTabShortcut(index: () => number, onSelect: () => void) {
+export function useTabShortcut(index: () => number, onSelect: () => void) {
   const command = useCommand()
 
   command.register(() => {

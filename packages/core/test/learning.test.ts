@@ -81,6 +81,41 @@ describe("Learning", () => {
     }),
   )
 
+  it.effect("exposes only high-confidence workspace patterns for review-only Evolution proposals", () =>
+    Effect.gen(function* () {
+      const learning = yield* LearningV2.Service
+      const failure = {
+        userInput: "Repair the parser",
+        success: false,
+        errorType: "SyntaxError",
+        errorMessage: "SyntaxError: unexpected token",
+      } as const
+      yield* learning.record(failure)
+      yield* learning.record(failure)
+      expect(yield* learning.proposalCandidates()).toEqual([])
+
+      yield* learning.record(failure)
+      expect(yield* learning.proposalCandidates()).toMatchObject([{ type: "failure", frequency: 3, confidence: 0.7 }])
+    }),
+  )
+
+  it.effect("redacts secrets before learning outcomes can become proposal evidence", () =>
+    Effect.gen(function* () {
+      const learning = yield* LearningV2.Service
+      const secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+      yield* learning.record({
+        userInput: `debug with token=${secret}`,
+        success: false,
+        errorMessage: `Authorization: Bearer ${secret}`,
+      })
+      const status = yield* learning.status()
+      expect(status.recent[0]?.userInput).not.toContain(secret)
+      expect(status.recent[0]?.errorMessage).not.toContain(secret)
+      expect(status.patterns[0]?.description).not.toContain(secret)
+      expect(status.patterns[0]?.description).toContain("[REDACTED_SECRET]")
+    }),
+  )
+
   it.effect("imports append-only dogfood candidates idempotently by deterministic fingerprint", () =>
     Effect.gen(function* () {
       const learning = yield* LearningV2.Service

@@ -1,0 +1,120 @@
+---
+import BrandMark from "./BrandMark.astro"
+type View = "login" | "register" | "forgot" | "reset" | "verify"
+interface Props { view: View }
+const { view } = Astro.props
+const content = {
+  login: ["登录 Arforge", "登录后进入你的工作空间。账户数据由租户边界隔离。", "登录"],
+  register: ["创建账户", "注册后，我们会向你的邮箱发送一次性验证链接。", "创建账户"],
+  forgot: ["找回密码", "输入注册邮箱。无论账户是否存在，返回结果保持一致。", "发送重置邮件"],
+  reset: ["设置新密码", "保存后，所有现有登录会话都会立即退出。", "保存新密码"],
+  verify: ["验证邮箱", "正在检查一次性验证链接。", "重新验证"],
+} as const
+const current = content[view]
+---
+
+<main class="auth-shell" data-auth-root data-view={view}>
+  <a class="auth-shell__brand" href="/zh-CN/"><BrandMark /></a>
+  <section class="auth-card" aria-labelledby="auth-title">
+    <div class="auth-card__top"><span class="status-label">安全账户 · Secure account</span><button type="button" class="auth-language" data-auth-language>English</button></div>
+    <h1 id="auth-title" data-copy="title">{current[0]}</h1>
+    <p class="auth-card__description" data-copy="description">{current[1]}</p>
+
+    <form class="auth-form" data-auth-form novalidate>
+      {(view === "login" || view === "register" || view === "forgot") && <label class="auth-field"><span data-copy="email">邮箱</span><input type="email" name="email" inputmode="email" autocomplete="email" required /></label>}
+      {view === "register" && <label class="auth-field"><span data-copy="displayName">显示名称（选填）</span><input name="displayName" autocomplete="name" /></label>}
+      {(view === "login" || view === "register" || view === "reset") && <label class="auth-field"><span data-copy={view === "reset" ? "newPassword" : "password"}>{view === "reset" ? "新密码" : "密码"}</span><span class="auth-password"><input type="password" name="password" autocomplete={view === "login" ? "current-password" : "new-password"} minlength={view === "login" ? undefined : 12} maxlength="256" required /><button type="button" data-password-toggle data-copy="showPassword" aria-label="显示密码">显示</button></span>{view !== "login" && <small data-copy="passwordHelp">使用 12–256 个字符；建议使用密码管理器。</small>}</label>}
+      <p class="auth-message" data-auth-message role="status" aria-live="polite"></p>
+      <button class="button auth-submit" type="submit" data-copy="submit">{current[2]}</button>
+    </form>
+
+    <div class="auth-links">
+      {view === "login" && <><a href="/register/" data-copy="createAccount">创建账户</a><a href="/forgot-password/" data-copy="forgotPassword">忘记密码？</a></>}
+      {view !== "login" && <a href="/login/" data-copy="backToLogin">返回登录</a>}
+    </div>
+    <div class="auth-privacy"><span aria-hidden="true"></span><span data-copy="session">持久化加密会话 · HttpOnly Cookie</span></div>
+  </section>
+  <p class="auth-shell__boundary" data-copy="boundary">账户用于连接你拥有的设备；代码和命令仍在设备端执行。</p>
+</main>
+
+<script>
+  import { safeReturnPath } from "../lib/security"
+  const root = document.querySelector<HTMLElement>("[data-auth-root]")
+  if (root) {
+    type Locale = "zh-CN" | "en"
+    type View = "login" | "register" | "forgot" | "reset" | "verify"
+    const view = root.dataset.view as View
+    const words = {
+      "zh-CN": {
+        title: { login: "登录 Arforge", register: "创建账户", forgot: "找回密码", reset: "设置新密码", verify: "验证邮箱" },
+        description: { login: "登录后进入你的工作空间。账户数据由租户边界隔离。", register: "注册后，我们会向你的邮箱发送一次性验证链接。", forgot: "输入注册邮箱。无论账户是否存在，返回结果保持一致。", reset: "保存后，所有现有登录会话都会立即退出。", verify: "正在检查一次性验证链接。" },
+        submit: { login: "登录", register: "创建账户", forgot: "发送重置邮件", reset: "保存新密码", verify: "重新验证" },
+        email: "邮箱", displayName: "显示名称（选填）", password: "密码", newPassword: "新密码", showPassword: "显示", hidePassword: "隐藏", passwordHelp: "使用 12–256 个字符；建议使用密码管理器。", createAccount: "创建账户", forgotPassword: "忘记密码？", backToLogin: "返回登录", session: "持久化加密会话 · HttpOnly Cookie", boundary: "账户用于连接你拥有的设备；代码和命令仍在设备端执行。", working: "正在处理…", unavailable: "服务暂时不可用，请稍后重试。", invalid: "请检查输入后重试。", loginFailed: "邮箱或密码不正确，或邮箱尚未验证。", registered: "如果该邮箱可以注册，验证邮件已经发送。", resetSent: "如果账户存在，密码重置邮件已经发送。", resetDone: "密码已更新。现在可以使用新密码登录。", verified: "邮箱验证成功。现在可以登录。", tokenFailed: "链接无效、已使用或已过期。",
+      },
+      en: {
+        title: { login: "Sign in to Arforge", register: "Create an account", forgot: "Reset your password", reset: "Choose a new password", verify: "Verify your email" },
+        description: { login: "Sign in to continue to your workspace. Tenant boundaries isolate account data.", register: "We will send a single-use verification link to your email address.", forgot: "Enter your account email. The response is identical whether the account exists or not.", reset: "Saving signs out every existing session immediately.", verify: "Checking this single-use verification link." },
+        submit: { login: "Sign in", register: "Create account", forgot: "Send reset email", reset: "Save new password", verify: "Verify again" },
+        email: "Email", displayName: "Display name (optional)", password: "Password", newPassword: "New password", showPassword: "Show", hidePassword: "Hide", passwordHelp: "Use 12–256 characters. A password manager is recommended.", createAccount: "Create account", forgotPassword: "Forgot password?", backToLogin: "Back to sign in", session: "Persistent encrypted session · HttpOnly Cookie", boundary: "Your account connects devices you control; code and commands still run there.", working: "Working…", unavailable: "The service is temporarily unavailable. Try again shortly.", invalid: "Check the form and try again.", loginFailed: "The email or password is incorrect, or the email has not been verified.", registered: "If this address can be registered, a verification email has been sent.", resetSent: "If the account exists, a password reset email has been sent.", resetDone: "Password updated. You can now sign in with the new password.", verified: "Email verified. You can now sign in.", tokenFailed: "This link is invalid, already used, or expired.",
+      },
+    } as const
+    const params = new URLSearchParams(location.search)
+    let locale: Locale = params.get("lang") === "en" || (!params.get("lang") && navigator.language.toLowerCase().startsWith("en")) ? "en" : "zh-CN"
+    const languageButton = root.querySelector<HTMLButtonElement>("[data-auth-language]")
+    const form = root.querySelector<HTMLFormElement>("[data-auth-form]")!
+    const submit = form.querySelector<HTMLButtonElement>("button[type=submit]")!
+    const message = root.querySelector<HTMLElement>("[data-auth-message]")!
+    const applyLocale = () => {
+      document.documentElement.lang = locale
+      languageButton!.textContent = locale === "zh-CN" ? "English" : "简体中文"
+      root.querySelectorAll<HTMLElement>("[data-copy]").forEach((element) => {
+        const key = element.dataset.copy!
+        const value = key === "title" || key === "description" || key === "submit" ? words[locale][key][view] : words[locale][key as keyof typeof words[Locale]]
+        if (typeof value === "string") element.textContent = value
+      })
+    }
+    languageButton?.addEventListener("click", () => { locale = locale === "zh-CN" ? "en" : "zh-CN"; applyLocale() })
+    const passwordInput = form.querySelector<HTMLInputElement>('input[name="password"]')
+    const passwordToggle = form.querySelector<HTMLButtonElement>("[data-password-toggle]")
+    passwordToggle?.addEventListener("click", () => {
+      if (!passwordInput) return
+      const reveal = passwordInput.type === "password"
+      passwordInput.type = reveal ? "text" : "password"
+      passwordToggle.textContent = reveal ? words[locale].hidePassword : words[locale].showPassword
+      passwordToggle.setAttribute("aria-label", passwordToggle.textContent)
+    })
+    applyLocale()
+
+    const request = async (path: string, body: unknown) => {
+      const response = await fetch(path, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => undefined)
+      if (!response) return { response, result: {} as Record<string, unknown> }
+      return { response, result: await response.json().catch(() => ({})) as Record<string, unknown> }
+    }
+    const complete = (text: string, error = false) => { message.textContent = text; message.classList.toggle("auth-message--error", error); message.classList.toggle("auth-message--success", !error) }
+    const token = () => params.get(view === "verify" ? "verify_token" : "reset_token") || params.get("token") || ""
+    const submitRequest = async (event?: SubmitEvent) => {
+      event?.preventDefault()
+      if (submit.disabled) return
+      if (!form.reportValidity()) return
+      submit.disabled = true; submit.textContent = words[locale].working; complete("")
+      const data = new FormData(form)
+      const body = view === "login" ? { email: data.get("email"), password: data.get("password") }
+        : view === "register" ? { email: data.get("email"), displayName: data.get("displayName") || undefined, password: data.get("password") }
+        : view === "forgot" ? { email: data.get("email") }
+        : view === "reset" ? { token: token(), password: data.get("password") }
+        : { token: token() }
+      const path = { login: "/auth/login", register: "/auth/register", forgot: "/auth/forgot-password", reset: "/auth/reset-password", verify: "/auth/verify-email" }[view]
+      const { response, result } = await request(path, body)
+      submit.disabled = false; submit.textContent = words[locale].submit[view]
+      if (!response) return complete(words[locale].unavailable, true)
+      if (view === "login" && response.ok && result.authenticated === true) return location.assign(safeReturnPath(params.get("returnTo")))
+      if (view === "register" && response.ok && result.accepted === true) { form.reset(); return complete(words[locale].registered) }
+      if (view === "forgot" && response.ok) { form.reset(); return complete(words[locale].resetSent) }
+      if (view === "reset" && response.ok && result.reset === true) { form.reset(); complete(words[locale].resetDone); return setTimeout(() => location.assign(`/login/?lang=${locale}`), 1200) }
+      if (view === "verify" && response.ok && result.verified === true) { complete(words[locale].verified); return setTimeout(() => location.assign(`/login/?lang=${locale}`), 1200) }
+      complete(view === "login" ? words[locale].loginFailed : view === "reset" || view === "verify" ? words[locale].tokenFailed : words[locale].invalid, true)
+    }
+    form.addEventListener("submit", submitRequest)
+    if (view === "verify" && token()) void submitRequest()
+  }
+</script>

@@ -1,12 +1,8 @@
-import { AgentPython } from "@arforge-ai/core/agent-python"
-import { AgentCapability } from "@arforge-ai/schema/agent-capability"
-import { Effect, Schema } from "effect"
+import { RepoScale } from "@arforge-ai/core/analysis/repo-scale"
+import { Effect } from "effect"
 import { EOL } from "node:os"
-import { resolve } from "node:path"
+import { join, resolve } from "node:path"
 import { effectCmd, fail } from "../effect-cmd"
-
-const productRoot = resolve(import.meta.dir, "../../../../..")
-const decodeReport = Schema.decodeUnknownEffect(AgentCapability.RepoScaleReport)
 
 export const RepoScaleCommand = effectCmd({
   command: "repo-scale [query]",
@@ -51,30 +47,12 @@ export const RepoScaleCommand = effectCmd({
     }
 
     const workspace = resolve(args.workspace ?? process.cwd())
-    const result = yield* Effect.gen(function* () {
-      const bridge = yield* AgentPython.Service
-      return yield* bridge
-        .call("repo.scale", {
-          path: args.path,
-          max_files: args.maxFiles,
-          limit: args.limit,
-          ...(args.query === undefined ? {} : { query: args.query }),
-        })
-        .pipe(Effect.flatMap(decodeReport))
-    }).pipe(
-      Effect.provide(
-        AgentPython.layer({
-          runtimeRoot: process.env.ARFORGE_AGENT_RUNTIME_ROOT || productRoot,
-          workspace,
-          pythonExecutable: process.env.ARFORGE_AGENT_PYTHON || undefined,
-          home: process.env.ARFORGE_HOME || undefined,
-        }),
-      ),
-      Effect.scoped,
-      Effect.catch((error) =>
-        fail(error instanceof Error ? `仓库扫描失败：${error.message}` : "仓库扫描失败。"),
-      ),
-    )
+    const root = args.path === "." ? workspace : join(workspace, args.path)
+    const result = RepoScale.buildRepoScaleReport(root, {
+      query: args.query,
+      maxFiles: args.maxFiles,
+      limit: args.limit,
+    })
 
     if (args.json) {
       process.stdout.write(JSON.stringify({ workspace, ...result }, null, 2) + EOL)
@@ -83,11 +61,7 @@ export const RepoScaleCommand = effectCmd({
 
     process.stdout.write(`Arforge 仓库规模：${result.scan.total} 个已索引代码文件${EOL}`)
     process.stdout.write(`根目录：${result.root}${EOL}`)
-    process.stdout.write(
-      `扫描：${result.scan.scan_time_ms} ms · ${result.scan.incremental ? "增量" : "全量"} · ` +
-        `新增 ${result.scan.added} / 变更 ${result.scan.changed} / 未变 ${result.scan.unchanged}` +
-        `${result.scan.truncated ? " · 已达到预算上限" : ""}${EOL}`,
-    )
+    process.stdout.write(`扫描：${result.scan.scan_time_ms} ms · 全量${result.scan.truncated ? " · 已达到预算上限" : ""}${EOL}`)
     if (result.search.query) {
       process.stdout.write(
         `搜索 “${result.search.query}”：${result.search.total} 个文件命中，检查 ${result.search.searched_files} 个文件${EOL}`,

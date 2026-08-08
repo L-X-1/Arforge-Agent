@@ -6,6 +6,9 @@
 
 与 DB 版 learning_outcome 职责不同：这是面向 code 任务的轻量本地遥测（append-only jsonl），
 记录失败不抛异常（遥测绝不能影响主流程）。
+
+``record_dogfood_outcome`` 是 AgentRun 生产入口：``arforge/core/agent_run.py`` 的
+``AgentRun.execute()`` 在成功/不完整/异常三条路径调用它，把每次生产运行写进 dogfood.jsonl。
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ class RunOutcome:
     success: bool
     steps: int = 0
     tool_calls: int = 0
+    failed_tool_calls: int = 0
     llm_calls: int = 0
     tokens: int = 0
     cost_cny: float = 0.0
@@ -72,6 +76,76 @@ def record_outcome(outcome: RunOutcome) -> bool:
             h.write(json.dumps(row, ensure_ascii=False) + "\n")
         return True
     except OSError:
+        return False
+
+
+def record_dogfood_outcome(
+    task: str,
+    success: bool,
+    *,
+    error: str = "",
+    run_id: str = "",
+    task_id: str = "",
+    suite_id: str = "",
+    task_category: str = "",
+    provider: str = "",
+    model: str = "",
+    workspace: str = "",
+    steps: int = 0,
+    tool_calls: int = 0,
+    failed_tool_calls: int = 0,
+    tokens: int = 0,
+    cost_cny: float = 0.0,
+    modified_files: int = 0,
+    duration_seconds: float = 0.0,
+    stop_reason: str = "",
+    reasoning_effort: str = "",
+    max_steps: int = 0,
+    formal: bool = False,
+    real_model: bool = False,
+    isolated_workspace: bool = False,
+    verification_passed: bool = False,
+    artifact_dir: str = "",
+    verification: dict | None = None,
+) -> bool:
+    """AgentRun 生产入口：记录一次真实 code 任务的 outcome。
+
+    失败返回 False 不抛（遥测纪律：绝不能影响主流程）。
+    """
+    try:
+        outcome = RunOutcome(
+            task=task,
+            success=success,
+            steps=steps,
+            tool_calls=tool_calls,
+            failed_tool_calls=failed_tool_calls,
+            tokens=tokens,
+            cost_cny=cost_cny,
+            modified_files=modified_files,
+            run_id=run_id,
+            task_id=task_id,
+            suite_id=suite_id,
+            task_category=task_category,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            duration_seconds=duration_seconds,
+            stop_reason=stop_reason,
+            reasoning_effort=reasoning_effort,
+            max_steps=max_steps,
+            formal=formal,
+            real_model=real_model,
+            isolated_workspace=isolated_workspace,
+            verification_passed=verification_passed,
+            artifact_dir=artifact_dir,
+            verification=verification or {},
+        )
+        if not outcome.ts:
+            outcome.ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        if error and not success:
+            outcome.verification = {"error": error}
+        return record_outcome(outcome)
+    except Exception:
         return False
 
 

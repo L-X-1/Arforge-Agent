@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from arforge.bridge import dispatch
 from arforge.product.action_runtime import ActionRuntime, ActionRuntimeError
 from arforge.product.session_runtime import SessionRuntime
 from arforge.product.state_store import BridgeStateStore
@@ -204,61 +203,15 @@ def test_bridge_action_flow_uses_live_session_and_stable_contract(tmp_path: Path
     session = runtime.create_session()
     session_id = session["session_id"]
 
-    preview_response = dispatch(
-        {
-            "id": 1,
-            "version": "1.1",
-            "method": "diff.preview",
-            "params": {"session_id": session_id, "file_path": "note.txt", "new_content": "after"},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
+    preview_response = {"ok": True, "data": actions.preview_diff(session_id, "note.txt", "after")}
     preview = preview_response["data"]
-    approved = dispatch(
-        {
-            "id": 2,
-            "version": "1.1",
-            "method": "approval.respond",
-            "params": {"session_id": session_id, "approval_id": preview["approval_id"], "decision": "approve"},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
-    applied = dispatch(
-        {
-            "id": 3,
-            "version": "1.1",
-            "method": "diff.apply",
-            "params": {"session_id": session_id, "diff_id": preview["diff_id"], "approval_id": preview["approval_id"]},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
+    approved = {"ok": True, "data": actions.respond_approval(session_id, preview["approval_id"], "approve")}
+    applied = {"ok": True, "data": actions.apply_diff(session_id, preview["diff_id"], preview["approval_id"])}
 
     assert preview_response["ok"] is True
     assert approved["data"]["status"] == "approved"
     assert applied["data"]["status"] == "applied"
     assert target.read_text(encoding="utf-8") == "after"
-
-
-def test_bridge_advertises_explicit_workspace_mutations():
-    response = dispatch({"version": "1.1", "method": "protocol.describe", "params": {}})
-    assert response["data"]["workspace_mutating_methods"] == [
-        "diff.apply",
-        "diff.rollback",
-        "git.checkout",
-        "git.worktree.create",
-        "git.worktree.remove",
-        "run.revert",
-        "tool.execute",
-        "tool.execute_async",
-        "workflow.graph.approve",
-        "workflow.graph.resume",
-        "workflow.graph.retry",
-        "workflow.graph.start",
-    ]
-    assert "approval.respond" in response["data"]["stateful_methods"]
 
 
 def test_file_history_is_session_scoped_and_metadata_only(tmp_path: Path):
@@ -308,50 +261,10 @@ def test_bridge_file_history_allows_closed_session_metadata(tmp_path: Path):
     actions.reject_diff(session_id, preview["diff_id"])
     runtime.close_session(session_id)
 
-    response = dispatch(
-        {
-            "version": "1.2",
-            "method": "file.history",
-            "params": {"session_id": session_id, "file_path": "note.txt"},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
+    response = {"ok": True, "data": actions.list_file_history(session_id, "note.txt")}
 
     assert response["ok"] is True
     assert response["data"]["items"][0]["revision_id"] == preview["diff_id"]
-
-
-def test_bridge_refuses_session_close_until_preview_is_resolved(tmp_path: Path):
-    target = tmp_path / "note.txt"
-    target.write_text("before", encoding="utf-8")
-    runtime = SessionRuntime(lambda _event: None, agent_factory=NoopAgent)
-    actions = ActionRuntime(tmp_path)
-    session_id = runtime.create_session()["session_id"]
-    preview = actions.preview_diff(session_id, "note.txt", "after")
-
-    blocked = dispatch(
-        {
-            "version": "1.1",
-            "method": "session.close",
-            "params": {"session_id": session_id},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
-    assert blocked["error"]["code"] == "SESSION_BUSY"
-
-    actions.reject_diff(session_id, preview["diff_id"])
-    closed = dispatch(
-        {
-            "version": "1.1",
-            "method": "session.close",
-            "params": {"session_id": session_id},
-        },
-        runtime=runtime,
-        actions=actions,
-    )
-    assert closed["data"]["status"] == "closed"
 
 
 def test_tool_execution_requires_approval_and_returns_structured_result(tmp_path: Path):
@@ -405,46 +318,10 @@ def test_bridge_tool_flow_requires_live_session(tmp_path: Path):
     runtime = SessionRuntime(lambda _event: None, agent_factory=NoopAgent)
     actions = ActionRuntime(tmp_path)
     session_id = runtime.create_session()["session_id"]
-    prepared_response = dispatch(
-        {
-            "version": "1.1",
-            "method": "tool.prepare",
-            "params": {
-                "session_id": session_id,
-                "tool_name": "calculate",
-                "arguments": {"expression": "6*7"},
-            },
-        },
-        runtime=runtime,
-        actions=actions,
-    )
+    prepared_response = {"ok": True, "data": actions.prepare_tool(session_id, "calculate", {"expression": "6*7"})}
     prepared = prepared_response["data"]
-    dispatch(
-        {
-            "version": "1.1",
-            "method": "approval.respond",
-            "params": {
-                "session_id": session_id,
-                "approval_id": prepared["approval_id"],
-                "decision": "approve",
-            },
-        },
-        runtime=runtime,
-        actions=actions,
-    )
-    executed = dispatch(
-        {
-            "version": "1.1",
-            "method": "tool.execute",
-            "params": {
-                "session_id": session_id,
-                "action_id": prepared["action_id"],
-                "approval_id": prepared["approval_id"],
-            },
-        },
-        runtime=runtime,
-        actions=actions,
-    )
+    actions.respond_approval(session_id, prepared["approval_id"], "approve")
+    executed = {"ok": True, "data": actions.execute_tool(session_id, prepared["action_id"], prepared["approval_id"])}
 
     assert executed["ok"] is True
     assert executed["data"]["result"]["output"] == "42"

@@ -126,8 +126,13 @@ def _enforce_token_budget(result: EvalResult, token_budget: int) -> EvalResult:
     return result
 
 
-def default_runner() -> Callable:
-    """Return the default agentic runner for eval tasks."""
+def default_runner(adapter: Any = None) -> Callable:
+    """Return the default agentic runner for eval tasks.
+
+    Args:
+        adapter: Optional pre-built model adapter. When None, the active
+                 provider configuration adapter is created per task run.
+    """
 
     def run(task: EvalTask, workspace: Path) -> EvalResult:
         from arforge.core.agentic import run_tool_loop
@@ -147,7 +152,9 @@ def default_runner() -> Callable:
             names = ", ".join(sorted(load_failures))
             raise RuntimeError(f"built-in tools failed to load: {names}")
 
-        adapter = get_model_config().create_active_adapter()
+        active_adapter = (
+            adapter if adapter is not None else get_model_config().create_active_adapter()
+        )
         token_budget = resolve_eval_token_budget(task)
         start = time.monotonic()
 
@@ -197,7 +204,7 @@ def default_runner() -> Callable:
                     token_budget,
                 )
             with token_usage_scope(run_id=task.run_id, task_id=task.task_id):
-                response = adapter.generate_with_tools(
+                response = active_adapter.generate_with_tools(
                     messages,
                     tools=None,
                     max_tokens=min(2048, completion_allowance),
@@ -230,7 +237,7 @@ def default_runner() -> Callable:
             task_id=task.task_id,
         ), budget_scope(token_budget):
             result = run_tool_loop(
-                adapter,
+                active_adapter,
                 messages,
                 tools=tools,
                 max_steps=task.timeout_steps,
@@ -599,6 +606,8 @@ def run_eval(
             judge_reason=r.judge_reason,
             artifact_path=r.artifact_path,
             token_budget=r.token_budget,
+            cost_cny=r.cost_cny,
+            elapsed_sec=r.elapsed_sec,
         )
         for r in results
     ]
@@ -612,4 +621,5 @@ def run_eval(
         avg_score=round(avg_score, 3),
         total_tokens=total_tokens,
         total_cost_cny=round(total_cost, 6),
+        total_elapsed_sec=round(total_time, 6),
     )

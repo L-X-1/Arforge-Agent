@@ -34914,7 +34914,7 @@
     "npm": "@ai-sdk/openai-compatible",
     "api": "https://api.stepfun.ai/step_plan/v1",
     "name": "StepFun AI",
-    "doc": "https://platform.stepfun.ai/docs/en/step-plan/integrations/open-code",
+    "doc": "",
     "models": {
       "step-2-16k": {
         "id": "step-2-16k",

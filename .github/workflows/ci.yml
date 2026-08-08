@@ -124,7 +124,6 @@ jobs:
               --filter=@arforge-ai/sdk-next
           - shard: infrastructure
             filters: >-
-              --filter=@arforge-ai/agent-python
               --filter=@arforge-ai/effect-drizzle-sqlite
               --filter=@arforge-ai/effect-sqlite-node
               --filter=@arforge-ai/http-recorder

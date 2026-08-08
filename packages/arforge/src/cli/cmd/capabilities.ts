@@ -1,17 +1,12 @@
-import { AgentPython } from "@arforge-ai/core/agent-python"
-import { AgentCapability } from "@arforge-ai/schema/agent-capability"
-import { Effect, Schema } from "effect"
+import { CAPABILITY_CATALOG, nativeHealth } from "@arforge-ai/core/capability-catalog"
+import { Effect } from "effect"
 import { EOL } from "node:os"
 import { resolve } from "node:path"
-import { effectCmd, fail } from "../effect-cmd"
-
-const productRoot = resolve(import.meta.dir, "../../../../..")
-const decodeHealth = Schema.decodeUnknownEffect(AgentCapability.Health)
-const decodeList = Schema.decodeUnknownEffect(AgentCapability.List)
+import { effectCmd } from "../effect-cmd"
 
 export const CapabilitiesCommand = effectCmd({
   command: "capabilities [workspace]",
-  describe: "查看通过共享 Core 接入的 Arforge Agent 特色能力",
+  describe: "查看 Arforge Agent 特色能力目录",
   instance: false,
   builder: (yargs) =>
     yargs
@@ -31,28 +26,12 @@ export const CapabilitiesCommand = effectCmd({
       }),
   handler: Effect.fn("Cli.capabilities")(function* (args) {
     const workspace = resolve(args.workspace ?? process.cwd())
-    const result = yield* Effect.gen(function* () {
-      const bridge = yield* AgentPython.Service
-      const health = yield* bridge.call("health").pipe(Effect.flatMap(decodeHealth))
-      const capabilities = yield* bridge.call("capabilities.list").pipe(Effect.flatMap(decodeList))
-      if (capabilities.count !== capabilities.items.length) {
-        return yield* fail("Agent 能力清单计数与内容不一致。")
-      }
-      return { workspace, health, capabilities }
-    }).pipe(
-      Effect.provide(
-        AgentPython.layer({
-          runtimeRoot: process.env.ARFORGE_AGENT_RUNTIME_ROOT || productRoot,
-          workspace,
-          pythonExecutable: process.env.ARFORGE_AGENT_PYTHON || undefined,
-          home: process.env.ARFORGE_HOME || undefined,
-        }),
-      ),
-      Effect.scoped,
-      Effect.catch((error) =>
-        fail(error instanceof Error ? `无法读取 Arforge Agent 能力：${error.message}` : "无法读取 Arforge Agent 能力。"),
-      ),
-    )
+    const health = nativeHealth()
+    const capabilities = {
+      count: CAPABILITY_CATALOG.length,
+      items: CAPABILITY_CATALOG,
+    }
+    const result = { workspace, health, capabilities }
 
     if (args.json) {
       process.stdout.write(JSON.stringify(result, null, 2) + EOL)
@@ -61,7 +40,7 @@ export const CapabilitiesCommand = effectCmd({
 
     const enabled = result.capabilities.items.filter((item) => item.enabled)
     process.stdout.write(
-      `${result.health.brand} ${result.health.version} · Python ${result.health.python} · ${enabled.length}/${result.capabilities.count} 项能力已启用${EOL}`,
+      `${result.health.brand} ${result.health.version} · 原生 TS 运行时 · ${enabled.length}/${result.capabilities.count} 项能力已启用${EOL}`,
     )
     process.stdout.write(`工作区：${result.workspace}${EOL}`)
     for (const item of enabled) {

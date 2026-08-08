@@ -1,13 +1,9 @@
-import { AgentPython } from "@arforge-ai/core/agent-python"
-import { AgentCapability } from "@arforge-ai/schema/agent-capability"
-import { Effect, Schema } from "effect"
+import { AnalysisQuality } from "@arforge-ai/core/analysis/quality"
+import { Effect } from "effect"
 import { readFile } from "node:fs/promises"
 import { EOL } from "node:os"
 import { resolve } from "node:path"
 import { effectCmd, fail } from "../effect-cmd"
-
-const productRoot = resolve(import.meta.dir, "../../../../..")
-const decodeAssessment = Schema.decodeUnknownEffect(AgentCapability.QualityAssessment)
 
 export const QualityCommand = effectCmd({
   command: "quality [files..]",
@@ -45,28 +41,10 @@ export const QualityCommand = effectCmd({
       catch: (error) => (error instanceof Error ? error : new Error(String(error))),
     }).pipe(Effect.catch((error) => fail(`无法读取补丁：${error.message}`)))
 
-    const result = yield* Effect.gen(function* () {
-      const bridge = yield* AgentPython.Service
-      return yield* bridge
-        .call("quality.assess", {
-          files: args.files ?? [],
-          ...(patchText === undefined ? {} : { patch_text: patchText }),
-        })
-        .pipe(Effect.flatMap(decodeAssessment))
-    }).pipe(
-      Effect.provide(
-        AgentPython.layer({
-          runtimeRoot: process.env.ARFORGE_AGENT_RUNTIME_ROOT || productRoot,
-          workspace,
-          pythonExecutable: process.env.ARFORGE_AGENT_PYTHON || undefined,
-          home: process.env.ARFORGE_HOME || undefined,
-        }),
-      ),
-      Effect.scoped,
-      Effect.catch((error) =>
-        fail(error instanceof Error ? `质量门禁执行失败：${error.message}` : "质量门禁执行失败。"),
-      ),
-    )
+    const result = AnalysisQuality.assessQualityChange([...(args.files ?? [])], {
+      patchText,
+      root: workspace,
+    })
 
     if (args.json) {
       process.stdout.write(JSON.stringify({ workspace, ...result }, null, 2) + EOL)

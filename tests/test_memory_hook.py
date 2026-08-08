@@ -247,32 +247,28 @@ class TestIndexRebuild:
 class TestMemoryLearningPipeline:
     """M4: End-to-end pipeline: memory extraction → learning recording → injection."""
 
-    def test_memory_and_learning_hooks_coexist(self):
-        """Both memory and learning hooks can be installed simultaneously."""
+    def test_memory_hooks_install_cleanly(self):
+        """Memory hooks install idempotently without the retired learning hook."""
         from arforge.core.hooks import HookEvent, get_hook_manager
 
         mgr = get_hook_manager()
         mgr.clear()
 
         from arforge.core.memory_hook import install_memory_hooks
-        from arforge.core.learning_hook import install_learning_hooks
 
-        install_learning_hooks()
         install_memory_hooks()
 
-        # Both should have handlers on PRE_LLM_CALL
+        # Memory hooks own PRE_LLM_CALL and SESSION_END
         pre_count = mgr.handler_count(HookEvent.PRE_LLM_CALL)
-        assert pre_count >= 2, "Should have both learning_inject and memory_inject"
+        assert pre_count >= 1, "Should have memory_inject handler"
 
-        # Both on SESSION_END
         session_count = mgr.handler_count(HookEvent.SESSION_END)
-        assert session_count >= 2
+        assert session_count >= 1
 
-    def test_full_pipeline_turn_records_memory_and_learning(self):
-        """A full turn: auto-extract memory → record learning outcome."""
+    def test_full_pipeline_turn_records_memory(self):
+        """A full turn: auto-extract memory without the retired learning hook."""
         from arforge.core.hooks import HookContext, HookEvent
         from arforge.core.memory_hook import _auto_extract_memories
-        from arforge.core.learning_hook import _record_turn_outcome
 
         # Simulate a turn
         metadata = {
@@ -290,10 +286,6 @@ class TestMemoryLearningPipeline:
         post_ctx = HookContext(HookEvent.POST_LLM_CALL, metadata=metadata)
         mem_result = _auto_extract_memories(post_ctx)
         assert mem_result.action == "proceed"
-
-        stop_ctx = HookContext(HookEvent.STOP, metadata=metadata)
-        learn_result = _record_turn_outcome(stop_ctx)
-        assert learn_result.action == "proceed"
 
     def test_toggle_guards_both_hooks(self):
         """Disabling memory hooks prevents extraction but not crash."""

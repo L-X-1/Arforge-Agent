@@ -29,7 +29,7 @@
 
 [data-titlebar-tab] [data-slot="tab-close"] {
   position: absolute;
-  top: 5px;
+  top: 6px;
   right: 4px;
   display: flex;
   height: 20px;
@@ -43,7 +43,7 @@
 }
 
 [data-titlebar-tab-list] {
-  gap: 6px;
+  gap: 8px;
 }
 
 [data-titlebar-tab-slot] {
@@ -54,7 +54,7 @@
   content: "";
   position: absolute;
   top: 0;
-  height: 30px;
+  height: 32px;
   width: 16px;
   pointer-events: none;
   background: linear-gradient(to right, transparent, var(--tab-bg));
