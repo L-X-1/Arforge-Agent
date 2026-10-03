@@ -13,7 +13,7 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,postgres]"
-.\.tools\bun-1.3.14\bun.exe install
+bun install
 ```
 
 CI 和发布环境使用仓库中的带哈希锁文件。修改依赖后，按 README 的 uv universal 命令同时更新 `requirements-release.lock` 与 `requirements-dev.lock`，并在 Python 3.10–3.12 矩阵审阅安装结果。
@@ -27,8 +27,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 --version
 python -m pytest -q
 python -m ruff check arforge tests config.py main.py
 python -m compileall -q arforge config.py
-.\.tools\bun-1.3.14\bun.exe turbo typecheck
-.\.tools\bun-1.3.14\bun.exe --cwd packages/arforge test
+bun run turbo typecheck
+bun --cwd packages/arforge test
 ```
 
 完整产品验收还包括：
@@ -42,21 +42,26 @@ python -m build
 
 ## 3. 代码地图
 
-| 路径 | 职责 | 修改时重点验证 |
-| --- | --- | --- |
-| `packages/core/` | 共享契约、数据库、Session Runner、capability bridge | SQLite/PostgreSQL 双路径、Effect 边界 |
-| `packages/arforge/` | CLI、Provider、Server、工具与会话 | CLI/HTTP/会话行为一致 |
-| `packages/app/` | Desktop/Web 共用 Solid 应用 | 状态同步、交互和可访问性 |
-| `packages/desktop/` | Electron 主进程、preload 和打包 | 启动、sidecar、窗口和私有环境 |
-| `arforge/core/` | 保留的 Python Agent 能力 | 兼容桥、自纠错、取消、错误传播 |
-| `arforge/models/` | 模型适配、速率限制、令牌统计 | 所有调用入口均经过适配器策略 |
-| `arforge/planning/` | 计划、推理、工作流 | 状态转换、失败恢复、边界输入 |
-| `arforge/tools/` | 工具注册和具体工具 | schema、权限、路径边界、副作用 |
-| `arforge/security/` | 确认、验证、恢复、安全编辑 | fail-closed、脱敏、回滚 |
-| `arforge/database/` | 引擎、备份、Alembic 迁移 | main/multiagent 分离、离线 SQL |
-| `arforge/product/` | doctor、日志、数据清单 | 无密钥泄漏、跨平台行为 |
-| `arforge/cli.py` | 兼容 Python CLI | 仅验证未迁移能力，不新增产品入口 |
-| `tests/` | 自动回归和产品契约 | 新行为必须有失败路径测试 |
+| 路径                               | 职责                                                | 修改时重点验证                                                                                                    |
+| ---------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `packages/core/`                   | 共享契约、数据库、Session Runner、capability bridge | SQLite/PostgreSQL 双路径、Effect 边界                                                                             |
+| `packages/arforge/`                | CLI、Provider、Server、工具与会话                   | CLI/HTTP/会话行为一致                                                                                             |
+| `packages/app/`                    | Desktop/Web 共用 Solid 应用                         | 状态同步、交互和可访问性                                                                                          |
+| `packages/desktop/`                | Electron 主进程、preload 和打包                     | 启动、sidecar、窗口和私有环境                                                                                     |
+| `arforge/core/`                    | 保留的 Python Agent 能力                            | 兼容桥、自纠错、取消、错误传播；dogfood 默认 runner 通过统一 TS `arforge run` 执行                                |
+| `arforge/models/`                  | 模型适配、速率限制、令牌统计                        | 所有调用入口均经过适配器策略                                                                                      |
+| `arforge/planning/`                | 计划、推理、工作流                                  | 状态转换、失败恢复、边界输入                                                                                      |
+| `arforge/tools/`                   | 工具注册和具体工具                                  | schema、权限、路径边界、副作用                                                                                    |
+| `arforge/security/`                | 确认、验证、恢复、安全编辑                          | fail-closed、脱敏、回滚                                                                                           |
+| `arforge/database/`                | 引擎、备份、Alembic 迁移                            | main/multiagent 分离、离线 SQL                                                                                    |
+| `arforge/product/`                 | doctor、日志、数据清单                              | 无密钥泄漏、跨平台行为                                                                                            |
+| `packages/arforge/src/cli-main.ts` | 统一 TypeScript CLI                                 | 所有产品命令、Provider、Session 与 Permission 的唯一入口                                                          |
+| `arforge/cli_bridge.py`            | Python CLI 兼容转发                                 | `python -m arforge`、`python -m arforge.cli`、Python console script、根 `main.py` 和 Windows `arforge.cmd` 只转发到 TS；`invoke(...)` 为嵌入宿主提供捕获式结构化结果；缺失运行时直接失败 |
+| `arforge/cli_compat.py`            | 外部嵌入兼容 facade                                 | 仅重导出 `cli_bridge` 的统一 TS 入口和 `CliInvocationResult`；新 Python IDE/测试/服务集成应使用它，不得添加 parser、handler 或状态 |
+| `arforge/cli.py`                   | 旧 Python CLI API                                   | 仅供显式兼容调用和迁移测试，不新增产品命令或状态 owner；新嵌入代码迁移到 `arforge.cli_compat` 后再退役，产品/自纠错运行器不得直接启动它，静态门禁禁止其它产品源直接 import/唤起它 |
+| `script/arforge-cli-compat-inventory.ts` | TS CLI 兼容退役清单                            | 唯一的只读源码/digest 治理实现；`--check --json` 发现旧模块未经审查漂移或 facade 导出分叉时失败，不执行旧 parser、不写文件 |
+| `scripts/cli_compat_inventory.py`  | Python 兼容治理入口                               | 仅无状态转发到上面的 TS 实现，保留旧自动化命令合同；不得添加第二套解析、策略或状态写入 |
+| `tests/`                           | 自动回归和产品契约                                  | 新行为必须有失败路径测试                                                                                          |
 
 主调用方向是 Electron/CLI → TypeScript Server/Session Runner →
 Provider/Tools；Python Agent 特性通过 capability bridge 接入。数据库和安全能力
@@ -66,7 +71,20 @@ Provider/Tools；Python Agent 特性通过 capability bridge 接入。数据库�
 
 ### 新增 CLI 命令
 
-更新 `COMMANDS_HELP`、参数解析和 `_COMMAND_MAP`，为成功、错误参数、非交互确认和帮助文本增加测试，同时更新 README/用户指南。
+在 `packages/arforge/src/cli-main.ts` 及对应 `packages/arforge/src/cli/cmd/`
+实现命令，复用 Core/Server/Session/Permission；为成功、错误参数、非交互确认和
+帮助文本增加 TypeScript 测试，同时更新 README/用户指南。不要在
+`arforge/cli.py` 增加新的产品命令；旧 Python API 只能显式兼容转发。
+
+### 检查旧 CLI 退役边界
+
+```powershell
+.venv\Scripts\python.exe scripts/cli_compat_inventory.py --json --check
+```
+
+该检查由 `script/arforge-cli-compat-inventory.ts` 唯一实现，读取旧 `arforge/cli.py`
+的顶层定义并比较源码 digest；任何新增、删除或未经复核的变更都必须先更新迁移
+证据。Python 路径只是兼容转发，不执行旧 parser，也不会创建或修改业务状态。
 
 ### 新增工具
 

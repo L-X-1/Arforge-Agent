@@ -1,10 +1,15 @@
 import type { LocationRef } from "@arforge-ai/sdk/v2"
-import { createContext, useContext, type Accessor, type ParentProps } from "solid-js"
+import { createComponent, createContext, useContext, type Accessor, type ParentProps } from "solid-js"
 
 const context = createContext<Accessor<LocationRef | undefined>>()
 
 export function LocationProvider(props: ParentProps<{ location?: LocationRef }>) {
-  return <context.Provider value={() => props.location}>{props.children}</context.Provider>
+  return createComponent(context.Provider, {
+    value: () => props.location,
+    get children() {
+      return props.children
+    },
+  })
 }
 
 export function useLocation() {

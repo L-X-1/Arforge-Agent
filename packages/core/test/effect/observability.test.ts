@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Layer, Logger } from "effect"
+import http, { type IncomingMessage, type ServerResponse } from "node:http"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { fileLogger } from "../../src/observability/logging"
-import { resource } from "../../src/observability/otlp"
+import { resource, tracingLayer } from "../../src/observability/otlp"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
 const arforgeClient = process.env.ARFORGE_CLIENT
@@ -78,6 +79,48 @@ test("file logger appends concurrent runs with a run on every line", async () =>
   expect(lines.every((line) => line.startsWith("timestamp=") && line.includes(" level=INFO "))).toBe(true)
   expect(lines.every((line) => !line.includes(" fiber="))).toBe(true)
   expect(lines.every((line) => !line.startsWith("{"))).toBe(true)
+})
+
+test("exports a trace span through the configured OTLP endpoint", async () => {
+  const requests: Array<{ readonly url: string | undefined; readonly body: string }> = []
+  const server = http.createServer((request: IncomingMessage, response: ServerResponse) => {
+    const chunks: Buffer[] = []
+    request.on("data", (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    request.on("end", () => {
+      requests.push({ url: request.url, body: Buffer.concat(chunks).toString("utf8") })
+      response.statusCode = 200
+      response.end()
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => resolve())
+  })
+
+  try {
+    const address = server.address()
+    if (address === null || typeof address === "string") throw new Error("OTLP smoke server did not expose a port")
+    const layer = await tracingLayer({ endpoint: `http://127.0.0.1:${address.port}` })
+    await Effect.void.pipe(
+      Effect.withSpan("Arforge.OtlpSmoke", {
+        attributes: {
+          "arforge.run_id": "smoke-run",
+          "arforge.request_digest": "smoke-digest",
+          "arforge.prompt_text": "do-not-export-prompt",
+          apiKey: "do-not-export-key",
+        },
+      }),
+      Effect.provide(layer),
+      Effect.scoped,
+      Effect.runPromise,
+    )
+    const traceBodies = requests.filter((request) => request.url === "/v1/traces").map((request) => request.body)
+    expect(traceBodies.some((body) => body.length > 0)).toBe(true)
+    expect(traceBodies.join("\n")).not.toContain("do-not-export-prompt")
+    expect(traceBodies.join("\n")).not.toContain("do-not-export-key")
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
 })
 
 test("file logger flattens nested objects", async () => {

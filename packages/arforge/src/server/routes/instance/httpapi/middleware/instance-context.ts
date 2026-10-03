@@ -1,4 +1,4 @@
-import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { WorkspaceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { Effect, Layer } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"
@@ -26,10 +26,13 @@ function provideInstanceContext<E>(
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext> {
   return Effect.gen(function* () {
     const route = yield* WorkspaceRouteContext
-    const ctx = yield* store.load({ directory: decode(route.directory) })
-    return yield* effect.pipe(
-      Effect.provideService(InstanceRef, ctx),
-      Effect.provideService(WorkspaceRef, route.workspaceID),
+    // Keep all HTTP instance effects on the store's unified boundary. The
+    // store owns the durable Database handle and re-injects it together with
+    // InstanceRef, so route-layer context pruning cannot orphan async work or
+    // state finalizers that still need persistence.
+    return yield* store.provide(
+      { directory: decode(route.directory) },
+      effect.pipe(Effect.provideService(WorkspaceRef, route.workspaceID)),
     )
   })
 }

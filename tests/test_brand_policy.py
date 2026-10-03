@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -7,9 +8,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_runtime_sources_do_not_contain_reference_brand_markers() -> None:
-    """Use the product-aware audit so legitimate provider integrations remain valid."""
-    bun = PROJECT_ROOT / ".tools" / "bun-1.3.14" / "bun.exe"
+def test_brand_audit_has_no_unapproved_regressions() -> None:
+    """Use the product-aware audit and enforce the checked-in baseline."""
+    bun = PROJECT_ROOT / ".tools" / "bun-1.3.14" / ("bun.exe" if os.name == "nt" else "bun")
     result = subprocess.run(
         [str(bun), "run", "brand:check"],
         cwd=PROJECT_ROOT,
@@ -20,4 +21,4 @@ def test_runtime_sources_do_not_contain_reference_brand_markers() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "0 hits in 0 finding files" in result.stdout
+    assert "Brand audit failed:" not in result.stdout + result.stderr

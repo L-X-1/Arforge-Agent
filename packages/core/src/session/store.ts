@@ -10,9 +10,12 @@ import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionTable, SessionTagTable } from "./sql"
 import { fromRow } from "./info"
+import { PermissionV1 } from "../v1/permission"
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
+  /** Legacy per-session rules retained in the session projection. */
+  readonly permissions: (sessionID: SessionSchema.ID) => Effect.Effect<PermissionV1.Ruleset | undefined>
   readonly context: (sessionID: SessionSchema.ID) => Effect.Effect<SessionMessage.Message[], MessageDecodeError>
   readonly runnerContext: (
     sessionID: SessionSchema.ID,
@@ -46,6 +49,15 @@ const layer = Layer.effect(
           row,
           tags.map((item) => item.value),
         )
+      }),
+      permissions: Effect.fn("SessionStore.permissions")(function* (sessionID) {
+        const row = yield* db
+          .select({ permission: SessionTable.permission })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return row ? (row.permission ?? []) : undefined
       }),
       context: Effect.fn("SessionStore.context")(function* (sessionID) {
         return yield* SessionHistory.load(db, sessionID)

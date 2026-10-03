@@ -5,15 +5,34 @@ import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
+import { PermissionV2 } from "@arforge-ai/core/permission"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { CooperativeWaitTool } from "@arforge-ai/core/tool/cooperative-wait"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { executeTool, toolDefinitions, toolIdentity } from "./lib/tool"
 
 const firstSession = SessionV2.ID.make("ses_cooperative_wait_first")
 const secondSession = SessionV2.ID.make("ses_cooperative_wait_second")
+const currentLocation = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
+const permission = Layer.succeed(
+  PermissionV2.Service,
+  PermissionV2.Service.of({
+    assert: () => Effect.void,
+    ask: () => Effect.die("unused"),
+    reply: () => Effect.die("unused"),
+    get: () => Effect.die("unused"),
+    forSession: () => Effect.die("unused"),
+    list: () => Effect.die("unused"),
+  }),
+)
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -25,7 +44,11 @@ const it = testEffect(
       ToolRegistry.toolsNode,
       CooperativeWaitTool.node,
     ]),
-    [[ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig]],
+    [
+      [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, currentLocation],
+      [PermissionV2.node, permission],
+    ],
   ),
 )
 

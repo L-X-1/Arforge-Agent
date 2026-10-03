@@ -1,0 +1,27 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent/packages/core
+Command: bun test --rerun-every --timeout 60000 test/action-gateway.test.ts test/session-runner.test.ts -t 'receipt.*preserves the original effect|repairs a scheduled.*write failure'
+Exit code: 0
+Raw captured output:
+
+bun test v1.3.14 (0d9b296a)
+
+test\action-gateway.test.ts:
+(pass) ActionGateway > durable projection started receipt defect preserves the original effect and cancellation [181.31ms]
+(pass) ActionGateway > durable projection started receipt interrupt preserves the original effect and cancellation [90.24ms]
+(pass) ActionGateway > durable projection completed receipt defect preserves the original effect and cancellation [83.13ms]
+(pass) ActionGateway > durable projection completed receipt interrupt preserves the original effect and cancellation [77.99ms]
+(pass) ActionGateway > durable projection failed receipt defect preserves the original effect and cancellation [78.56ms]
+(pass) ActionGateway > durable projection failed receipt interrupt preserves the original effect and cancellation [72.17ms]
+(pass) ActionGateway > durable projection interrupted receipt defect preserves the original effect and cancellation [67.80ms]
+(pass) ActionGateway > durable projection interrupted receipt interrupt preserves the original effect and cancellation [63.11ms]
+
+test\session-runner.test.ts:
+(pass) SessionRunnerLLM > repairs a scheduled receipt write failure from the original Action without replaying the task [1203.98ms]
+(pass) SessionRunnerLLM > repairs a scheduled presentation write failure from the original Action without replaying the task [1031.25ms]
+
+ 10 pass
+ 361 filtered out
+ 0 fail
+ 125 expect() calls
+Ran 10 tests across 2 files. [4.55s]

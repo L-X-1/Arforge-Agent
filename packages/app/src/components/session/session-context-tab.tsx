@@ -18,6 +18,7 @@ import { useSessionLayout } from "@/pages/session/session-layout"
 import { getSessionContext } from "./session-context-metrics"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
+import "@/components/preview/workbench-review.css"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
   system: "var(--syntax-info)",
@@ -29,7 +30,7 @@ const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
 
 function Stat(props: { label: string; value: JSX.Element }) {
   return (
-    <div class="flex flex-col gap-1">
+    <div data-slot="context-stat" class="flex flex-col gap-1">
       <div class="text-12-regular text-text-weak">{props.label}</div>
       <div class="text-12-medium text-text-strong">{props.value}</div>
     </div>
@@ -271,7 +272,7 @@ export function SessionContextTab() {
 
   return (
     <ScrollView
-      class="@container h-full"
+      class="arforge-review-workbench @container h-full"
       viewportRef={(el) => {
         scroll = el
         restoreScroll()
@@ -279,7 +280,7 @@ export function SessionContextTab() {
       onScroll={handleScroll}
     >
       <div class="px-6 pt-4 pb-10 flex flex-col gap-10">
-        <div class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
+        <div data-slot="context-stats" class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
           <For each={stats}>
             {(stat) => <Stat label={language.t(stat.label as Parameters<typeof language.t>[0])} value={stat.value()} />}
           </For>
@@ -312,7 +313,7 @@ export function SessionContextTab() {
                 )}
               </For>
             </div>
-            <div class="hidden text-11-regular text-text-weaker">{language.t("context.breakdown.note")}</div>
+            <div class="text-12-regular text-text-weak">{language.t("context.breakdown.note")}</div>
           </div>
         </Show>
 

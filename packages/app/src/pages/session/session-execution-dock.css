@@ -167,11 +167,43 @@
   justify-content: flex-end;
   overflow: hidden;
   padding: 14px 14px 12px;
-  border-bottom: 1px solid var(--v2-border-border-muted);
+  border-bottom: 0;
   isolation: isolate;
   background:
     linear-gradient(180deg, rgb(247 189 56 / 3%), transparent 58%),
     radial-gradient(circle at 50% 49%, rgb(247 189 56 / 13%), transparent 45%);
+}
+
+/* The hit area is deliberately wider than the visible divider so it remains
+   easy to grab without adding visual weight between the two dock sections. */
+.execution-dock__splitter {
+  position: relative;
+  z-index: 1;
+  height: 9px;
+  flex: none;
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.execution-dock__splitter > span {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--v2-border-border-muted);
+  transition: background-color 150ms ease-out;
+}
+
+.execution-dock__splitter:hover > span,
+.execution-dock__splitter:focus-visible > span,
+.execution-dock__splitter[data-resizing="true"] > span {
+  background: var(--v2-border-border-strong);
+}
+
+.execution-dock__splitter:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--v2-border-border-focus);
 }
 
 .execution-mascot::before {
@@ -657,8 +689,7 @@
   animation-name: execution-dragon-rig-head;
 }
 
-.execution-mascot:not(.execution-mascot--running):not(.execution-mascot--pet-fixed)
-  .execution-mascot__figure-position {
+.execution-mascot:not(.execution-mascot--running):not(.execution-mascot--pet-fixed) .execution-mascot__figure-position {
   animation: execution-pet-roam 13s ease-in-out infinite;
 }
 

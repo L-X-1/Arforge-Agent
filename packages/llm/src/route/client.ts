@@ -10,7 +10,15 @@ import { WebSocketExecutor } from "./transport"
 import type { Protocol } from "./protocol"
 import { applyCachePolicy } from "../cache-policy"
 import * as ProviderShared from "../protocols/shared"
-import type { LLMError, LLMEvent, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
+import type {
+  LLMError,
+  LLMEvent,
+  ModelTokenizer,
+  PreparedRequestOf,
+  ProtocolID,
+  ProviderOptions,
+  TokenizerRegistry,
+} from "../schema"
 import {
   GenerationOptions,
   HttpOptions,
@@ -70,6 +78,10 @@ export interface RouteDefaults {
   readonly generation?: GenerationOptions
   readonly providerOptions?: ProviderOptions
   readonly http?: HttpOptions
+  /** Runtime-only exact tokenizer supplied by a route/provider adapter. */
+  readonly tokenizer?: ModelTokenizer
+  /** Runtime-only immutable catalog used during route.model reconstruction. */
+  readonly tokenizerRegistry?: TokenizerRegistry
 }
 
 export interface RouteDefaultsInput {
@@ -78,6 +90,8 @@ export interface RouteDefaultsInput {
   readonly generation?: GenerationOptions.Input
   readonly providerOptions?: ProviderOptions
   readonly http?: HttpOptions.Input
+  readonly tokenizer?: ModelTokenizer
+  readonly tokenizerRegistry?: TokenizerRegistry
 }
 
 export interface RoutePatch<Body, Prepared> extends RouteDefaultsInput {
@@ -95,10 +109,15 @@ const makeRouteModel = (route: AnyRoute, mapped: RouteMappedModelInput) => {
   if (!provider) throw new Error(`Route.model(${route.id}) requires a provider`)
   if (!endpointBaseURL(route.endpoint))
     throw new Error(`Route.model(${route.id}) requires an endpoint baseURL — configure it on the route first`)
+  const tokenizer =
+    mapped.tokenizer ??
+    route.defaults.tokenizer ??
+    route.defaults.tokenizerRegistry?.resolve({ provider, model: mapped.id })?.tokenizer
   return Model.make({
     ...mapped,
     provider,
     route,
+    ...(tokenizer === undefined ? {} : { tokenizer }),
   })
 }
 
@@ -150,6 +169,8 @@ export interface Interface {
    * route the request will resolve to.
    */
   readonly prepare: <Body = unknown>(request: LLMRequest) => Effect.Effect<PreparedRequestOf<Body>, LLMError>
+  /** Send this process's original preparation exactly once; never recompile a preview or decoded copy. */
+  readonly streamPrepared: (request: PreparedRequest) => Stream.Stream<LLMEvent, LLMError>
   readonly stream: StreamMethod
   readonly generate: GenerateMethod
 }
@@ -284,7 +305,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
             Stream.mapEffect(decodeEvent(route)),
             protocol.stream.terminal ? Stream.takeUntil(protocol.stream.terminal) : (stream) => stream,
           )
-        return events.pipe(
+        const parsed = events.pipe(
           Stream.mapAccumEffect(
             () => protocol.stream.initial(request),
             protocol.stream.step,
@@ -292,6 +313,30 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
           ),
           Stream.catchCause((cause) => Stream.fail(streamError(route, `Failed to read ${route} stream`, cause))),
         )
+        return Stream.suspend(() => {
+          // Track completion per subscription without buffering streamed output.
+          // A consumer cancellation or upstream failure must retain its cause;
+          // this check runs only after a normal upstream EOF and parser flush.
+          let terminal = false
+          return parsed.pipe(
+            Stream.tap((event) =>
+              Effect.sync(() => {
+                if (event.type === "finish" || event.type === "provider-error") terminal = true
+              }),
+            ),
+            Stream.concat(
+              Stream.unwrap(
+                Effect.sync(() =>
+                  terminal
+                    ? Stream.empty
+                    : Stream.fail(
+                        ProviderShared.eventError(route, "Provider stream ended without a terminal finish event"),
+                      ),
+                ),
+              ),
+            ),
+          )
+        })
       },
     } satisfies Route<Body, Prepared>
     return route
@@ -361,21 +406,60 @@ const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
 const prepareWith = Effect.fn("LLMClient.prepare")(function* (request: LLMRequest) {
   const compiled = yield* compile(request)
 
-  return new PreparedRequest({
+  const transmission = compiled.route.transport.describe?.(compiled.prepared)
+  const result = new PreparedRequest({
     id: compiled.request.id ?? "request",
     route: compiled.route.id,
     protocol: compiled.route.protocol,
     model: compiled.request.model,
     body: compiled.body,
+    ...(transmission
+      ? {
+          transmission: {
+            transport: compiled.route.transport.id,
+            body: transmission.body,
+            ...(transmission.endpoint ? { endpoint: transmission.endpoint } : {}),
+          },
+        }
+      : {}),
     metadata: { transport: compiled.route.transport.id },
   })
+  const send = compiled.route.streamPrepared
+  preparedExecutions.set(result, {
+    body: ProviderShared.encodeJson({ body: result.body, transmission: result.transmission }),
+    send: (runtime) => send(compiled.prepared, compiled.request, runtime),
+  })
+  return result
 })
+
+// Transport preparations may contain authentication. Keep them out of the
+// public Schema object and serialized previews. Weak keys do not retain unused
+// preparations; consuming a preparation removes its execution capability.
+const preparedExecutions = new WeakMap<
+  PreparedRequest,
+  {
+    readonly body: string
+    readonly send: (runtime: TransportRuntime) => Stream.Stream<LLMEvent, LLMError>
+  }
+>()
+
+const streamPreparedWith = (runtime: TransportRuntime) => (request: PreparedRequest) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const execution = preparedExecutions.get(request)
+      if (!execution) return yield* ProviderShared.invalidRequest("Prepared request is unknown or already consumed")
+      preparedExecutions.delete(request)
+      if (execution.body !== ProviderShared.encodeJson({ body: request.body, transmission: request.transmission }))
+        return yield* ProviderShared.invalidRequest("Prepared request body changed before sending")
+      return execution.send(runtime)
+    }),
+  )
 
 const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest) =>
   Stream.unwrap(
     Effect.gen(function* () {
-      const compiled = yield* compile(request)
-      return compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime)
+      const prepared = yield* prepareWith(request)
+      return streamPreparedWith(runtime)(prepared)
     }),
   )
 
@@ -392,6 +476,13 @@ const generateWith = (stream: Interface["stream"]) =>
 
 export const prepare = <Body = unknown>(request: LLMRequest) =>
   prepareWith(request) as Effect.Effect<PreparedRequestOf<Body>, LLMError>
+
+export const streamPrepared = (request: PreparedRequest): Stream.Stream<LLMEvent, LLMError, Service> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      return (yield* Service).streamPrepared(request)
+    }),
+  )
 
 export function stream(request: LLMRequest): Stream.Stream<LLMEvent, LLMError> {
   return Stream.unwrap(
@@ -417,11 +508,17 @@ export const streamRequest = (request: LLMRequest) =>
 export const layer: Layer.Layer<Service, never, RequestExecutor.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const stream = streamRequestWith({
+    const runtime = {
       http: yield* RequestExecutor.Service,
       webSocket: Option.getOrUndefined(yield* Effect.serviceOption(WebSocketExecutor.Service)),
+    }
+    const stream = streamRequestWith(runtime)
+    return Service.of({
+      prepare: prepareWith as Interface["prepare"],
+      streamPrepared: streamPreparedWith(runtime),
+      stream,
+      generate: generateWith(stream),
     })
-    return Service.of({ prepare: prepareWith as Interface["prepare"], stream, generate: generateWith(stream) })
   }),
 )
 
@@ -431,6 +528,7 @@ export const LLMClient = {
   Service,
   layer,
   prepare,
+  streamPrepared,
   stream,
   generate,
 } as const

@@ -1,0 +1,27 @@
+Command: bun test test/mcp/catalog.test.ts --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+19 pass
+0 fail
+48 expect() calls
+Ran 19 tests across 1 file. [3.12s]
+
+Covered:
+- aggregate reservation commit/release across failed and healthy traversals;
+- aggregate total deadline aborting an active list request;
+- resetTimeoutOnProgress=false and bounded maxTotalTimeout;
+- per-traversal cursor/page/item/byte/deadline and caller-cancellation guards;
+- rejection of a non-string nextCursor at the MCP response boundary.
+
+Command: bun run typecheck (packages/arforge)
+Exit: 2
+No diagnostic remains in packages/arforge/src/mcp/catalog.ts or packages/arforge/test/mcp/catalog.test.ts.
+Remaining diagnostics are the pre-existing packages/tui JSX/BaseRenderable type incompatibilities.
+
+Command: bun x oxlint --disable-nested-config src/mcp/catalog.ts test/mcp/catalog.test.ts --quiet
+Exit: 0
+Found 0 warnings and 0 errors.
+
+Command: bun run audit:migration-freshness
+Exit: 0
+valid=true; source-inputs=7576; python-capabilities=5080; python-tests=3394; dependency-leaves=7500; ts-composition=1757/3/5/3; capability-links=4 (missing evidence remains 4 historical records).

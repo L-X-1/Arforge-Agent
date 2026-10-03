@@ -2,8 +2,8 @@
 
 /**
  * Development compatibility launcher for the unified TypeScript CLI.
- * The Python runtime remains an internal capability service and is never a
- * second user-facing session owner.
+ * Legacy Python assets remain migration/compatibility data only; they are
+ * never a second user-facing session owner.
  */
 
 import { spawn, spawnSync } from "node:child_process"

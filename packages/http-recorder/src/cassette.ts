@@ -14,6 +14,15 @@ export class CassetteNotFoundError extends Schema.TaggedErrorClass<CassetteNotFo
   }
 }
 
+export class CassetteInvalidError extends Schema.TaggedErrorClass<CassetteInvalidError>()("CassetteInvalidError", {
+  cassetteName: Schema.String,
+  reason: Schema.Literals(["invalid-json", "invalid-schema"]),
+}) {
+  override get message() {
+    return `Cassette "${this.cassetteName}" is invalid: ${this.reason === "invalid-json" ? "invalid JSON" : "schema validation failed"}`
+  }
+}
+
 export class UnsafeCassetteError extends Schema.TaggedErrorClass<UnsafeCassetteError>()("UnsafeCassetteError", {
   cassetteName: Schema.String,
   findings: Schema.Array(SecretFindingSchema),
@@ -26,10 +35,18 @@ export class UnsafeCassetteError extends Schema.TaggedErrorClass<UnsafeCassetteE
 }
 
 export interface Interface {
-  readonly read: (name: string) => Effect.Effect<ReadonlyArray<Interaction>, CassetteNotFoundError>
+  readonly read: (
+    name: string,
+  ) => Effect.Effect<ReadonlyArray<Interaction>, CassetteNotFoundError | CassetteInvalidError>
   readonly append: (
     name: string,
     interaction: Interaction,
+    metadata?: CassetteMetadata,
+  ) => Effect.Effect<void, UnsafeCassetteError>
+  /** Atomically replaces one cassette after the complete recording is safe. */
+  readonly commit: (
+    name: string,
+    interactions: ReadonlyArray<Interaction>,
     metadata?: CassetteMetadata,
   ) => Effect.Effect<void, UnsafeCassetteError>
   readonly exists: (name: string) => Effect.Effect<boolean>
@@ -64,10 +81,45 @@ const buildCassette = (
 
 const formatCassette = (cassette: Cassette) => `${JSON.stringify(encodeCassette(cassette), null, 2)}\n`
 
-const parseCassette = Schema.decodeUnknownSync(Schema.fromJsonString(CassetteSchema))
+const parseCassette = (name: string, raw: string) =>
+  Effect.try({
+    try: () => JSON.parse(raw) as unknown,
+    catch: () => new CassetteInvalidError({ cassetteName: name, reason: "invalid-json" }),
+  }).pipe(
+    Effect.flatMap((value) =>
+      Effect.try({
+        try: () => Schema.decodeUnknownSync(CassetteSchema)(value),
+        catch: () => new CassetteInvalidError({ cassetteName: name, reason: "invalid-schema" }),
+      }),
+    ),
+  )
 
 const failIfUnsafe = (name: string, findings: ReadonlyArray<SecretFinding>) =>
   findings.length === 0 ? Effect.void : Effect.fail(new UnsafeCassetteError({ cassetteName: name, findings }))
+
+const decodedBodyFindings = (value: unknown, base = ""): ReadonlyArray<SecretFinding> => {
+  if (Array.isArray(value)) return value.flatMap((item, index) => decodedBodyFindings(item, `${base}[${index}]`))
+  if (!value || typeof value !== "object") return []
+  const record = value as Record<string, unknown>
+  const decoded =
+    record.bodyEncoding === "base64" && typeof record.body === "string"
+      ? secretFindings(new TextDecoder().decode(Buffer.from(record.body, "base64"))).map((finding) => ({
+          path: `${base ? `${base}.` : ""}body(decoded)${finding.path ? `.${finding.path}` : ""}`,
+          reason: finding.reason,
+        }))
+      : []
+  return [
+    ...decoded,
+    ...Object.entries(record).flatMap(([key, child]) =>
+      key === "body" ? [] : decodedBodyFindings(child, base ? `${base}.${key}` : key),
+    ),
+  ]
+}
+
+const interactionSecretFindings = (interaction: Interaction) => [
+  ...secretFindings(interaction),
+  ...decodedBodyFindings(interaction),
+]
 
 export const fileSystem = (
   options: { readonly directory?: string } = {},
@@ -81,6 +133,27 @@ export const fileSystem = (
       const appendLock = yield* Semaphore.make(1)
 
       const pathFor = (name: string) => cassettePath(directory, name)
+
+      const commitUnlocked = (
+        name: string,
+        interactions: ReadonlyArray<Interaction>,
+        metadata: CassetteMetadata | undefined,
+      ) =>
+        Effect.gen(function* () {
+          const interactionFindings = interactions.flatMap(interactionSecretFindings)
+          const cassette = buildCassette(name, interactions, metadata)
+          const findings = [...interactionFindings, ...secretFindings(cassette.metadata ?? {})]
+          yield* failIfUnsafe(name, findings)
+          const target = pathFor(name)
+          yield* fs.makeDirectory(path.dirname(target), { recursive: true }).pipe(Effect.orDie)
+          const temporary = `${target}.${crypto.randomUUID()}.tmp`
+          yield* fs.writeFileString(temporary, formatCassette(cassette)).pipe(
+            Effect.flatMap(() => fs.rename(temporary, target)),
+            Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.catch(() => Effect.void))),
+            Effect.orDie,
+          )
+          recorded.set(name, { interactions: [...interactions], findings: interactionFindings })
+        })
 
       const walk = (current: string): Effect.Effect<ReadonlyArray<string>> =>
         Effect.gen(function* () {
@@ -98,29 +171,19 @@ export const fileSystem = (
       return Service.of({
         read: (name) =>
           fs.readFileString(pathFor(name)).pipe(
-            Effect.map((raw) => parseCassette(raw).interactions),
-            Effect.catch(() => Effect.fail(new CassetteNotFoundError({ cassetteName: name }))),
+            Effect.mapError(() => new CassetteNotFoundError({ cassetteName: name })),
+            Effect.flatMap((raw) => parseCassette(name, raw)),
+            Effect.map((cassette) => cassette.interactions),
           ),
         append: (name, interaction, metadata) =>
           appendLock.withPermit(
             Effect.gen(function* () {
               const entry = recorded.get(name) ?? { interactions: [], findings: [] }
               const interactions = [...entry.interactions, interaction]
-              const interactionFindings = [...entry.findings, ...secretFindings(interaction)]
-              const cassette = buildCassette(name, interactions, metadata)
-              const findings = [...interactionFindings, ...secretFindings(cassette.metadata ?? {})]
-              yield* failIfUnsafe(name, findings)
-              const target = pathFor(name)
-              yield* fs.makeDirectory(path.dirname(target), { recursive: true }).pipe(Effect.orDie)
-              const temporary = `${target}.${crypto.randomUUID()}.tmp`
-              yield* fs.writeFileString(temporary, formatCassette(cassette)).pipe(
-                Effect.flatMap(() => fs.rename(temporary, target)),
-                Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.catch(() => Effect.void))),
-                Effect.orDie,
-              )
-              recorded.set(name, { interactions, findings: interactionFindings })
+              yield* commitUnlocked(name, interactions, metadata)
             }),
           ),
+        commit: (name, interactions, metadata) => appendLock.withPermit(commitUnlocked(name, interactions, metadata)),
         exists: (name) =>
           fs.access(pathFor(name)).pipe(
             Effect.as(true),
@@ -161,12 +224,27 @@ export const memory = (initial: Record<string, ReadonlyArray<Interaction>> = {})
         appendLock.withPermit(
           Effect.suspend(() => {
             const interactions = [...(stored.get(name) ?? []), interaction]
-            const findings = [...(accumulatedFindings.get(name) ?? []), ...secretFindings(interaction)]
+            const findings = [...(accumulatedFindings.get(name) ?? []), ...interactionSecretFindings(interaction)]
             const allFindings = metadata ? [...findings, ...secretFindings({ name, ...metadata })] : findings
             return failIfUnsafe(name, allFindings).pipe(
               Effect.tap(() =>
                 Effect.sync(() => {
                   stored.set(name, interactions)
+                  accumulatedFindings.set(name, findings)
+                }),
+              ),
+            )
+          }),
+        ),
+      commit: (name, interactions, metadata) =>
+        appendLock.withPermit(
+          Effect.suspend(() => {
+            const findings = interactions.flatMap(interactionSecretFindings)
+            const allFindings = metadata ? [...findings, ...secretFindings({ name, ...metadata })] : findings
+            return failIfUnsafe(name, allFindings).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  stored.set(name, [...interactions])
                   accumulatedFindings.set(name, findings)
                 }),
               ),

@@ -2,6 +2,7 @@ import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Context, Effect, Layer } from "effect"
 import { serviceUse } from "@arforge-ai/core/effect/service-use"
 import { InstanceState } from "@/effect/instance-state"
+import { Database } from "@arforge-ai/core/database/database"
 
 type State = Record<string, string | undefined>
 
@@ -36,6 +37,6 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [] })
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [Database.node] })
 
 export * as Env from "."

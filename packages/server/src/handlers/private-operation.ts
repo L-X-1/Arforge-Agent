@@ -15,6 +15,14 @@ import { response } from "../location"
 import { resolveProductRoot } from "../product-root"
 
 const productRoot = resolveProductRoot()
+const runtimeVersion = (() => {
+  const bunVersion = typeof Bun !== "undefined" ? Bun.version : process.versions.bun
+  if (bunVersion) return `Bun ${bunVersion}`
+  const electronVersion = process.versions.electron
+  return electronVersion
+    ? `Node ${process.versions.node} · Electron ${electronVersion}`
+    : `Node ${process.versions.node}`
+})()
 
 const message = (error: unknown) =>
   (error instanceof Error ? error.message : String(error))
@@ -54,7 +62,6 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
         Promise.all(
           [Global.Path.data, Global.Path.config, Global.Path.state, Global.Path.cache, Global.Path.log].map(
             async (directory) => {
-              await fs.mkdir(directory, { recursive: true })
               await fs.access(directory, constants.R_OK | constants.W_OK)
             },
           ),
@@ -75,7 +82,7 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
           id: "runtime",
           label: "统一运行时",
           ok: true,
-          detail: `Arforge ${InstallationVersion} · Bun ${Bun.version}`,
+          detail: `Arforge ${InstallationVersion} · ${runtimeVersion}`,
         },
         { id: "workspace", label: "工作区", ok: true, detail: productRoot },
         { id: "storage", label: "私人目录", ...storage },

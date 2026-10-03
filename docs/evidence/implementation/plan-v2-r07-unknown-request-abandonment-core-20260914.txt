@@ -1,0 +1,24 @@
+Command: bun test test/durable-run-recovery.test.ts --timeout 30000 --rerun-every
+Working directory: E:/Arforge-Agent/packages/core
+Exit: 0
+Runtime: Bun 1.3.14
+
+test/durable-run-recovery.test.ts:
+(pass) inspects and explicitly cancels only the original unstarted draft task
+(pass) inspects and explicitly cancels only the original unstarted preflight task
+(pass) inspects and explicitly cancels only the original unstarted queued task
+(pass) inspects and explicitly cancels only the original unstarted awaiting_authorization task
+(pass) pending cancellation rejects foreign-session without changing original facts
+(pass) pending cancellation rejects stale-revision without changing original facts
+(pass) pending cancellation rejects lease-held without changing original facts
+(pass) pending cancellation rejects checkpoint without changing original facts
+(pass) pending cancellation rejects request without changing original facts
+(pass) pending cancellation rejects running without changing original facts
+(pass) pending cancellation rechecks revision at its original commit boundary
+(pass) pending cancellation rechecks request at its original commit boundary
+(pass) pending cancellation rechecks access at its original commit boundary
+
+13 pass
+0 fail
+78 expect() calls
+Ran 13 tests across 1 file. [1.83s]

@@ -1,0 +1,133 @@
+/* Workbench-only surfaces. User theme and font preferences remain authoritative. */
+:is(.arforge-review-workbench, [data-component="file-preview"], [data-component="editable-file-preview"], [data-component="workbench-browser-panel"], [data-testid="run-history"]) {
+  --workbench-surface: var(--arforge-review-surface, var(--background-base));
+  --workbench-muted: var(--arforge-review-surface-muted, var(--background-stronger));
+  --workbench-border: var(--arforge-review-border, var(--border-weak-base));
+  --workbench-text: var(--arforge-review-text, var(--text-strong));
+  --workbench-secondary: var(--arforge-review-text-muted, var(--text-weak));
+  min-width: 0;
+  color: var(--workbench-text);
+}
+.arforge-review-workbench {
+  container: arforge-workbench / inline-size;
+  background: var(--workbench-surface);
+}
+.arforge-review-workbench [data-session-side-panel-body],
+.arforge-review-workbench [data-component="session-review-v2"],
+.arforge-review-workbench [data-slot="session-review-v2-body"],
+.arforge-review-workbench [data-slot="session-review-v2-preview"] {
+  min-width: 0;
+  min-height: 0;
+}
+.arforge-review-workbench [data-slot="tabs-list"] { min-width: 0; scrollbar-width: thin; }
+.arforge-review-workbench [data-slot="tabs-trigger"] { min-height: 40px; }
+.arforge-review-workbench [data-slot="session-review-v2-preview"] { flex: 1 1 0; overflow: hidden; }
+[data-component="review-file-workbench"] { display: flex; flex-direction: column; min-width: 0; height: 100%; }
+[data-component="review-file-workbench"] > [data-component="session-review-v2"] { flex: 1; min-height: 0; }
+[data-slot="workbench-pane-switch"], [data-slot="workbench-file-actions"], [data-slot="terminal-workbench-actions"] {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--workbench-border, var(--border-weak-base));
+}
+[data-slot="workbench-pane-switch"] span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-component="review-file-workbench"][data-compact="true"][data-navigation="true"] [data-slot="session-review-v2-preview"] { display: none; }
+[data-component="review-file-workbench"][data-compact="true"] [data-component="session-review-v2-sidebar-root"] { width: 100%; flex: 1; min-width: 0; }
+[data-component="review-file-workbench"][data-compact="true"] [data-slot="session-review-v2-sidebar"] { width: 100% !important; max-width: none; }
+[data-component="review-file-workbench"][data-compact="true"] [data-slot="session-review-v2-sidebar-resize"] { display: none; }
+[data-component="review-file-workbench"][data-compact="true"][data-navigation="false"] [data-component="session-review-v2-sidebar-root"] { display: none; }
+:is(.arforge-review-workbench, [data-component="file-preview"], [data-component="editable-file-preview"], [data-component="workbench-browser-panel"]) :is(button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--text-interactive-base, currentColor);
+  outline-offset: 3px;
+}
+[data-component="file-preview"] > header { gap: 10px; padding: 12px 16px; background: var(--workbench-surface); }
+[data-component="file-preview"] > header > span:first-child { flex-basis: 180px; }
+[data-slot="workbench-file-actions"] { font-size: 12px; }
+[data-slot="workbench-file-actions"] [role="alert"] { flex-basis: 100%; overflow-wrap: anywhere; }
+[data-slot="workbench-file-actions"] button,
+[data-slot="workbench-pane-switch"] button,
+[data-slot="terminal-workbench-actions"] button,
+.execution-detail-pane button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--workbench-border, var(--border-weak-base));
+  border-radius: 8px;
+  background: var(--workbench-surface, var(--background-base));
+  color: inherit;
+  cursor: pointer;
+}
+[data-slot="workbench-file-actions"] button:disabled,
+[data-slot="terminal-workbench-actions"] button:disabled,
+.execution-detail-pane button:disabled { cursor: default; opacity: .5; }
+[data-component="file-preview"] :is([data-slot="pdf-preview-controls"], .office-controls, [data-slot="html-resource-controls"]) {
+  padding: 10px 16px;
+  gap: 10px;
+  background: var(--workbench-surface);
+}
+[data-slot="pdf-preview-viewport"], [data-slot="office-preview-viewport"] {
+  background: var(--workbench-muted, var(--background-stronger));
+  scrollbar-gutter: stable;
+}
+[data-slot="pdf-preview-surface"] canvas, .office-paper {
+  box-shadow: 0 3px 16px color-mix(in srgb, var(--text-base) 8%, transparent);
+}
+[data-component="file-preview"] .office-paper { border-radius: 8px; }
+[data-component="file-preview"] .office-paper th { position: sticky; top: 0; z-index: 1; }
+[data-component="file-preview"] .office-paper tbody th { left: 0; }
+[data-slot="office-slide-outline"] { display: flex; gap: 10px; overflow: auto; padding: 12px 16px; }
+[data-slot="office-slide-outline"] button { flex: 0 0 140px; text-align: start; }
+[data-slot="office-slide-outline"] button[aria-current="page"] { outline: 2px solid var(--text-interactive-base, currentColor); outline-offset: -2px; }
+[data-slot="office-slide-outline"] span { display: block; font-size: 12px; }
+[data-slot="office-slide-outline"] small { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin-top: 6px; color: var(--text-weak); }
+[data-slot="pdf-search"] { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
+[data-slot="pdf-search"] input { min-width: 100px; width: 180px; flex: 1; padding: 8px; border: 1px solid var(--border-weak-base); border-radius: 8px; }
+[data-slot="pdf-search"] button { min-height: 36px; padding: 4px 8px; }
+[data-slot="pdf-search"] [role="status"] { width: 100%; font-size: 12px; color: var(--text-weak); }
+[data-component="video-file-preview"] { display: grid; gap: 12px; padding: 16px; }
+[data-component="video-file-preview"] video { width: 100%; max-height: 65vh; }
+[data-component="text-document-editor"] { min-width: 0; }
+[data-slot="text-editor-code"] { min-width: 0; overflow: auto; }
+[data-slot="text-editor-conflict"] { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; padding: 12px; }
+[data-slot="text-editor-conflict"] pre { min-width: 0; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--border-weak-base); border-radius: 8px; }
+[data-component="workbench-browser-panel"] > [role="group"] { min-height: 44px; }
+[data-component="workbench-browser-panel"] button[aria-pressed="true"] { background: var(--workbench-muted); color: var(--workbench-text); }
+[data-component="workbench-browser-panel"] form { padding: 12px; gap: 8px; }
+[data-component="workbench-browser-panel"] [role="alert"] { overflow-wrap: anywhere; }
+.execution-dock.arforge-review-workbench.execution-dock--open { width: clamp(360px, 38vw, 760px); max-width: 100%; }
+.execution-workbench { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: auto; }
+.execution-workbench > .execution-dock__steps { flex: none; max-height: 250px; padding-bottom: 12px; }
+.execution-workbench .execution-step__topline { flex-wrap: wrap; }
+.execution-workbench .execution-step__button[aria-expanded="true"] { background: var(--workbench-muted); }
+.execution-workbench .execution-step__meta { overflow-wrap: anywhere; flex-wrap: wrap; font-size: 11px; }
+.execution-workbench .execution-step__status { font-size: 11px; }
+.execution-detail-pane { min-width: 0; flex: 1; padding: 16px; border-top: 1px solid var(--workbench-border); }
+.execution-detail-pane header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.execution-detail-pane h3 { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.execution-detail-pane h4 { font-size: 12px; color: var(--workbench-secondary); margin-block: 16px 8px; }
+.execution-detail-pane pre { min-width: 0; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; padding: 12px; border: 1px solid var(--workbench-border); border-radius: 10px; background: var(--workbench-muted); font: 12px/1.7 var(--font-family-mono, monospace); }
+.execution-detail-pane [role="alert"] { overflow-wrap: anywhere; }
+.arforge-review-workbench [data-slot="context-stat"] { min-width: 0; padding: 12px; border-bottom: 1px solid var(--workbench-border); overflow-wrap: anywhere; }
+.arforge-review-workbench [data-slot="context-stats"] { gap: 8px; }
+[data-testid="run-history"] { container: arforge-run-history / inline-size; }
+[data-testid="run-report"] { min-width: 0; overflow-wrap: anywhere; }
+[data-slot="run-report-metrics"] { grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); }
+@container arforge-workbench (min-width: 650px) {
+  .execution-workbench { display: grid; grid-template-columns: 220px minmax(0, 1fr); overflow: hidden; }
+  .execution-workbench > .execution-dock__steps { max-height: none; overflow: auto; }
+  .execution-detail-pane { border-top: 0; border-left: 1px solid var(--workbench-border); overflow: auto; }
+}
+@container arforge-workbench (max-width: 560px) {
+  [data-component="text-editor-layout"][data-preview="true"] { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: coarse) {
+  [data-component="file-preview"] :is(button, select, input),
+  [data-component="workbench-browser-panel"] button,
+  [data-slot="workbench-pane-switch"] button,
+  [data-slot="terminal-workbench-actions"] button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arforge-review-workbench { scroll-behavior: auto; transition: none; }
+}

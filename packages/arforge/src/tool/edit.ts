@@ -4,7 +4,7 @@
 // https://github.com/cline/cline/blob/main/evals/diff-edits/diff-apply/diff-06-26-25.ts
 
 import * as path from "path"
-import { Effect, Schema, Semaphore } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
@@ -18,6 +18,7 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import * as Bom from "@/util/bom"
+import * as CoreFileMutation from "./file-mutation"
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
@@ -30,18 +31,6 @@ function detectLineEnding(text: string): "\n" | "\r\n" {
 function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   if (ending === "\n") return text
   return text.replaceAll("\n", "\r\n")
-}
-
-const locks = new Map<string, Semaphore.Semaphore>()
-
-function lock(filePath: string) {
-  const resolvedFilePath = FSUtil.resolve(filePath)
-  const hit = locks.get(resolvedFilePath)
-  if (hit) return hit
-
-  const next = Semaphore.makeUnsafe(1)
-  locks.set(resolvedFilePath, next)
-  return next
 }
 
 export const Parameters = Schema.Struct({
@@ -81,67 +70,30 @@ export const EditTool = Tool.define(
             ? params.filePath
             : path.join(instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filePath)
+          const files = yield* CoreFileMutation.service()
+          const mutationTarget = CoreFileMutation.target(instance.worktree, filePath)
+          const journal = CoreFileMutation.makeJournal(files)
+          let intentRecorder: CoreFileMutation.MutationIntentRecorder | undefined
 
           let diff = ""
           let contentOld = ""
           let contentNew = ""
-          yield* lock(filePath).withPermits(1)(
-            Effect.gen(function* () {
-              if (params.oldString === "") {
-                const existed = yield* afs.existsSafe(filePath)
-                if (existed) {
-                  throw new Error(
-                    "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
-                  )
-                }
-                const next = Bom.split(params.newString)
-                const desiredBom = next.bom
-                contentOld = ""
-                contentNew = next.text
-                diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
-                yield* ctx.ask({
-                  permission: "edit",
-                  patterns: [path.relative(instance.worktree, filePath)],
-                  always: ["*"],
-                  metadata: {
-                    filepath: filePath,
-                    diff,
-                  },
-                })
-                yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-                if (yield* format.file(filePath)) {
-                  contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
-                }
-                yield* events.publish(FileSystem.Event.Edited, { file: filePath })
-                yield* events.publish(Watcher.Event.Updated, {
-                  file: filePath,
-                  event: "add",
-                })
-                return
+          let desiredBom = false
+          let event: "add" | "change" = "change"
+          yield* Effect.gen(function* () {
+            if (params.oldString === "") {
+              const existed = yield* afs.existsSafe(filePath)
+              if (existed) {
+                throw new Error(
+                  "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
+                )
               }
-
-              const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-              if (!info) throw new Error(`File ${filePath} not found`)
-              if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
-              const source = yield* Bom.readFile(afs, filePath)
-              contentOld = source.text
-
-              const ending = detectLineEnding(contentOld)
-              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
-              const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
-
-              const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
-              const desiredBom = source.bom || next.bom
+              const next = Bom.split(params.newString)
+              desiredBom = next.bom
+              event = "add"
+              contentOld = ""
               contentNew = next.text
-
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
-              )
+              diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
               yield* ctx.ask({
                 permission: "edit",
                 patterns: [path.relative(instance.worktree, filePath)],
@@ -151,25 +103,186 @@ export const EditTool = Tool.define(
                   diff,
                 },
               })
-
-              yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
-              if (yield* format.file(filePath)) {
-                contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
-              }
-              yield* events.publish(FileSystem.Event.Edited, { file: filePath })
-              yield* events.publish(Watcher.Event.Updated, {
-                file: filePath,
-                event: "change",
+              const written = new TextEncoder().encode(Bom.join(contentNew, desiredBom))
+              const intentEntries = yield* CoreFileMutation.stageIntentEntries([
+                {
+                  target: mutationTarget,
+                  operation: "create",
+                  after: written,
+                  recovery: "remove-if-matching",
+                },
+              ])
+              intentRecorder = CoreFileMutation.makeIntentRecorder({
+                gateway: ctx.gateway,
+                actionID: ctx.parentAction?.actionID,
+                entries: intentEntries,
               })
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
+              if (intentRecorder) yield* intentRecorder.record("prepared", "Edit create transaction prepared")
+              yield* files
+                .create({ target: mutationTarget, content: written })
+                .pipe(
+                  Effect.catch((error) =>
+                    CoreFileMutation.reportFailure({ error, operation: "editing", metadata: ctx.metadata }),
+                  ),
+                )
+              journal.add({ kind: "remove-created", target: mutationTarget, expected: written })
+              return
+            }
+
+            const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!info) throw new Error(`File ${filePath} not found`)
+            if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+            const rawSource = yield* afs.readFile(filePath)
+            const source = Bom.split(new TextDecoder("utf-8", { ignoreBOM: true }).decode(rawSource))
+            contentOld = source.text
+
+            const ending = detectLineEnding(contentOld)
+            const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
+            const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
+
+            const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
+            desiredBom = source.bom || next.bom
+            event = "change"
+            contentNew = next.text
+
+            diff = trimDiff(
+              createTwoFilesPatch(
+                filePath,
+                filePath,
+                normalizeLineEndings(contentOld),
+                normalizeLineEndings(contentNew),
+              ),
+            )
+            yield* ctx.ask({
+              permission: "edit",
+              patterns: [path.relative(instance.worktree, filePath)],
+              always: ["*"],
+              metadata: {
+                filepath: filePath,
+                diff,
+              },
+            })
+
+            const written = new TextEncoder().encode(Bom.join(contentNew, desiredBom))
+            const intentEntries = yield* CoreFileMutation.stageIntentEntries([
+              {
+                target: mutationTarget,
+                operation: "write",
+                before: rawSource,
+                after: written,
+                recovery: "restore-from-volatile-journal",
+              },
+            ])
+            intentRecorder = CoreFileMutation.makeIntentRecorder({
+              gateway: ctx.gateway,
+              actionID: ctx.parentAction?.actionID,
+              entries: intentEntries,
+            })
+            if (intentRecorder) yield* intentRecorder.record("prepared", "Edit transaction prepared")
+            yield* files
+              .writeIfUnchanged({
+                target: mutationTarget,
+                expected: rawSource,
+                content: written,
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  CoreFileMutation.reportFailure({ error, operation: "editing", metadata: ctx.metadata }),
                 ),
               )
-            }).pipe(Effect.orDie),
+            journal.add({ kind: "restore", target: mutationTarget, expected: written, content: rawSource })
+          }).pipe(Effect.orDie)
+
+          const failureAfterRollback = (cause: Cause.Cause<unknown>) =>
+            Effect.gen(function* () {
+              const original = Cause.squash(cause)
+              const originalError = original instanceof Error ? original : new Error(String(original))
+              yield* CoreFileMutation.recordBestEffort(
+                intentRecorder,
+                "rollback_required",
+                "Edit transaction requires compensation",
+              )
+              const rollbackErrors = yield* journal.rollback()
+              yield* CoreFileMutation.recordBestEffort(
+                intentRecorder,
+                rollbackErrors.length > 0 ? "rollback_blocked" : "rolled_back",
+                "Edit transaction recovery",
+              )
+              if (rollbackErrors.length > 0)
+                return yield* Effect.fail(
+                  new Error(
+                    `Edit post-processing failed. ${originalError.message} Rollback: ${rollbackErrors.map((error) => error.message).join("; ")}`,
+                  ),
+                )
+              return yield* Effect.fail(new Error(`Edit post-processing failed. ${originalError.message}`))
+            })
+
+          if (intentRecorder) {
+            const committed = yield* intentRecorder.record("committed", "Edit transaction committed").pipe(Effect.exit)
+            if (Exit.isFailure(committed)) return yield* failureAfterRollback(committed.cause)
+          }
+
+          // Formatting, LSP validation, event publication and durable
+          // settlement share the canonical post-processing transaction.
+          const postCommit = Effect.gen(function* () {
+            const checkpointTarget = mutationTarget.resource
+            if (
+              yield* CoreFileMutation.runPostProcessingStage({
+                recorder: intentRecorder,
+                stage: "formatter",
+                target: checkpointTarget,
+                effect: format.file(filePath),
+              })
+            ) {
+              contentNew = yield* CoreFileMutation.runPostProcessingStage({
+                recorder: intentRecorder,
+                stage: "bom",
+                target: checkpointTarget,
+                effect: Bom.syncFile(afs, filePath, desiredBom),
+              })
+            }
+            const current = yield* afs
+              .readFile(filePath)
+              .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
+            if (current) journal.refresh(mutationTarget, current)
+
+            yield* CoreFileMutation.runPostProcessingStage({
+              recorder: intentRecorder,
+              stage: "lsp_touch",
+              target: checkpointTarget,
+              effect: lsp.touchFile(filePath, "document"),
+            })
+            const diagnostics = yield* CoreFileMutation.runPostProcessingStage({
+              recorder: intentRecorder,
+              stage: "diagnostics",
+              effect: lsp.diagnostics(),
+            })
+            yield* CoreFileMutation.runPostProcessingStage({
+              recorder: intentRecorder,
+              stage: "event_v2",
+              target: checkpointTarget,
+              effect: events.publish(FileSystem.Event.Edited, { file: filePath }),
+            })
+            yield* CoreFileMutation.runPostProcessingStage({
+              recorder: intentRecorder,
+              stage: "watcher",
+              target: checkpointTarget,
+              effect: events.publish(Watcher.Event.Updated, {
+                file: filePath,
+                event,
+              }),
+            })
+            return diagnostics
+          })
+          const diagnostics = yield* CoreFileMutation.runPostProcessingTransaction({
+            recorder: intentRecorder,
+            journal,
+            operation: "Edit",
+            effect: postCommit,
+          })
+
+          diff = trimDiff(
+            createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
           )
 
           let additions = 0
@@ -189,13 +302,11 @@ export const EditTool = Tool.define(
             metadata: {
               diff,
               filediff,
-              diagnostics: {},
+              diagnostics,
             },
           })
 
           let output = "Edit applied successfully."
-          yield* lsp.touchFile(filePath, "document")
-          const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)
           const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
           if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
@@ -209,7 +320,7 @@ export const EditTool = Tool.define(
             title: `${path.relative(instance.worktree, filePath)}`,
             output,
           }
-        }),
+        }).pipe(Effect.orDie),
     }
   }),
 )

@@ -20,6 +20,9 @@ import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
 import { SessionProjector } from "@arforge-ai/core/session/projector"
+import * as SessionCompactionCheckpoint from "@arforge-ai/core/session/compaction-checkpoint"
+import { SessionEvent } from "@arforge-ai/core/session/event"
+import * as ContextSurface from "@arforge-ai/core/context-surface"
 
 import { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
@@ -890,6 +893,258 @@ describe("session.compaction.process", () => {
     }).pipe(withCompaction({ result: "compact" })),
   )
 
+  itCompaction.instance(
+    "rejects an empty provider summary without hiding history or auto-continuing",
+    () => {
+      const stub = llm()
+      stub.push(
+        Stream.make(
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: basicUsage() }),
+          LLMEvent.finish({ reason: "stop", usage: basicUsage() }),
+        ),
+      )
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const events = yield* EventV2Bridge.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "history that must remain visible")
+        const seen: string[] = []
+        const off = yield* events.listen((event) => {
+          seen.push(event.type)
+          return Effect.void
+        })
+        yield* Effect.addFinalizer(() => off)
+
+        const result = yield* SessionCompaction.use.process({
+          parentID: msg.id,
+          messages: yield* ssn.messages({ sessionID: session.id }),
+          sessionID: session.id,
+          auto: true,
+        })
+        const messages = yield* ssn.messages({ sessionID: session.id })
+        const summary = messages.find((item) => item.info.role === "assistant" && item.info.summary)
+
+        expect(result).toBe("stop")
+        expect(summary?.info.role).toBe("assistant")
+        if (summary?.info.role === "assistant") {
+          expect(summary.info.finish).toBe("error")
+          expect(JSON.stringify(summary.info.error)).toContain("complete non-empty summary")
+        }
+        expect(messages.filter((item) => item.info.role === "user")).toHaveLength(1)
+        const filtered = MessageV2.filterCompacted(messages)
+        expect(filtered).toHaveLength(messages.length)
+        expect(filtered.some((item) => item.info.id === msg.id)).toBe(true)
+        expect(
+          filtered.some((item) => item.parts.some((part) => part.type === "text" && part.text.includes("must remain"))),
+        ).toBe(true)
+        expect(seen).not.toContain(SessionCompaction.Event.Compacted.type)
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "commits a real provider summary through the Core durable checkpoint owner",
+    () => {
+      const stub = llm()
+      stub.push(reply("durable compact summary"))
+      return Effect.gen(function* () {
+        const test = yield* TestInstance
+        const ssn = yield* SessionNs.Service
+        const events = yield* EventV2Bridge.Service
+        const { db } = yield* Database.Service
+        const session = yield* ssn.create({})
+        const original = yield* createUserMessage(session.id, `important source ${"x".repeat(2_000)}`)
+        const seen: string[] = []
+        let endedDirectory: string | undefined
+        const off = yield* events.listen((event) => {
+          seen.push(event.type)
+          if (event.type === SessionEvent.Compaction.Ended.type) endedDirectory = event.location?.directory
+          return Effect.void
+        })
+        yield* Effect.addFinalizer(() => off)
+
+        const result = yield* SessionCompaction.use.process({
+          parentID: original.id,
+          messages: yield* ssn.messages({ sessionID: session.id }),
+          sessionID: session.id,
+          auto: false,
+        })
+
+        const operations = yield* SessionCompactionCheckpoint.scan(db, session.id)
+        expect(result).toBe("continue")
+        expect(operations).toHaveLength(1)
+        expect(operations[0]).toMatchObject({ status: "committed", lastPhase: "closed" })
+        const checkpoints = yield* SessionCompactionCheckpoint.load(db, session.id, operations[0].operationID)
+        expect(checkpoints.map((checkpoint) => checkpoint.phase)).toEqual([
+          "prepared",
+          "summarizing",
+          "summarized",
+          "revalidated",
+          "committed",
+          "closed",
+        ])
+        expect(new Set(checkpoints.map((checkpoint) => checkpoint.candidateDigest)).size).toBe(2)
+        expect(seen).toContain(SessionEvent.Compaction.Started.type)
+        expect(seen).toContain(SessionEvent.Compaction.Ended.type)
+        expect(seen).toContain(SessionCompaction.Event.Compacted.type)
+        expect(endedDirectory).toBe(test.directory)
+
+        const durableMessages = yield* ssn.messages({ sessionID: session.id })
+        expect(durableMessages.some((message) => message.info.id === original.id)).toBe(true)
+        const summary = durableMessages.find((message) => message.info.role === "assistant" && message.info.summary)
+        expect(summary?.parts.some((part) => part.type === "text" && part.text === "durable compact summary")).toBe(
+          true,
+        )
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "aborts the Core transaction when durable source changes during summarization",
+    () => {
+      let signalStarted!: () => void
+      let release!: () => void
+      const started = new Promise<void>((resolve) => (signalStarted = resolve))
+      const gate = new Promise<void>((resolve) => (release = resolve))
+      const stub = llm()
+      stub.push(
+        Stream.fromAsyncIterable(
+          {
+            async *[Symbol.asyncIterator]() {
+              yield LLMEvent.stepStart({ index: 0 })
+              signalStarted()
+              await gate
+              yield LLMEvent.textStart({ id: "txt-0" })
+              yield LLMEvent.textDelta({ id: "txt-0", text: "must not commit" })
+              yield LLMEvent.textEnd({ id: "txt-0" })
+              yield LLMEvent.stepFinish({ index: 0, reason: "stop", usage: basicUsage() })
+              yield LLMEvent.finish({ reason: "stop", usage: basicUsage() })
+            },
+          },
+          (error) => error,
+        ),
+      )
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const events = yield* EventV2Bridge.Service
+        const { db } = yield* Database.Service
+        const session = yield* ssn.create({})
+        const original = yield* createUserMessage(session.id, `stable source ${"x".repeat(2_000)}`)
+        const seen: string[] = []
+        const off = yield* events.listen((event) => {
+          seen.push(event.type)
+          return Effect.void
+        })
+        yield* Effect.addFinalizer(() => off)
+
+        const fiber = yield* SessionCompaction.use
+          .process({
+            parentID: original.id,
+            messages: yield* ssn.messages({ sessionID: session.id }),
+            sessionID: session.id,
+            auto: false,
+          })
+          .pipe(Effect.forkChild)
+        yield* Effect.promise(() => started).pipe(Effect.timeout("5 seconds"))
+        const concurrent = yield* createUserMessage(session.id, "new durable input while summary is running")
+        release()
+        const result = yield* Fiber.join(fiber).pipe(Effect.timeout("5 seconds"))
+
+        const operations = yield* SessionCompactionCheckpoint.scan(db, session.id)
+        expect(result).toBe("stop")
+        expect(operations).toHaveLength(1)
+        expect(operations[0]).toMatchObject({ status: "aborted", lastPhase: "aborted" })
+        const checkpoints = yield* SessionCompactionCheckpoint.load(db, session.id, operations[0].operationID)
+        expect(checkpoints.map((checkpoint) => checkpoint.phase)).toEqual([
+          "prepared",
+          "summarizing",
+          "summarized",
+          "aborted",
+        ])
+        expect(checkpoints.at(-1)?.reason).toBe("stale-surface")
+        expect(seen).not.toContain(SessionEvent.Compaction.Ended.type)
+        expect(seen).not.toContain(SessionCompaction.Event.Compacted.type)
+
+        const durableMessages = yield* ssn.messages({ sessionID: session.id })
+        expect(durableMessages.some((message) => message.info.id === original.id)).toBe(true)
+        expect(durableMessages.some((message) => message.info.id === concurrent.id)).toBe(true)
+        const summary = durableMessages.find((message) => message.info.role === "assistant" && message.info.summary)
+        expect(summary?.info.role).toBe("assistant")
+        if (summary?.info.role === "assistant") {
+          expect(summary.info.finish).toBe("error")
+          expect(JSON.stringify(summary.info.error)).toContain("source changed before commit")
+        }
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "does not call the provider while prior compaction checkpoint evidence is unresolved",
+    () => {
+      let called = false
+      const stub = llm()
+      stub.push((input) => {
+        called = true
+        return reply("must not run")(input)
+      })
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const events = yield* EventV2Bridge.Service
+        const { db } = yield* Database.Service
+        const session = yield* ssn.create({})
+        const original = yield* createUserMessage(session.id, `source ${"x".repeat(2_000)}`)
+        const unresolved = {
+          version: 1,
+          operationID: "surface-compaction:v1:blocked-prior-operation",
+          sequence: 1,
+          phase: "prepared",
+          epoch: 0,
+          generation: 0,
+          sourceHeadSeq: 1,
+          surfaceDigest: "a".repeat(64),
+          providerRevision: "mature-session-compaction:test:test-model:v1",
+        } satisfies ContextSurface.AsyncCompactionCheckpoint
+        yield* SessionCompactionCheckpoint.append(db, session.id, unresolved)
+        const seen: string[] = []
+        const off = yield* events.listen((event) => {
+          seen.push(event.type)
+          return Effect.void
+        })
+        yield* Effect.addFinalizer(() => off)
+
+        const result = yield* SessionCompaction.use.process({
+          parentID: original.id,
+          messages: yield* ssn.messages({ sessionID: session.id }),
+          sessionID: session.id,
+          auto: false,
+        })
+
+        expect(result).toBe("stop")
+        expect(called).toBe(false)
+        expect((yield* SessionCompactionCheckpoint.scan(db, session.id))[0]).toMatchObject({
+          status: "in_flight",
+          lastPhase: "prepared",
+        })
+        expect(seen).not.toContain(SessionEvent.Compaction.Started.type)
+        expect(seen).not.toContain(SessionEvent.Compaction.Ended.type)
+        expect(seen).not.toContain(SessionCompaction.Event.Compacted.type)
+        const summary = (yield* ssn.messages({ sessionID: session.id })).find(
+          (message) => message.info.role === "assistant" && message.info.summary,
+        )
+        expect(summary?.info.role).toBe("assistant")
+        if (summary?.info.role === "assistant") {
+          expect(summary.info.finish).toBe("error")
+          expect(JSON.stringify(summary.info.error)).toContain("unresolved durable checkpoint evidence")
+        }
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
   it.instance(
     "adds synthetic continue prompt when auto is enabled",
     Effect.gen(function* () {
@@ -1366,6 +1621,7 @@ describe("session.compaction.process", () => {
       stub.push(
         reply("summary", (input) => {
           captured = JSON.stringify(input.messages)
+          expect(input.messages).toHaveLength(1)
         }),
       )
       return Effect.gen(function* () {
@@ -1387,6 +1643,7 @@ describe("session.compaction.process", () => {
         })
 
         expect(captured).toContain("older context")
+        expect(captured).toContain("[User]: older context")
         expect(captured).not.toContain("keep this turn")
         expect(captured).not.toContain("and this one too")
         expect(captured).not.toContain("What did we do so far?")

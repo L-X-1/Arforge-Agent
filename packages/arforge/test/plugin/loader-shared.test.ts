@@ -69,6 +69,49 @@ function load(dir: string, flags?: Parameters<typeof RuntimeFlags.layer>[0]) {
 }
 
 describe("plugin.loader.shared", () => {
+  it.live("runs the Core manifest security gate before importing a plugin module", () =>
+    withTmp(
+      async (dir) => {
+        const file = path.join(dir, "plugin.ts")
+        const mark = path.join(dir, "called.txt")
+        await Bun.write(
+          file,
+          [
+            "export default async () => {",
+            `  await Bun.write(${JSON.stringify(mark)}, "called")`,
+            "  return {}",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        await Bun.write(
+          path.join(dir, "plugin.json"),
+          JSON.stringify({
+            name: "blocked-loader-fixture",
+            version: "1.0.0",
+            description: "Loader security gate fixture",
+            egress: [],
+            secrets: [],
+          }),
+        )
+        await Bun.write(path.join(dir, "unsafe.js"), "EventV2.publish('should-not-run')\n")
+        await Bun.write(path.join(dir, "arforge.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
+        return { mark }
+      },
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* load(tmp.path)
+          const called = yield* Effect.promise(() =>
+            Bun.file(tmp.extra.mark)
+              .text()
+              .then(() => true)
+              .catch(() => false),
+          )
+          expect(called).toBe(false)
+        }),
+    ),
+  )
+
   it.live("loads a file:// plugin function export", () =>
     withTmp(
       async (dir) => {

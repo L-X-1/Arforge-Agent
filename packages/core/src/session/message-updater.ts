@@ -100,6 +100,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
+      // Session metadata is not conversation content or a model-visible message.
+      "session.next.title.generated": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           SessionMessage.AgentSwitched.make({
@@ -132,6 +134,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             text: event.data.prompt.text,
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
+            scheduledTasks: event.data.prompt.scheduledTasks,
+            system: event.data.prompt.system,
+            route: event.data.prompt.route,
+            command: event.data.prompt.command,
+            format: event.data.prompt.format,
             time: { created: event.data.timestamp },
           }),
         )
@@ -150,6 +157,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         ),
       "session.next.memory.context.prepared": () => Effect.void,
       "session.next.context.fusion.prepared": () => Effect.void,
+      "session.next.request.envelope.prepared": () => Effect.void,
+      "session.next.request.binding.prepared": () => Effect.void,
       "session.next.synthetic": (event) => {
         return adapter.appendMessage(
           SessionMessage.Synthetic.make({
@@ -216,6 +225,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.finish = event.data.finish
           draft.cost = event.data.cost
           draft.tokens = event.data.tokens
+          draft.structured = event.data.structured
           if (event.data.snapshot || event.data.files)
             draft.snapshot = {
               ...draft.snapshot,
@@ -329,7 +339,15 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
                 input: match.state.input,
                 structured: event.data.structured,
                 content: [...event.data.content],
-                outputPaths: event.data.outputPaths ? [...event.data.outputPaths] : [],
+                ...(event.data.artifactRefs === undefined ? {} : { artifactRefs: [...event.data.artifactRefs] }),
+                // Opaque artifact receipts supersede legacy paths. Ignore a
+                // path if an older producer happened to send both fields.
+                outputPaths:
+                  event.data.artifactRefs !== undefined && event.data.artifactRefs.length > 0
+                    ? []
+                    : event.data.outputPaths
+                      ? [...event.data.outputPaths]
+                      : [],
                 result: event.data.result,
               }),
             )
@@ -351,8 +369,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
                 status: "error",
                 error: event.data.error,
                 input: typeof match.state.input === "string" ? {} : match.state.input,
-                structured: match.state.status === "running" ? match.state.structured : {},
-                content: match.state.status === "running" ? match.state.content : [],
+                structured: event.data.structured ?? (match.state.status === "running" ? match.state.structured : {}),
+                content: event.data.content ?? (match.state.status === "running" ? match.state.content : []),
+                ...(event.data.artifactRefs ? { artifactRefs: event.data.artifactRefs } : {}),
+                ...(event.data.outputPaths ? { outputPaths: event.data.outputPaths } : {}),
                 result: event.data.result,
               }),
             )
@@ -392,6 +412,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.retried": () => Effect.void,
       "session.next.compaction.started": () => Effect.void,
+      "session.next.compaction.request.prepared": () => Effect.void,
       "session.next.compaction.delta": () => Effect.void,
       "session.next.compaction.ended": (event) => {
         return adapter.appendMessage(

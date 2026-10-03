@@ -11,6 +11,7 @@ import { ServerConnection } from "@/context/server"
 import { SessionTabAvatarView } from "@/pages/layout/session-tab-avatar"
 import { sessionTitle } from "@/utils/session-title"
 import { shouldOpenSessionInBackground } from "../home-session-open"
+import { SessionNavigationMenu } from "./session-navigation"
 import {
   HomeSessionStatusController,
   homeSessionSearchKey,
@@ -39,6 +40,8 @@ export type HomeSessionsViewProps = {
   language: ReturnType<typeof useLanguage>
   groups: Accessor<HomeSessionGroup[]>
   loading: Accessor<boolean>
+  error?: Accessor<unknown>
+  onRetry?: () => void
   showProjectName: Accessor<boolean>
   server: Accessor<ServerConnection.Key>
   canCreateSession: Accessor<boolean>
@@ -108,6 +111,12 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
         />
       </div>
       <div class="-mr-3 min-h-[calc(100cqh-64px)] lg:min-h-[calc(100cqh-72px)]">
+        <Show when={!props.error?.()} fallback={
+          <div class="workspace-sidebar__notice" role="alert">
+            <span>{props.language.t("common.requestFailed")}</span>
+            <button type="button" onClick={props.onRetry}>{props.language.t("common.retry")}</button>
+          </div>
+        }>
         <Show
           when={!props.loading()}
           fallback={
@@ -145,6 +154,7 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
               </For>
             </div>
           </Show>
+        </Show>
         </Show>
       </div>
     </section>
@@ -294,6 +304,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
             aria-label={props.searchPlaceholder()}
             aria-expanded={props.searchOpen()}
             aria-controls={HOME_SESSION_SEARCH_RESULTS_ID}
+            role="combobox"
             aria-autocomplete="list"
             aria-activedescendant={
               props.searchActive() && props.searchOpen()
@@ -303,6 +314,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
             onFocus={props.onSearchFocus}
             onInput={(event) => props.onSearchInput(event.currentTarget.value)}
             onKeyDown={(event) => {
+              if (event.isComposing || event.keyCode === 229) return
               if (event.key === "Escape") {
                 event.preventDefault()
                 props.onSearchClose()
@@ -334,7 +346,7 @@ function HomeSessionSearch(props: HomeSessionsViewProps) {
               size="small"
               class="relative z-20 shrink-0"
               icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
-              aria-label={props.searchPlaceholder()}
+              aria-label={props.language.t("home.archived.search.clear")}
               onClick={() => {
                 props.onSearchClose()
                 props.onSearchFocus()
@@ -437,6 +449,7 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
 
   return (
     <div
+      data-component="home-session-item"
       class="group/session relative flex h-11 min-w-0 items-center rounded-[12px]"
       classList={{ group: !!showProjectName() }}
     >
@@ -504,6 +517,11 @@ function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionReco
             }}
           />
         </TooltipV2>
+        <SessionNavigationMenu
+          server={props.server()}
+          session={props.record.session}
+          onArchive={() => props.onArchiveSession(props.record.session)}
+        />
       </div>
     </div>
   )

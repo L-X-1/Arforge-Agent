@@ -166,6 +166,7 @@ export const LEGACY_HTTP_FRONTEND_OWNERSHIP = [
     operations: [
       "mcp.status",
       "mcp.add",
+      "mcp.health",
       "mcp.auth.start",
       "mcp.auth.remove",
       "mcp.auth.callback",
@@ -286,6 +287,27 @@ export const LEGACY_HTTP_FRONTEND_OWNERSHIP = [
     evidence: ["packages/app/src/components/settings-v2/providers.tsx"],
     rationale:
       "Provider organization selection remains contextual to provider settings; it must not become a generic control-center action.",
+  },
+  {
+    feature: "control-plane-approval-and-recovery",
+    surface: "desktop-user-surface",
+    risk: "confirm",
+    operations: [
+      "session.revert.control",
+      "session.unrevert.control",
+      "session.share.control",
+      "session.unshare.control",
+      "experimental.controlApproval.list",
+      "experimental.controlApproval.reply",
+      "experimental.controlOperation.status",
+    ],
+    evidence: [
+      "packages/app/src/context/control-approval.tsx",
+      "packages/app/src/components/control-operation-recovery.tsx",
+      "packages/app/src/components/prompt-input/submit.ts",
+    ],
+    rationale:
+      "Durable control approvals and recovery status are rendered and settled by the Desktop control center and session recovery flow.",
   },
   {
     feature: "runtime-capability-introspection",

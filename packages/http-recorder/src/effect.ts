@@ -18,6 +18,7 @@ export const http = (name: string, options: RecorderOptions = {}): Layer.Layer<H
     metadata: options.metadata,
     redactor: make(options.redact),
     match: options.match,
+    maxRequestBodyBytes: options.maxRequestBodyBytes,
   }).pipe(
     Layer.provide(CassetteService.fileSystem({ directory: options.directory })),
     Layer.provide(FetchHttpClient.layer),

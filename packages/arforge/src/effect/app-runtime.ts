@@ -23,7 +23,6 @@ import { Permission } from "@/permission"
 import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
-import { SessionRunState } from "@/session/run-state"
 import { SessionProcessor } from "@/session/processor"
 import { SessionCompaction } from "@/session/compaction"
 import { SessionRevert } from "@/session/revert"
@@ -46,6 +45,8 @@ import { Worktree } from "@/worktree"
 import { Installation } from "@/installation"
 import { ShareNext } from "@/share/share-next"
 import { SessionShare } from "@/share/session"
+import { SessionShareReadonlyLocal } from "@/share/readonly-local"
+import { SessionShareReceiptStore } from "@/share/receipt-store"
 import { Npm } from "@arforge-ai/core/npm"
 import { memoMap } from "@arforge-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
@@ -54,6 +55,14 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { AppNodeBuilderV1 } from "./app-node-builder-v1"
 import { SessionProjector } from "@arforge-ai/core/session/projector"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
+import { RollbackArtifact } from "@arforge-ai/core/runtime"
+import { SubagentProvider } from "@arforge-ai/core/runtime/subagent-provider"
+import { SubagentChildExecutor } from "@arforge-ai/core/runtime/subagent-child-executor"
+import { SubagentControlRecovery } from "@arforge-ai/core/runtime/subagent-control-recovery"
+import { RuntimeInvariants } from "@arforge-ai/core/runtime"
+import { SessionExecution } from "@arforge-ai/core/session/execution"
+import { SessionExecutionFormal } from "@/session/execution-formal"
 
 export const AppLayer = AppNodeBuilderV1.build(
   LayerNode.group([
@@ -77,12 +86,16 @@ export const AppLayer = AppNodeBuilderV1.build(
     Permission.node,
     Todo.node,
     Session.node,
+    SessionExecution.node,
     SessionProjector.node,
     SessionStatus.node,
     BackgroundJob.node,
+    SubagentProvider.node,
+    SubagentChildExecutor.node,
+    SubagentControlRecovery.node,
+    RuntimeInvariants.node,
     RuntimeFlags.node,
     EventV2Bridge.node,
-    SessionRunState.node,
     SessionProcessor.node,
     SessionCompaction.node,
     SessionRevert.node,
@@ -92,6 +105,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     LLM.node,
     LSP.node,
     MCP.node,
+    LocationServiceMap.node,
     McpAuth.node,
     Command.node,
     Truncate.node,
@@ -105,7 +119,11 @@ export const AppLayer = AppNodeBuilderV1.build(
     Installation.node,
     ShareNext.node,
     SessionShare.node,
+    SessionShareReadonlyLocal.node,
+    SessionShareReceiptStore.node,
+    RollbackArtifact.node,
   ]),
+  [[SessionExecution.node, SessionExecutionFormal.node]],
 ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

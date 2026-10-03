@@ -1,4 +1,11 @@
-"""Persistent task graph tools with legacy-compatible local storage."""
+"""Explicit Python compatibility seam for the legacy task graph.
+
+TypeScript/Core ``TaskGraphV2`` owns the product task lifecycle, persistence,
+authorization, optimistic revisions, dependency graph, and policy gates.
+This module remains importable for old Python callers and migration fixtures,
+but it is not part of the default Python bootstrap and must never become a
+second product task owner.
+"""
 
 from __future__ import annotations
 

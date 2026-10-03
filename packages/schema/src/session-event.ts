@@ -14,6 +14,7 @@ import { SessionMessage } from "./session-message"
 import { Revert } from "./revert"
 import { PrimaryDelivery } from "./primary-delivery"
 import { Memory } from "./memory"
+import { AgentRuntime } from "./agent-runtime"
 
 export { FileAttachment }
 
@@ -74,6 +75,19 @@ export const ModelSwitched = Event.define({
   },
 })
 export type ModelSwitched = typeof ModelSwitched.Type
+
+/** A generated proposal; projection applies it only while the original default title is unchanged. */
+export const TitleGenerated = Event.define({
+  type: "session.next.title.generated",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    expectedTitle: Schema.String,
+    title: Schema.String,
+  },
+})
+export type TitleGenerated = typeof TitleGenerated.Type
 
 export const Moved = Event.define({
   type: "session.next.moved",
@@ -178,7 +192,11 @@ export const ContextFusionPrepared = Event.define({
     totalInjectedBytes: NonNegativeInt,
     providerCallReady: Schema.Literal(true),
     degraded: Schema.Boolean,
-    bridgeProtocol: Schema.Literal("arforge.bridge/1.2"),
+    // Legacy bridge metadata remains optional so durable events written by the
+    // retired Python sidecar can still be decoded and audited.
+    bridgeProtocol: Schema.Literal("arforge.bridge/1.2").pipe(optional),
+    assemblyProtocol: Schema.Literal("arforge.context/2").pipe(optional),
+    runtimeTopology: Schema.Literals(["typescript-single-runtime", "legacy-dual-runtime"]).pipe(optional),
     memory: Schema.Struct({
       runtime: Schema.Literal("typescript-core"),
       ...FusionContextComponent.fields,
@@ -186,7 +204,7 @@ export const ContextFusionPrepared = Event.define({
     }),
     learning: Schema.Struct({ runtime: Schema.Literal("typescript-core"), ...FusionContextComponent.fields }),
     evolution: Schema.Struct({
-      runtime: Schema.Literal("python-sidecar"),
+      runtime: Schema.Literals(["typescript-core", "python-sidecar"]),
       ...FusionContextComponent.fields,
       activeCandidateCount: NonNegativeInt,
       injectedCandidateCount: NonNegativeInt,
@@ -194,6 +212,54 @@ export const ContextFusionPrepared = Event.define({
   },
 })
 export type ContextFusionPrepared = typeof ContextFusionPrepared.Type
+
+/**
+ * Durable projection of the exact provider request boundary. The serialized
+ * envelope is normalized JSON with no credential value; the digest is kept as
+ * a queryable index and is verified again before replay reconstruction.
+ */
+export const RequestEnvelopePrepared = Event.define({
+  type: "session.next.request.envelope.prepared",
+  ...options,
+  schema: {
+    ...Base,
+    runID: AgentRuntime.RunID,
+    turnStep: NonNegativeInt,
+    /** Optional bounded attempt identity; omitted by pre-attempt legacy events. */
+    attempt: PositiveInt.pipe(optional),
+    schemaVersion: Schema.Literal("1.0"),
+    requestDigest: Sha256Digest,
+    envelope: Schema.String,
+  },
+})
+export type RequestEnvelopePrepared = typeof RequestEnvelopePrepared.Type
+
+/**
+ * Metadata-only mature request binding. Unlike RequestEnvelopePrepared this
+ * event intentionally carries no serialized request body; it only records the
+ * bounded owner/attempt identity and the digests needed for reconciliation.
+ */
+export const RequestBindingPrepared = Event.define({
+  type: "session.next.request.binding.prepared",
+  ...options,
+  schema: {
+    ...Base,
+    runID: AgentRuntime.RunID,
+    turnStep: PositiveInt,
+    attempt: PositiveInt,
+    schemaVersion: Schema.Literal(1),
+    runtime: Schema.Literals(["native", "ai-sdk"]),
+    mode: Schema.Literals(["native-envelope", "prepared-projection"]),
+    requestDigest: Sha256Digest,
+    contextDigest: Sha256Digest,
+    toolSetRevision: Sha256Digest,
+    routeConfigRevision: Sha256Digest,
+    /** Optional SkillV2 snapshot identity used to assemble the request. */
+    skillSnapshotDigest: Sha256Digest.pipe(optional),
+    compilerRevision: Schema.String,
+  },
+})
+export type RequestBindingPrepared = typeof RequestBindingPrepared.Type
 
 export const Synthetic = Event.define({
   type: "session.next.synthetic",
@@ -238,6 +304,8 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessage.ID,
+      runID: AgentRuntime.RunID.pipe(optional),
+      requestDigest: Sha256Digest.pipe(optional),
       agent: Schema.String,
       model: Model.Ref,
       snapshot: Schema.String.pipe(optional),
@@ -264,6 +332,7 @@ export namespace Step {
       }),
       snapshot: Schema.String.pipe(optional),
       files: Schema.Array(RelativePath).pipe(optional),
+      structured: Schema.Record(Schema.String, Schema.Json).pipe(optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -445,6 +514,8 @@ export namespace Tool {
       ...ToolBase,
       structured: Schema.Record(Schema.String, Schema.Unknown),
       content: Schema.Array(ToolContent),
+      /** New storage-safe projection; outputPaths remains compatibility-only. */
+      artifactRefs: Schema.Array(Schema.suspend(() => AgentRuntime.OpaqueArtifactRef)).pipe(optional),
       outputPaths: Schema.Array(Schema.String).pipe(optional),
       result: Schema.Unknown.pipe(optional),
       provider: Schema.Struct({
@@ -461,6 +532,10 @@ export namespace Tool {
     schema: {
       ...ToolBase,
       error: UnknownError,
+      content: Schema.Array(ToolContent).pipe(optional),
+      structured: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
+      artifactRefs: Schema.Array(Schema.suspend(() => AgentRuntime.OpaqueArtifactRef)).pipe(optional),
+      outputPaths: Schema.Array(Schema.String).pipe(optional),
       result: Schema.Unknown.pipe(optional),
       provider: Schema.Struct({
         executed: Schema.Boolean,
@@ -495,6 +570,19 @@ export const Retried = Event.define({
 export type Retried = typeof Retried.Type
 
 export namespace Compaction {
+  /** Current durable preparation evidence; not a visible conversation message. */
+  export const RequestPrepared = Event.define({
+    type: "session.next.compaction.request.prepared",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessage.ID,
+      requestDigest: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+      envelope: Schema.String,
+    },
+  })
+  export type RequestPrepared = typeof RequestPrepared.Type
+
   export const Started = Event.define({
     type: "session.next.compaction.started",
     ...options,
@@ -525,6 +613,22 @@ export namespace Compaction {
       reason: Started.data.fields.reason,
       text: Schema.String,
       recent: Schema.String,
+      /** Normalized provider usage consumed by the compaction request. Older
+       * events omit this field and remain replay-compatible. */
+      usage: Schema.Struct({
+        cost: Schema.Finite,
+        tokens: Schema.Struct({
+          input: Schema.Finite,
+          output: Schema.Finite,
+          reasoning: Schema.Finite,
+          cache: Schema.Struct({ read: Schema.Finite, write: Schema.Finite }),
+        }),
+      }).pipe(optional),
+      /** Durable identity used to reconcile a crash between Session settlement
+       * publication and the final semantic checkpoint. Optional for v1 events
+       * written before transactional compaction was introduced. */
+      operationID: Schema.NonEmptyString.pipe(optional),
+      candidateDigest: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).pipe(optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -545,6 +649,7 @@ export namespace RevertEvent {
 }
 
 export const DurableDefinitions = Event.inventory(
+  TitleGenerated,
   AgentSwitched,
   ModelSwitched,
   Moved,
@@ -555,6 +660,8 @@ export const DurableDefinitions = Event.inventory(
   ContextUpdated,
   MemoryContextPrepared,
   ContextFusionPrepared,
+  RequestEnvelopePrepared,
+  RequestBindingPrepared,
   Synthetic,
   Shell.Started,
   Shell.Ended,
@@ -574,6 +681,7 @@ export const DurableDefinitions = Event.inventory(
   Reasoning.Ended,
   Retried,
   Compaction.Started,
+  Compaction.RequestPrepared,
   Compaction.Ended,
   RevertEvent.Staged,
   RevertEvent.Cleared,
@@ -581,6 +689,7 @@ export const DurableDefinitions = Event.inventory(
 )
 
 export const Definitions = Event.inventory(
+  TitleGenerated,
   AgentSwitched,
   ModelSwitched,
   Moved,
@@ -591,6 +700,8 @@ export const Definitions = Event.inventory(
   ContextUpdated,
   MemoryContextPrepared,
   ContextFusionPrepared,
+  RequestEnvelopePrepared,
+  RequestBindingPrepared,
   Synthetic,
   Shell.Started,
   Shell.Ended,
@@ -613,6 +724,7 @@ export const Definitions = Event.inventory(
   Tool.Failed,
   Retried,
   Compaction.Started,
+  Compaction.RequestPrepared,
   Compaction.Delta,
   Compaction.Ended,
   RevertEvent.Staged,

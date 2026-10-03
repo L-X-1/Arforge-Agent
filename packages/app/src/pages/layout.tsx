@@ -53,6 +53,12 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { setSessionHandoff } from "@/pages/session/handoff"
 import { SessionRouteKey, SessionStateKey } from "@/utils/server-scope"
 import { listAllSessions } from "@/utils/session"
+import {
+  beginControlOperation,
+  runControlOperationToCompletion,
+  type CompletedWorktree,
+} from "@/utils/control-operation-intent"
+import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
 
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@arforge-ai/ui/theme/context"
@@ -1558,6 +1564,8 @@ export default function LegacyLayout(props: ParentProps) {
   const deleteWorkspace = async (root: string, directory: string, leaveDeletedWorkspace = false) => {
     if (directory === root) return
 
+    const controlSDK = serverSDK()
+
     const current = currentDir()
     const currentKey = pathKey(current)
     const deletedKey = pathKey(directory)
@@ -1568,20 +1576,45 @@ export default function LegacyLayout(props: ParentProps) {
 
     setBusy(directory, true)
 
-    const result = await serverSDK()
-      .client.worktree.remove({ directory: root, worktreeRemoveInput: { directory } })
-      .then((x) => x.data)
+    const operation = await beginControlOperation({
+      server: controlSDK.scope,
+      project: root,
+      location: root,
+      kind: "worktree.remove",
+      input: { directory },
+    })
+      .then((intent) =>
+        runControlOperationToCompletion<true>(
+          intent,
+          (requestID) =>
+            controlSDK.client.worktree
+              .remove({
+                directory: root,
+                worktreeRemoveControlInput: { directory, requestID },
+              })
+              .then((x) => x.data),
+          ({ requestID, operation, location }) =>
+            controlSDK.client.experimental.controlOperation
+              .status({ requestID, directory: location, operation })
+              .then((x) => x.data),
+        ),
+      )
       .catch((err) => {
         showToast({
           title: language.t("workspace.delete.failed.title"),
           description: errorMessage(err, language.t("common.requestFailed")),
         })
-        return false
+        return undefined
       })
 
     setBusy(directory, false)
 
-    if (!result) return
+    if (!operation) return
+    if (operation.state === "status") {
+      showControlOperationStatusNotice(operation.status, (key) => language.t(key))
+      return
+    }
+    if (!operation.value) return
 
     if (pathKey(store.lastProjectSession[root]?.directory ?? "") === pathKey(directory)) {
       clearLastProjectSession(root)
@@ -1617,6 +1650,7 @@ export default function LegacyLayout(props: ParentProps) {
 
   const resetWorkspace = async (root: string, directory: string) => {
     if (directory === root) return
+    const controlSDK = serverSDK()
     setBusy(directory, true)
 
     const progress = showToast({
@@ -1626,41 +1660,74 @@ export default function LegacyLayout(props: ParentProps) {
     })
     const dismiss = () => toaster.dismiss(progress)
 
-    const sessions = await listAllSessions(serverSDK().api.session, { directory, order: "desc" }).catch(() => [])
+    const sessions = await listAllSessions(controlSDK.api.session, { directory, order: "desc" }).catch(() => [])
 
-    clearWorkspaceTerminals(
-      directory,
-      sessions.map((s) => s.id),
-      platform,
-      serverSDK().scope,
-    )
-    await serverSDK()
-      .client.instance.dispose({ directory })
-      .catch(() => undefined)
-
-    const result = await serverSDK()
-      .client.worktree.reset({ directory: root, worktreeResetInput: { directory } })
-      .then((x) => x.data)
+    const operation = await beginControlOperation({
+      server: controlSDK.scope,
+      project: root,
+      location: root,
+      kind: "worktree.reset",
+      input: { directory },
+    })
+      .then((intent) =>
+        runControlOperationToCompletion<true>(
+          intent,
+          (requestID) =>
+            controlSDK.client.worktree
+              .reset({
+                directory: root,
+                worktreeResetControlInput: { directory, requestID },
+              })
+              .then((x) => x.data),
+          ({ requestID, operation, location }) =>
+            controlSDK.client.experimental.controlOperation
+              .status({ requestID, directory: location, operation })
+              .then((x) => x.data),
+        ),
+      )
       .catch((err) => {
         showToast({
           title: language.t("workspace.reset.failed.title"),
           description: errorMessage(err, language.t("common.requestFailed")),
         })
-        return false
+        return undefined
       })
 
-    if (!result) {
+    if (!operation) {
+      setBusy(directory, false)
+      dismiss()
+      return
+    }
+    if (operation.state === "status") {
+      setBusy(directory, false)
+      dismiss()
+      showControlOperationStatusNotice(operation.status, (key) => language.t(key))
+      return
+    }
+    if (!operation.value) {
       setBusy(directory, false)
       dismiss()
       return
     }
 
+    // These local/UI effects must happen only after the control-plane action
+    // was explicitly approved and the server-side reset settled. The server
+    // disposes the loaded worktree inside the authorized Gateway body before
+    // Git mutates it; this post-success cleanup only reconciles the desktop.
+    clearWorkspaceTerminals(
+      directory,
+      sessions.map((s) => s.id),
+      platform,
+      controlSDK.scope,
+    )
+    await controlSDK.client.instance.dispose({ directory }).catch(() => undefined)
+
     await Promise.all(
       sessions
         .filter((session) => session.time.archived === undefined)
         .map((session) =>
-          serverSDK()
-            .api.session.archive({ sessionID: session.id, directory: session.directory })
+          controlSDK.api.session
+            .archive({ sessionID: session.id, directory: session.directory })
             .catch(() => undefined),
         ),
     )
@@ -1999,9 +2066,30 @@ export default function LegacyLayout(props: ParentProps) {
       pathKey(project.worktree),
       async () => {
         clearSidebarHoverState()
-        const created = await serverSDK()
-          .client.worktree.create({ directory: project.worktree })
-          .then((x) => x.data)
+        const controlSDK = serverSDK()
+        const operation = await beginControlOperation({
+          server: controlSDK.scope,
+          project: project.worktree,
+          location: project.worktree,
+          kind: "worktree.create",
+          input: {},
+        })
+          .then((intent) =>
+            runControlOperationToCompletion<CompletedWorktree>(
+              intent,
+              (requestID) =>
+                controlSDK.client.worktree
+                  .create({
+                    directory: project.worktree,
+                    worktreeCreateControlInput: { requestID },
+                  })
+                  .then((x) => x.data),
+              ({ requestID, operation, location }) =>
+                controlSDK.client.experimental.controlOperation
+                  .status({ requestID, directory: location, operation })
+                  .then((x) => x.data),
+            ),
+          )
           .catch((err) => {
             showToast({
               title: language.t("workspace.create.failed.title"),
@@ -2010,6 +2098,12 @@ export default function LegacyLayout(props: ParentProps) {
             return undefined
           })
 
+        if (!operation) return
+        if (operation.state === "status") {
+          showControlOperationStatusNotice(operation.status, (key) => language.t(key))
+          return
+        }
+        const created = operation.value
         if (!created?.directory) return
 
         setWorkspaceName(
@@ -2024,7 +2118,7 @@ export default function LegacyLayout(props: ParentProps) {
         const root = pathKey(local)
 
         setBusy(created.directory, true)
-        WorktreeState.pending(serverSDK().scope, created.directory)
+        WorktreeState.pending(controlSDK.scope, created.directory)
         setProjectWorkspaceExpanded(local, created.directory, true)
         setStore("workspaceOrder", project.worktree, (prev) => {
           const existing = prev ?? []

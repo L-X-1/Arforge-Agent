@@ -2,6 +2,8 @@ export * as ConfigProviderV1 from "./provider"
 
 import { Schema } from "effect"
 import { PositiveInt } from "../../schema"
+import { Billing } from "@arforge-ai/schema/billing"
+import type { ConfigProvider } from "../../config/provider"
 
 export const ModelStatus = Schema.Literals(["alpha", "beta", "deprecated", "active"])
 
@@ -38,6 +40,8 @@ export const Model = Schema.Struct({
       ),
     }),
   ),
+  /** Compatibility spelling of the same canonical billing contract, not another price owner. */
+  priceCatalog: Schema.optional(Billing.PriceCatalog),
   limit: Schema.optional(
     Schema.Struct({
       context: Schema.Finite,
@@ -116,3 +120,85 @@ export const Info = Schema.Struct({
   models: Schema.optional(Schema.Record(Schema.String, Model)),
 }).annotate({ identifier: "ProviderConfig" })
 export type Info = Schema.Schema.Type<typeof Info>
+
+/** Read-only projection for remaining consumers of the legacy TS provider DTO. */
+export const fromCanonical = (input: ConfigProvider.Info) => ({
+  ...(input.name === undefined ? {} : { name: input.name }),
+  ...(input.env === undefined ? {} : { env: [...input.env] }),
+  ...(input.api?.type === "aisdk" ? { npm: input.api.package } : {}),
+  ...(input.api?.url === undefined ? {} : { api: input.api.url }),
+  ...(input.api || input.request
+    ? {
+        options: {
+          ...input.api?.settings,
+          ...input.request?.body,
+          ...(input.api?.url === undefined ? {} : { baseURL: input.api.url }),
+          ...(input.request?.headers === undefined ? {} : { headers: { ...input.request.headers } }),
+        },
+      }
+    : {}),
+  ...(input.models === undefined
+    ? {}
+    : {
+        models: Object.fromEntries(
+          Object.entries(input.models).map(([id, model]) => {
+            const costs = model.cost === undefined ? [] : Array.isArray(model.cost) ? model.cost : [model.cost]
+            const base = costs.find((cost) => cost.tier === undefined)
+            const large = costs.find((cost) => cost.tier?.type === "context" && cost.tier.size === 200_000)
+            return [
+              id,
+              {
+                ...(model.name === undefined ? {} : { name: model.name }),
+                ...(model.family === undefined ? {} : { family: model.family }),
+                ...(model.api?.id === undefined ? {} : { id: model.api.id }),
+                ...(model.api && "type" in model.api && model.api.type === "aisdk"
+                  ? { provider: { npm: model.api.package, api: model.api.url } }
+                  : {}),
+                ...(model.capabilities === undefined
+                  ? {}
+                  : {
+                      tool_call: model.capabilities.tools,
+                      modalities: { input: [...model.capabilities.input], output: [...model.capabilities.output] },
+                    }),
+                ...(model.request?.body === undefined ? {} : { options: { ...model.request.body } }),
+                ...(model.request?.headers === undefined ? {} : { headers: { ...model.request.headers } }),
+                ...(model.variants === undefined
+                  ? {}
+                  : {
+                      variants: Object.fromEntries(model.variants.map((variant) => [variant.id, { ...variant.body }])),
+                    }),
+                ...(base === undefined
+                  ? {}
+                  : {
+                      cost: {
+                        input: base.input,
+                        output: base.output,
+                        cache_read: base.cache?.read,
+                        cache_write: base.cache?.write,
+                        ...(large === undefined
+                          ? {}
+                          : {
+                              context_over_200k: {
+                                input: large.input,
+                                output: large.output,
+                                cache_read: large.cache?.read,
+                                cache_write: large.cache?.write,
+                              },
+                            }),
+                      },
+                    }),
+                ...(model.priceCatalog === undefined
+                  ? {}
+                  : { priceCatalog: Schema.encodeSync(Billing.PriceCatalog)(model.priceCatalog) }),
+                ...(model.disabled === undefined
+                  ? {}
+                  : { status: model.disabled ? ("deprecated" as const) : ("active" as const) }),
+                ...(model.limit?.context === undefined || model.limit.output === undefined
+                  ? {}
+                  : { limit: { context: model.limit.context, output: model.limit.output, input: model.limit.input } }),
+              },
+            ]
+          }),
+        ),
+      }),
+})

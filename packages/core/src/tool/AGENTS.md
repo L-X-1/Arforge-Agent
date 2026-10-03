@@ -4,12 +4,12 @@ This folder owns Core's one local tool representation, process and Location regi
 
 ## Representations
 
-- `tool.ts` defines the opaque canonical `Tool.make({ description, input, output, execute, toModelOutput })` value. Application tools and shipped built-ins use the same type.
+- `tool.ts` defines the opaque canonical `Tool.make({ description, effects, input, output, execute, toModelOutput })` value. Application tools and shipped built-ins use the same type. `effects` declares the action's risk, retry, reversibility, resource, secret, and success contract before execution.
 - `application-tools.ts` stores process-scoped application registrations.
 - `tools.ts` exposes the registration-only `Tools.Service` view used by Location producers.
-- `registry.ts` stores only canonical tools, overlays Location registrations over application registrations, derives definitions, invokes tools, and applies generic output bounding.
+- `registry.ts` stores only canonical tools, overlays Location registrations over application registrations, derives definitions, routes every invocation through the Action Gateway, and applies generic output bounding.
 
-Do not add a second executable entry type, registry-owned executor, authorization callback, output-path callback, or legacy normalization path.
+Do not add a second executable entry type, registry-owned executor, output-path callback, or legacy normalization path. The registry performs the universal L2/L3 preauthorization from the tool permission action and declared effect scopes before entering the executor. Exact leaf permissions remain in place for resolved resources and compatibility; the gateway must never imply that those leaf checks have been bypassed.
 
 ## Construction
 
@@ -42,7 +42,7 @@ Both are scoped:
 
 ## Permissions
 
-The registry has no `PermissionV2.Service` dependency and performs no execution authorization. An internal built-in-only operation attaches a permission action solely to preserve whole-tool definition filtering; it is not part of public `Tool.make`. Most tools default to their registered name; `edit`, `write`, and `apply_patch` declare the shared `edit` action.
+The registry acquires `PermissionV2.Service` and passes an L2/L3 assertion to the Action Gateway before settlement. The permission action comes from the canonical tool decoration, while resources come from the declared filesystem, network, secret, and external-service scopes. L3 always forces confirmation; L0/L1 remain automatic and L4 is rejected by the gateway. Leaf tools retain exact resource permission checks for resolved resources and compatibility. Most tools default to their registered name; `edit`, `write`, and `apply_patch` declare the shared `edit` action.
 
 Definition filtering is catalog visibility, not execution authorization. A call still executes the captured leaf policy if it reaches settlement.
 

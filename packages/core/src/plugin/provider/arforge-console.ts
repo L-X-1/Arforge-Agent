@@ -4,7 +4,7 @@ import type { IntegrationOAuthMethodRegistration } from "@arforge-ai/plugin/v2/e
 import { define } from "@arforge-ai/plugin/v2/effect/plugin"
 import type { CredentialValue } from "@arforge-ai/sdk/v2/types"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
-import { EventV2 } from "../../event"
+import { PluginEvents } from "../events"
 import { Credential } from "../../credential"
 import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
@@ -72,13 +72,13 @@ function oauth(http: HttpClient.HttpClient, defaultServer: string, clientID: str
   } satisfies IntegrationOAuthMethodRegistration
 }
 
-export const ArforgeConsolePlugin = define<HttpClient.HttpClient | EventV2.Service | Scope.Scope>({
+export const ArforgeConsolePlugin = define<HttpClient.HttpClient | PluginEvents.Service | Scope.Scope>({
   id: "arforge-console",
   effect: Effect.fn(function* (ctx) {
     const defaultServer = process.env.ARFORGE_CONSOLE_URL?.trim().replace(/\/+$/, "")
     const clientID = process.env.ARFORGE_CONSOLE_CLIENT_ID?.trim()
     if (!defaultServer || !clientID) return
-    const events = yield* EventV2.Service
+    const events = yield* PluginEvents.Service
     const http = yield* HttpClient.HttpClient
     const loading = Semaphore.makeUnsafe(1)
     let connected = false

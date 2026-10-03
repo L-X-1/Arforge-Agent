@@ -3,12 +3,12 @@ export * as TaskGraphTools from "./task-graph"
 import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
-import { PositiveInt } from "../schema"
 import { TaskGraphV2 } from "../task-graph"
+import { PositiveInt } from "../schema"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead, scopedChange } from "./effect-semantics"
 
 const TaskOutput = Schema.Struct({ task: TaskGraphV2.Info })
 const PageOutput = Schema.Struct({ page: TaskGraphV2.Page })
@@ -16,16 +16,11 @@ const DeletedOutput = Schema.Struct({ deleted: TaskGraphV2.ID })
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const tasks = yield* TaskGraphV2.Service
-    const permission = yield* PermissionV2.Service
 
-    const authorize = (
-      action: string,
-      resources: ReadonlyArray<string>,
-      context: Tool.Context,
-    ) =>
-      permission.assert({
+    const authorize = (action: string, resources: ReadonlyArray<string>, context: Tool.Context) =>
+      context.permission.assert({
         action,
         resources: [...resources],
         save: [...resources],
@@ -47,6 +42,11 @@ const layer = Layer.effectDiscard(
             blockedBy: Schema.Array(TaskGraphV2.ID).pipe(Schema.optional),
           }),
           output: TaskOutput,
+          effects: scopedChange({
+            externalServices: ["task-graph-store"],
+            expectedArtifacts: ["durable task graph node"],
+            successCriteria: ["a new task and its validated blockers are persisted in the current session"],
+          }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -62,6 +62,11 @@ const layer = Layer.effectDiscard(
             owner: TaskGraphV2.Owner.pipe(Schema.optional),
           }),
           output: PageOutput,
+          effects: automaticRead({
+            externalServices: ["task-graph-store"],
+            expectedArtifacts: ["bounded task graph page"],
+            successCriteria: ["current-session tasks are returned with blockers and revisions"],
+          }),
           toModelOutput: json,
           execute: (input, context) =>
             tasks.list({ ...input, sessionID: context.sessionID }).pipe(
@@ -75,6 +80,12 @@ const layer = Layer.effectDiscard(
             query: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(240)),
           }),
           output: PageOutput,
+          effects: (input) =>
+            automaticRead({
+              externalServices: ["task-graph-store"],
+              expectedArtifacts: ["bounded task graph search page"],
+              successCriteria: [`task graph search for ${input.query} returns only current-session matches`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             tasks.list({ sessionID: context.sessionID, search: input.query }).pipe(
@@ -96,6 +107,12 @@ const layer = Layer.effectDiscard(
             blockedBy: Schema.Array(TaskGraphV2.ID).pipe(Schema.optional),
           }),
           output: TaskOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["task-graph-store"],
+              expectedArtifacts: [`task:${input.taskID}`],
+              successCriteria: [`task:${input.taskID} is updated from revision ${input.expectedRevision}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -112,6 +129,12 @@ const layer = Layer.effectDiscard(
             owner: TaskGraphV2.Owner,
           }),
           output: TaskOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["task-graph-store"],
+              expectedArtifacts: [`task:${input.taskID}`],
+              successCriteria: [`task:${input.taskID} is claimed from revision ${input.expectedRevision}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -127,6 +150,12 @@ const layer = Layer.effectDiscard(
             expectedRevision: PositiveInt,
           }),
           output: TaskOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["task-graph-store"],
+              expectedArtifacts: [`task:${input.taskID}`],
+              successCriteria: [`task:${input.taskID} is completed from revision ${input.expectedRevision}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -141,6 +170,12 @@ const layer = Layer.effectDiscard(
             expectedRevision: PositiveInt,
           }),
           output: DeletedOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["task-graph-store"],
+              expectedArtifacts: [`task:${input.taskID}`],
+              successCriteria: [`task:${input.taskID} and all dependency edges are deleted from revision ${input.expectedRevision}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -157,14 +192,16 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/task-graph",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, TaskGraphV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, TaskGraphV2.node],
 })
 
 function json({ output }: { output: unknown }) {
   return [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
 }
 
-const toolError = Effect.mapError((error: unknown) => new ToolFailure({ message: describe(error) }))
+const toolError = Effect.mapError(
+  (error: unknown) => Tool.toToolFailure(error) ?? new ToolFailure({ message: describe(error) }),
+)
 
 function describe(error: unknown) {
   if (typeof error === "object" && error !== null && "_tag" in error) {

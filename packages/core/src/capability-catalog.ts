@@ -14,6 +14,36 @@ export interface CatalogEntry {
   readonly keywords: string[]
   readonly priority: number
   readonly enabled: boolean
+  /**
+   * A capability may advertise a typed execution contract once its handler
+   * is owned by Core and routed through ActionGateway.  The catalog remains
+   * usable for route preview without this field; absence is intentionally
+   * interpreted as fail-closed by the execution-contract audit.
+   */
+  readonly execution?: CapabilityExecutionContract
+}
+
+/**
+ * Minimum declaration required before a capability can be considered for an
+ * execution adapter.  This is metadata only: the presence of a declaration
+ * does not itself execute a handler or grant permission.
+ */
+export interface CapabilityExecutionContract {
+  readonly owner: string
+  readonly typed_input_schema: string
+  readonly typed_output_schema: string
+  readonly authorization: "action-gateway"
+  readonly cancellation: "required"
+  readonly evidence: "required"
+  readonly settlement: "required"
+  readonly side_effects: "read-only" | "write"
+  /** Stable reference to the test/evidence that proves the declaration. */
+  readonly verification: CapabilityExecutionVerification
+}
+
+export interface CapabilityExecutionVerification {
+  readonly test_id: string
+  readonly evidence_digest: string
 }
 
 export const CAPABILITY_CATALOG: CatalogEntry[] = [
@@ -45,7 +75,17 @@ export const CAPABILITY_CATALOG: CatalogEntry[] = [
     name: "security_review",
     description: "Audit code or system configuration for security vulnerabilities",
     kind: "security",
-    keywords: ["security", "安全", "vulnerability", "漏洞", "exploit", "injection", "permission", "权限", "audit security"],
+    keywords: [
+      "security",
+      "安全",
+      "vulnerability",
+      "漏洞",
+      "exploit",
+      "injection",
+      "permission",
+      "权限",
+      "audit security",
+    ],
     priority: 12,
     enabled: true,
   },
@@ -53,7 +93,20 @@ export const CAPABILITY_CATALOG: CatalogEntry[] = [
     name: "code_review",
     description: "Review code for bugs, style issues, and potential improvements",
     kind: "tool",
-    keywords: ["review", "code review", "审查", "检查代码", "inspect", "audit", "analyze", "analyse", "fix", "fix bug", "修复", "debug"],
+    keywords: [
+      "review",
+      "code review",
+      "审查",
+      "检查代码",
+      "inspect",
+      "audit",
+      "analyze",
+      "analyse",
+      "fix",
+      "fix bug",
+      "修复",
+      "debug",
+    ],
     priority: 15,
     enabled: true,
   },
@@ -69,7 +122,18 @@ export const CAPABILITY_CATALOG: CatalogEntry[] = [
     name: "code_search",
     description: "Search the local project codebase for symbols, patterns, and references",
     kind: "context",
-    keywords: ["search code", "find in code", "代码搜索", "搜索代码", "grep", "symbol", "定义", "definition", "where is", "在哪里"],
+    keywords: [
+      "search code",
+      "find in code",
+      "代码搜索",
+      "搜索代码",
+      "grep",
+      "symbol",
+      "定义",
+      "definition",
+      "where is",
+      "在哪里",
+    ],
     priority: 20,
     enabled: true,
   },
@@ -77,7 +141,17 @@ export const CAPABILITY_CATALOG: CatalogEntry[] = [
     name: "learning_injection",
     description: "Inject learned patterns, preferences, and error fixes into context",
     kind: "memory",
-    keywords: ["learn", "学习", "pattern", "模式", "preference", "偏好", "error pattern", "错误模式", "inject learning"],
+    keywords: [
+      "learn",
+      "学习",
+      "pattern",
+      "模式",
+      "preference",
+      "偏好",
+      "error pattern",
+      "错误模式",
+      "inject learning",
+    ],
     priority: 25,
     enabled: true,
   },
@@ -131,9 +205,21 @@ export const CAPABILITY_CATALOG: CatalogEntry[] = [
   },
   {
     name: "doc_extraction",
-    description: "从 PDF/Word/Excel 提取文本内容",
+    description: "通过确定性本地管线从 PDF/Word/Excel/PowerPoint/CSV/TSV 提取文本内容",
     kind: "tool",
-    keywords: ["提取文档", "读pdf", "读word", "读excel", "doc", "pdf", "文档内容", "extract"],
+    keywords: [
+      "提取文档",
+      "读pdf",
+      "读word",
+      "读excel",
+      "读powerpoint",
+      "读csv",
+      "读tsv",
+      "doc",
+      "pdf",
+      "文档内容",
+      "extract",
+    ],
     priority: 75,
     enabled: true,
   },

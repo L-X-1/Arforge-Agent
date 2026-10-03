@@ -3,6 +3,7 @@ import { reasoningProfile } from "@arforge-ai/core/reasoning-profile"
 
 export type ExecutionTraceKind = "reasoning" | "context" | "command" | "edit" | "agent" | "verify" | "tool" | "answer" | "retry"
 export type ExecutionTraceStatus = "pending" | "running" | "completed" | "error"
+export type ExecutionTraceSection = { kind: "input" | "output" | "error" | "detail"; source: string; content: string }
 
 export type ExecutionTraceStep = {
   id: string
@@ -15,6 +16,7 @@ export type ExecutionTraceStep = {
   startedAt?: number
   endedAt?: number
   agentSessionID?: string
+  sections?: ExecutionTraceSection[]
 }
 
 export type ExecutionTrace = {
@@ -103,6 +105,19 @@ function toolDetail(part: ToolPart) {
   return blocks.length ? blocks.join("\n\n") : undefined
 }
 
+function toolSections(part: ToolPart): ExecutionTraceSection[] {
+  const sections: ExecutionTraceSection[] = [{ kind: "input", source: part.id, content: JSON.stringify(part.state.input, null, 2) }]
+  if (part.state.status === "completed" && part.state.output) sections.push({ kind: "output", source: part.id, content: part.state.output })
+  if (part.state.status === "error" && part.state.error) sections.push({ kind: "error", source: part.id, content: part.state.error })
+  return sections
+}
+
+export function executionStepText(step: ExecutionTraceStep) {
+  return step.sections?.length
+    ? step.sections.map((section) => `[${section.source}] ${section.kind}\n${section.content}`).join("\n\n")
+    : step.detail ?? step.preview ?? ""
+}
+
 function toolAgentSessionID(part: ToolPart) {
   if (!("metadata" in part.state) || !part.state.metadata || typeof part.state.metadata !== "object") return
   return stringField(part.state.metadata as Record<string, unknown>, ["sessionId", "sessionID", "jobId"])
@@ -125,6 +140,7 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       count: 1,
       preview: clipped(part.text.replace(/\s+/g, " ")),
       detail: clipped(part.text),
+      sections: [{ kind: "detail", source: part.id, content: part.text }],
       startedAt: part.time.start,
       endedAt: part.time.end,
     }
@@ -139,6 +155,7 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       title: part.tool,
       preview: toolPreview(part),
       detail: toolDetail(part),
+      sections: toolSections(part),
       ...(kind === "agent" ? { agentSessionID: toolAgentSessionID(part) } : {}),
       ...toolTiming(part),
     }
@@ -151,6 +168,7 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       count: Math.max(part.files.length, 1),
       preview: part.files.join(", "),
       detail: part.files.join("\n"),
+      sections: [{ kind: "detail", source: part.id, content: part.files.join("\n") }],
     }
   }
   if (part.type === "agent") {
@@ -165,6 +183,7 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       title: part.agent,
       preview: part.description,
       detail: clipped(part.prompt),
+      sections: [{ kind: "input", source: part.id, content: part.prompt }],
     }
   }
   if (part.type === "retry") {
@@ -175,6 +194,7 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       count: 1,
       preview: `#${part.attempt}`,
       detail: clipped(JSON.stringify(part.error, null, 2)),
+      sections: [{ kind: "error", source: part.id, content: JSON.stringify(part.error, null, 2) }],
       startedAt: part.time.created,
     }
   }
@@ -185,6 +205,8 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
       status: busy && part.time?.end === undefined ? "running" : "completed",
       count: 1,
       preview: clipped(part.text.replace(/\s+/g, " ")),
+      detail: clipped(part.text),
+      sections: [{ kind: "output", source: part.id, content: part.text }],
       startedAt: part.time?.start,
       endedAt: part.time?.end,
     }
@@ -215,6 +237,7 @@ function mergeSteps(steps: ExecutionTraceStep[]) {
     previous.count += step.count
     previous.preview = [previous.preview, step.preview].filter(Boolean).join(" · ") || undefined
     previous.detail = [previous.detail, step.detail].filter(Boolean).join("\n\n") || undefined
+    previous.sections = [...(previous.sections ?? []), ...(step.sections ?? [])]
     previous.startedAt = previous.startedAt ?? step.startedAt
     previous.endedAt = step.endedAt ?? previous.endedAt
     return result

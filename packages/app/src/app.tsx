@@ -52,6 +52,7 @@ import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
+import { ControlApprovalProvider } from "@/context/control-approval"
 import { usePlatform } from "@/context/platform"
 import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
@@ -68,12 +69,27 @@ import { legacySessionHref, legacySessionServer, requireServerKey, sessionHref }
 import { createSessionLineage } from "@/pages/session/session-lineage"
 import { preloadNewSessionRoute } from "@/utils/new-session-route"
 import { useSettingsDialog } from "@/components/settings-dialog"
+import { ControlApprovalCenter } from "@/components/control-approval/control-approval-center"
+import { ControlOperationRecovery } from "@/components/control-operation-recovery"
+import { OnboardingProvider } from "@/context/onboarding"
 
-import { SessionPage, SessionRouteErrorBoundary, TargetSessionRouteContent } from "@/pages/session"
 import { NewHome } from "@/pages/home"
 import { LegacyHome } from "@/pages/home/legacy-home"
+import SettingsPage from "@/pages/settings"
 
 const NewSession = lazy(preloadNewSessionRoute)
+const SessionPage = lazy(async () => {
+  const module = await import("@/pages/session")
+  return { default: module.SessionPage }
+})
+const SessionRouteErrorBoundary = lazy(async () => {
+  const module = await import("@/pages/session")
+  return { default: module.SessionRouteErrorBoundary }
+})
+const TargetSessionRouteContent = lazy(async () => {
+  const module = await import("@/pages/session")
+  return { default: module.TargetSessionRouteContent }
+})
 
 const SessionRoute = () => {
   const settings = useSettings()
@@ -317,10 +333,12 @@ function SharedProviders(props: ParentProps) {
   return (
     <>
       <BodyDesignClass />
-      <CommandProvider>
-        <DesktopCommands />
-        <HighlightsProvider>{props.children}</HighlightsProvider>
-      </CommandProvider>
+      <OnboardingProvider>
+        <CommandProvider>
+          <DesktopCommands />
+          <HighlightsProvider>{props.children}</HighlightsProvider>
+        </CommandProvider>
+      </OnboardingProvider>
     </>
   )
 }
@@ -506,11 +524,7 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean; start
         </Show>
       </Show>
       <Show when={loading()}>
-        <div
-          class="fixed inset-0 z-[9999] bg-background-base"
-          role="status"
-          aria-label="Arforge 正在初始化"
-        />
+        <div class="fixed inset-0 z-[9999] bg-background-base" role="status" aria-label="Arforge 正在初始化" />
       </Show>
     </>
   )
@@ -609,13 +623,19 @@ export function AppInterface(props: {
                 root={(routerProps) => (
                   <TabsProvider>
                     <PermissionProvider>
-                      <NotificationProvider>
-                        <ServerShell>
-                          <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
-                            <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                      <ControlApprovalProvider>
+                        <NotificationProvider>
+                          <Show when={!useSettings().general.newLayoutDesigns()}>
+                            <ControlApprovalCenter />
                           </Show>
-                        </ServerShell>
-                      </NotificationProvider>
+                          <ControlOperationRecovery />
+                          <ServerShell>
+                            <Show when={useSettings().general.newLayoutDesigns()} fallback={routerProps.children}>
+                              <NewAppLayout serverScoped={props.serverScoped}>{routerProps.children}</NewAppLayout>
+                            </Show>
+                          </ServerShell>
+                        </NotificationProvider>
+                      </ControlApprovalProvider>
                     </PermissionProvider>
                   </TabsProvider>
                 )}
@@ -635,6 +655,9 @@ function Routes(props: { serverScoped?: JSX.Element }) {
 
   return (
     <>
+      <Show when={settings.general.newLayoutDesigns()}>
+        <Route path="/settings" component={SettingsPage} />
+      </Show>
       <Route
         component={(routeProps) => (
           <LegacyServerLayout serverScoped={props.serverScoped}>{routeProps.children}</LegacyServerLayout>

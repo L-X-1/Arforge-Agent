@@ -10,6 +10,7 @@ import { AbsolutePath } from "./schema"
 import { SystemContext } from "./system-context/index"
 import { SystemContextRegistry } from "./system-context/registry"
 import { makeLocationNode } from "./effect/app-node"
+import { ContextFirewall } from "./context-firewall"
 
 class File extends Schema.Class<File>("InstructionContext.File")({
   path: AbsolutePath,
@@ -101,5 +102,7 @@ export const node = makeLocationNode({
 })
 
 function render(files: ReadonlyArray<File>) {
-  return files.map((file) => `Instructions from: ${file.path}\n${file.content}`).join("\n\n")
+  return files
+    .map((file) => ContextFirewall.trustedProjectRules(file.path, `Instructions from: ${file.path}\n${file.content}`))
+    .join("\n\n")
 }

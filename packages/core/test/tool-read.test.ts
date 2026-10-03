@@ -186,7 +186,10 @@ describe("ReadTool", () => {
           mime: "text/plain",
         },
       })
-      expect(assertions).toMatchObject([{ sessionID, action: "read", resources: ["README.md"], save: ["*"] }])
+      // Automatic (L0/L1) reads are verified against the trusted registry
+      // preflight; the leaf assert is suppressed and never reaches
+      // PermissionV2 after gateway evaluation.
+      expect(assertions).toEqual([])
       expect(readCalls).toEqual([
         {
           input: AbsolutePath.make(path.join(process.cwd(), "README.md")),
@@ -208,14 +211,15 @@ describe("ReadTool", () => {
           call: { type: "tool-call", id: "call-external-read", name: "read", input: { path: external } },
         }),
       ).toMatchObject({ type: "json" })
-      expect(assertions).toMatchObject([
-        {
-          sessionID,
-          action: "external_directory",
-          resources: [path.join(path.dirname(external), "*").replaceAll("\\", "/")],
-        },
-        { sessionID, action: "read", resources: [external.replaceAll("\\", "/")], save: ["*"] },
-      ])
+      // An external read is elevated to L2 scoped authorization: the exact
+      // read resource plus the external_directory boundary, asserted by the
+      // canonical preflight in sorted order.
+      expect(assertions.map((input) => input.action)).toEqual(["external_directory", "read"])
+      expect(assertions[0]).toMatchObject({
+        resources: [path.join(path.dirname(external), "*").replaceAll("\\", "/")],
+      })
+      expect(assertions[1]).toMatchObject({ resources: [external.replaceAll("\\", "/")] })
+      expect(assertions[1]?.resources).not.toContain("*")
       expect(readCalls).toEqual([{ input: AbsolutePath.make(external), page: { offset: undefined, limit: undefined } }])
     }),
   )
@@ -528,18 +532,25 @@ describe("ReadTool", () => {
     }),
   )
 
-  it.effect("does not read when permission is denied", () =>
+  it.effect("does not read when permission is denied for an elevated external read", () =>
     Effect.gen(function* () {
       allow = false
       const registry = yield* ToolRegistry.Service
+      const external = path.join(path.parse(process.cwd()).root, "external-read", "notes.txt")
 
       expect(
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-read", name: "read", input: { path: "README.md" } },
+          call: { type: "tool-call", id: "call-read", name: "read", input: { path: external } },
         }),
-      ).toEqual({ type: "error", value: "Unable to read README.md" })
+      ).toEqual({
+        type: "error",
+        value: `Permission denied for external_directory: ${path.join(
+          path.dirname(external),
+          "*",
+        ).replaceAll("\\", "/")}; read: ${external.replaceAll("\\", "/")}`,
+      })
       expect(readCalls).toEqual([])
     }),
   )
@@ -554,7 +565,7 @@ describe("ReadTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-missing-path", name: "read", input: { path: missingPath } },
         }),
-      ).toEqual({ type: "error", value: `Unable to read ${missingPath}` })
+      ).toEqual({ type: "error", value: "Preflight blocked: read target could not be statically resolved" })
       expect(assertions).toEqual([])
       expect(readCalls).toEqual([])
     }),
@@ -577,24 +588,30 @@ describe("ReadTool", () => {
           },
         }),
       ).toEqual({ type: "json", value: { entries: [], truncated: false } })
-      expect(assertions).toMatchObject([{ sessionID, action: "read", resources: ["src"], save: ["*"] }])
+      // Automatic directory reads are verified against the trusted preflight;
+      // the leaf assert is suppressed.
+      expect(assertions).toEqual([])
       expect(listCalls).toEqual([{ offset: 2, limit: 10 }])
     }),
   )
 
-  it.effect("does not list a directory when permission is denied", () =>
+  it.effect("does not list a directory when permission is denied for an elevated external read", () =>
     Effect.gen(function* () {
       allow = false
       resolvedType = "directory"
       const registry = yield* ToolRegistry.Service
+      const external = path.join(path.parse(process.cwd()).root, "external-read")
 
       expect(
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-read-directory-denied", name: "read", input: { path: "src" } },
+          call: { type: "tool-call", id: "call-read-directory-denied", name: "read", input: { path: external } },
         }),
-      ).toEqual({ type: "error", value: "Unable to read src" })
+      ).toEqual({
+        type: "error",
+        value: expect.stringContaining("Permission denied for external_directory"),
+      })
       expect(listCalls).toEqual([])
     }),
   )

@@ -3,11 +3,11 @@ export * as QuestionTool from "./question"
 import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
 import { QuestionV2 } from "../question"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact } from "./effect-semantics"
 
 export const name = "question"
 
@@ -46,9 +46,8 @@ export const toModelOutput = (
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const question = yield* QuestionV2.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
@@ -56,11 +55,16 @@ const layer = Layer.effectDiscard(
           description,
           input: Input,
           output: Output,
+          effects: majorImpact({
+            externalServices: ["user-interaction"],
+            expectedArtifacts: ["one answer array per prompt"],
+            successCriteria: ["all prompts return bounded user answers or explicit unanswered values"],
+          }),
           toModelOutput: ({ input, output }) => [
             { type: "text", text: toModelOutput(input.questions, output.answers) },
           ],
           execute: (input, context) =>
-            permission
+            context.permission
               .assert({
                 action: "question",
                 resources: ["*"],
@@ -69,7 +73,9 @@ const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
               .pipe(
-                Effect.mapError(() => new ToolFailure({ message: "Permission denied: question" })),
+                Effect.mapError(
+                  (error) => Tool.toToolFailure(error) ?? new ToolFailure({ message: "Permission denied: question" }),
+                ),
                 Effect.andThen(
                   question
                     .ask({
@@ -90,5 +96,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/question",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, QuestionV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, QuestionV2.node],
 })

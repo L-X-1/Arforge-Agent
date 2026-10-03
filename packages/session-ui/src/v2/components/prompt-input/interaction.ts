@@ -1,4 +1,5 @@
 import { createEffect, on, type Accessor } from "solid-js"
+import { capturePromptEditorSelection, restorePromptEditorSelection, promptInputIsComposing, type PromptEditorSelection } from "./editor-selection"
 import { createStore, reconcile } from "solid-js/store"
 import { useFilteredList } from "@arforge-ai/ui/hooks"
 import { createPromptInputV2Attachments, type PromptInputV2AttachmentConfig } from "./attachments"
@@ -70,11 +71,15 @@ export function createPromptInputV2Controller(input: {
   attachments?: PromptInputV2AttachmentConfig
 }) {
   let editor: HTMLElement | undefined
+  let savedSelection: PromptEditorSelection | undefined
   let fileInput: HTMLInputElement | undefined
   const draft = createPromptInputV2Store(input.store)
   const [state, setState] = input.state ?? createPromptInputV2State()
   if (input.identity) {
-    createEffect(on(input.identity, () => setState(reconcile(createPromptInputV2InteractionState())), { defer: true }))
+    createEffect(on(input.identity, () => {
+      savedSelection = undefined
+      setState(reconcile(createPromptInputV2InteractionState()))
+    }, { defer: true }))
   }
   function addPart(part: PromptInputV2PersistedState["prompt"][number]) {
     if (part.type === "image") return false
@@ -186,6 +191,8 @@ export function createPromptInputV2Controller(input: {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
+    // IME owns Enter, Escape, arrows and shortcuts until composition commits.
+    if (promptInputIsComposing(event)) return true
     if (
       state.mode === "normal" &&
       (event.metaKey || event.ctrlKey) &&
@@ -243,10 +250,14 @@ export function createPromptInputV2Controller(input: {
     dispatch({ type: "popover.results", ids })
   })
 
-  const restoreFocus = (cursor = draft.state.cursor ?? promptLength(draft.state.prompt)) => {
+  const restoreFocus = (cursor?: number) => {
+    const identity = input.identity?.()
     requestAnimationFrame(() => {
-      editor?.focus()
-      setEditorCursor(editor, cursor)
+      if (input.identity && input.identity() !== identity) return
+      if (!editor?.isConnected) return
+      editor.focus({ preventScroll: true })
+      if (cursor === undefined && restorePromptEditorSelection(editor, savedSelection)) return
+      setEditorCursor(editor, cursor ?? draft.state.cursor ?? promptLength(draft.state.prompt))
     })
   }
 
@@ -338,6 +349,9 @@ export function createPromptInputV2Controller(input: {
       input.onEditor?.(element)
     },
     restoreFocus,
+    captureSelection() {
+      savedSelection = capturePromptEditorSelection(editor) ?? savedSelection
+    },
     onInput(value: string, prompt?: PromptInputV2PersistedState["prompt"], cursor?: number) {
       if (prompt) draft.setPrompt(prompt, cursor)
       dispatch({ type: "input.changed", value, persist: !prompt })

@@ -7,6 +7,7 @@ import { optional } from "@arforge-ai/core/schema"
 import { Plugin } from "../plugin"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
+import { Database } from "@arforge-ai/core/database/database"
 
 const When = Schema.Struct({
   key: Schema.String,
@@ -224,6 +225,6 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [Auth.node, Plugin.node] })
+export const node = LayerNode.make({ service: Service, layer: layer, deps: [Auth.node, Plugin.node, Database.node] })
 
 export * as ProviderAuth from "./auth"

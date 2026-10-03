@@ -8,6 +8,8 @@ import type {
 import type { AssistantMessage, FilePart, Message, Part, ToolPart, UserMessage } from "@arforge-ai/sdk/v2"
 import { Option, Schema } from "effect"
 
+type StructuredAssistant = SessionMessageAssistant & { structured?: Record<string, unknown> }
+
 const emptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const emptyModel: { id: string; providerID: string; variant?: string } = { id: "", providerID: "" }
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
@@ -80,20 +82,21 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
       return
     }
     if (message.type === "assistant") {
-      agent = message.agent
-      model = message.model
+      const assistant = message as StructuredAssistant
+      agent = assistant.agent
+      model = assistant.model
       if (!parentID) return
       const parent = messages.findLast((item) => item.id === parentID)
       if (parent?.role === "user") {
-        parent.agent = message.agent
+        parent.agent = assistant.agent
         parent.model = {
-          providerID: message.model.providerID,
-          modelID: message.model.id,
-          variant: message.model.variant,
+          providerID: assistant.model.providerID,
+          modelID: assistant.model.id,
+          variant: assistant.model.variant,
         }
       }
-      messages.push(assistantMessage(sessionID, parentID, message))
-      parts.set(message.id, assistantParts(sessionID, message))
+      messages.push(assistantMessage(sessionID, parentID, assistant))
+      parts.set(assistant.id, assistantParts(sessionID, assistant))
       return
     }
     if (message.type !== "compaction" || !parentID) return
@@ -230,7 +233,7 @@ function userParts(sessionID: string, message: SessionMessageUser): Part[] {
   ]
 }
 
-function assistantMessage(sessionID: string, parentID: string, message: SessionMessageAssistant): AssistantMessage {
+function assistantMessage(sessionID: string, parentID: string, message: StructuredAssistant): AssistantMessage {
   const error = message.error
     ? message.error.type.toLowerCase().includes("abort") || message.error.type.toLowerCase().includes("interrupt")
       ? { name: "MessageAbortedError" as const, data: { message: message.error.message } }
@@ -255,9 +258,9 @@ function assistantMessage(sessionID: string, parentID: string, message: SessionM
   }
 }
 
-function assistantParts(sessionID: string, message: SessionMessageAssistant): Part[] {
+function assistantParts(sessionID: string, message: StructuredAssistant): Part[] {
   const ordinals = { text: 0, reasoning: 0 }
-  return message.content.flatMap((content): Part[] => {
+  const parts = message.content.flatMap((content): Part[] => {
     if (content.type === "text") {
       const part = textPart(sessionID, message.id, ordinals.text++, content.text)
       return content.text.trim() ? [part] : []
@@ -279,6 +282,20 @@ function assistantParts(sessionID: string, message: SessionMessageAssistant): Pa
     }
     return [toolPart(sessionID, message.id, content)]
   })
+  if (message.content.some((content) => content.type === "text" && content.text.trim())) return parts
+  const structured = record(message.structured) ? structuredText(message.structured) : undefined
+  return structured ? [...parts, textPart(sessionID, message.id, ordinals.text, structured, true)] : parts
+}
+
+function structuredText(value: Record<string, unknown>) {
+  try {
+    const json = JSON.stringify(value, undefined, 2)
+    const longest = Math.max(0, ...(json.match(/`+/g) ?? []).map((run) => run.length))
+    const fence = "`".repeat(Math.max(3, longest + 1))
+    return `${fence}json\n${json}\n${fence}`
+  } catch {
+    return undefined
+  }
 }
 
 function textPart(sessionID: string, messageID: string, ordinal: number, text: string, synthetic?: boolean): Part {

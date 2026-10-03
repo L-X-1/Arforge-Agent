@@ -8,14 +8,23 @@ import { PermissionV2 } from "@arforge-ai/core/permission"
 import { Project } from "@arforge-ai/core/project"
 import { ProjectTable } from "@arforge-ai/core/project/sql"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Location } from "@arforge-ai/core/location"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { TaskGraphV2 } from "@arforge-ai/core/task-graph"
 import { TaskGraphTools } from "@arforge-ai/core/tool/task-graph"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { executeTool, toolDefinitions, toolIdentity } from "./lib/tool"
+
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 const sessionID = SessionV2.ID.make("ses_task_graph_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -45,6 +54,7 @@ const it = testEffect(
     [
       [PermissionV2.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, current],
     ],
   ),
 )
@@ -99,10 +109,14 @@ describe("TaskGraphTools", () => {
       const design = (yield* tasks.list({ sessionID })).items[0]!
       yield* executeTool(
         registry,
-        call("create_task", {
-          title: "Implement task graph",
-          blockedBy: [design.id],
-        }),
+        call(
+          "create_task",
+          {
+            title: "Implement task graph",
+            blockedBy: [design.id],
+          },
+          "call-create-implementation",
+        ),
       )
       const implementation = (yield* tasks.list({ sessionID })).items[1]!
 
@@ -127,11 +141,15 @@ describe("TaskGraphTools", () => {
       expect(
         yield* executeTool(
           registry,
-          call("claim_task", {
-            taskID: implementation.id,
-            expectedRevision: implementation.revision,
-            owner: "worker-1",
-          }),
+          call(
+            "claim_task",
+            {
+              taskID: implementation.id,
+              expectedRevision: implementation.revision,
+              owner: "worker-1",
+            },
+            "call-claim-implementation",
+          ),
         ),
       ).toMatchObject({ type: "text", value: expect.stringContaining('"status": "in_progress"') })
       expect(assertions.map((item) => item.action)).toEqual([
@@ -142,5 +160,9 @@ describe("TaskGraphTools", () => {
         "claim_task",
       ])
     }),
+    // The full Core matrix starts many isolated SQLite layers in parallel;
+    // preserve the default fast budget for ordinary tests while giving this
+    // source-compatibility integration enough room under suite-wide load.
+    { timeout: 15_000 },
   )
 })

@@ -198,7 +198,10 @@ test("focuses a terminal created from the new-terminal button", async ({ page })
   await expect(composer).toBeFocused()
 
   await page.getByRole("button", { name: "New terminal" }).click()
-  await expect(page.getByRole("tab", { name: "Terminal 2" })).toHaveAttribute("aria-selected", "true")
+  await expect(page.locator(`[data-slot="tabs-trigger"][data-value="${newPtyID}"]`).first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
   await expect.poll(() => terminal.evaluate((element) => element.contains(document.activeElement))).toBe(true)
 })
 

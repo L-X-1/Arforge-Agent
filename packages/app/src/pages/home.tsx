@@ -9,6 +9,10 @@ import { createHomeScrollController } from "./home/home-scroll-controller"
 import { createHomeSessionSearchController } from "./home/home-session-search-controller"
 import { createHomeSessionsController } from "./home/home-sessions-controller"
 import { HomeSessions } from "./home/home-sessions"
+import { useSessionNavigation } from "./home/session-navigation"
+import { HomeFirstRunGuide } from "@/components/onboarding/home-first-run-guide"
+import { serverName } from "@/context/server"
+import { displayName } from "@/pages/layout/helpers"
 
 export function NewHome() {
   const home = createHomeController()
@@ -37,7 +41,8 @@ export function NewHome() {
       setSearchParams({ archived: undefined })
     }
   })
-  const sessions = createHomeSessionsController(home)
+  const navigation = useSessionNavigation()
+  const sessions = createHomeSessionsController(home, { pins: navigation.targets })
   const archived = createHomeArchivedSessionsController(home)
   const search = createHomeSessionSearchController(home, sessions)
   const scroll = createHomeScrollController(sessions.data.groups)
@@ -60,7 +65,7 @@ export function NewHome() {
         onScroll={(event) => scroll.viewport.update(event.currentTarget.scrollTop)}
         onWheel={scroll.viewport.containOuterWheel}
       >
-        <div class="mx-auto flex w-full max-w-[880px] items-center gap-2.5 px-3 pt-4 lg:px-4">
+        <div class="workspace-home__brand mx-auto flex w-full items-center gap-2.5">
           <Mark class="size-5" />
           <span class="font-mono text-[15px] font-bold leading-none tracking-[0.14em] text-v2-text-text-base">
             ARFORGE
@@ -71,10 +76,29 @@ export function NewHome() {
             </span>
           </Show>
         </div>
-        <div class="mx-auto min-h-full w-full max-w-[880px] px-3 pb-16 lg:px-4">
+        <div class="workspace-home__content mx-auto min-h-full w-full pb-16">
+          <div class="workspace-home__scope">
+            <Show when={home.server.focused()}>{(conn) => <span>{serverName(conn())}</span>}</Show>
+            <Show when={home.project.selected()}>
+              {(project) => <span title={project().worktree}>{displayName(project())}</span>}
+            </Show>
+          </div>
           <Show
             when={page() === "archived"}
-            fallback={<HomeSessions sessions={sessions} search={search} scroll={scroll} />}
+            fallback={
+              <>
+                <Show when={sessions.data.pinFailures() > 0}>
+                  <div class="workspace-sidebar__notice" role="status">
+                    <span>{sessions.copy.language.t("common.requestFailed")}</span>
+                    <button type="button" onClick={() => void sessions.data.retry()}>
+                      {sessions.copy.language.t("common.retry")}
+                    </button>
+                  </div>
+                </Show>
+                <HomeFirstRunGuide canStart={sessions.session.canCreate()} onStart={sessions.session.create} />
+                <HomeSessions sessions={sessions} search={search} scroll={scroll} />
+              </>
+            }
           >
             <HomeArchivedSessionsView archived={archived} />
           </Show>

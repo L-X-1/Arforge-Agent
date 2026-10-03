@@ -1,0 +1,22 @@
+R13 MCP catalog 共享预算与目标租约 proof（2026-09-15）
+
+实现：
+- MCP.catalog() 的 prompts/resources/resourceTemplates 三类刷新共用 CatalogBudget 事务预算；分页 reserve/commit/release，保留原分页、字节、并发和 deadline 上限。
+- MCP service 增加 leaseForCapability，生产 Prompt/resource/resource-template projection 与 command getter 在 native transport 前申请 generation lease。
+- resource/template lease 先对当前 generation 目录保留的原始 URI/source template 做 exact comparison，再由安装级 sealer 绑定精确 URI（模板另绑定脱敏 source template）；getPrompt/readResource 重算 proof，篡改 reference/template fail-closed。
+- 旧数字 generation、无 generation 调用和测试替身兼容；不把 HTTP/CLI 目录声称成 control Action/Gateway 已完成。
+- HTTP mcp.capabilities、mcp.resource.catalog 与 TS CLI mcp capabilities 现统一调用 mcp/control-gateway.ts：ControlClaimIndex -> DurableRun -> ActionGateway 的 one-shot durable control action，执行前冻结 scope/generation/intent，异常 best-effort 收敛并释放 opaque lease；mcp.list 仍保持纯 supervisor 状态读取。
+
+验收：
+- catalog.test.ts：19 pass / 0 fail / 48 assertions / exit 0。
+- lifecycle lease focus：2 pass / 0 fail / 31 assertions / exit 0。
+- control gateway durable-run focus：1 pass / 0 fail / 5 assertions / exit 0，验证 mcp.catalog.read ControlRun completed 且 lease/activeAttempt 已释放。
+- lifecycle（ARFORGE_SANDBOX_DISABLE_WINDOWS_NATIVE=1）：44 pass / 0 fail / 175 assertions / exit 0。
+- resource-projection.test.ts：11 pass / 0 fail / 48 assertions / exit 0。
+- cli/mcp-capabilities.test.ts：1 pass / 0 fail / 2 assertions / exit 0。
+- httpapi-mcp + httpapi-mcp-read-paths：9 pass / 0 fail / 73 assertions / exit 0。
+- httpapi-exercise coverage：428 pass / 0 fail / 0 skip / 4 missing / exit 0；4 个既有 `/api/fs/*` 场景缺失，使用 `--fail-on-missing` 时按合同退出 1，与本切片无关。
+- migration freshness：按 Python 依赖 → TS composition → source snapshot 顺序重生成后 audit:migration-freshness valid=true；Python 5095/6709/6，TS 1797/3/5/3，source inputs 7700，capability links 4 records/4 missing evidence。
+- packages/arforge typecheck exit 2，只有既有 packages/tui JSX/BaseRenderable 诊断；本切片无 MCP/command 新诊断。Prettier、限定 git diff --check 通过。
+
+仍开放：mcp.list 以及尚不存在的 HTTP/CLI read/template/prompt 端点的 control action、外发授权/期限/持久回执与恢复；RFC 6570 pattern policy、默认 native 两项本地生命周期边界、完整冷恢复/全量矩阵/真实外部 Provider、旧无 generation 消费者审计及 R30 后 full sandbox。未改用户数据。

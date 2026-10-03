@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "session/full-runner-queue-parity-openai-text",
+    "recordedAt": "2026-08-29T23:37:50.863Z",
+    "provider": "openai",
+    "protocol": "openai-compatible-chat",
+    "runtime": "mature-prompt"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\\nRequest-scoped instruction: answer this turn without tools.\"},{\"role\":\"user\",\"content\":\"Say hello in one short sentence.\"}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\ndata: [DONE]\n\n"
+      }
+    }
+  ]
+}

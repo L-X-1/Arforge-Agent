@@ -15,6 +15,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@arforge-ai/core/filesystem/watcher"
+import { failingEventPublish, failingLsp } from "./post-process-failure"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-edit-session"),
@@ -37,6 +38,36 @@ const layer = LayerNode.compile(
 
 const it = testEffect(layer)
 
+const failingFormat = Layer.succeed(
+  Format.Service,
+  Format.Service.of({
+    init: () => Effect.void,
+    status: () => Effect.succeed([]),
+    file: () => Effect.die(new Error("formatter post-process failed")),
+  }),
+)
+
+const failingPostProcessIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[Format.node, failingFormat]],
+  ),
+)
+
+const failingLspIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[LSP.node, failingLsp]],
+  ),
+)
+
+const failingEventIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[EventV2Bridge.node, failingEventPublish]],
+  ),
+)
+
 const init = Effect.fn("EditToolTest.init")(function* () {
   const info = yield* EditTool
   return yield* info.init()
@@ -50,8 +81,11 @@ const run = Effect.fn("EditToolTest.run")(function* (
   return yield* tool.execute(args, next)
 })
 
-const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameters<typeof EditTool>) {
-  const exit = yield* run(args).pipe(Effect.exit)
+const fail = Effect.fn("EditToolTest.fail")(function* (
+  args: Tool.InferParameters<typeof EditTool>,
+  next: Tool.Context = ctx,
+) {
+  const exit = yield* run(args, next).pipe(Effect.exit)
   if (Exit.isFailure(exit)) {
     const err = Cause.squash(exit.cause)
     return err instanceof Error ? err : new Error(String(err))
@@ -90,6 +124,42 @@ const onceBus = Effect.fn("EditToolTest.onceBus")(function* (def: typeof Watcher
 })
 
 describe("tool.edit", () => {
+  failingPostProcessIt.instance("rolls back when post-processing fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filepath = path.join(test.directory, "post-process-failure.txt")
+      yield* put(filepath, "before\n")
+
+      const error = yield* fail({ filePath: filepath, oldString: "before", newString: "after" })
+      expect(error.message).toContain("Edit post-processing failed")
+      expect(yield* load(filepath)).toBe("before\n")
+    }),
+  )
+
+  failingLspIt.instance("rolls back when LSP refresh fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filepath = path.join(test.directory, "lsp-post-process-failure.txt")
+      yield* put(filepath, "before\n")
+
+      const error = yield* fail({ filePath: filepath, oldString: "before", newString: "after" })
+      expect(error.message).toContain("Edit post-processing failed")
+      expect(yield* load(filepath)).toBe("before\n")
+    }),
+  )
+
+  failingEventIt.instance("rolls back when watcher publication fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filepath = path.join(test.directory, "event-post-process-failure.txt")
+      yield* put(filepath, "before\n")
+
+      const error = yield* fail({ filePath: filepath, oldString: "before", newString: "after" })
+      expect(error.message).toContain("Edit post-processing failed")
+      expect(yield* load(filepath)).toBe("before\n")
+    }),
+  )
+
   describe("creating new files", () => {
     it.instance("creates new file when oldString is empty", () =>
       Effect.gen(function* () {
@@ -568,6 +638,32 @@ describe("tool.edit", () => {
         ])
 
         expect(yield* load(filepath)).toBe("top = 1\nmiddle = keep\nbottom = 2\n")
+      }),
+    )
+
+    it.instance("rejects an external change made after permission approval", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filepath = path.join(test.directory, "raced.txt")
+        yield* put(filepath, "before\n")
+        const metadata: Record<string, unknown>[] = []
+        const racedCtx = {
+          ...ctx,
+          ask: () => Effect.promise(() => fs.writeFile(filepath, "external\n", "utf-8")),
+          metadata: (input: { metadata?: Record<string, unknown> }) =>
+            Effect.sync(() => {
+              if (input.metadata) metadata.push(input.metadata)
+            }),
+        }
+
+        const error = yield* fail({ filePath: filepath, oldString: "before", newString: "after" }, racedCtx)
+        expect(error.message).toContain("File changed after permission approval")
+        expect(metadata.at(-1)).toMatchObject({
+          kind: "file_conflict",
+          code: "observed_version_mismatch",
+          path: filepath,
+        })
+        expect(yield* load(filepath)).toBe("external\n")
       }),
     )
   })

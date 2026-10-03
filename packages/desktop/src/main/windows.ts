@@ -15,7 +15,11 @@ import { PINCH_ZOOM_ENABLED_KEY, WINDOW_IDS_KEY } from "./store-keys"
 import { createUnresponsiveSampler } from "./unresponsive"
 import { createWindowRegistry } from "./window-registry"
 import { safeWindowURL } from "./window-state"
+import { redactPreviewResourceURLs } from "./preview-resource-url"
 import { resolveRelaunchOptions } from "./relaunch"
+import { shouldServeRendererShell } from "./renderer-route"
+import { documentPolicyHeader, jsCallStacksDocumentPolicy, withRendererDocumentPolicy } from "./renderer-security"
+import { windowRecoveryCopy, type WindowRecoveryAction } from "./window-recovery-copy"
 
 const root = dirname(fileURLToPath(import.meta.url))
 const rendererRoot = join(root, "../renderer")
@@ -29,8 +33,6 @@ const defaultBackground = {
   light: resolveThemeVariant(arforgeDefaultTheme.light, false)["background-base"],
   dark: resolveThemeVariant(arforgeDefaultTheme.dark, true)["background-base"],
 }
-const documentPolicyHeader = "Document-Policy"
-const jsCallStacksDocumentPolicy = "include-js-call-stacks-in-crash-reports"
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -293,29 +295,28 @@ export function registerRendererProtocol() {
       return new Response("Not found", { status: 404 })
     }
 
-    try {
-      const range = request.headers.get("range")
-      const response = await net.fetch(pathToFileURL(file).toString(), {
-        headers: range ? { range } : undefined,
-      })
-      if (response.status >= 400) {
-        writeLog(
-          "protocol",
-          "fetch failed",
-          {
-            url: request.url,
-            file,
-            status: response.status,
-            statusText: response.statusText,
-          },
-          "error",
-        )
+    const range = request.headers.get("range")
+    const candidates = shouldServeRendererShell({ method: request.method, pathname: url.pathname, range })
+      ? [file, join(rendererRoot, "index.html")]
+      : [file]
+    let failure: unknown
+    for (const candidate of candidates) {
+      try {
+        const response = await net.fetch(pathToFileURL(candidate).toString(), {
+          headers: range ? { range } : undefined,
+        })
+        if (response.status < 400) {
+          if (candidate !== file)
+            writeLog("protocol", "served renderer shell for navigation", { url: request.url })
+          return withRendererDocumentPolicy(response, candidate)
+        }
+        failure = { status: response.status, statusText: response.statusText }
+      } catch (error) {
+        failure = error
       }
-      return addDocumentPolicy(response, file)
-    } catch (error) {
-      writeLog("protocol", "fetch error", { url: request.url, file, error }, "error")
-      return new Response("Not found", { status: 404 })
     }
+    writeLog("protocol", "fetch failed", { url: request.url, file, error: failure }, "error")
+    return new Response("Not found", { status: 404 })
   })
 }
 
@@ -333,20 +334,21 @@ function loadWindow(win: BrowserWindow, html: string) {
 function wireWindowRecovery(win: BrowserWindow, name: string) {
   let showing = false
   const sampler = createUnresponsiveSampler(win, name)
+  const copy = windowRecoveryCopy(app.getLocale())
 
-  const handle = async (button: string | undefined, wait: boolean) => {
-    if (button === "Export Logs") {
+  const handle = async (action: WindowRecoveryAction | undefined, wait: boolean) => {
+    if (action === "export_logs") {
       const sampling = sampler.stopAndFlush()
       await exportDebugLogs().catch((error) => writeLog("main", "failed to export debug logs", { error }, "error"))
       if (wait && sampling) sampler.start()
       return true
     }
-    if (button === "Relaunch") {
+    if (action === "relaunch") {
       sampler.stopAndFlush()
       relaunchHandler()
       return false
     }
-    if (button === "Quit") {
+    if (action === "quit") {
       sampler.stopAndFlush()
       app.quit()
     }
@@ -358,7 +360,10 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
     showing = true
     try {
       while (!win.isDestroyed()) {
-        const buttons = wait ? ["Relaunch", "Export Logs", "Keep Waiting"] : ["Relaunch", "Export Logs", "Quit"]
+        const actions: WindowRecoveryAction[] = wait
+          ? ["relaunch", "export_logs", "keep_waiting"]
+          : ["relaunch", "export_logs", "quit"]
+        const buttons = actions.map((action) => copy.actions[action])
         const result = await dialog.showMessageBox(win, {
           type: "warning",
           buttons,
@@ -367,7 +372,7 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
           message,
           detail,
         })
-        if (await handle(buttons[result.response], wait)) continue
+        if (await handle(actions[result.response], wait)) continue
         return
       }
     } finally {
@@ -390,7 +395,7 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
         event,
         errorCode,
         errorDescription,
-        validatedURL,
+        validatedURL: redactPreviewResourceURLs(validatedURL),
         currentURL: safeWindowURL(win),
         isMainFrame,
       },
@@ -399,8 +404,12 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
 
     if (!isMainFrame || errorCode === -3) return
     void show(
-      "Arforge failed to load",
-      [`Window: ${name}`, `URL: ${validatedURL}`, `Error: ${errorCode} ${errorDescription}`].join("\n"),
+      copy.loadFailed,
+      [
+        `${copy.window}: ${name}`,
+        `${copy.url}: ${validatedURL}`,
+        `${copy.error}: ${errorCode} ${errorDescription}`,
+      ].join("\n"),
       false,
     )
   }
@@ -415,35 +424,33 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
     sampler.stopAndFlush()
     writeLog("window", "renderer process gone", { window: name, currentURL: safeWindowURL(win), details }, "error")
     void show(
-      "Arforge window terminated unexpectedly",
-      [`Window: ${name}`, `Reason: ${details.reason}`, `Code: ${details.exitCode ?? "<unknown>"}`].join("\n"),
+      copy.terminated,
+      [
+        `${copy.window}: ${name}`,
+        `${copy.reason}: ${details.reason}`,
+        `${copy.code}: ${details.exitCode ?? copy.unknown}`,
+      ].join("\n"),
       false,
     )
   })
   win.on("unresponsive", () => {
     writeLog("window", "renderer unresponsive", { window: name, currentURL: safeWindowURL(win) }, "error")
     sampler.start()
-    void show("Arforge is not responding", "You can relaunch the app, open the logs, or keep waiting.", true)
+    void show(copy.unresponsive, copy.unresponsiveDetail, true)
   })
   win.on("responsive", () => {
     writeLog("window", "renderer responsive", { window: name, currentURL: safeWindowURL(win) }, "error")
     sampler.stopAndFlush()
   })
-  win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+  win.webContents.on("console-message", (event) => {
+    const { level, message, lineNumber: line, sourceId } = event
     if (message.toLowerCase().includes("terminal") || sourceId.toLowerCase().includes("terminal")) {
-      writeLog("pty", "console", { window: name, level, message, line, sourceId })
+      writeLog("pty", "console", { window: name, level, message: redactPreviewResourceURLs(message), line, sourceId: redactPreviewResourceURLs(sourceId) })
     }
   })
   win.webContents.on("preload-error", (_event, preloadPath, error) => {
     writeLog("preload", "preload error", { window: name, preloadPath, error }, "error")
   })
-}
-
-function addDocumentPolicy(response: Response, file: string) {
-  if (!file.toLowerCase().endsWith(".html")) return response
-  const headers = new Headers(response.headers)
-  headers.set(documentPolicyHeader, jsCallStacksDocumentPolicy)
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
 function allowRendererPermissions(win: BrowserWindow) {

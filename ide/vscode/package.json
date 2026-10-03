@@ -42,13 +42,13 @@
       "properties": {
         "arforge.bridge.command": {
           "type": "string",
-          "default": "python",
-          "description": "Bridge 可执行命令。默认使用当前 PATH 中的 Python。"
+          "default": "arforge",
+          "description": "Bridge 可执行命令。默认使用 TypeScript Arforge CLI。"
         },
         "arforge.bridge.args": {
           "type": "array",
           "items": {"type": "string"},
-          "default": ["-m", "arforge.bridge"],
+          "default": ["bridge"],
           "description": "传给 Bridge 命令的参数。"
         },
         "arforge.bridge.profile": {

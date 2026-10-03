@@ -1,0 +1,28 @@
+R13 MCP catalog generation fence / bounded retry (2026-09-15)
+
+Changed:
+  - MCP.catalog now captures connected client identity, observed/desired generation and supervisor phase before listing.
+  - A changed fence discards the mixed projection and retries at most three times with a 25 ms scheduling window.
+  - Old transport failures during a generation transition are handled by the same bounded retry; repeated churn fails closed.
+  - Added a real HTTP MCP transport replacement regression; the second generation returns all three catalog kinds.
+  - No second MCP discovery, budget, semaphore, registry, transport, or Action owner was added.
+
+Tests:
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/mcp/lifecycle.test.ts -t "catalog() retries when a reconnect changes its generation fence" --rerun-every
+  result: 1 pass / 0 fail / 6 assertions / exit 0
+
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/mcp/lifecycle.test.ts -t "catalog|capabilit" --rerun-every
+  result: 9 pass / 0 fail / 38 assertions / exit 0
+
+Background full lifecycle:
+  result: 39 pass / 2 fail / 129 assertions / exit 1
+  failures: existing Windows/Bun local stdio startup-directory and fixture-PID boundaries
+
+Quality:
+  - arforge typecheck has no new MCP/CLI/HTTP diagnostics; existing packages/tui JSX/BaseRenderable errors remain
+  - Prettier and scoped git diff --check passed
+  - migration freshness valid=true after the final ordered regeneration (Python scanned=5091, dependency leaves=6708, TS source=1795, source inputs=7675)
+
+Open:
+  - explicit control Action/Gateway identity, authorization and durable receipt for HTTP/CLI catalog reads
+  - remaining MCP lifecycle, Artifact, external-service and post-R30 sandbox gates

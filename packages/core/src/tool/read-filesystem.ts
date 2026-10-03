@@ -7,6 +7,7 @@ import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
 import { makeLocationNode } from "../effect/app-node"
 import { AbsolutePath, PositiveInt, RelativePath } from "../schema"
+import { SymbolicLinkError } from "../file-guard"
 
 export const MAX_READ_LINES = 2_000
 export const MAX_READ_BYTES = 50 * 1024
@@ -60,6 +61,16 @@ export class PathKindError extends Schema.TaggedErrorClass<PathKindError>()("Rea
   }
 }
 
+export class ExternalDriftError extends Schema.TaggedErrorClass<ExternalDriftError>()("ReadTool.ExternalDriftError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `File changed while it was being read: ${this.resource}`
+  }
+}
+
+export { SymbolicLinkError }
+
 export type InspectError = FSUtil.Error | PathKindError
 export type ReadError =
   | FSUtil.Error
@@ -68,6 +79,8 @@ export type ReadError =
   | MalformedUtf8Error
   | OffsetOutOfRangeError
   | PathKindError
+  | ExternalDriftError
+  | SymbolicLinkError
 
 export const PageInput = Schema.Struct({
   offset: PositiveInt.pipe(Schema.optional),
@@ -97,7 +110,7 @@ export interface Interface {
     resource: string,
     page?: PageInput,
   ) => Effect.Effect<FileSystem.Content | TextPage, ReadError>
-  readonly list: (path: AbsolutePath, page?: PageInput) => Effect.Effect<ListPage, FSUtil.Error>
+  readonly list: (path: AbsolutePath, page?: PageInput) => Effect.Effect<ListPage, FSUtil.Error | SymbolicLinkError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/ReadToolFileSystem") {}
@@ -161,6 +174,29 @@ const decodeUtf8 = (resource: string, decoder: TextDecoder, bytes?: Uint8Array) 
 const decodeChunk = (resource: string, decoder: TextDecoder, bytes: Uint8Array) =>
   bytes.includes(0) ? Effect.fail(new BinaryFileError({ resource })) : decodeUtf8(resource, decoder, bytes)
 
+type FileObservation = {
+  readonly identity: string
+  readonly size: string
+  readonly mode: number
+  readonly mtimeMs: number | undefined
+}
+
+const observe = Effect.fn("ReadTool.observe")(function* (fs: FSUtil.Interface, input: string) {
+  const info = yield* fs.stat(input)
+  return {
+    identity: `${String(info.dev)}:${Option.getOrElse(info.ino, () => undefined) ?? "unknown"}`,
+    size: String(info.size),
+    mode: info.mode & 0o7777,
+    mtimeMs: Option.getOrElse(info.mtime, () => undefined)?.getTime(),
+  } satisfies FileObservation
+})
+
+const sameObservation = (before: FileObservation, after: FileObservation) =>
+  before.identity === after.identity &&
+  before.size === after.size &&
+  before.mode === after.mode &&
+  before.mtimeMs === after.mtimeMs
+
 export const inspect = Effect.fn("ReadTool.inspect")(function* (fs: FSUtil.Interface, input: string) {
   const info = yield* fs.stat(input)
   const type = info.type === "File" ? "file" : info.type === "Directory" ? "directory" : undefined
@@ -174,8 +210,10 @@ export const read = Effect.fn("ReadTool.read")(function* (
   resource: string,
   page: PageInput = {},
 ) {
+  if (yield* fs.isSymbolicLink(input)) return yield* Effect.fail(new SymbolicLinkError({ path: input }))
   const real = yield* fs.realPath(input)
-  return yield* Effect.scoped(
+  const before = yield* observe(fs, real)
+  const result = yield* Effect.scoped(
     Effect.gen(function* () {
       const file = yield* fs.open(real, { flag: "r" })
       const info = yield* file.stat
@@ -319,9 +357,13 @@ export const read = Effect.fn("ReadTool.read")(function* (
       })
     }),
   )
+  const after = yield* observe(fs, real)
+  if (!sameObservation(before, after)) return yield* Effect.fail(new ExternalDriftError({ resource }))
+  return result
 })
 
 export const list = Effect.fn("ReadTool.list")(function* (fs: FSUtil.Interface, input: string, page: PageInput = {}) {
+  if (yield* fs.isSymbolicLink(input)) return yield* Effect.fail(new SymbolicLinkError({ path: input }))
   const real = yield* fs.realPath(input)
   const items = yield* fs.readDirectoryEntries(real)
   const offset = page.offset ?? 1

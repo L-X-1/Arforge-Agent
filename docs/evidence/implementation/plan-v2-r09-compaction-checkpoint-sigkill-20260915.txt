@@ -1,0 +1,40 @@
+R09 compaction semantic checkpoint cross-process SIGKILL slice (2026-09-15)
+
+Cross-process matrix:
+  command: D:\bun\bin\bun.exe test test/session/compaction-checkpoint.test.ts test/session-compaction.test.ts --rerun-every
+  result: 10 pass / 0 fail / 68 expect() calls / exit 0
+  phases: prepared, summarizing, summarized, revalidated, committed, closed
+  behavior: each phase was committed by an independent Bun worker, then SIGKILLed; a fresh layer classified the same SQLite prefix as in_flight, completed_unsettled, or committed without provider retry; after-event/committed/closed also recovered an already-published Compaction.Ended event
+
+Checkpoint file re-run:
+  command: D:\bun\bin\bun.exe test test/session/compaction-checkpoint.test.ts --rerun-every
+  result: 7 pass / 0 fail / 60 expect() calls / exit 0
+
+Core typecheck:
+  command: D:\bun\bin\bun.exe run typecheck
+  result: exit 0
+
+Prettier:
+  command: D:\bun\bin\bun.exe x prettier --check src/session/compaction-checkpoint.ts test/session/compaction-checkpoint.test.ts test/fixture/compaction-checkpoint-crash-worker.ts
+  result: passed
+
+Diff check:
+  command: git diff --check -- packages/core/src/session/compaction-checkpoint.ts packages/core/test/session/compaction-checkpoint.test.ts packages/core/test/fixture/compaction-checkpoint-crash-worker.ts
+  result: exit 0
+
+Oxlint:
+  command: D:\bun\bin\bun.exe x oxlint src/session/compaction-checkpoint.ts test/session/compaction-checkpoint.test.ts test/fixture/compaction-checkpoint-crash-worker.ts --quiet
+  result: blocked before lint because existing %ARFORGE_REPO%\.oxlintrc.json places options.typeAware outside the root config; no source diagnostics were produced
+
+Global freshness note:
+  the first audit observed volatile packages/app/e2e/test-results traces; R00 then fixed the dependency-ledger exclusion and added a regression. After regeneration migration-freshness is valid=true; Python consumer audit remains valid=true with remaining_consumer_count=0. See plan-v2-r00-migration-freshness-20260915.md.
+
+Isolation:
+  - crash hook requires ARFORGE_DESKTOP_ISOLATED_ACCEPTANCE=1 and an explicit phase variable
+  - worker uses a temporary SQLite profile and fixed metadata only
+  - no network, credentials, provider call, or real user data
+  - full OS sandbox remains post-R30
+
+Remaining:
+  - finer provider/Surface CAS/Artifact/settlement crash windows and complete CLI/Desktop recovery are open
+  - R09 and the overall plan remain open

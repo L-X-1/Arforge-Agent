@@ -6,11 +6,17 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@arforge-ai/core/effect/app-node-platform"
 import { PermissionV2 } from "@arforge-ai/core/permission"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
-import { WebFetchTool } from "@arforge-ai/core/tool/webfetch"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { WebFetchTool } from "@arforge-ai/core/tool/webfetch"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
+import { Egress } from "@arforge-ai/core/egress"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
 
 const sessionID = SessionV2.ID.make("ses_webfetch_test")
@@ -39,10 +45,17 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 const toolLayer = (replacements: LayerNode.Replacements = []) =>
   AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, WebFetchTool.node]), [
     [PermissionV2.node, permission],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+    [Location.node, current],
     ...replacements,
   ])
 const it = testEffect(toolLayer([[LayerNodePlatform.httpClient, http]]))
@@ -59,7 +72,6 @@ const call = (input: typeof WebFetchTool.Input.Type, id = "call-webfetch") => ({
   ...toolIdentity,
   call: { type: "tool-call" as const, id, name: "webfetch", input },
 })
-
 describe("WebFetchTool helpers", () => {
   test("defaults format and rejects invalid timeout controls", () => {
     const decode = Schema.decodeUnknownSync(WebFetchTool.Input)
@@ -73,6 +85,39 @@ describe("WebFetchTool helpers", () => {
     expect(WebFetchTool.extractTextFromHTML(html)).toBe("Helloworld wide")
     expect(WebFetchTool.convertHTMLToMarkdown(html)).toBe("# Hello\n\nworld **wide**")
   })
+
+  test("fetches a bounded raw asset through the canonical egress trace", async () => {
+    const requested: string[] = []
+    const assertions: Array<{ url: string; method: string; redirectFrom?: string }> = []
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requested.push(request.url)
+        const response =
+          request.url === "https://cdn.example.test/app.js"
+            ? new Response("", { status: 302, headers: { location: "/v2/app.js" } })
+            : new Response("console.log('asset')", { headers: { "content-type": "text/javascript" } })
+        return HttpClientResponse.fromWeb(request, response)
+      }),
+    )
+    const egress: Egress.Authorizer = {
+      assert: (input) => Effect.sync(() => assertions.push(input)),
+    }
+    const result = await Effect.runPromise(
+      WebFetchTool.fetchRawAsset(client, egress, "https://cdn.example.test/app.js"),
+    )
+    expect(requested).toEqual(["https://cdn.example.test/app.js", "https://cdn.example.test/v2/app.js"])
+    expect(assertions).toEqual([
+      { url: "https://cdn.example.test/app.js", method: "GET" },
+      { url: "https://cdn.example.test/v2/app.js", method: "GET", redirectFrom: "https://cdn.example.test/app.js" },
+    ])
+    expect(result).toMatchObject({
+      url: "https://cdn.example.test/app.js",
+      redirects: ["https://cdn.example.test/v2/app.js"],
+      finalURL: "https://cdn.example.test/v2/app.js",
+      contentType: "text/javascript",
+    })
+    expect(new TextDecoder().decode(result.bytes)).toBe("console.log('asset')")
+  })
 })
 
 describe("WebFetchTool registration", () => {
@@ -84,15 +129,29 @@ describe("WebFetchTool registration", () => {
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["webfetch"])
       expect(yield* settleTool(registry, call({ url, format: "text", timeout: 4 }))).toEqual({
-        result: { type: "text", value: "hello" },
+        result: { type: "text", value: ContextFirewall.untrusted("web", "hello") },
         output: {
           structured: { url, contentType: "text/plain", format: "text", output: "hello" },
-          content: [{ type: "text", text: "hello" }],
+          content: [{ type: "text", text: ContextFirewall.untrusted("web", "hello") }],
         },
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text", timeout: 4 } },
+        {
+          sessionID,
+          agent: "build",
+          action: "webfetch",
+          resources: ["HTTP origin from url", url],
+          metadata: {
+            riskTier: "L2",
+            authority: "scoped_grant",
+            networkScope: [url],
+            externalServices: ["HTTP origin from url"],
+            filesystemScope: [],
+            secretScope: [],
+          },
+        },
       ])
+      expect(assertions[0]?.resources).not.toContain("*")
       expect(requests).toMatchObject([{ url, headers: { accept: expect.stringContaining("text/plain;q=1.0") } }])
     }),
   )
@@ -105,10 +164,23 @@ describe("WebFetchTool registration", () => {
 
       expect(yield* executeTool(registry, call({ url, format: "text" }))).toEqual({
         type: "text",
-        value: "hello",
+        value: ContextFirewall.untrusted("web", "hello"),
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+        {
+          sessionID,
+          agent: "build",
+          action: "webfetch",
+          resources: ["HTTP origin from url", url],
+          metadata: {
+            riskTier: "L2",
+            authority: "scoped_grant",
+            networkScope: [url],
+            externalServices: ["HTTP origin from url"],
+            filesystemScope: [],
+            secretScope: [],
+          },
+        },
       ])
       expect(requests.map((request) => request.url)).toEqual([url])
     }),
@@ -133,10 +205,23 @@ describe("WebFetchTool registration", () => {
 
           expect(yield* executeTool(registry, call({ url, format: "text" }))).toEqual({
             type: "text",
-            value: "redirected",
+            value: ContextFirewall.untrusted("web", "redirected"),
           })
           expect(assertions).toMatchObject([
-            { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+            {
+              sessionID,
+              agent: "build",
+              action: "webfetch",
+              resources: ["HTTP origin from url", url],
+              metadata: {
+                riskTier: "L2",
+                authority: "scoped_grant",
+                networkScope: [url],
+                externalServices: ["HTTP origin from url"],
+                filesystemScope: [],
+                secretScope: [],
+              },
+            },
           ])
         }),
       (server) => Effect.promise(() => server.stop(true)),
@@ -150,7 +235,7 @@ describe("WebFetchTool registration", () => {
 
       expect(yield* executeTool(registry, call({ url: "file:///etc/passwd", format: "text" }))).toEqual({
         type: "error",
-        value: "Unable to fetch file:///etc/passwd",
+        value: "Preflight blocked: webfetch only supports http and https URLs",
       })
       expect(assertions).toEqual([])
       expect(requests).toEqual([])
@@ -168,13 +253,13 @@ describe("WebFetchTool registration", () => {
         )
       const registry = yield* ToolRegistry.Service
 
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "markdown" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "markdown" }, "call-md"))).toEqual({
         type: "text",
-        value: "# Hello\n\nworld",
+        value: ContextFirewall.untrusted("web", "# Hello\n\nworld"),
       })
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "text" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "text" }, "call-text"))).toEqual({
         type: "text",
-        value: "Helloworld",
+        value: ContextFirewall.untrusted("web", "Helloworld"),
       })
     }),
   )
@@ -208,7 +293,9 @@ describe("WebFetchTool registration", () => {
             headers: { "content-type": "text/plain", "content-length": String(WebFetchTool.MAX_RESPONSE_BYTES + 1) },
           }),
         )
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/declared", format: "text" }))).toEqual({
+      expect(
+        yield* executeTool(registry, call({ url: "https://1.1.1.1/declared", format: "text" }, "call-declared")),
+      ).toEqual({
         type: "error",
         value: "Unable to fetch https://1.1.1.1/declared",
       })
@@ -217,7 +304,9 @@ describe("WebFetchTool registration", () => {
         Effect.succeed(
           new Response("x".repeat(WebFetchTool.MAX_RESPONSE_BYTES + 1), { headers: { "content-type": "text/plain" } }),
         )
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/streamed", format: "text" }))).toEqual({
+      expect(
+        yield* executeTool(registry, call({ url: "https://1.1.1.1/streamed", format: "text" }, "call-streamed")),
+      ).toEqual({
         type: "error",
         value: "Unable to fetch https://1.1.1.1/streamed",
       })
@@ -229,13 +318,13 @@ describe("WebFetchTool registration", () => {
       reset()
       const registry = yield* ToolRegistry.Service
       respond = () => Effect.succeed(new Response("png", { headers: { "content-type": "image/png" } }))
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/image", format: "html" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/image", format: "html" }, "call-image"))).toEqual({
         type: "error",
         value: "Unable to fetch https://1.1.1.1/image",
       })
 
       respond = () => Effect.succeed(new Response("pdf", { headers: { "content-type": "application/pdf" } }))
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/file", format: "html" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/file", format: "html" }, "call-file"))).toEqual({
         type: "error",
         value: "Unable to fetch https://1.1.1.1/file",
       })
@@ -256,7 +345,7 @@ describe("WebFetchTool registration", () => {
 
       expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "text" }))).toEqual({
         type: "text",
-        value: "ok",
+        value: ContextFirewall.untrusted("web", "ok"),
       })
       expect(requests).toHaveLength(2)
       expect(requests[0]?.headers["user-agent"]).toContain("Mozilla/5.0")
@@ -273,6 +362,7 @@ describe("WebFetchTool registration", () => {
         registry,
         call({ url: "https://1.1.1.1/slow", format: "text", timeout: 1 }),
       ).pipe(Effect.forkChild)
+      while (requests.length === 0) yield* Effect.yieldNow
       yield* TestClock.adjust(Duration.seconds(1))
 
       expect(yield* Fiber.join(fiber)).toEqual({ type: "error", value: "Unable to fetch https://1.1.1.1/slow" })

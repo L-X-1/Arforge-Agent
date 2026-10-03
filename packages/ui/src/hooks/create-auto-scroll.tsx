@@ -8,6 +8,14 @@ export interface AutoScrollOptions {
   onUserInteracted?: () => void
   overflowAnchor?: "none" | "auto" | "dynamic"
   bottomThreshold?: number
+  /** Follow idle layout measurements only when the caller still owns the bottom anchor. */
+  followOnResize?: () => boolean
+  /**
+   * Keep following content for a short settling window after work stops.
+   * Session timelines disable this because an idle/error projection is a
+   * terminal state, not a streaming tail that should move the reader.
+   */
+  settleAfterStop?: boolean
 }
 
 export function createAutoScroll(options: AutoScrollOptions) {
@@ -177,12 +185,17 @@ export function createAutoScroll(options: AutoScrollOptions) {
         if (store.userScrolled) setStore("userScrolled", false)
         return
       }
-      if (!active()) return
+      if (!active() && !options.followOnResize?.()) return
       if (store.userScrolled) return
       // ResizeObserver fires after layout, before paint.
       // Keep the bottom locked in the same frame to avoid visible
-      // "jump up then catch up" artifacts while streaming content.
-      scrollToBottom(false)
+      // "jump up then catch up" artifacts while streaming or measuring content.
+      // Do not force a resume: a reader's explicit pause must survive resizing.
+      if (el && distanceFromBottom(el) < 2) {
+        markAuto(el)
+        return
+      }
+      scrollToBottomNow("auto")
     },
   )
 
@@ -197,6 +210,7 @@ export function createAutoScroll(options: AutoScrollOptions) {
         return
       }
 
+      if (options.settleAfterStop === false) return
       settling = true
       settleTimer = setTimeout(() => {
         settling = false

@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "claim_id": "PY-001-OWNER-REGISTRY-001",
+  "owner": "manual-dispatcher-bootstrap",
+  "version": 1,
+  "status": "REVIEW_PENDING",
+  "pre_review_whitelist": true,
+  "protocol_manifest": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "protocol_manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+  "allowed_paths": [
+    "docs/evidence/implementation/owner-registry.v1.json",
+    "docs/evidence/implementation/cards/PY-001-OWNER-REGISTRY-001.md",
+    "docs/evidence/implementation/claims/PY-001-OWNER-REGISTRY-001.json",
+    "docs/evidence/implementation/attestations/owner-registry.v1.sha256",
+    "docs/evidence/implementation/state.json",
+    "script/arforge-owner-registry.ts",
+    "script/arforge-owner-registry.test.ts",
+    "script/bunfig.toml"
+  ],
+  "forbidden_paths": [
+    "packages/*",
+    "arforge/*",
+    "packages/agent-python/*",
+    "commit/push/PR/release paths"
+  ],
+  "created_from_source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+  "card_digest": "fa490f661e3dfe5716082905befa6b96a1763c34700dc21b37aca88beac97896",
+  "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48"
+}

@@ -80,6 +80,8 @@ function session(id: string, directory: string, title: string) {
 async function mockServers(page: Page, requests: string[]) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(route) })
+    if (url.pathname === "/auth/session") return json(route, { authenticated: true, mode: "private" })
     if (url.origin !== serverA && url.origin !== serverB) return route.fallback()
     requests.push(url.toString())
     const current = url.origin === serverA ? sessionA : sessionB
@@ -97,12 +99,32 @@ async function mockServers(page: Page, requests: string[]) {
     if (/^\/session\/[^/]+$/.test(url.pathname)) return json(route, { name: "NotFoundError" }, 404)
     if (url.pathname === `/session/${current.id}/message`) return json(route, [])
     if (/^\/session\/[^/]+\/(children|todo|diff)$/.test(url.pathname)) return json(route, [])
+    // The server probe prefers the v2 API when /api/health returns a pid. Keep
+    // the fixture complete for that protocol so a reload cannot replace a
+    // valid response with `{}` and crash the global-sync normalizers.
+    if (["/api/provider", "/api/model", "/api/agent"].includes(url.pathname)) return json(route, { data: [] })
+    if (url.pathname === "/api/model/default") return json(route, { data: null })
+    if (["/api/command", "/api/reference", "/api/permission/request", "/api/question/request"].includes(url.pathname))
+      return json(route, { location: { directory: current.directory }, data: [] })
+    if (url.pathname === "/api/mcp") return json(route, { location: { directory: current.directory }, data: [] })
+    if (url.pathname === "/api/mcp/resource")
+      return json(route, { location: { directory: current.directory }, data: { resources: [], templates: [] } })
     if (["/skill", "/command", "/lsp", "/formatter", "/permission", "/question", "/vcs/diff"].includes(url.pathname))
       return json(route, [])
     if (["/global/config", "/config", "/provider/auth", "/mcp"].includes(url.pathname)) return json(route, {})
     if (url.pathname === "/provider")
       return json(route, { all: [], connected: [], default: { providerID: "", modelID: "" } })
     if (url.pathname === "/agent") return json(route, [{ name: "build", mode: "primary" }])
+    if (url.pathname === "/api/project" || url.pathname === "/api/project/current") {
+      const project = {
+        id: current.projectID,
+        worktree: current.directory,
+        vcs: "git",
+        time: { created: 1, updated: 1 },
+        sandboxes: [],
+      }
+      return json(route, url.pathname === "/api/project" ? [project] : project)
+    }
     if (url.pathname === "/project" || url.pathname === "/project/current") {
       const project = {
         id: current.projectID,
@@ -143,11 +165,22 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
     contentType: "application/json",
-    headers: { "access-control-allow-origin": "*" },
+    headers: corsHeaders(route),
     body: JSON.stringify(body),
   })
 }
 
 function sse(route: Route) {
-  return route.fulfill({ status: 200, contentType: "text/event-stream", body: ": ok\n\n" })
+  return route.fulfill({ status: 200, contentType: "text/event-stream", headers: corsHeaders(route), body: ": ok\n\n" })
+}
+
+function corsHeaders(route: Route) {
+  const origin = route.request().headers().origin
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+    "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers":
+      route.request().headers()["access-control-request-headers"] ?? "authorization,content-type,x-arforge-directory",
+  }
 }

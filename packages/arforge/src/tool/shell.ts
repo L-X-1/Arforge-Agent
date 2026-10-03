@@ -21,6 +21,9 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { isProtectedSecretEnvironmentKey, sanitizeChildEnvironment } from "@arforge-ai/core/secret-environment"
+import { SandboxRunner } from "@/sandbox/runner"
+import { SandboxPolicy } from "@arforge-ai/core/sandbox/policy"
 
 export { Parameters } from "./shell/prompt"
 
@@ -61,6 +64,48 @@ const CMD_FILES = new Set([
   "rename",
   "rmdir",
   "type",
+])
+const LOCAL_ONLY_COMMANDS = new Set([
+  "awk",
+  "basename",
+  "cat",
+  "cd",
+  "chdir",
+  "chmod",
+  "chown",
+  "cp",
+  "cut",
+  "date",
+  "df",
+  "dirname",
+  "du",
+  "echo",
+  "false",
+  "file",
+  "find",
+  "grep",
+  "head",
+  "less",
+  "ls",
+  "mkdir",
+  "mv",
+  "pwd",
+  "printf",
+  "realpath",
+  "rm",
+  "rmdir",
+  "sed",
+  "sleep",
+  "sort",
+  "stat",
+  "tail",
+  "test",
+  "touch",
+  "tr",
+  "true",
+  "uniq",
+  "wc",
+  "which",
 ])
 const FLAGS = new Set(["-destination", "-literalpath", "-path"])
 const SWITCHES = new Set(["-confirm", "-debug", "-force", "-nonewline", "-recurse", "-verbose", "-whatif"])
@@ -139,6 +184,7 @@ function home(text: string) {
 }
 
 function envValue(key: string) {
+  if (isProtectedSecretEnvironmentKey(key)) return undefined
   if (process.platform !== "win32") return process.env[key]
   const name = Object.keys(process.env).find((item) => item.toLowerCase() === key.toLowerCase())
   return name ? process.env[name] : undefined
@@ -335,11 +381,182 @@ const parser = lazy(async () => {
   return { bash, ps }
 })
 
+/**
+ * The session Action Gateway needs a deliberately small, side-effect-free
+ * view of a shell invocation before it can ask for an L3 approval.  This is
+ * not a sandbox or a general shell evaluator: any construct whose filesystem
+ * effects cannot be accounted for is rejected before a process can spawn.
+ */
+export type Preflight =
+  | {
+      readonly type: "known"
+      readonly command: string
+      readonly externalDirectoryGlobs: ReadonlyArray<string>
+      readonly network: "none" | "possible"
+    }
+  | {
+      readonly type: "unknown"
+      readonly command: string
+      readonly reason: string
+    }
+
+export class UnknownEffectError extends Error {
+  override readonly name = "ShellUnknownEffectError"
+
+  constructor(readonly reason: string) {
+    super(`Shell command was not executed because its effects could not be fully preflighted: ${reason}`)
+  }
+}
+
+type PreflightInput = {
+  readonly command: string
+  readonly cwd: string
+  readonly instanceDirectory: string
+  /** The configured executable, not a model-provided shell name. */
+  readonly shell: string
+}
+
+function nodeTypes(root: Node) {
+  const types = new Set<string>()
+  const visit = (node: Node) => {
+    types.add(node.type)
+    for (let index = 0; index < node.childCount; index++) {
+      const child = node.child(index)
+      if (child) visit(child)
+    }
+  }
+  visit(root)
+  return types
+}
+
+function externalDirectoryGlob(directory: string) {
+  const glob = path.join(directory, "*")
+  return process.platform === "win32" ? FSUtil.normalizePathPattern(glob) : glob
+}
+
+function insideDirectory(directory: string, target: string) {
+  const relative = path.relative(directory, target)
+  return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative))
+}
+
+const networkRisk = (tokens: ReadonlyArray<string>): "none" | "possible" => {
+  const executable = tokens[0]?.toLowerCase().replace(/^.*[\\/]/, "")
+  return executable && LOCAL_ONLY_COMMANDS.has(executable) ? "none" : "possible"
+}
+
+/**
+ * Parse only the POSIX single-command subset for which we can bind every
+ * literal external path before approval.  PowerShell and cmd have distinct
+ * expansion semantics; they remain L3 and fail closed until they receive an
+ * equally complete parser, rather than pretending the Bash parser protects
+ * them.
+ */
+export const preflight = Effect.fn("ShellPreflight.preflight")(function* (input: PreflightInput) {
+  const shellName = Shell.name(input.shell)
+  const kind = ShellID.toKind(shellName)
+  if (shellName !== "bash" || !Shell.posix(input.shell)) {
+    return {
+      type: "unknown" as const,
+      command: input.command,
+      reason: `configured ${kind} shell has no complete static effect parser`,
+    }
+  }
+
+  // Git Bash translates POSIX absolute paths through cygpath at execution.
+  // A pure preflight must not invoke cygpath, so failing closed is safer than
+  // binding the host's unrelated /tmp-style path.
+  if (process.platform === "win32" && /(?:^|\s)["']?\//.test(input.command)) {
+    return {
+      type: "unknown" as const,
+      command: input.command,
+      reason: "POSIX absolute paths require runtime cygpath translation",
+    }
+  }
+
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const tree = yield* Effect.acquireRelease(parse(input.command, false), (tree) => Effect.sync(() => tree.delete()))
+      const root = tree.rootNode
+      const types = nodeTypes(root)
+      const unsupported = [
+        "redirected_statement",
+        "file_redirect",
+        "heredoc_redirect",
+        "herestring_redirect",
+        "pipeline",
+        "command_substitution",
+        "process_substitution",
+        "subshell",
+      ].find((type) => types.has(type))
+      if (unsupported || root.hasError) {
+        return {
+          type: "unknown" as const,
+          command: input.command,
+          reason: unsupported ? `unsupported ${unsupported} syntax` : "shell syntax did not parse cleanly",
+        }
+      }
+
+      const parsed = commands(root)
+      // Relative arguments after `cd`, and every command in a compound list,
+      // can depend on effects of an earlier command.  Do not infer a scope
+      // from an execution order we have not modelled.
+      if (parsed.length !== 1) {
+        return {
+          type: "unknown" as const,
+          command: input.command,
+          reason: "compound shell commands are not statically sequenced",
+        }
+      }
+
+      const command = parts(parsed[0]!)
+      const tokens = command.map((item) => item.text)
+      const executable = tokens[0]
+      const dirs = new Set<string>()
+      if (executable && FILES.has(executable)) {
+        for (const arg of pathArgs(command, false)) {
+          const text = home(unquote(arg))
+          if (!text || dynamic(text, false)) {
+            return {
+              type: "unknown" as const,
+              command: input.command,
+              reason: "dynamic filesystem path",
+            }
+          }
+          const literal = prefix(text)
+          if (!literal) {
+            return {
+              type: "unknown" as const,
+              command: input.command,
+              reason: "filesystem glob without a stable parent path",
+            }
+          }
+          const resolved = path.resolve(input.cwd, literal)
+          if (insideDirectory(input.instanceDirectory, resolved)) continue
+          // The existing leaf resolves a literal as either a file (parent
+          // directory) or a directory.  Stat declares both possible exact
+          // directory scopes without consulting the filesystem.
+          dirs.add(path.dirname(resolved))
+          dirs.add(resolved)
+        }
+      }
+
+      if (!insideDirectory(input.instanceDirectory, input.cwd)) dirs.add(input.cwd)
+      return {
+        type: "known" as const,
+        command: input.command,
+        externalDirectoryGlobs: Array.from(dirs, externalDirectoryGlob).sort((a, b) => a.localeCompare(b)),
+        network: networkRisk(tokens),
+      }
+    }),
+  )
+})
+
 export const ShellTool = Tool.define(
   ShellID.ToolID,
   Effect.gen(function* () {
     const config = yield* Config.Service
     const spawner = yield* ChildProcessSpawner
+    const sandbox = yield* SandboxRunner.Service
     const fs = yield* FSUtil.Service
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
@@ -419,10 +636,12 @@ export const ShellTool = Tool.define(
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
-      return {
-        ...process.env,
-        ...extra.env,
-      }
+      return (
+        sanitizeChildEnvironment({
+          ...process.env,
+          ...extra.env,
+        }) ?? {}
+      )
     })
 
     const run = Effect.fn("ShellTool.run")(function* (
@@ -430,8 +649,14 @@ export const ShellTool = Tool.define(
         shell: string
         command: string
         cwd: string
+        workspace: string
         env: NodeJS.ProcessEnv
         timeout: number
+        roots: ReadonlyArray<string>
+        readOnlyRoots: ReadonlyArray<string>
+        profile: SandboxPolicy.Profile
+        network: "none" | "inherit"
+        requireEnforcement: boolean
       },
       ctx: Tool.Context,
     ) {
@@ -446,6 +671,7 @@ export const ShellTool = Tool.define(
       let cut = false
       let expired = false
       let aborted = false
+      let sandboxReport: SandboxRunner.Report | undefined
 
       const closeSink = Effect.fnUntraced(function* () {
         const stream = sink
@@ -481,7 +707,23 @@ export const ShellTool = Tool.define(
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          const prepared = yield* sandbox.prepare({
+            command: cmd(input.shell, input.command, input.cwd, input.env),
+            workspace: input.workspace,
+            cwd: input.cwd,
+            roots: input.roots,
+            readOnlyRoots: input.readOnlyRoots,
+            profile: input.profile,
+            network: input.network,
+            requireEnforcement: input.requireEnforcement,
+          })
+          sandboxReport = prepared.report
+          yield* ctx.metadata({
+            metadata: {
+              sandbox: prepared.report,
+            },
+          })
+          const handle = yield* spawner.spawn(prepared.command)
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
@@ -589,6 +831,7 @@ export const ShellTool = Tool.define(
           exit: code,
           truncated: cut,
           ...(cut && file ? { outputPath: file } : {}),
+          ...(sandboxReport ? { sandbox: sandboxReport } : { sandbox: { backend: sandbox.backend().kind } }),
         },
         output,
       }
@@ -612,29 +855,100 @@ export const ShellTool = Tool.define(
               const cwd = params.workdir
                 ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
+              const shellPreflight = yield* preflight({
+                command: params.command,
+                cwd,
+                instanceDirectory: instanceCtx.directory,
+                shell,
+              })
+              // Unknown effects remain closed for automatic/scoped durable
+              // actions. A gateway-verified fresh human L3 capability may
+              // execute the exact command the person just approved.
+              if (ctx.parentAction && shellPreflight.type === "unknown" && ctx.parentAction.authority !== "human") {
+                throw new UnknownEffectError(shellPreflight.reason)
+              }
+              if (ctx.parentAction && shellPreflight.type === "known" && shellPreflight.network === "possible") {
+                if (!ctx.egress?.assertProcess)
+                  throw new UnknownEffectError(
+                    "network-capable shell command requires an explicit process egress scope",
+                  )
+                yield* ctx.egress.assertProcess({ command: shellPreflight.command }).pipe(Effect.orDie)
+              }
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
               const timeout = params.timeout ?? defaultTimeoutMs
               const ps = Shell.ps(shell)
-              yield* Effect.scoped(
-                Effect.gen(function* () {
-                  const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
-                    Effect.sync(() => tree.delete()),
-                  )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
-                  if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan, params)
-                }),
-              )
+              const sandboxProfile = ctx.sandboxProfile ?? SandboxPolicy.DefaultProfile
+              const roots = new Set<string>([instanceCtx.directory, cwd])
+              // Native Windows shells often load helper DLLs/interpreters from
+              // beside the configured executable (Git Bash's usr/bin is a
+              // common example).  Grant those installation directories as
+              // read-only SBOX roots only when the host has the full
+              // BaseContainer boundary; never turn them into writable roots or
+              // weaken the truthful partial path on legacy hosts.
+              const readOnlyRoots = new Set<string>()
+              const backend = sandbox.backend()
+              const msysLegacy =
+                process.platform === "win32" &&
+                backend.kind === "windows-native" &&
+                backend.baseContainer.status === "available" &&
+                /(?:^|[\\/])(?:bash|sh)(?:\.exe)?$/iu.test(shell)
+              if (
+                process.platform === "win32" &&
+                backend.kind === "windows-native" &&
+                backend.baseContainer.status === "available" &&
+                !msysLegacy
+              ) {
+                let current = path.dirname(shell)
+                for (let depth = 0; depth < 2; depth++) {
+                  readOnlyRoots.add(current)
+                  const parent = path.dirname(current)
+                  if (parent === current) break
+                  current = parent
+                }
+              }
+              // A fresh human capability authorizes the exact opaque command
+              // that the gateway displayed. Re-parsing an unknown PowerShell/
+              // cmd compound command into leaf fragments would incorrectly
+              // compare those fragments with the whole-command grant and
+              // reject it as a scope expansion. The input digest still binds
+              // execution to the exact approved command, so only bypass the
+              // legacy leaf prompt for this narrow human + unknown case.
+              const exactOpaqueHumanApproval =
+                ctx.parentAction?.authority === "human" && shellPreflight.type === "unknown"
+              if (!exactOpaqueHumanApproval) {
+                yield* Effect.scoped(
+                  Effect.gen(function* () {
+                    const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
+                      Effect.sync(() => tree.delete()),
+                    )
+                    const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
+                    if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
+                    for (const directory of scan.dirs) roots.add(directory)
+                    yield* ask(ctx, scan, params)
+                  }),
+                )
+              }
 
               return yield* run(
                 {
                   shell,
                   command: params.command,
                   cwd,
+                  workspace: instanceCtx.directory,
                   env: yield* shellEnv(ctx, cwd),
                   timeout,
+                  roots: [...roots],
+                  readOnlyRoots: [...readOnlyRoots],
+                  profile: sandboxProfile,
+                  network: shellPreflight.type === "known" && shellPreflight.network === "none" ? "none" : "inherit",
+                  requireEnforcement:
+                    (ctx.parentAction?.authority === "automatic" || ctx.parentAction?.authority === "scoped_grant") &&
+                    (msysLegacy ||
+                      sandboxProfile === "read-only" ||
+                      (shellPreflight.type === "known" &&
+                        (shellPreflight.network === "possible" || shellPreflight.externalDirectoryGlobs.length > 0))),
                 },
                 ctx,
               )
@@ -643,3 +957,5 @@ export const ShellTool = Tool.define(
       })
   }),
 )
+
+export * as ShellPreflight from "./shell"

@@ -20,6 +20,7 @@ import { LayerNodePlatform } from "@arforge-ai/core/effect/app-node-platform"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { Config } from "@/config/config"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem, InstanceStore.node]), [
@@ -223,8 +224,18 @@ describe("Instruction.system", () => {
 
         const rules = yield* svc.system()
         expect(rules).toHaveLength(2)
-        expect(rules[0]).toBe(`Instructions from: ${path.join(globalTmp, "AGENTS.md")}\n# Global Instructions`)
-        expect(rules[1]).toBe(`Instructions from: ${path.join(projectTmp, "AGENTS.md")}\n# Project Instructions`)
+        expect(rules[0]).toBe(
+          ContextFirewall.trustedProjectRules(
+            path.join(globalTmp, "AGENTS.md"),
+            `Instructions from: ${path.join(globalTmp, "AGENTS.md")}\n# Global Instructions`,
+          ),
+        )
+        expect(rules[1]).toBe(
+          ContextFirewall.trustedProjectRules(
+            path.join(projectTmp, "AGENTS.md"),
+            `Instructions from: ${path.join(projectTmp, "AGENTS.md")}\n# Project Instructions`,
+          ),
+        )
       }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
     }),
   )

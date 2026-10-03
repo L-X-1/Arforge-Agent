@@ -7,6 +7,7 @@ import type * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import * as Shell from "@arforge-ai/core/shell"
 import { testEffect } from "../lib/effect"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
@@ -61,6 +62,35 @@ async function gone(pid: number, timeout = 5_000) {
 
 describe("cross-spawn spawner", () => {
   describe("basic spawning", () => {
+    if (process.platform === "win32") {
+      fx.effect(
+        "captures cmd quoted executable path and arguments",
+        Effect.gen(function* () {
+          const shell = Shell.preferred("cmd.exe")
+          const command = `"${process.execPath}" -e "process.stdout.write('space & quoted output')"`
+          const handle = yield* ChildProcess.make(shell, Shell.args(shell, command, process.cwd()), {
+            stdin: "ignore",
+          })
+          expect(yield* decodeByteStream(handle.all)).toBe("space & quoted output")
+          expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(0))
+        }),
+      )
+
+      fx.effect(
+        "captures cmd quoted command output and nonzero exit",
+        Effect.gen(function* () {
+          const shell = Shell.preferred("cmd.exe")
+          const command = `node -e "process.stdout.write('cmd-output');process.exit(17)"`
+          const handle = yield* ChildProcess.make(shell, Shell.args(shell, command, process.cwd()), {
+            stdin: "ignore",
+          })
+          const output = yield* decodeByteStream(handle.all)
+          expect(output).toBe("cmd-output")
+          expect(yield* handle.exitCode).toBe(ChildProcessSpawner.ExitCode(17))
+        }),
+      )
+    }
+
     fx.effect(
       "captures stdout",
       Effect.gen(function* () {
@@ -155,6 +185,30 @@ describe("cross-spawn spawner", () => {
         const out = yield* decodeByteStream(handle.stdout)
         expect(out).toBe("one-two-three")
       }),
+    )
+
+    fx.effect(
+      "never exposes Arforge control-plane secrets to child processes",
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const previous = process.env.ARFORGE_SECRET_MASTER_KEY
+          process.env.ARFORGE_SECRET_MASTER_KEY = "must-not-reach-child"
+          return previous
+        }),
+        () =>
+          Effect.gen(function* () {
+            const handle = yield* js('process.stdout.write(process.env.ARFORGE_SECRET_MASTER_KEY ?? "redacted")', {
+              env: { ARFORGE_SECRET_MASTER_KEY: "explicit-value-must-also-be-redacted" },
+              extendEnv: true,
+            })
+            expect(yield* decodeByteStream(handle.stdout)).toBe("redacted")
+          }),
+        (previous) =>
+          Effect.sync(() => {
+            if (previous === undefined) delete process.env.ARFORGE_SECRET_MASTER_KEY
+            else process.env.ARFORGE_SECRET_MASTER_KEY = previous
+          }),
+      ),
     )
   })
 

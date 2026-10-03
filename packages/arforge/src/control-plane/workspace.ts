@@ -22,7 +22,7 @@ import { getAdapter, registeredAdapters } from "./adapters"
 import { type Target, type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
 import { WorkspaceV2 } from "@arforge-ai/core/workspace"
 import { Session } from "@/session/session"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionExecution } from "@arforge-ai/core/session/execution"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
@@ -155,7 +155,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const auth = yield* Auth.Service
     const session = yield* Session.Service
-    const prompt = yield* SessionPrompt.Service
+    const execution = yield* SessionExecution.Service
     const http = yield* HttpClient.HttpClient
     const events = yield* EventV2Bridge.Service
     const vcs = yield* Vcs.Service
@@ -581,7 +581,7 @@ const layer = Layer.effect(
                 ),
               )
             } else {
-              yield* prompt.cancel(input.sessionID)
+              yield* execution.interrupt(input.sessionID)
             }
 
             // "claim" this session so any future events coming from
@@ -951,7 +951,7 @@ export const node = LayerNode.make({
   deps: [
     Auth.node,
     Session.node,
-    SessionPrompt.node,
+    SessionExecution.node,
     httpClient,
     EventV2Bridge.node,
     Vcs.node,

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test"
+import { Schema } from "effect"
+import { ContextContract } from "@arforge-ai/core/context-contract"
 import { compileContext, CONTEXT_LAYER_NAMES, estimateTokens } from "@arforge-ai/core/runtime/compiler"
 
 describe("RuntimeCompiler", () => {
@@ -31,6 +33,35 @@ describe("RuntimeCompiler", () => {
     expect(compiled.totalTokens).toBeLessThanOrEqual(200)
   })
 
+  it("keeps mandatory current-request instructions and their provenance under budget pressure", () => {
+    const compiled = compileContext(
+      [
+        {
+          layer: "L6",
+          name: "requestSystem",
+          text: "request policy",
+          mandatory: true,
+          sourceDigest: "a".repeat(64),
+          instructionAllowed: true,
+        },
+        { layer: "L7", name: "optional", text: "x".repeat(400) },
+      ],
+      4,
+    )
+    const request = compiled.layers[0]
+
+    expect(compiled.parts).toEqual(["request policy"])
+    expect(request).toMatchObject({
+      name: "requestSystem",
+      mandatory: true,
+      sourceDigest: "a".repeat(64),
+      instructionAllowed: true,
+      kept: true,
+    })
+    expect(compiled.layers[1]?.kept).toBe(false)
+    expect(compiled.totalTokens).toBeLessThanOrEqual(4)
+  })
+
   it("truncates remaining high layers when dropping is not enough", () => {
     const big = "y".repeat(1000)
     const compiled = compileContext(
@@ -55,6 +86,41 @@ describe("RuntimeCompiler", () => {
   it("exposes the blueprint layer names", () => {
     expect(CONTEXT_LAYER_NAMES["L0"]).toBe("宪法与安全约束")
     expect(CONTEXT_LAYER_NAMES["L5"]).toBe("检索到的相关记忆")
+  })
+
+  it("normalizes legacy L0-L7 inputs into the canonical Context OS contract", () => {
+    const compiled = compileContext([
+      { layer: "L3", name: "baseline", text: "project facts" },
+      { layer: "L5", name: "memory", text: "governed preference" },
+      { layer: "L4", name: "summary", text: "derived summary" },
+    ])
+
+    expect(compiled.layers.map((layer) => layer.contextLayer)).toEqual([
+      "authority",
+      "recalled_memory",
+      "cognitive_state",
+    ])
+    expect(compiled.layers.map((layer) => layer.authority)).toEqual(["runtime-input", "governed-memory", "derived"])
+    expect(compiled.layers.map((layer) => layer.trust)).toEqual(["trusted", "untrusted-memory", "derived"])
+  })
+
+  it("keeps Context Package as a derived compilation reference, never a source authority", () => {
+    expect(ContextContract.isSourceOfTruth("event-run")).toBe(true)
+    expect(ContextContract.isSourceOfTruth("governed-memory")).toBe(true)
+    expect(ContextContract.isSourceOfTruth("context-package")).toBe(false)
+    expect(ContextContract.isSourceOfTruth("derived")).toBe(false)
+
+    expect(
+      Schema.decodeUnknownSync(ContextContract.PackageReference)({
+        type: "context-package",
+        version: "v3",
+        digest: "sha256:context-package",
+      }),
+    ).toEqual({
+      type: "context-package",
+      version: "v3",
+      digest: "sha256:context-package",
+    })
   })
 
   it("estimates tokens as chars / 4", () => {

@@ -10,6 +10,7 @@ let panel;
 let extensionContext;
 let sessionId = "";
 let activeOperationId = "";
+let awaitingOperation = false;
 let answer = "";
 
 function workspaceRoot() {
@@ -44,10 +45,10 @@ async function ensureBridge() {
     post({ type: "error", message: error.message });
   });
   const selected = config();
-  const command = selected.get("bridge.command", "python");
-  const args = selected.get("bridge.args", ["-m", "arforge.bridge"]);
+  const command = selected.get("bridge.command", "arforge");
+  const args = selected.get("bridge.args", ["bridge"]);
   const profile = selected.get("bridge.profile", "").trim();
-  const env = { ARFORGE_WORKSPACE: workspaceRoot(), PYTHONUTF8: "1" };
+  const env = { ARFORGE_WORKSPACE: workspaceRoot() };
   if (profile) env.ARFORGE_HOME = profile;
   setStatus("loading", "Arforge 正在连接");
   await bridge.start({ command, args, cwd: workspaceRoot(), env });
@@ -95,6 +96,7 @@ async function newSession() {
   const client = await ensureBridge();
   sessionId = "";
   activeOperationId = "";
+  awaitingOperation = false;
   await extensionContext?.workspaceState.update(sessionStorageKey(), undefined);
   await createSession(client);
   post({ type: "clear" });
@@ -144,7 +146,9 @@ async function sendPrompt(input, extra = {}) {
   post({ type: "user", content: input });
   post({ type: "assistantStart" });
   const liveContext = editorContext();
-  const operation = await client.request("chat.start", {
+  awaitingOperation = true;
+  try {
+    const operation = await client.request("chat.start", {
     session_id: currentSession,
     input,
     timeout_ms: 0,
@@ -157,8 +161,13 @@ async function sendPrompt(input, extra = {}) {
       ...(liveContext.editor ? { editor: liveContext.editor } : {}),
       long_task: Boolean(extra.longTask)
     }
-  });
-  activeOperationId = operation.operation_id;
+    });
+    activeOperationId = operation.operation_id;
+    awaitingOperation = false;
+  } catch (error) {
+    awaitingOperation = false;
+    throw error;
+  }
 }
 
 async function refreshChanges() {
@@ -180,7 +189,15 @@ async function cancelActiveOperation() {
 }
 
 function onBridgeEvent(event) {
-  if (!activeOperationId || event.operation_id !== activeOperationId) return;
+  if (!activeOperationId) {
+    if (awaitingOperation && event.type === "operation.started" && event.session_id === sessionId) {
+      activeOperationId = event.operation_id;
+      awaitingOperation = false;
+    } else {
+      return;
+    }
+  }
+  if (event.operation_id !== activeOperationId) return;
   const data = event.data || {};
   if (event.type === "answer.reset") {
     answer = "";
@@ -198,10 +215,24 @@ function onBridgeEvent(event) {
     if (typeof data.answer === "string") answer = data.answer;
     post({ type: "assistantDone", content: answer });
     activeOperationId = "";
+    awaitingOperation = false;
+    setStatus("ready", "Arforge 已连接");
     void refreshChanges();
-  } else if (event.type === "operation.failed" || event.type === "operation.cancelled") {
+  } else if (event.type === "operation.cancelled") {
+    post({ type: "activity", content: "任务已停止。" });
+    activeOperationId = "";
+    awaitingOperation = false;
+    setStatus("ready", "Arforge 已连接");
+  } else if (event.type === "operation.timed_out") {
+    post({ type: "error", message: String(data.error || data.message || "任务超时") });
+    activeOperationId = "";
+    awaitingOperation = false;
+    setStatus("error", "Arforge 任务超时");
+  } else if (event.type === "operation.failed") {
     post({ type: "error", message: String(data.error || data.message || "任务未完成") });
     activeOperationId = "";
+    awaitingOperation = false;
+    setStatus("error", "Arforge 任务失败");
   }
 }
 
@@ -340,6 +371,7 @@ function activate(context) {
       await bridge?.stop();
       bridge = undefined;
       activeOperationId = "";
+      awaitingOperation = false;
       await ensureBridge();
       await ensureSession();
       vscode.window.showInformationMessage("Arforge Bridge 已重启");

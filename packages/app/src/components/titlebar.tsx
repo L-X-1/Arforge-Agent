@@ -27,6 +27,7 @@ import { ServerConnection, useServer } from "@/context/server"
 import { tabKey, useTabs } from "@/context/tabs"
 import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
+import { SHELL_DRAWER_QUERY } from "@/pages/layout/workspace-shell-state"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
 import { normalizeSessionInfo } from "@/utils/session"
 
@@ -81,6 +82,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
   const params = useParams()
   const useV2Titlebar = createMemo(() => settings.general.newLayoutDesigns())
   const mobile = createMediaQuery("(max-width: 767px)")
+  const narrow = createMediaQuery(SHELL_DRAWER_QUERY)
   const bottom = createMemo(() => useV2Titlebar() && mobile() && settings.general.mobileTitlebarPosition() === "bottom")
 
   const mac = createMemo(() => platform.platform === "desktop" && platform.os === "macos")
@@ -382,7 +384,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                 id: "home.toggle",
                 title: language.t("home.title"),
                 category: language.t("command.category.view"),
-                keybind: "mod+b",
+                keybind: "mod+shift+h",
                 hidden: true,
                 onSelect: toggleHome,
               },
@@ -466,6 +468,20 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   "md:pl-4": !mac(),
                 }}
               >
+                <TooltipV2 placement="bottom" value={language.t("command.sidebar.toggle")}>
+                  <IconButtonV2
+                    type="button"
+                    data-action="workspace-sidebar-toggle"
+                    variant="ghost-muted"
+                    size="large"
+                    class="shrink-0"
+                    icon={<IconV2 name="menu" />}
+                    onClick={() => narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle()}
+                    aria-label={language.t("command.sidebar.toggle")}
+                    aria-controls="workspace-navigation"
+                    aria-expanded={narrow() ? layout.mobileSidebar.opened() : layout.sidebar.opened()}
+                  />
+                </TooltipV2>
                 <ChannelIndicator debugTools={props.debugTools} />
                 <Show when={windows() || linux()}>
                   <WindowsAppMenu command={command} platform={platform} variant="v2" />
@@ -782,9 +798,7 @@ function ChannelIndicator(props: { debugTools?: { visible: boolean; toggle: () =
   return (
     <>
       {channel && ["beta", "dev"].includes(channel) && (
-        <div class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono">
-          {label}
-        </div>
+        <div class="bg-icon-interactive-base text-[#FFF] font-medium px-2 rounded-sm uppercase font-mono">{label}</div>
       )}
     </>
   )

@@ -1,8 +1,11 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Effect } from "effect"
+import path from "node:path"
+import { writeFile } from "node:fs/promises"
 import { Auth } from "../../src/auth"
 import { testEffect } from "../lib/effect"
+import { Global } from "@arforge-ai/core/global"
 
 const it = testEffect(LayerNode.compile(Auth.node))
 
@@ -70,6 +73,36 @@ describe("Auth", () => {
       yield* auth.remove("anthropic")
       const after = yield* auth.all()
       expect(after["anthropic"]).toBeUndefined()
+    }),
+  )
+
+  it.instance("stores provider credentials in a protected envelope instead of plaintext JSON", () =>
+    Effect.gen(function* () {
+      const auth = yield* Auth.Service
+      yield* auth.set("protected-provider", { type: "api", key: "sk-never-write-this-plaintext" })
+
+      const raw = yield* Effect.promise(() => Bun.file(path.join(Global.Path.data, "auth.json")).text())
+      const envelope = JSON.parse(raw) as Record<string, unknown>
+      expect(raw).not.toContain("sk-never-write-this-plaintext")
+      expect(envelope.kind).toBe("arforge-protected-json")
+      expect(envelope.schema_version).toBe(1)
+      expect(String(envelope.provider)).toMatch(/windows-dpapi-current-user|aes-256-gcm|test-ephemeral/)
+    }),
+  )
+
+  it.instance("migrates a legacy plaintext auth file after a successful read", () =>
+    Effect.gen(function* () {
+      const target = path.join(Global.Path.data, "auth.json")
+      yield* Effect.promise(() =>
+        writeFile(target, JSON.stringify({ legacy: { type: "api", key: "legacy-plaintext-secret" } }), "utf8"),
+      )
+      const auth = yield* Auth.Service
+      const entry = yield* auth.get("legacy")
+      expect(entry).toMatchObject({ type: "api", key: "legacy-plaintext-secret" })
+
+      const migrated = yield* Effect.promise(() => Bun.file(target).text())
+      expect(migrated).not.toContain("legacy-plaintext-secret")
+      expect(JSON.parse(migrated)).toMatchObject({ kind: "arforge-protected-json", schema_version: 1 })
     }),
   )
 })

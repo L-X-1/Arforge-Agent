@@ -1,5 +1,6 @@
 import { useLanguage } from "@/context/language"
 import type { OperationsApi } from "@/utils/server"
+import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
 import { Button } from "@arforge-ai/ui/button"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useNavigate } from "@solidjs/router"
@@ -12,7 +13,6 @@ import {
   evolutionRefreshError,
   type EvolutionAction,
 } from "./evolution-model"
-import { publishEvolutionPending } from "./navigation"
 
 type LocationInput = { location: { directory: string; workspace?: string } }
 type Candidate = Awaited<ReturnType<OperationsApi["agentCapabilities"]["evolutionCandidates"]>>["data"]["items"][number]
@@ -32,11 +32,11 @@ const copy = {
     candidates: "Candidates",
     opportunities: "Evidence opportunities",
     actualRecall: "Actual memory recall",
-    recalls: "Real recalls",
-    useful: "Useful recall",
-    feedback: "Feedback coverage",
-    stale: "Stale/inactive",
-    conflicts: "Conflicting recalls",
+    recalls: "Measured samples",
+    useful: "Top-1 hit rate",
+    feedback: "Mean reciprocal rank",
+    stale: "No-result rate",
+    conflicts: "Evidence status",
     exposureAudit: "Experiment exposure audit",
     exposureDescription:
       "Every real model turn is bound to its preparation-time candidate or control assignment. Session keys stay private; only their digest is shown.",
@@ -200,11 +200,11 @@ const copy = {
     candidates: "进化候选",
     opportunities: "证据机会",
     actualRecall: "真实记忆召回",
-    recalls: "真实召回次数",
-    useful: "有效召回率",
-    feedback: "反馈覆盖率",
-    stale: "过期/非活跃召回",
-    conflicts: "冲突召回率",
+    recalls: "已测样本数",
+    useful: "首位命中率",
+    feedback: "平均倒数排名",
+    stale: "无结果率",
+    conflicts: "证据状态",
     exposureAudit: "实验曝光审计",
     exposureDescription: "每次真实模型调用都绑定到准备时的候选组或对照组；会话键保持私密，桌面端只显示其摘要。",
     exposureFilter: "曝光状态",
@@ -363,11 +363,11 @@ const copy = {
     candidates: "進化候選",
     opportunities: "證據機會",
     actualRecall: "真實記憶召回",
-    recalls: "真實召回次數",
-    useful: "有效召回率",
-    feedback: "回饋覆蓋率",
-    stale: "過期/非活躍召回",
-    conflicts: "衝突召回率",
+    recalls: "已測樣本數",
+    useful: "首位命中率",
+    feedback: "平均倒數排名",
+    stale: "無結果率",
+    conflicts: "證據狀態",
     exposureAudit: "實驗曝光審計",
     exposureDescription: "每次真實模型呼叫都綁定到準備時的候選組或對照組；工作階段鍵保持私密，桌面端只顯示其摘要。",
     exposureFilter: "曝光狀態",
@@ -562,7 +562,7 @@ export function EvolutionWorkbench(props: {
   type Opportunity = Awaited<
     ReturnType<OperationsApi["agentCapabilities"]["evolutionOpportunities"]>
   >["data"]["items"][number]
-  type Recall = Awaited<ReturnType<OperationsApi["agentCapabilities"]["memoryActualRecallQuality"]>>["data"]
+  type Recall = Awaited<ReturnType<OperationsApi["memories"]["recallQuality"]>>
   type Canary = Awaited<ReturnType<OperationsApi["agentCapabilities"]["evolutionCanaryReport"]>>["data"]
   type ContextPreview = Awaited<ReturnType<OperationsApi["agentCapabilities"]["evolutionContextPreview"]>>["data"]
   type ExposureAudit = Awaited<ReturnType<OperationsApi["agentCapabilities"]["evolutionExposures"]>>["data"]
@@ -612,31 +612,39 @@ export function EvolutionWorkbench(props: {
     contextPreview: undefined as ContextPreview | undefined,
   })
 
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let previousScopeKey: string | undefined
   const refresh = async () => {
     if (!props.ready() || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
     setState({ loading: "refresh", error: "" })
     try {
       const results = await Promise.allSettled([
-        props.api().agentCapabilities.evolutionStatus(props.location()),
-        props.api().agentCapabilities.evolutionCandidates({ ...props.location(), limit: 100 }),
-        props.api().agentCapabilities.evolutionOpportunities({ ...props.location(), limit: 50 }),
-        props.api().agentCapabilities.memoryActualRecallQuality(props.location()),
+        props.api().agentCapabilities.evolutionStatus(requestedLocation),
+        props.api().agentCapabilities.evolutionCandidates({ ...requestedLocation, limit: 100 }),
+        props.api().agentCapabilities.evolutionOpportunities({ ...requestedLocation, limit: 50 }),
+        props.api().memories.recallQuality(requestedLocation),
         props.api().agentCapabilities.evolutionExposures({
-          ...props.location(),
+          ...requestedLocation,
           ...(state.exposureFilter === "all" ? {} : { status: state.exposureFilter }),
           limit: 100,
         }),
-        props.api().agentCapabilities.evolutionAuditEvents({ ...props.location(), limit: 100 }),
-        props.api().agentCapabilities.evolutionExposureArchives({ ...props.location(), limit: 100 }),
+        props.api().agentCapabilities.evolutionAuditEvents({ ...requestedLocation, limit: 100 }),
+        props.api().agentCapabilities.evolutionExposureArchives({ ...requestedLocation, limit: 100 }),
       ])
+      if (!scopeGuard.isCurrent(request)) return
       const [status, candidates, opportunities, recall, exposures, auditTimeline, archiveCatalog] = results
       if (status.status === "fulfilled") {
         setState("status", status.value.data)
-        publishEvolutionPending(status.value.data.counts)
       }
       if (candidates.status === "fulfilled") setState("candidates", [...candidates.value.data.items])
       if (opportunities.status === "fulfilled") setState("opportunities", [...opportunities.value.data.items])
-      if (recall.status === "fulfilled") setState("recall", recall.value.data)
+      if (recall.status === "fulfilled") setState("recall", recall.value)
       if (exposures.status === "fulfilled") setState("exposures", exposures.value.data)
       if (auditTimeline.status === "fulfilled") setState("auditTimeline", auditTimeline.value.data)
       if (archiveCatalog.status === "fulfilled") setState("archiveCatalog", archiveCatalog.value.data)
@@ -650,9 +658,9 @@ export function EvolutionWorkbench(props: {
           ),
         )
     } catch (error) {
-      setState("error", evolutionRefreshError([error], c().unavailable))
+      if (scopeGuard.isCurrent(request)) setState("error", evolutionRefreshError([error], c().unavailable))
     } finally {
-      setState("loading", "")
+      if (scopeGuard.isCurrent(request)) setState("loading", "")
     }
   }
 
@@ -661,13 +669,13 @@ export function EvolutionWorkbench(props: {
     if (!props.ready() || state.loading) return
     void run(
       "exposures",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionExposures({
-          ...props.location(),
+          ...location,
           ...(filter === "all" ? {} : { status: filter }),
           limit: 100,
         })
-        setState("exposures", result.data)
+        if (scopeGuard.isCurrent(request)) setState("exposures", result.data)
       },
       "",
       false,
@@ -679,12 +687,12 @@ export function EvolutionWorkbench(props: {
     if (!Number.isFinite(keepRecorded) || keepRecorded < 0 || keepRecorded > 10_000) return
     void run(
       "archive-preview",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionExposureArchivePreview({
-          ...props.location(),
+          ...location,
           keepRecorded,
         })
-        setState("archivePlan", result.data)
+        if (scopeGuard.isCurrent(request)) setState("archivePlan", result.data)
       },
       "",
       false,
@@ -707,14 +715,14 @@ export function EvolutionWorkbench(props: {
       return
     void run(
       "archive-apply",
-      async () => {
+      async (location, request) => {
         await props.api().agentCapabilities.evolutionExposureArchiveApply({
-          ...props.location(),
+          ...location,
           keepRecorded: plan.keep_recorded,
           expectedPlanDigest: plan.plan_digest,
           reason,
         })
-        setState({ archivePlan: undefined, archiveReason: "" })
+        if (scopeGuard.isCurrent(request)) setState({ archivePlan: undefined, archiveReason: "" })
       },
       c().archiveApplied,
     )
@@ -723,18 +731,20 @@ export function EvolutionWorkbench(props: {
   const selectExposureArchive = (archiveID: string) =>
     void run(
       "archive-detail",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionExposureArchiveGet({
-          ...props.location(),
+          ...location,
           archiveID,
           limit: 500,
         })
-        setState({
-          selectedArchiveID: archiveID,
-          archiveDetail: result.data,
-          restorePlan: undefined,
-          restoreReason: "",
-        })
+        if (scopeGuard.isCurrent(request)) {
+          setState({
+            selectedArchiveID: archiveID,
+            archiveDetail: result.data,
+            restorePlan: undefined,
+            restoreReason: "",
+          })
+        }
       },
       "",
       false,
@@ -745,12 +755,12 @@ export function EvolutionWorkbench(props: {
     if (!archiveID) return
     void run(
       "restore-preview",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionExposureRestorePreview({
-          ...props.location(),
+          ...location,
           archiveID,
         })
-        setState("restorePlan", result.data)
+        if (scopeGuard.isCurrent(request)) setState("restorePlan", result.data)
       },
       "",
       false,
@@ -773,19 +783,20 @@ export function EvolutionWorkbench(props: {
       return
     void run(
       "restore-apply",
-      async () => {
+      async (location, request) => {
         await props.api().agentCapabilities.evolutionExposureRestoreApply({
-          ...props.location(),
+          ...location,
           archiveID: plan.archive_id,
           expectedPlanDigest: plan.plan_digest,
           reason,
         })
         const detail = await props.api().agentCapabilities.evolutionExposureArchiveGet({
-          ...props.location(),
+          ...location,
           archiveID: plan.archive_id,
           limit: 500,
         })
-        setState({ archiveDetail: detail.data, restorePlan: undefined, restoreReason: "" })
+        if (scopeGuard.isCurrent(request))
+          setState({ archiveDetail: detail.data, restorePlan: undefined, restoreReason: "" })
       },
       c().restoreApplied,
     )
@@ -796,47 +807,54 @@ export function EvolutionWorkbench(props: {
     if (!archiveID) return
     void run(
       "archive-export",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionExposureArchiveExport({
-          ...props.location(),
+          ...location,
           archiveID,
         })
         const actualDigest = await sha256Text(result.data.content)
         if (actualDigest !== result.data.sha256) throw new Error("Exported audit document digest mismatch")
-        downloadText(result.data.filename, result.data.media_type, result.data.content)
+        if (scopeGuard.isCurrent(request)) downloadText(result.data.filename, result.data.media_type, result.data.content)
       },
       c().archiveExported,
       false,
     )
   }
 
-  const run = async (name: string, action: () => Promise<unknown>, notice: string, refreshAfter = true) => {
-    if (state.loading) return
+  const run = async (
+    name: string,
+    action: (location: LocationInput, request: ScopeRequestToken) => Promise<unknown>,
+    notice: string,
+    refreshAfter = true,
+  ) => {
+    if (!props.ready() || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
     setState({ loading: name, error: "", notice: "" })
     try {
-      await action()
-      if (notice) setState("notice", notice)
+      await action(requestedLocation, request)
+      if (notice && scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      setState("error", evolutionRefreshError([error], c().unavailable))
+      if (scopeGuard.isCurrent(request)) setState("error", evolutionRefreshError([error], c().unavailable))
     } finally {
-      setState("loading", "")
+      if (scopeGuard.isCurrent(request)) setState("loading", "")
     }
-    if (refreshAfter) await refresh()
+    if (refreshAfter && scopeGuard.isCurrent(request)) await refresh()
   }
 
   const createCandidate = () =>
     void run(
       "create",
-      async () => {
+      async (location, request) => {
         await props.api().agentCapabilities.evolutionCreate({
-          ...props.location(),
+          ...location,
           title: state.title.trim(),
           target: state.target,
           instruction: state.instruction.trim(),
           rationale: state.rationale.trim(),
           evidenceRefs: evolutionEvidenceRefs(state.evidence),
         })
-        setState({ title: "", instruction: "", rationale: "", evidence: "" })
+        if (scopeGuard.isCurrent(request)) setState({ title: "", instruction: "", rationale: "", evidence: "" })
       },
       c().create,
     )
@@ -859,9 +877,9 @@ export function EvolutionWorkbench(props: {
     if (destructive && !window.confirm(`${label}: ${candidate.title}\n\n${reason}`)) return
     void run(
       `${action}:${candidate.candidate_id}`,
-      () =>
+      (location) =>
         props.api().agentCapabilities.evolutionTransition({
-          ...props.location(),
+          ...location,
           candidateID: candidate.candidate_id,
           action,
           expectedRevision: candidate.state.revision,
@@ -875,12 +893,12 @@ export function EvolutionWorkbench(props: {
   const loadCanary = (candidate: Candidate) =>
     void run(
       `report:${candidate.candidate_id}`,
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionCanaryReport({
-          ...props.location(),
+          ...location,
           candidateID: candidate.candidate_id,
         })
-        setState("canary", candidate.candidate_id, result.data)
+        if (scopeGuard.isCurrent(request)) setState("canary", candidate.candidate_id, result.data)
       },
       c().report,
     )
@@ -890,9 +908,9 @@ export function EvolutionWorkbench(props: {
     if (!match) return
     void run(
       `pattern:${match[1]}`,
-      () =>
+      (location) =>
         props.api().agentCapabilities.evolutionFromPattern({
-          ...props.location(),
+          ...location,
           patternID: Number(match[1]),
         }),
       c().propose,
@@ -902,21 +920,50 @@ export function EvolutionWorkbench(props: {
   const previewContext = () =>
     void run(
       "preview",
-      async () => {
+      async (location, request) => {
         const result = await props.api().agentCapabilities.evolutionContextPreview({
-          ...props.location(),
+          ...location,
           userInput: state.previewTask,
           cohortKey: state.cohortKey.trim(),
         })
-        setState("contextPreview", result.data)
+        if (scopeGuard.isCurrent(request)) setState("contextPreview", result.data)
       },
       c().preview,
     )
 
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => ready && void refresh(),
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged) {
+          setState({
+            loading: "",
+            error: "",
+            notice: "",
+            status: undefined,
+            candidates: [],
+            opportunities: [],
+            recall: undefined,
+            exposures: undefined,
+            auditTimeline: undefined,
+            archivePlan: undefined,
+            archiveReason: "",
+            archiveCatalog: undefined,
+            selectedArchiveID: "",
+            archiveDetail: undefined,
+            restorePlan: undefined,
+            restoreReason: "",
+            canary: {},
+            reasons: {},
+            contextPreview: undefined,
+          })
+        }
+        void refresh()
+      },
     ),
   )
 
@@ -924,6 +971,7 @@ export function EvolutionWorkbench(props: {
     <section
       class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
       data-testid="evolution-workbench"
+      aria-busy={!!state.loading}
     >
       <header class="flex justify-end">
         <Button size="small" variant="ghost" disabled={!!state.loading} onClick={() => void refresh()}>
@@ -1509,11 +1557,11 @@ export function EvolutionWorkbench(props: {
         <h3 class="text-13-medium text-text-strong">{c().actualRecall}</h3>
         <p class="text-11-regular text-text-weak">{c().syntheticWarning}</p>
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <Metric label={c().recalls} value={state.recall?.recalls ?? "—"} />
-          <Metric label={c().useful} value={state.recall ? percent(state.recall.useful_recall_rate) : "—"} />
-          <Metric label={c().feedback} value={state.recall ? percent(state.recall.feedback_coverage) : "—"} />
-          <Metric label={c().stale} value={state.recall ? percent(state.recall.stale_or_inactive_recall_rate) : "—"} />
-          <Metric label={c().conflicts} value={state.recall ? percent(state.recall.conflicting_recall_rate) : "—"} />
+          <Metric label={c().recalls} value={state.recall?.sampleSize ?? "—"} />
+          <Metric label={c().useful} value={state.recall ? percent(state.recall.top1Rate) : "—"} />
+          <Metric label={c().feedback} value={state.recall ? state.recall.meanReciprocalRank.toFixed(3) : "—"} />
+          <Metric label={c().stale} value={state.recall ? percent(state.recall.noResultRate) : "—"} />
+          <Metric label={c().conflicts} value={state.recall?.status ?? "—"} />
         </div>
       </article>
 

@@ -6,6 +6,8 @@
     "types": ["node", "bun"]
   },
   "include": [
+    "./*.acceptance.ts",
+    "./desktop-runtime-insight-seed.ts",
     "./performance/playwright*.ts",
     "./performance/unit/playwright-browser.test.ts",
     "./performance/unit/playwright-server.test.ts",

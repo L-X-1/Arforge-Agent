@@ -10,18 +10,26 @@ import fsNode from "fs/promises"
 import { Flag } from "@arforge-ai/core/flag/flag"
 import { Auth } from "../auth"
 import { Env } from "../env"
-import { applyEdits, modify } from "jsonc-parser"
 import { existsSync } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@arforge-ai/core/v1/config/console-state"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, RcMap, ScopedCache } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { EffectFlock } from "@arforge-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@arforge-ai/core/v1/config/config"
+import { ConfigProviderV1 } from "@arforge-ai/core/v1/config/provider"
+import { ConfigProvider } from "@arforge-ai/core/config/provider"
+import { ConfigMCP } from "@arforge-ai/core/config/mcp"
+import { ConfigMCPV1 } from "@arforge-ai/core/v1/config/mcp"
+import { Config as CoreConfig } from "@arforge-ai/core/config"
+import { ConfigMigrateV1 } from "@arforge-ai/core/v1/config/migrate"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
+import { Billing } from "@arforge-ai/schema/billing"
+import { Database } from "@arforge-ai/core/database/database"
 import { RemoteAuthError } from "@arforge-ai/core/v1/config/error"
 import { ConfigPermissionV1 } from "@arforge-ai/core/v1/config/permission"
 import { ConfigPluginV1 } from "@arforge-ai/core/v1/config/plugin"
@@ -39,7 +47,35 @@ import { withTransientReadRetry } from "@/util/effect-http-client"
 // Custom merge function that concatenates array fields instead of replacing them
 // Keep remeda's deep conditional merge type out of hot config-loading paths; TS profiling showed it dominates here.
 function mergeConfig(target: Info, source: Info): Info {
-  return mergeDeep(target, source) as Info
+  const merged = mergeDeep(target, source) as Info
+  for (const [id, provider] of Object.entries(source.provider ?? {})) {
+    for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+      const output = merged.provider?.[id]?.models?.[modelID]
+      if (output && model.priceCatalog !== undefined) output.priceCatalog = model.priceCatalog
+    }
+  }
+  // Preserve layered overrides for the same transport, but never carry the
+  // previous endpoint's authentication or environment to another transport.
+  for (const [name, server] of Object.entries(source.mcp ?? {})) {
+    const previous = target.mcp?.[name]
+    if (
+      server.type !== undefined &&
+      merged.mcp &&
+      (!previous || previous.type === undefined || !sameMcpTransport(previous, server))
+    )
+      merged.mcp[name] = server
+  }
+  return merged
+}
+
+function sameMcpTransport(previous: ConfigMCPV1.Info, next: ConfigMCPV1.Info): boolean {
+  if (previous.type === "remote" && next.type === "remote") return previous.url === next.url
+  if (previous.type !== "local" || next.type !== "local") return false
+  return (
+    previous.cwd === next.cwd &&
+    previous.command.length === next.command.length &&
+    previous.command.every((argument, index) => argument === next.command[index])
+  )
 }
 
 function mergeConfigConcatArrays(target: Info, source: Info): Info {
@@ -50,9 +86,76 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
   return merged
 }
 
-function normalizeLoadedConfig(data: unknown) {
+function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
   const copy = { ...data }
+  if (copy.mcp !== undefined) {
+    const parts = ConfigMCPV1.split(copy.mcp)
+    const canonical =
+      parts.canonical === undefined ? undefined : ConfigParse.schema(ConfigMCP.Info, parts.canonical, source)
+    const legacy = parts.legacy === undefined ? {} : ConfigParse.schema(ConfigV1.Info.fields.mcp, parts.legacy, source)
+    const servers = mergeConfig(
+      { mcp: legacy ?? {} },
+      {
+        mcp: Object.fromEntries(
+          Object.entries(canonical?.servers ?? {}).map(([name, server]) => [name, ConfigMCPV1.fromCanonical(server)]),
+        ),
+      },
+    ).mcp
+    for (const server of Object.values(servers ?? {})) {
+      if (server.type !== undefined && server.timeout !== undefined)
+        server.timeout = ConfigMCPV1.canonicalTimeout(server.timeout, "server")
+    }
+    copy.mcp = servers
+    if (canonical?.timeout !== undefined)
+      copy.experimental = {
+        ...(isRecord(copy.experimental) ? copy.experimental : {}),
+        mcp_timeout: {
+          ...ConfigMCPV1.canonicalTimeout(
+            isRecord(copy.experimental) && copy.experimental.mcp_timeout !== undefined
+              ? ConfigParse.schema(ConfigMCPV1.Timeout, copy.experimental.mcp_timeout, source)
+              : undefined,
+            "defaults",
+          ),
+          ...canonical.timeout,
+        },
+      }
+  }
+  // Normalize before merging documents so a legacy scalar request override
+  // cannot erase an inherited canonical startup timeout.
+  if (isRecord(copy.experimental) && copy.experimental.mcp_timeout !== undefined)
+    copy.experimental = {
+      ...copy.experimental,
+      mcp_timeout: ConfigMCPV1.canonicalTimeout(
+        ConfigParse.schema(ConfigMCPV1.Timeout, copy.experimental.mcp_timeout, source),
+        "defaults",
+      ),
+    }
+  if (copy.provider !== undefined) {
+    ConfigParse.schema(Schema.Record(Schema.String, ConfigProviderV1.Info), copy.provider, source)
+  }
+  if (copy.providers !== undefined) {
+    const providers = ConfigParse.schema(Schema.Record(Schema.String, ConfigProvider.Info), copy.providers, source)
+    copy.provider = mergeDeep(
+      isRecord(copy.provider) ? copy.provider : {},
+      Object.fromEntries(
+        Object.entries(providers).map(([id, provider]) => [id, ConfigProviderV1.fromCanonical(provider)]),
+      ),
+    )
+    // A catalog revision is a complete billing contract, not a field-by-field
+    // patch. Never retain rates from a legacy revision beneath the TS price.
+    for (const [id, provider] of Object.entries(providers)) {
+      const mergedProvider = isRecord(copy.provider) ? copy.provider[id] : undefined
+      const models = isRecord(mergedProvider) ? mergedProvider.models : undefined
+      for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+        if (model.priceCatalog !== undefined) {
+          const target = isRecord(models) ? models[modelID] : undefined
+          if (isRecord(target)) target.priceCatalog = Schema.encodeSync(Billing.PriceCatalog)(model.priceCatalog)
+        }
+      }
+    }
+    delete copy.providers
+  }
   const hadLegacy = "theme" in copy || "keybinds" in copy || "tui" in copy
   if (!hadLegacy) return copy
   delete copy.theme
@@ -121,12 +224,21 @@ type State = {
   consoleState: ConsoleState
 }
 
+type LocationMap = Context.Service.Shape<typeof LocationServiceMap.Service>
+
 export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
-  readonly update: (config: Info) => Effect.Effect<void>
-  readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly update: (
+    config: Info,
+    locations: LocationMap,
+    options?: { directory?: string },
+  ) => Effect.Effect<{ path: string; changed: boolean }>
+  readonly updateGlobal: (
+    config: Info,
+    locations: LocationMap,
+  ) => Effect.Effect<{ info: Info; changed: boolean; path: string }>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
@@ -137,25 +249,13 @@ export class Service extends Context.Service<Service, Interface>()("@arforge/Con
 export const use = serviceUse(Service)
 
 function globalConfigFile() {
-  const candidates = ["arforge.jsonc", "arforge.json", "config.json"].map((file) => path.join(Global.Path.config, file))
+  const candidates = ["arforge.jsonc", "arforge.json", "config.json"].map((file) =>
+    path.join(Flag.ARFORGE_CONFIG_DIR ?? Global.Path.config, file),
+  )
   for (const file of candidates) {
     if (existsSync(file)) return file
   }
   return candidates[0]
-}
-
-function patchJsonc(input: string, patch: unknown, path: string[] = []): string {
-  if (!isRecord(patch)) {
-    const edits = modify(input, path, patch, {
-      formattingOptions: {
-        insertSpaces: true,
-        tabSize: 2,
-      },
-    })
-    return applyEdits(input, edits)
-  }
-
-  return Object.entries(patch).reduce((result, [key, value]) => patchJsonc(result, value, [...path, key]), input)
 }
 
 function writable(info: Info) {
@@ -170,6 +270,19 @@ function writableGlobal(info: Info) {
   return next
 }
 
+function canonicalPatch(info: Info) {
+  const { provider: _provider, mcp: _mcp, ...rest } = Schema.encodeSync(ConfigV1.Info)(writable(info))
+  // The existing migration is the only provider spelling conversion. JSON
+  // encoding omits migration placeholders instead of deleting authored fields.
+  const migrated = ConfigMigrateV1.migrate(info)
+  const encode = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
+  return {
+    ...rest,
+    ...(info.provider === undefined ? {} : { providers: encode(migrated.providers) }),
+    ...(info.mcp === undefined ? {} : { mcp: encode(migrated.mcp ?? {}) }),
+  }
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -179,6 +292,8 @@ const layer = Layer.effect(
     const env = yield* Env.Service
     const npmSvc = yield* Npm.Service
     const http = yield* HttpClient.HttpClient
+    const flock = yield* EffectFlock.Service
+    const constructionContext = yield* Effect.context()
 
     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
 
@@ -222,7 +337,7 @@ const layer = Layer.effect(
         ),
       )
       const parsed = ConfigParse.jsonc(expanded, source)
-      const data = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(parsed), source)
+      const data = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(parsed, source), source)
       if (!("path" in options)) return data
 
       yield* Effect.promise(() => resolveLoadedPlugins(data, options.path))
@@ -237,6 +352,7 @@ const layer = Layer.effect(
     })
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
+      const globalDirectory = Flag.ARFORGE_CONFIG_DIR ?? Global.Path.config
       let result: Info = {}
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
       // explicitly routes config through env-provided paths or content.
@@ -246,12 +362,12 @@ const layer = Layer.effect(
           yield* fs.writeWithDirs(file, "{}\n").pipe(Effect.catch(() => Effect.void))
         }
       }
-      result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, "config.json"), env))
+      result = mergeConfig(result, yield* loadFile(path.join(globalDirectory, "config.json"), env))
       for (const file of ["arforge.json", "arforge.jsonc"]) {
-        result = mergeConfig(result, yield* loadFile(path.join(Global.Path.config, file), env))
+        result = mergeConfig(result, yield* loadFile(path.join(globalDirectory, file), env))
       }
 
-      const legacy = path.join(Global.Path.config, "config")
+      const legacy = path.join(globalDirectory, "config")
       if (existsSync(legacy)) {
         yield* Effect.promise(() =>
           import(pathToFileURL(legacy).href, { with: { type: "toml" } })
@@ -259,7 +375,7 @@ const layer = Layer.effect(
               const { provider, model, ...rest } = mod.default
               if (provider && model) result.model = `${provider}/${model}`
               result = mergeConfig(result, rest)
-              await fsNode.writeFile(path.join(Global.Path.config, "arforge.json"), JSON.stringify(result, null, 2))
+              await fsNode.writeFile(path.join(globalDirectory, "arforge.json"), JSON.stringify(result, null, 2))
               await fsNode.unlink(legacy)
             })
             .catch(() => {}),
@@ -437,7 +553,11 @@ const layer = Layer.effect(
                   : Effect.void,
               ),
               Effect.asVoid,
-              Effect.forkDetach,
+              // Dependency installation belongs to the config snapshot that
+              // requested it. Keep it in that snapshot's scope so invalidation
+              // or instance disposal cannot leave an orphan npm worker behind
+              // while the next snapshot (or SQLite cleanup) starts.
+              Effect.forkScoped({ startImmediately: true }),
             )
           deps.push(dep)
 
@@ -606,42 +726,62 @@ const layer = Layer.effect(
       )
     })
 
-    const update = Effect.fn("Config.update")(function* (config: Info) {
-      const dir = yield* InstanceState.directory
-      const file = path.join(dir, "config.json")
-      const existing = yield* loadFile(file)
-      yield* fs
-        .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
-        .pipe(Effect.orDie)
+    const update = Effect.fn("Config.update")(function* (
+      config: Info,
+      locations: LocationMap,
+      options?: { directory?: string },
+    ) {
+      const dir = options?.directory ?? (yield* InstanceState.directory)
+      const result = yield* CoreConfig.updateDocument(dir, canonicalPatch(config), { local: true }).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.provideService(EffectFlock.Service, flock),
+        Effect.orDie,
+      )
+      if (!result.changed) return { path: result.path, changed: false }
+      // A project file is inherited by already-opened descendant directories.
+      // Invalidate their original product snapshots as well as the Core map;
+      // otherwise CLI/server consumers disagree after a successful save.
+      for (const key of yield* ScopedCache.keys(state.cache)) {
+        if (FSUtil.contains(dir, key))
+          yield* ScopedCache.invalidate(state.cache, key).pipe(Effect.provide(constructionContext))
+      }
+      yield* invalidateLocations(locations, dir)
+      return { path: result.path, changed: true }
+    })
+
+    const invalidateLocations = Effect.fnUntraced(function* (locations: LocationMap, directory?: string) {
+      // The caller passes its actual runtime owner, captured at its application
+      // boundary. A pruned request context must not silently skip this step.
+      const keys = Array.from(yield* RcMap.keys(locations.rcMap))
+      for (const key of keys) {
+        if (directory !== undefined && !FSUtil.contains(directory, key.directory)) continue
+        yield* locations.invalidate(key)
+      }
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
     })
 
-    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
-      const file = globalConfigFile()
-      const before = (yield* readConfigFile(file)) ?? "{}"
-      const patch = writableGlobal(config)
-
-      let next: Info
-      let changed: boolean
-      if (!file.endsWith(".jsonc")) {
-        const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
-        const merged = mergeDeep(writable(existing), patch)
-        const serialized = JSON.stringify(merged, null, 2)
-        changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
-        next = merged
-      } else {
-        const updated = patchJsonc(before, patch)
-        next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
-        changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info, locations: LocationMap) {
+      const savedInfo = (document: { path: string; text: string }) =>
+        ConfigParse.schema(
+          ConfigV1.Info,
+          normalizeLoadedConfig(ConfigParse.jsonc(document.text, document.path), document.path),
+          document.path,
+        )
+      const result = yield* CoreConfig.updateDocument(
+        Flag.ARFORGE_CONFIG_DIR ?? Global.Path.config,
+        canonicalPatch(writableGlobal(config)),
+        { validate: savedInfo },
+      ).pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(EffectFlock.Service, flock), Effect.orDie)
+      const info = savedInfo(result)
+      if (result.changed) {
+        yield* invalidate()
+        yield* ScopedCache.invalidateAll(state.cache).pipe(Effect.provide(constructionContext))
+        yield* invalidateLocations(locations)
       }
-
-      if (changed) yield* invalidate()
-      return { info: next, changed }
+      return { info, changed: result.changed, path: result.path }
     })
 
     return Service.of({
@@ -660,7 +800,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient],
+  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient, Database.node, EffectFlock.node],
 })
 
 export * as Config from "./config"

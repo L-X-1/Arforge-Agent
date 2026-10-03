@@ -2,6 +2,7 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { dirname, isAbsolute, join, relative, resolve as pathResolve, sep } from "path"
 import { realpathSync } from "fs"
 import * as NFS from "fs/promises"
+import { randomUUID } from "node:crypto"
 import { lookup } from "mime-types"
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
 import type { PlatformError } from "effect/PlatformError"
@@ -9,6 +10,7 @@ import { Glob } from "./util/glob"
 import { serviceUse } from "./effect/service-use"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem } from "./effect/app-node-platform"
+import { atomicWrite, atomicWriteIfUnchanged, isSymbolicLink } from "./file-guard"
 
 export namespace FSUtil {
   export class FileSystemError extends Schema.TaggedErrorClass<FileSystemError>()("FileSystemError", {
@@ -37,6 +39,29 @@ export namespace FSUtil {
     readonly writeJson: (path: string, data: unknown, mode?: number) => Effect.Effect<void, Error>
     readonly ensureDir: (path: string) => Effect.Effect<void, Error>
     readonly writeWithDirs: (path: string, content: string | Uint8Array, mode?: number) => Effect.Effect<void, Error>
+    /**
+     * Publish a fully staged file only when the target is absent. The node
+     * implementation uses FileGuard's fsynced temporary + hard-link path so a
+     * crash cannot expose a partially written destination.
+     */
+    readonly writeIfAbsentAtomic?: (
+      path: string,
+      content: string | Uint8Array,
+      mode?: number,
+    ) => Effect.Effect<void, Error>
+    /**
+     * Optional during the compatibility window so lightweight read-only test /
+     * adaptor filesystem implementations can omit the capability. Conditional
+     * mutation fails closed when the implementation does not provide it; the
+     * production node implements the staged, revalidated atomic CAS path.
+     */
+    readonly writeIfUnchanged?: (
+      path: string,
+      expected: Uint8Array,
+      content: string | Uint8Array,
+      mode?: number,
+    ) => Effect.Effect<void, Error>
+    readonly isSymbolicLink: (path: string) => Effect.Effect<boolean, Error>
     readonly readDirectoryEntries: (path: string) => Effect.Effect<DirEntry[], Error>
     readonly resolve: (path: string) => Effect.Effect<string>
     readonly findUp: (target: string, start: string, stop?: string) => Effect.Effect<string[], Error>
@@ -109,8 +134,23 @@ export namespace FSUtil {
 
       const writeJson = Effect.fn("FileSystem.writeJson")(function* (path: string, data: unknown, mode?: number) {
         const content = JSON.stringify(data, null, 2)
-        yield* fs.writeFileString(path, content)
-        if (mode) yield* fs.chmod(path, mode)
+        const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`
+        yield* Effect.tryPromise({
+          try: async () => {
+            try {
+              await NFS.writeFile(temporary, content, {
+                encoding: "utf8",
+                flag: "wx",
+                ...(mode ? { mode } : {}),
+              })
+              if (mode) await NFS.chmod(temporary, mode)
+              await NFS.rename(temporary, path)
+            } finally {
+              await NFS.rm(temporary, { force: true }).catch(() => undefined)
+            }
+          },
+          catch: (cause) => new FileSystemError({ method: "writeJson", cause }),
+        })
       })
 
       const ensureDir = Effect.fn("FileSystem.ensureDir")(function* (path: string) {
@@ -129,19 +169,30 @@ export namespace FSUtil {
         content: string | Uint8Array,
         mode?: number,
       ) {
-        const write = typeof content === "string" ? fs.writeFileString(path, content) : fs.writeFile(path, content)
-
-        yield* write.pipe(
-          Effect.catchIf(
-            (e) => e.reason._tag === "NotFound",
-            () =>
-              Effect.gen(function* () {
-                yield* fs.makeDirectory(dirname(path), { recursive: true })
-                yield* write
-              }),
-          ),
+        yield* atomicWrite(path, content, mode).pipe(
+          Effect.mapError((error) => new FileSystemError({ method: "writeWithDirs", cause: error })),
         )
-        if (mode) yield* fs.chmod(path, mode)
+      })
+
+      const writeIfAbsentAtomic = Effect.fn("FileSystem.writeIfAbsentAtomic")(function* (
+        path: string,
+        content: string | Uint8Array,
+        mode?: number,
+      ) {
+        yield* atomicWrite(path, content, mode, { overwrite: false }).pipe(
+          Effect.mapError((error) => new FileSystemError({ method: "writeIfAbsentAtomic", cause: error })),
+        )
+      })
+
+      const writeIfUnchanged = Effect.fn("FileSystem.writeIfUnchanged")(function* (
+        path: string,
+        expected: Uint8Array,
+        content: string | Uint8Array,
+        mode?: number,
+      ) {
+        yield* atomicWriteIfUnchanged(path, expected, content, mode).pipe(
+          Effect.mapError((error) => new FileSystemError({ method: "writeIfUnchanged", cause: error })),
+        )
       })
 
       const glob = Effect.fn("FileSystem.glob")(function* (pattern: string, options?: Glob.Options) {
@@ -209,6 +260,10 @@ export namespace FSUtil {
         writeJson,
         ensureDir,
         writeWithDirs,
+        writeIfAbsentAtomic,
+        writeIfUnchanged,
+        isSymbolicLink: (path) =>
+          isSymbolicLink(path).pipe(Effect.mapError((error) => new FileSystemError({ method: "lstat", cause: error }))),
         findUp,
         up,
         globUp,

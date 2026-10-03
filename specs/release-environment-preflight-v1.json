@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "status_values": ["ready", "blocked"],
+  "required_checks": [
+    "signing.provider",
+    "signing.sm_host",
+    "signing.sm_api_key",
+    "signing.sm_client_cert_file",
+    "signing.sm_client_cert_password",
+    "signing.arforge_windows_keypair_alias",
+    "signing.arforge_windows_expected_signer_subject",
+    "signing.client_certificate_file",
+    "staging.origin",
+    "telemetry.otlp_endpoint",
+    "database.application_url",
+    "database.admin_url"
+  ],
+  "safety": {
+    "values_logged": false,
+    "secret_values_logged": false,
+    "default_missing_status": "blocked"
+  }
+}

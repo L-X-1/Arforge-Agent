@@ -1,4 +1,5 @@
 import { Location } from "@arforge-ai/core/location"
+import { Database } from "@arforge-ai/core/database/database"
 import { LocationServiceMap } from "@arforge-ai/core/location-services"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { WorkspaceV2 } from "@arforge-ai/core/workspace"
@@ -49,11 +50,15 @@ function decode(input: string) {
 export const layer = Layer.effect(
   LocationMiddleware,
   Effect.gen(function* () {
+    const database = yield* Database.Service
     const locations = yield* LocationServiceMap.Service
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(ref(request))))
+        return yield* effect.pipe(
+          Effect.provide(locations.get(ref(request))),
+          Effect.provideService(Database.Service, database),
+        )
       }),
     )
   }),

@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron"
 import type { DesktopMenuAction } from "@arforge-ai/app/desktop-menu"
 import { createMainWindow, updateTitlebar } from "./windows"
+import { createWorkbenchBrowserWindow } from "./browser-window"
 
 export type DesktopMenuActionHandlers = Partial<{
   relaunch: () => void
@@ -17,6 +18,9 @@ export function runDesktopMenuAction(
       return
     case "window.new":
       createMainWindow()
+      return
+    case "window.browser":
+      if (win && !win.isDestroyed()) createWorkbenchBrowserWindow(win)
       return
     case "window.close":
       win?.close()

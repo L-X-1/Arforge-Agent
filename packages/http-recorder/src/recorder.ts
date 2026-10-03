@@ -1,6 +1,7 @@
-import { Effect, Scope, SynchronizedRef } from "effect"
+import { Effect, Exit, Scope, SynchronizedRef } from "effect"
 import type * as CassetteService from "./cassette.js"
 import type { CassetteNotFoundError } from "./cassette.js"
+import type { CassetteInvalidError } from "./cassette.js"
 import type { Interaction } from "./schema.js"
 
 const isCI = () => {
@@ -20,7 +21,10 @@ export const resolveAutoMode = (
 export interface ReplayState<T> {
   readonly claim: <E>(
     validate: (interaction: T | undefined, index: number, interactions: ReadonlyArray<T>) => Effect.Effect<void, E>,
-  ) => Effect.Effect<{ readonly interaction: T; readonly index: number }, CassetteNotFoundError | E>
+  ) => Effect.Effect<
+    { readonly interaction: T; readonly index: number },
+    CassetteNotFoundError | CassetteInvalidError | E
+  >
 }
 
 export const makeReplayState = <T>(
@@ -32,10 +36,12 @@ export const makeReplayState = <T>(
     const load = yield* Effect.cached(cassette.read(name).pipe(Effect.map(project)))
     const position = yield* SynchronizedRef.make(0)
 
-    yield* Effect.addFinalizer(() =>
+    yield* Effect.addFinalizer((exit) =>
       Effect.gen(function* () {
+        // Preserve the primary replay/mismatch failure. Completeness is a
+        // success-path invariant and must not replace the actionable cause.
+        if (!Exit.isSuccess(exit)) return
         const used = yield* SynchronizedRef.get(position)
-        if (used === 0) return yield* Effect.void
         const interactions = yield* load.pipe(Effect.orDie)
         if (used < interactions.length)
           return yield* Effect.die(

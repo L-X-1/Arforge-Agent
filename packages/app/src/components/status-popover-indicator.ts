@@ -1,8 +1,8 @@
 import type { LspStatus } from "@arforge-ai/sdk/v2/client"
-import type { McpServer } from "@arforge-ai/client/promise"
+import type { McpConnectionStatus } from "@/context/global-sync/types"
 
 export function hasNonBlockingServiceIssue(input: {
-  mcp: Array<McpServer["status"]["status"]>
+  mcp: Array<McpConnectionStatus["status"]>
   lsp: Array<LspStatus["status"]>
 }) {
   return (

@@ -31,6 +31,7 @@ import {
   type FileState,
   type FileSelection,
   type FileViewState,
+  type FilePreviewMode,
   type SelectedLineRange,
 } from "./file/types"
 
@@ -257,6 +258,8 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     const scrollTop = (input: string) => withPath(input, (file) => view().scrollTop(file))
     const scrollLeft = (input: string) => withPath(input, (file) => view().scrollLeft(file))
     const selectedLines = (input: string) => withPath(input, (file) => view().selectedLines(file))
+    const previewMode = (input: string) => view().previewMode(path.normalize(input))
+    const setPreviewMode = (input: string, mode: FilePreviewMode) => view().setPreviewMode(path.normalize(input), mode)
     const setScrollTop = (input: string, top: number) => withPath(input, (file) => view().setScrollTop(file, top))
     const setScrollLeft = (input: string, left: number) => withPath(input, (file) => view().setScrollLeft(file, left))
     const setSelectedLines = (input: string, range: SelectedLineRange | null) =>
@@ -294,6 +297,8 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       setScrollTop,
       setScrollLeft,
       selectedLines,
+      previewMode,
+      setPreviewMode,
       setSelectedLines,
       searchFiles: (query: string, options?: { limit?: number; signal?: AbortSignal }) =>
         search(query, "false", options),

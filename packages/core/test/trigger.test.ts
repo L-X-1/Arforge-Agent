@@ -4,6 +4,7 @@ import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
+import { Location } from "@arforge-ai/core/location"
 import { PermissionV2 } from "@arforge-ai/core/permission"
 import { Project } from "@arforge-ai/core/project"
 import { ProjectTable } from "@arforge-ai/core/project/sql"
@@ -20,7 +21,10 @@ import { testEffect } from "./lib/effect"
 import { executeTool, toolDefinitions, toolIdentity } from "./lib/tool"
 
 const sessionID = SessionV2.ID.make("ses_trigger_runtime_test")
-const base = AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, ScheduledPromptTriggerAccess.node]))
+const currentLocation = Location.boundNode({ directory: AbsolutePath.make(import.meta.dir) })
+const base = AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, ScheduledPromptTriggerAccess.node]), [
+  [Location.node, currentLocation],
+])
 const it = testEffect(Layer.empty)
 
 const withTriggers = <A, E, R>(
@@ -319,6 +323,7 @@ const toolLayer = AppNodeBuilder.build(
   ]),
   [
     [TriggerV2.node, TriggerV2.layerWith({}).pipe(Layer.orDie)],
+    [Location.node, currentLocation],
     [PermissionV2.node, permission],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   ],
@@ -382,8 +387,6 @@ describe("TriggerTools", () => {
         value: expect.stringContaining("Execute its prompt in the current session turn."),
       })
       expect(permissionAssertions.map((item) => [item.action, item.resources])).toEqual([
-        ["trigger_profiles", ["*"]],
-        ["trigger_manage", ["local"]],
         ["trigger_manage", ["local"]],
       ])
     }),

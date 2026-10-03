@@ -49,7 +49,7 @@ test("matches the rounded panel corners to the dark new-session background", asy
   await page.goto(`/new-session?draftId=${draftID}`)
   await expectAppVisible(page.locator('[data-component="prompt-input"]'))
   await expect(page.locator("html")).toHaveAttribute("data-color-scheme", "dark")
-  const panel = page.locator('main div[class*="rounded-[10px]"][class*="overflow-hidden"]')
+  const panel = page.locator('[data-component="session-new-design"]')
   await expect(panel).toHaveCount(1)
   const box = await panel.boundingBox()
   if (!box) throw new Error("New-session panel bounds are unavailable")

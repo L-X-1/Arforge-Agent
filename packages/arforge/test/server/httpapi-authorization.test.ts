@@ -13,6 +13,10 @@ import {
 import { testEffect } from "../lib/effect"
 import { Database } from "@arforge-ai/core/database/database"
 import { UserAuth } from "@arforge-ai/server/user-auth"
+import { IdentityContext } from "@arforge-ai/server/identity-context"
+import { LocalIdentityPrincipal } from "../../src/server/routes/instance/httpapi/middleware/authorization"
+
+const PrincipalResponse = Schema.Struct({ tenantID: Schema.String, userID: Schema.String, sessionID: Schema.String })
 
 const Api = HttpApi.make("test-authorization").add(
   HttpApiGroup.make("test")
@@ -23,6 +27,9 @@ const Api = HttpApi.make("test-authorization").add(
       HttpApiEndpoint.get("missing", "/missing", {
         success: Schema.String,
         error: HttpApiError.NotFound,
+      }),
+      HttpApiEndpoint.get("principal", "/principal", {
+        success: PrincipalResponse,
       }),
     )
     .middleware(Authorization),
@@ -41,7 +48,19 @@ const ServerApi = HttpApi.make("test-server-authorization").add(
 const handlers = HttpApiBuilder.group(Api, "test", (handlers) =>
   handlers
     .handle("probe", () => Effect.succeed("ok"))
-    .handle("missing", () => Effect.fail(new HttpApiError.NotFound({}))),
+    .handle("missing", () => Effect.fail(new HttpApiError.NotFound({})))
+    .handle("principal", () =>
+      Effect.gen(function* () {
+        const current = yield* Effect.serviceOption(IdentityContext.Current)
+        if (Option.isNone(current)) return yield* Effect.die("IdentityContext was not injected")
+        const principal = current.value
+        return {
+          tenantID: principal.tenantID,
+          userID: principal.userID,
+          sessionID: principal.sessionID,
+        }
+      }),
+    ),
 )
 
 const serverHandlers = HttpApiBuilder.group(ServerApi, "test.v2", (handlers) =>
@@ -62,11 +81,27 @@ const noAuthLayer = ServerAuth.Config.configLayer({ password: Option.none(), use
 const secretLayer = ServerAuth.Config.configLayer({ password: Option.some("secret"), username: "arforge" })
 const kitSecretLayer = ServerAuth.Config.configLayer({ password: Option.some("secret"), username: "kit" })
 const identityLayer = Layer.mergeAll(UserAuth.Config.privateLayer, Database.layerFromPath(":memory:"))
+const userAuthConfig: UserAuth.Info = {
+  mode: "users",
+  secret: Option.some("test-only-auth-secret-with-at-least-32-characters"),
+  publicUrl: "http://localhost",
+  emailWebhookUrl: Option.none(),
+  emailWebhookToken: Option.none(),
+  exposeTokens: "true",
+  trustProxy: "false",
+}
+const userIdentityLayer = Layer.mergeAll(
+  UserAuth.Config.configLayer(userAuthConfig),
+  Database.layerFromPath(":memory:"),
+)
 
 const it = testEffect(apiLayer.pipe(Layer.provide([noAuthLayer, identityLayer])))
 const itSecret = testEffect(apiLayer.pipe(Layer.provide([secretLayer, identityLayer])))
 const itKitSecret = testEffect(apiLayer.pipe(Layer.provide([kitSecretLayer, identityLayer])))
 const itV2Secret = testEffect(v2ApiLayer.pipe(Layer.provide([secretLayer, identityLayer])))
+const itUsers = testEffect(
+  Layer.merge(apiLayer.pipe(Layer.provide([noAuthLayer, userIdentityLayer])), userIdentityLayer),
+)
 
 const basic = (username: string, password: string) => ServerAuth.header({ username, password }) ?? ""
 
@@ -78,6 +113,12 @@ const getProbe = (headers?: Record<string, string>) =>
     HttpClient.execute,
   )
 
+const getPrincipal = (headers?: Record<string, string>) =>
+  HttpClientRequest.get("/principal").pipe(
+    headers ? HttpClientRequest.setHeaders(headers) : (request) => request,
+    HttpClient.execute,
+  )
+
 describe("HttpApi authorization middleware", () => {
   it.live("allows requests when server password is not configured", () =>
     Effect.gen(function* () {
@@ -85,6 +126,18 @@ describe("HttpApi authorization middleware", () => {
 
       expect(response.status).toBe(200)
       expect(yield* response.json).toBe("ok")
+    }),
+  )
+
+  it.live("injects the stable server-owned principal in no-auth private mode", () =>
+    Effect.gen(function* () {
+      const response = yield* getPrincipal()
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({
+        tenantID: LocalIdentityPrincipal.tenantID,
+        userID: LocalIdentityPrincipal.userID,
+        sessionID: LocalIdentityPrincipal.sessionID,
+      })
     }),
   )
 
@@ -104,6 +157,49 @@ describe("HttpApi authorization middleware", () => {
       expect(badPassword.status).toBe(401)
       expect(badPassword.headers["www-authenticate"] ?? "").toContain("Basic")
       expect(good.status).toBe(200)
+    }),
+  )
+
+  itSecret.live("injects the same server-owned principal only after valid Basic auth", () =>
+    Effect.gen(function* () {
+      const missing = yield* getPrincipal()
+      expect(missing.status).toBe(401)
+      const response = yield* getPrincipal({ authorization: basic("arforge", "secret") })
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({
+        tenantID: "ten_local",
+        userID: "usr_local",
+        sessionID: LocalIdentityPrincipal.sessionID,
+      })
+    }),
+  )
+
+  itUsers.live("injects the authenticated tenant member in user-auth mode", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const registered = yield* UserAuth.register(database.db, userAuthConfig, {
+        email: "principal@example.test",
+        password: "correct horse battery staple",
+      })
+      if (!registered.delivery) return yield* Effect.die("Expected a development verification token")
+      expect(yield* UserAuth.verifyEmail(database.db, registered.delivery.token)).toBe(true)
+      const login = yield* UserAuth.login(database.db, userAuthConfig, {
+        email: "principal@example.test",
+        password: "correct horse battery staple",
+        ip: "127.0.0.1",
+        userAgent: "authorization-test",
+      })
+      if (!login.ok) return yield* Effect.die(`Expected login, got ${login.reason}`)
+
+      const response = yield* getPrincipal({ cookie: `${UserAuth.COOKIE_NAME}=${login.token}` })
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({
+        tenantID: login.principal.tenantID,
+        userID: login.principal.userID,
+        sessionID: login.principal.sessionID,
+      })
+      expect(login.principal.tenantID).not.toBe(LocalIdentityPrincipal.tenantID)
+      expect(login.principal.userID).not.toBe(LocalIdentityPrincipal.userID)
     }),
   )
 

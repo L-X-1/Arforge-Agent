@@ -129,6 +129,28 @@ const openAIResponses = {
 
 const prepareNativeRequest = (input: NativeRequestInput) => LLMClient.prepare(LLMNative.request(input))
 
+test("preserves tool output schemas across the native request boundary", () => {
+  const outputSchema = {
+    type: "object",
+    properties: { answer: { type: "string" } },
+    required: ["answer"],
+    additionalProperties: false,
+  }
+  const request = LLMNative.request({
+    model: baseModel,
+    apiKey: "test-openai-key",
+    messages: [{ role: "user", content: "Use the lookup tool." }],
+    tools: {
+      lookup: {
+        description: "Look something up",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema,
+      },
+    },
+  })
+  expect(request.tools[0]?.outputSchema).toEqual(outputSchema)
+})
+
 const expectOpenAIResponsesRequest = (input: {
   readonly history: NativeRequestInput["messages"]
   readonly providerOptions?: NativeRequestInput["providerOptions"]
@@ -564,6 +586,7 @@ describe("session.llm-native.request", () => {
       } satisfies Tool
       const llmClient = {
         prepare: () => Effect.die("unused"),
+        streamPrepared: () => Stream.die("unused"),
         stream: () =>
           Stream.fromIterable([
             LLMEvent.toolCall({ id: "call-1", name: "lookup", input: {} }),

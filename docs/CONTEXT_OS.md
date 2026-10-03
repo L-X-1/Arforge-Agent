@@ -158,3 +158,14 @@ tokenizers are introduced. Digest chaining proves integrity, not author
 identity. The foundation does not yet optimize cross-provider prompt-cache
 layout or learn allocation policy autonomously; those belong to Capability
 Amplifier and governed Evolution Engine work.
+
+## 10. TypeScript authority contract
+
+During the V3 migration, `packages/core/src/context-contract.ts` is the
+TypeScript authority boundary. The existing L0-L7 compiler remains a compatible
+input surface, but every unit is normalized with an origin, canonical layer,
+trust class and authority before runtime insight is recorded. Event/Run and
+Memory OS remain source-of-truth authorities; summary/compaction and the
+Context Package remain derived state. Source Registry, Evidence Unit and the
+full digest-bound package compiler are implemented in the following Stage 4
+steps.

@@ -23,6 +23,11 @@ describe("session permission mode", () => {
     expect(permissionModeAutoRespond("fullAccess", "bash")).toBe(true)
   })
 
+  test("trusted L3 confirmations remain pending in Full Access while ordinary L2 work keeps its mode behavior", () => {
+    expect(permissionModeAutoRespond("fullAccess", "shell", true)).toBe(false)
+    expect(permissionModeAutoRespond("fullAccess", "edit", false)).toBe(true)
+  })
+
   test("restores the frontend selection from authoritative Session rules", () => {
     expect(permissionModeFromRules(sessionPermissionRules("plan"))).toBe("plan")
     expect(permissionModeFromRules(sessionPermissionRules("acceptEdits"))).toBe("acceptEdits")

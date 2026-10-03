@@ -1,0 +1,61 @@
+cwd: %ARFORGE_REPO%
+command: bun run typecheck --force
+exit_code: 0
+runtime: Bun 1.3.14 (0d9b296a)
+run_date: 2026-09-13 Asia/Shanghai
+
+$ bun turbo typecheck --concurrency=2 --force
+• turbo 2.10.2
+
+   • Packages in scope: @arforge-ai/app, @arforge-ai/cli, @arforge-ai/client-next, @arforge-ai/codemode, @arforge-ai/core, @arforge-ai/desktop, @arforge-ai/effect-drizzle-sqlite, @arforge-ai/effect-sqlite-node, @arforge-ai/http-recorder, @arforge-ai/httpapi-codegen, @arforge-ai/llm, @arforge-ai/plugin, @arforge-ai/protocol, @arforge-ai/schema, @arforge-ai/script, @arforge-ai/sdk, @arforge-ai/sdk-next, @arforge-ai/server, @arforge-ai/session-ui, @arforge-ai/slack, @arforge-ai/storybook, @arforge-ai/tui, @arforge-ai/ui, @arforge-ai/website, arforge, ghostty-web, gitlab-ai-provider
+   • Running typecheck in 27 packages
+   • Remote caching disabled
+
+@arforge-ai/effect-sqlite-node:typecheck: cache bypass, force executing 71bee98e3dadb0db
+@arforge-ai/session-ui:typecheck: cache bypass, force executing 6300c35c504592fe
+@arforge-ai/effect-sqlite-node:typecheck: $ tsgo --noEmit
+@arforge-ai/session-ui:typecheck: $ tsgo --noEmit
+@arforge-ai/codemode:typecheck: cache bypass, force executing 12258882aaca1613
+@arforge-ai/codemode:typecheck: $ tsgo --noEmit
+@arforge-ai/llm:typecheck: cache bypass, force executing ceb28340d0ce2116
+@arforge-ai/llm:typecheck: $ tsgo --noEmit
+@arforge-ai/httpapi-codegen:typecheck: cache bypass, force executing e90b7fe0d0d57939
+@arforge-ai/httpapi-codegen:typecheck: $ tsgo --noEmit
+@arforge-ai/sdk:typecheck: cache bypass, force executing b059af491340247f
+@arforge-ai/sdk:typecheck: $ tsgo --noEmit
+@arforge-ai/effect-drizzle-sqlite:typecheck: cache bypass, force executing a5642a757ab8a20a
+@arforge-ai/effect-drizzle-sqlite:typecheck: $ tsgo --noEmit
+@arforge-ai/plugin:typecheck: cache bypass, force executing 1331639b930bff55
+@arforge-ai/plugin:typecheck: $ tsgo --noEmit
+@arforge-ai/desktop:typecheck: cache bypass, force executing af5f54b7438f9b5d
+@arforge-ai/sdk-next:typecheck: cache bypass, force executing 58b82f8b83b36f79
+@arforge-ai/desktop:typecheck: $ tsgo -b
+@arforge-ai/sdk-next:typecheck: $ tsgo --noEmit
+@arforge-ai/ui:typecheck: cache bypass, force executing c4305bfeb1feffb1
+@arforge-ai/ui:typecheck: $ tsgo --noEmit
+@arforge-ai/protocol:typecheck: cache bypass, force executing dbe4fc395c33939b
+@arforge-ai/protocol:typecheck: $ tsgo --noEmit
+@arforge-ai/core:typecheck: cache bypass, force executing 003fa58b076b4a3f
+@arforge-ai/core:typecheck: $ tsgo --noEmit
+@arforge-ai/app:typecheck: cache bypass, force executing 52a30ec81f66926f
+@arforge-ai/app:typecheck: $ tsgo -b
+@arforge-ai/http-recorder:typecheck: cache bypass, force executing e006608af766a844
+@arforge-ai/http-recorder:typecheck: $ tsgo --noEmit
+@arforge-ai/client-next:typecheck: cache bypass, force executing 32c62526a9e67e6b
+@arforge-ai/cli:typecheck: cache bypass, force executing dce9d4cdbfe82aa5
+@arforge-ai/client-next:typecheck: $ tsgo --noEmit
+@arforge-ai/cli:typecheck: $ tsgo --noEmit
+arforge:typecheck: cache bypass, force executing 9fa77ba08f4d018f
+arforge:typecheck: $ tsgo --noEmit
+@arforge-ai/schema:typecheck: cache bypass, force executing ee256ff36fdcc7a1
+@arforge-ai/schema:typecheck: $ tsgo --noEmit
+@arforge-ai/tui:typecheck: cache bypass, force executing 51159e002e0603f6
+@arforge-ai/tui:typecheck: $ tsgo --noEmit
+@arforge-ai/slack:typecheck: cache bypass, force executing 0ba470da5d30d836
+@arforge-ai/slack:typecheck: $ tsgo --noEmit
+@arforge-ai/server:typecheck: cache bypass, force executing 34ab4a84a0c23e04
+@arforge-ai/server:typecheck: $ tsgo --noEmit
+
+ Tasks:    22 successful, 22 total
+Cached:    0 cached, 22 total
+  Time:    48.712s

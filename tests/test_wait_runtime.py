@@ -23,6 +23,16 @@ from arforge.wait_runtime import (
 from arforge.workspace_context import current_session_id, execution_scope
 
 
+def test_python_builtin_registry_does_not_register_legacy_wait_wrapper():
+    """The TS/Core wait tool is canonical; Python remains explicit compatibility."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.wait_tools" not in BUILTIN_TOOL_MODULES
+    assert REGISTRY.get("cooperative_wait") is not None
+    assert REGISTRY.get("cooperative_wait").source == "arforge.tools.wait_tools"
+
+
 def test_wait_completes_with_periodic_check_ins():
     manager = WaitManager()
     events = []

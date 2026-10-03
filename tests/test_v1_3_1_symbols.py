@@ -180,8 +180,13 @@ def test_extract_from_unsupported_file(tmp_path):
 
 
 def test_code_symbols_tool_js(tmp_path, monkeypatch):
-    import arforge.tools.symbol_tools  # noqa: F401  注册
+    import arforge.tools.symbol_tools as symbol_tools  # noqa: F401  兼容导入
     from arforge.tool_registry import REGISTRY
+
+    import arforge.tools.code_tools as code_tools
+
+    assert symbol_tools.code_symbols is code_tools.code_symbols
+    assert REGISTRY.get("code_symbols").source == code_tools.__name__
 
     f = tmp_path / "app.js"
     f.write_text("function main(){}\nclass App{ run(){} }\n", encoding="utf-8")

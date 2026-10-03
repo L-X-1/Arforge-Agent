@@ -1,4 +1,4 @@
-import type { useLocal } from "@/context/local"
+import type { BoundModelSelection } from "./model-binding"
 import type { Prompt, usePrompt } from "@/context/prompt"
 import type { PromptInputHistory } from "./history-store"
 import type { FollowupDraft } from "./submit"
@@ -33,7 +33,7 @@ export type PromptInputControls = {
     select: (name: string | undefined) => void
   }
   model: {
-    selection: ReturnType<typeof useLocal>["model"]
+    selection: BoundModelSelection
     paid: boolean
     loading: boolean
   }

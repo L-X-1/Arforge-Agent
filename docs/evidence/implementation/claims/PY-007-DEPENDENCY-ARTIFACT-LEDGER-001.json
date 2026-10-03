@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "claim_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+  "owner": "manual-dispatcher-bootstrap",
+  "version": 1,
+  "status": "REVIEW_PENDING",
+  "pre_review_whitelist": true,
+  "protocol_manifest": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "protocol_manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "owner_registry": "docs/evidence/implementation/owner-registry.v1.json",
+  "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+  "allowed_paths": [
+    "arforge/**",
+    "packages/agent-python/**",
+    "packages/desktop/**",
+    ".venv/**",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
+    "package.json",
+    "docs/evidence/implementation/legacy-python-dependencies.json",
+    "docs/evidence/implementation/attestations/python-dependencies.v1.sha256",
+    "docs/evidence/implementation/cards/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.md",
+    "docs/evidence/implementation/claims/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.json",
+    "docs/evidence/implementation/state.json",
+    "script/arforge-python-dependencies-ledger.ts",
+    "script/arforge-python-dependencies-ledger.test.ts",
+    "script/bunfig.toml"
+  ],
+  "forbidden_paths": [
+    "packages/* product writes",
+    "install/launch/spawn paths",
+    "commit/push/PR/release paths"
+  ],
+  "created_from_source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "card_digest": "0005e9daa9f498fbec258a1ac79e4363a6806db364f730d0037d01b66422ed72",
+  "artifact_digest": "0e623144af5edfcc6bb181a1821a0237bcef3e51cbb822cb319067b4dbef5a1f"
+}

@@ -43,7 +43,9 @@ export const Info = Schema.Struct({
   status: Status,
   queuePosition: NonNegativeInt,
   revision: PositiveInt,
-  promptID: SessionMessage.ID.pipe(optional),
+  // AgentRuntime also references Goal; defer the cross-domain message ID
+  // lookup so importing the current schema graph cannot observe a TDZ value.
+  promptID: Schema.suspend(() => SessionMessage.ID).pipe(optional),
   lastError: Schema.String,
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,

@@ -14,6 +14,9 @@ import { PermissionV2 } from "@arforge-ai/core/permission"
 import { AppProcess } from "@arforge-ai/core/process"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
+import { Global } from "@arforge-ai/core/global"
+import { ActionGateway } from "@arforge-ai/core/action-gateway"
+import { DurableAction } from "@arforge-ai/core/runtime/durable-action"
 import { BashTool } from "@arforge-ai/core/tool/bash"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
@@ -28,6 +31,7 @@ const runs: Array<{
   readonly command: string
   readonly cwd?: string
   readonly shell?: string | boolean
+  readonly env?: NodeJS.ProcessEnv
   readonly options?: AppProcess.RunOptions
 }> = []
 let denyAction: string | undefined
@@ -67,7 +71,13 @@ const appProcess = Layer.succeed(
     run: (command: ChildProcess.Command, options?: AppProcess.RunOptions) =>
       Effect.suspend(() => {
         if (command._tag !== "StandardCommand") throw new Error("expected standard command")
-        runs.push({ command: command.command, cwd: command.options.cwd, shell: command.options.shell, options })
+        runs.push({
+          command: command.command,
+          cwd: command.options.cwd,
+          shell: command.options.shell,
+          env: command.options.env,
+          options,
+        })
         return runFailure ? Effect.fail(runFailure) : Effect.succeed(result)
       }),
   } as unknown as AppProcess.Interface),
@@ -106,14 +116,26 @@ const withTool = <A, E, R>(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
+  // Keep managed artifact receipts isolated to this test's temporary root.
+  // ToolOutputStore is intentionally durable in production; using the default
+  // global catalog here would make a repeated identical fixture collide with
+  // a receipt left by an earlier test process.
+  const testGlobal = Global.layerWith({ data: directory, state: path.join(directory, ".state") })
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(
-        LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, LocationMutation.node, BashTool.node]),
+        LayerNode.group([
+          ToolRegistry.node,
+          ToolRegistry.toolsNode,
+          LocationMutation.node,
+          BashTool.node,
+          DurableAction.node,
+        ]),
         [
           [Location.node, activeLocation],
+          [Global.node, testGlobal],
           [PermissionV2.node, permission],
           [AppProcess.node, processLayer],
           [Config.node, config],
@@ -172,7 +194,55 @@ describe("BashTool", () => {
               combineOutput: true,
               maxOutputBytes: BashTool.MAX_CAPTURE_BYTES,
             })
-            expect(assertions).toMatchObject([{ sessionID, action: "bash", resources: ["pwd"], save: ["pwd"] }])
+            expect(assertions).toMatchObject([
+              {
+                sessionID,
+                agent: "build",
+                action: "bash",
+                resources: ["pwd"],
+                forceAsk: true,
+                metadata: {
+                  riskTier: "L3",
+                  authority: "human",
+                  filesystemScope: [".", "paths referenced by command"],
+                  networkScope: ["host network authority"],
+                  secretScope: ["allowlisted child environment; no Arforge control-plane secrets"],
+                  externalServices: ["host shell", "processes and services invoked by command"],
+                },
+              },
+            ])
+            expect(runs[0]?.env).not.toHaveProperty("ANTHROPIC_API_KEY")
+            expect(runs[0]?.env).not.toHaveProperty("ARFORGE_DB_URL")
+            expect(Object.keys(runs[0]?.env ?? {}).some((key) => key.toUpperCase() === "PATH")).toBe(true)
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("persists the shell progress checkpoint through the same ActionGateway", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const callID = "call-bash-progress"
+            yield* settleTool(registry, call({ command: "pwd" }, callID))
+            const actions = yield* DurableAction.Service
+            const actionID = ActionGateway.stableActionID({
+              sessionID,
+              assistantMessageID: toolIdentity.assistantMessageID,
+              toolCallID: callID,
+            })
+            const snapshot = yield* actions.load(actionID)
+            expect(snapshot.progress).toMatchObject({
+              phase: "settled",
+              completed: 1,
+              total: 1,
+              detail: "Shell command completed",
+            })
           }),
         )
       },
@@ -270,8 +340,8 @@ describe("BashTool", () => {
         ).pipe(
           Effect.andThen(
             Effect.sync(() => {
-              expect(assertions.map((item) => item.action)).toEqual(["external_directory", "bash"])
-              expect(assertions[0]).toMatchObject({
+              expect(assertions.map((item) => item.action)).toEqual(["bash", "external_directory"])
+              expect(assertions[1]).toMatchObject({
                 resources: [path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")],
               })
               expect(runs).toHaveLength(1)
@@ -294,14 +364,14 @@ describe("BashTool", () => {
           reset()
           denyAction = "external_directory"
           yield* withTool(active.path, (registry) =>
-            executeTool(registry, call({ command: "pwd", workdir: outside.path })),
+            executeTool(registry, call({ command: "pwd", workdir: outside.path }, "call-deny-ext")),
           )
-          expect(assertions.map((item) => item.action)).toEqual(["external_directory"])
+          expect(assertions.map((item) => item.action)).toEqual(["bash", "external_directory"])
           expect(runs).toEqual([])
 
           reset()
           denyAction = "bash"
-          yield* withTool(active.path, (registry) => executeTool(registry, call({ command: "pwd" })))
+          yield* withTool(active.path, (registry) => executeTool(registry, call({ command: "pwd" }, "call-deny-bash")))
           expect(assertions.map((item) => item.action)).toEqual(["bash"])
           expect(runs).toEqual([])
         }),
@@ -416,6 +486,68 @@ describe("BashTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
+
+  it.live("executes in a path containing spaces and Unicode", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const workdir = path.join(tmp.path, "space dir-空间")
+        return Effect.promise(() => fs.mkdir(workdir)).pipe(
+          Effect.andThen(
+            withTool(
+              tmp.path,
+              (registry) =>
+                settleTool(
+                  registry,
+                  call({
+                    command:
+                      process.platform === "win32"
+                        ? 'if exist "space dir-空间" (echo unicode-ok) else (echo unicode-missing)'
+                        : "test -d 'space dir-空间' && printf unicode-ok",
+                  }),
+                ),
+              LayerNode.compile(AppProcess.node),
+            ),
+          ),
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              const text = settled.output?.content.find((item) => item.type === "text")
+              expect(text?.type === "text" ? text.text : "").toContain("unicode-ok")
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("bounds high shell output and retains a managed artifact", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const command = `"${process.execPath}" -e "process.stdout.write('x'.repeat(${BashTool.MAX_CAPTURE_BYTES + 1024}))"`
+        return withTool(
+          tmp.path,
+          (registry) => settleTool(registry, call({ command }, "call-high-output")),
+          LayerNode.compile(AppProcess.node),
+        ).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.output?.structured).toMatchObject({ truncated: true })
+              expect(settled.output?.content[0]).toMatchObject({
+                type: "text",
+                text: expect.stringContaining("output capture truncated"),
+              })
+              expect(settled.outputPaths).toHaveLength(1)
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
 })
 
 test("keeps locked deferred parity TODOs visible", async () => {
@@ -426,7 +558,6 @@ test("keeps locked deferred parity TODOs visible", async () => {
     "Replace token-based command-argument external-directory advisories with parser-based detection.",
     "Restore PowerShell and cmd-specific invocation/path handling on Windows.",
     "Add plugin shell.env environment augmentation once V2 plugin hooks exist.",
-    "Add durable/live progress metadata streaming for long-running commands once V2 tool invocation progress context is wired.",
     "Persist background job status and define restart recovery before exposing remote observation.",
     "Revisit process-group cleanup and platform coverage with shell-specific tests if current AppProcess semantics do not fully cover it.",
     "Revisit binary output handling if stdout/stderr decoding is text-only.",

@@ -20,6 +20,14 @@ const localFetch = (directory: string): typeof globalThis.fetch =>
   )
 
 /**
+ * In-process fetch for endpoints that are intentionally outside the generated
+ * typed client, such as the explicit human control-approval reply route.
+ */
+export function createOperationsFetch(directory = process.cwd()): typeof globalThis.fetch {
+  return localFetch(directory)
+}
+
+/**
  * In-process client for the exact operations API used by the desktop app.
  *
  * Keeping CLI operations behind the HTTP contract is intentional: Goal run

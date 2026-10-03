@@ -10,12 +10,14 @@ import { app } from "electron"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
+import { createFileNativeActionJournal, createNativeActionRuntime } from "@arforge-ai/core/runtime/native-action"
 
 import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
 import { APP_IDS, APP_NAMES, CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
 import { forwardInitializationFailure } from "./initialization"
+import { isolatedRuntimeEnv, shouldRunLegacyProfileMigration } from "./isolation-env"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
 import { parseMarkdown } from "./markdown"
 import { createMenu } from "./menu"
@@ -111,19 +113,24 @@ function ensureLoopbackNoProxy() {
 const main = Effect.gen(function* () {
   contextMenu({ showSaveImageAs: true, showLookUpSelection: false, showSearchWithGoogle: false })
 
-  // on macOS apps run in `/` which can cause issues with ripgrep
-  try {
-    process.chdir(homedir())
-  } catch {}
-
-  process.env.ARFORGE_DISABLE_EMBEDDED_WEB_UI = "true"
-
-  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.arforge.desktop.dev"
   const acceptanceUserData = app.commandLine.getSwitchValue("user-data-dir")
   const isolatedAcceptanceInstance =
     process.env.ARFORGE_DESKTOP_ISOLATED_ACCEPTANCE === "1" &&
     isAbsolute(acceptanceUserData) &&
     resolve(acceptanceUserData) === acceptanceUserData
+
+  // on macOS apps run in `/` which can cause issues with ripgrep
+  // A validated isolated acceptance instance must retain its explicitly scoped
+  // workspace instead of silently switching back to the real user's home.
+  if (!isolatedAcceptanceInstance) {
+    try {
+      process.chdir(homedir())
+    } catch {}
+  }
+
+  process.env.ARFORGE_DISABLE_EMBEDDED_WEB_UI = "true"
+
+  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.arforge.desktop.dev"
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
 
@@ -151,6 +158,12 @@ const main = Effect.gen(function* () {
   )
   if (isolatedAcceptanceInstance) app.setPath("sessionData", join(acceptanceUserData, "session"))
   else if (onboardingTestRoot) app.setPath("sessionData", join(onboardingTestRoot, "session"))
+  if (isolatedAcceptanceInstance) {
+    app.setPath("documents", join(acceptanceUserData, "documents"))
+    const isolatedEnv = isolatedRuntimeEnv(acceptanceUserData)
+    for (const directory of Object.values(isolatedEnv)) mkdirSync(directory, { recursive: true })
+    Object.assign(process.env, isolatedEnv)
+  }
   initializeOldLayoutEligibility(app.getPath("userData"))
   logger = initLogging()
   initCrashReporter()
@@ -208,14 +221,15 @@ const main = Effect.gen(function* () {
   app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>")
   const features = app.commandLine.getSwitchValue("enable-features")
   app.commandLine.appendSwitch("enable-features", features ? `${jsCallStackFeature},${features}` : jsCallStackFeature)
-  if (!app.isPackaged) app.commandLine.appendSwitch("remote-debugging-port", "9222")
+  if (!app.isPackaged && !app.commandLine.hasSwitch("remote-debugging-port"))
+    app.commandLine.appendSwitch("remote-debugging-port", "9222")
 
   if (!isolatedAcceptanceInstance && !app.requestSingleInstanceLock()) {
     app.quit()
     return
   }
 
-  preferAppEnv(app.getPath("userData"))
+  preferAppEnv(app.getPath("userData"), { isolated: isolatedAcceptanceInstance })
 
   app.on("second-instance", (_event: Event, argv: string[]) => {
     const urls = argv.filter((arg: string) => arg.startsWith("arforge://"))
@@ -269,7 +283,13 @@ const main = Effect.gen(function* () {
 
   yield* Effect.promise(() => app.whenReady())
 
-  if (!TEST_ONBOARDING) migrate()
+  if (
+    shouldRunLegacyProfileMigration({
+      isolatedAcceptance: isolatedAcceptanceInstance,
+      onboardingTest: TEST_ONBOARDING,
+    })
+  )
+    migrate()
   yield* Effect.promise(() => cleanupStoreFiles(app.getPath("userData"))).pipe(
     Effect.tap((result) =>
       Effect.sync(() => {
@@ -287,7 +307,17 @@ const main = Effect.gen(function* () {
   registerRendererProtocol()
   setDockIcon()
   const updater = setupAutoUpdater(stopSidecars)
+  const nativeActions = createNativeActionRuntime({
+    journal: createFileNativeActionJournal(join(app.getPath("userData"), "native-actions.jsonl")),
+  })
+  const recoveredNativeActions = yield* Effect.promise(() => nativeActions.recover())
+  if (recoveredNativeActions.length > 0)
+    logger.warn("native actions require recovery after the previous main-process lifecycle", {
+      count: recoveredNativeActions.length,
+      actionIDs: recoveredNativeActions.map((receipt) => receipt.actionID),
+    })
   registerIpcHandlers({
+    nativeActions,
     killSidecar: () => killSidecar(),
     relaunch,
     awaitInitialization: Effect.fnUntraced(
@@ -302,8 +332,9 @@ const main = Effect.gen(function* () {
     consumeInitialDeepLinks: () => pendingDeepLinks.splice(0),
     getDefaultServerUrl: () => getDefaultServerUrl(),
     setDefaultServerUrl: (url) => setDefaultServerUrl(url),
-    isFirstLaunchOnboardingPending,
-    finishFirstLaunchOnboarding,
+    isFirstLaunchOnboardingPending: () => (isolatedAcceptanceInstance ? false : isFirstLaunchOnboardingPending()),
+    finishFirstLaunchOnboarding: (createDefaultProject) =>
+      isolatedAcceptanceInstance ? null : finishFirstLaunchOnboarding(createDefaultProject),
     isOldLayoutEligible,
     getDisplayBackend: async () => null,
     getRenderingMode: () => (hardwareAccelerationDisabled ? "software" : "hardware"),
@@ -317,7 +348,7 @@ const main = Effect.gen(function* () {
     exportDebugLogs: () => exportDebugLogs(),
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
   })
-  registerWslIpcHandlers(wslServers)
+  registerWslIpcHandlers(wslServers, nativeActions)
   yield* Effect.promise(() => startNetLog()).pipe(
     Effect.catch((error) =>
       Effect.sync(() => {

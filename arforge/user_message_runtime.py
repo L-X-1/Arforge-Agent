@@ -104,9 +104,9 @@ def _resolve_attachment(raw_path: str, *, primary: Path) -> dict[str, Any]:
     except OSError:
         raise UserMessageError(f"attachment does not exist: {raw_path}") from None
 
-    from arforge.workspace_roots import path_is_authorized
+    from arforge.ts_workspace import typescript_path_is_authorized
 
-    if not path_is_authorized(resolved, primary=primary):
+    if not typescript_path_is_authorized(resolved, primary=primary):
         raise UserMessageError(f"attachment is outside authorized workspaces: {raw_path}")
     if candidate.is_symlink():
         raise UserMessageError(f"attachment must not be a symbolic link: {raw_path}")

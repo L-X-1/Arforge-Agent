@@ -6,6 +6,9 @@ export type HomeArchivedSessionRecord = {
   projectName: string
 }
 
+/** The v2 session API uses an explicit null to remove an archived timestamp. */
+export const unarchiveSessionTime = { archived: null } as const
+
 function directoryName(directory: string) {
   const normalized = directory.replaceAll("\\", "/").replace(/\/+$/, "")
   return normalized.split("/").at(-1) || directory

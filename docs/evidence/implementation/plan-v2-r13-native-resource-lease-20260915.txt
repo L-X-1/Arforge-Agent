@@ -1,0 +1,12 @@
+R13 原生 MCP resource lease 精确 URI 绑定（2026-09-15）
+
+readResource 现在要求 kind=resource 的 lease ID 等于 safeCapabilityKey(server, resourceUri)，因此另一个当前资源的 lease 不能重定向请求；校验发生在 SDK transport 前。即使无 lease 的历史兼容调用也必须解析 declaredScope，scope 缺失时不进入 transport。resource-template lease 携带脱敏展开 URI reference，读取不同展开实例会在 transport 前拒绝；ToolRegistry 资源/模板 projection 重新计算 canonical capability ID。
+
+验收：
+- lifecycle URI/代际筛选：2 pass / 0 fail / 17 assertions，exit 0。
+- resource-projection：11 pass / 0 fail / 48 assertions（本轮前已通过）。
+- ToolRegistry MCP materialization：1 pass / 0 fail / 8 assertions，exit 0。
+- Prettier 和 git diff --check 通过。
+- 包级 arforge typecheck 仍只有既有 packages/tui JSX/BaseRenderable 诊断，无本次 MCP 新诊断。
+
+测试仅用临时 HTTP MCP fixture，未改用户数据；HTTP/CLI control Action/Gateway、模板 pattern/RFC 6570 更细授权、完整生命周期和 full sandbox 仍待完成。

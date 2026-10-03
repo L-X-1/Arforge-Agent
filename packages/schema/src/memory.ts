@@ -62,6 +62,7 @@ export type Scope = typeof Scope.Type
 
 export const Info = Schema.Struct({
   id: ID,
+  version: NonNegativeInt,
   content: Content,
   type: Type,
   tags: Tags,
@@ -99,7 +100,11 @@ export interface SemanticHit extends Schema.Schema.Type<typeof SemanticHit> {}
 
 export const SemanticResults = Schema.Struct({
   algorithm: Schema.Literals(["hybrid_bm25_embedding_api", "hybrid_bm25_hashing_vector"]),
-  localOnly: Schema.Literal(true),
+  /** False when a remote embedding transport was sent or may have run. */
+  localOnly: Schema.Boolean,
+  /** Transport fact used by clients to explain local fallback or remote use. */
+  embeddingEgress: Schema.Literals(["none", "denied", "sent", "unknown"]),
+  embeddingFallback: Schema.Literals(["remote-not-authorized", "remote-failed"]).pipe(optional),
   items: Schema.Array(SemanticHit),
   count: NonNegativeInt,
 }).annotate({ identifier: "Memory.SemanticResults" })

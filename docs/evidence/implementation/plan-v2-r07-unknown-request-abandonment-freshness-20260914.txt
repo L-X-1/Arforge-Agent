@@ -1,0 +1,16 @@
+Command: bun run audit:migration-freshness
+Working directory: E:/Arforge-Agent
+Exit: 0
+
+schema_version=1.0
+valid=true
+python-capabilities: valid=true, python_file_count=480, capability_leaf_count=5080
+python-tests: valid=true, python_file_count=365, test_leaf_count=3394
+python-dependencies: valid=true, scanned_file_count=7293, dependency_leaf_count=7500, asset_count=6
+ts-composition: valid=true, source_file_count=1757, composition_root_count=3, composition_binding_count=5, runner_service_use_count=3
+ts-boot: valid=true
+source-inputs: valid=true, input_count=7565
+capability-links: valid=true, record_count=4, missing_evidence_count=4
+
+The source snapshot was regenerated after all evidence/ledger writes using
+writeSourceSnapshot; no stale-input finding remains.

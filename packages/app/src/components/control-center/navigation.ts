@@ -2,52 +2,71 @@ import type { ControlCenterMessage } from "./control-center-text"
 
 export const ARFORGE_SETTINGS_TABS = [
   {
+    value: "arforge-workspace",
+    icon: "status",
+    label: "个人工作区",
+    description:
+      "统一查看项目（Project）、工作区（Location）、会话（Session）、任务（Task）、运行记录（Run）与后台任务的安全状态。",
+  },
+  {
     value: "arforge-overview",
     icon: "status",
     label: "系统概览",
-    description: "Server、工作区和 Agent 能力引擎的实时只读状态。",
+    description: "查看 Server、当前工作区和 Agent 引擎是否正常；此页面不会修改数据。",
   },
   {
     value: "arforge-integrations",
     icon: "providers",
-    label: "Provider / 模型",
-    description: "模型配置仍由成熟设置界面管理；这里补齐集成连接和凭据生命周期。",
+    label: "模型与服务商（Provider）",
+    description: "管理模型服务连接和凭据；具体模型选择仍在“模型”设置中完成。",
   },
   {
     value: "arforge-permissions",
     icon: "warning",
-    label: "权限 / 安全",
+    label: "权限与安全",
     description: "查看待处理请求以及已经持久化的权限规则，并可精确撤销单条规则。",
   },
   {
     value: "arforge-memory",
     icon: "brain",
-    label: "Memory / Learning",
-    description: "同一工作区中的持久记忆、语义检索、召回质量、编辑和治理闭环。",
+    label: "记忆与学习（Memory / Learning）",
+    description: "查看、搜索和管理当前工作区长期保留的记忆，并检查召回质量。",
+  },
+  {
+    value: "arforge-evolution",
+    icon: "brain",
+    label: "受控自主进化",
+    description: "审查学习证据提出的策略候选，并通过隔离评测、人工批准、灰度和回滚治理能力变化。",
+  },
+  {
+    value: "arforge-runtime",
+    icon: "console",
+    label: "运行时透视",
+    description: "上下文分层编译、模型路由决策、独立验证、审计链与运行状态的可视化。",
   },
   {
     value: "arforge-extensions",
     icon: "task",
-    label: "Workflow / Plugin / Skill",
-    description: "Workflow 运行、插件两阶段安装、Skill 开关与恢复入口共用同一 typed Server API。",
+    label: "工作流、插件与技能（Workflow / Plugin / Skill）",
+    description: "运行 Workflow，管理 Plugin 和 Skill；安装与启用分开确认，并通过同一 typed Server API 执行。",
   },
   {
     value: "arforge-diagnostics",
     icon: "checklist",
-    label: "诊断 / 运行报告",
-    description: "读取持久运行事实；报告不会创建第二份状态源。",
+    label: "诊断与运行报告",
+    description: "查看真实运行记录和诊断结果；报告只读取现有数据。",
   },
   {
     value: "arforge-operations",
     icon: "console",
-    label: "数据库 / 私有运维",
+    label: "数据库与本地运维",
     description: "破坏性运维不伪装成普通按钮；此处明确展示当前安全入口和执行边界。",
   },
   {
     value: "arforge-coverage",
     icon: "file-tree",
-    label: "能力映射",
-    description: "由机器可读合同生成的覆盖视图。新增 Server API 未归属时，测试会失败。",
+    label: "开发者：能力映射",
+    description: "供开发者核对前端功能与 Server API 的覆盖关系。",
   },
 ] as const satisfies ReadonlyArray<{
   value: `arforge-${string}`

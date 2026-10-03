@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadProductEnv } from "../packages/core/src/config/product-env"
+import { PostgresSchemaMigrations } from "../packages/core/src/database/postgres-schema.gen"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const injectedAdminUrl = process.env.ARFORGE_DB_ADMIN_URL?.trim()
@@ -27,6 +28,11 @@ const admin = adminUrl ? await inspectAdmin(adminUrl, mainTarget) : { configured
 const adminMultiagent = adminUrl
   ? await inspectAdminMultiagent(setDatabase(adminUrl, multiagentTarget.database))
   : { configured: false as const }
+const pendingMainMigrations = main.ok
+  ? PostgresSchemaMigrations.filter((migration) => !main.migrationLedger.includes(migration.id)).map(
+      (migration) => migration.id,
+    )
+  : []
 
 const report = {
   schemaVersion: 1,
@@ -52,15 +58,20 @@ const report = {
     installedTableCount: main.ok ? main.workflowGraphTableCount : null,
     ready: main.ok && main.workflowGraphTableCount === 3,
   },
+  schema: {
+    expectedVersion: PostgresSchemaMigrations.at(-1)?.id ?? null,
+    pendingMainMigrations,
+    currentLedgerComplete: main.ok && pendingMainMigrations.length === 0,
+  },
   admin,
   adminMultiagent,
   decisions: {
     databaseTopologyRequired: !explicitMultiagentUrl,
-    multiagentPrivilegeRepairRequired:
-      !multiagent.ok || multiagent.multiagentWritableTableCount !== 2,
+    multiagentPrivilegeRepairRequired: !multiagent.ok || multiagent.multiagentWritableTableCount !== 2,
     workflowMigrationRequired: !main.ok || main.workflowGraphTableCount !== 3,
     adminConnectionRequired:
       !main.ok ||
+      pendingMainMigrations.length > 0 ||
       main.workflowGraphTableCount !== 3 ||
       !multiagent.ok ||
       multiagent.multiagentWritableTableCount !== 2,
@@ -129,7 +140,9 @@ function sameServer(left: Target, right: Target) {
 async function inspectDatabase(label: string, url: string) {
   const target = parsePostgresUrl(url, label)
   try {
-    const first = await runPsqlJson(target, `
+    const first = await runPsqlJson(
+      target,
+      `
       SELECT json_build_object(
         'database', current_database(),
         'role', current_user,
@@ -182,17 +195,25 @@ async function inspectDatabase(label: string, url: string) {
             AND has_table_privilege(current_user, 'public.' || expected.name, 'DELETE')
         )
       )
-    `)
+    `,
+    )
     const migrations = first.migrationTable
-      ? ((await runPsqlJson(target, `
+      ? ((
+          await runPsqlJson(
+            target,
+            `
           SELECT json_build_object(
             'ids',
             COALESCE(json_agg(id ORDER BY id), '[]'::json)
           )
           FROM arforge_schema_migration
-        `)).ids as unknown[])
+        `,
+          )
+        ).ids as unknown[])
       : []
-    const defaultAdminCandidate = await runPsqlJson(target, `
+    const defaultAdminCandidate = await runPsqlJson(
+      target,
+      `
       SELECT json_build_object(
         'role', 'postgres',
         'exists', EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'postgres'),
@@ -200,15 +221,19 @@ async function inspectDatabase(label: string, url: string) {
         'canCreateDatabase', COALESCE((SELECT rolcreatedb FROM pg_roles WHERE rolname = 'postgres'), false),
         'canCreateRole', COALESCE((SELECT rolcreaterole FROM pg_roles WHERE rolname = 'postgres'), false)
       )
-    `)
+    `,
+    )
     const multiagentRows =
       numberValue(first.multiagentWritableTableCount) === 2
-        ? await runPsqlJson(target, `
+        ? await runPsqlJson(
+            target,
+            `
             SELECT json_build_object(
               'tasks', (SELECT count(*)::int FROM multiagent_tasks),
               'conversations', (SELECT count(*)::int FROM multiagent_conversations)
             )
-          `)
+          `,
+          )
         : null
     return {
       ok: true as const,
@@ -239,7 +264,9 @@ async function inspectDatabase(label: string, url: string) {
 async function inspectAdmin(url: string, main: Target) {
   const target = parsePostgresUrl(url, "ARFORGE_DB_ADMIN_URL")
   try {
-    const row = await runPsqlJson(target, `
+    const row = await runPsqlJson(
+      target,
+      `
       SELECT json_build_object(
         'database', current_database(),
         'role', current_user,
@@ -250,7 +277,8 @@ async function inspectAdmin(url: string, main: Target) {
       )
       FROM pg_roles
       WHERE rolname = current_user
-    `)
+    `,
+    )
     return {
       configured: true as const,
       ok: true as const,
@@ -275,7 +303,9 @@ async function inspectAdmin(url: string, main: Target) {
 async function inspectAdminMultiagent(url: string) {
   const target = parsePostgresUrl(url, "ARFORGE_DB_ADMIN_URL")
   try {
-    const row = await runPsqlJson(target, `
+    const row = await runPsqlJson(
+      target,
+      `
       SELECT json_build_object(
         'database', current_database(),
         'tasks', (SELECT count(*)::int FROM multiagent_tasks),
@@ -291,7 +321,8 @@ async function inspectAdminMultiagent(url: string) {
           AND has_table_privilege('arforge_app', 'public.multiagent_conversations', 'UPDATE')
           AND has_table_privilege('arforge_app', 'public.multiagent_conversations', 'DELETE')
       )
-    `)
+    `,
+    )
     return {
       configured: true as const,
       ok: true as const,
@@ -361,9 +392,7 @@ function resolvePsql() {
   const programFiles = process.env.ProgramFiles || "C:\\Program Files"
   const candidates = [
     configured,
-    ...["18", "17", "16", "15", "14"].map((version) =>
-      join(programFiles, "PostgreSQL", version, "bin", "psql.exe"),
-    ),
+    ...["18", "17", "16", "15", "14"].map((version) => join(programFiles, "PostgreSQL", version, "bin", "psql.exe")),
   ].filter((item): item is string => Boolean(item))
   const found = candidates.find((candidate) => existsSync(candidate))
   if (!found) throw new Error("PostgreSQL psql.exe was not found; set ARFORGE_PSQL_PATH")

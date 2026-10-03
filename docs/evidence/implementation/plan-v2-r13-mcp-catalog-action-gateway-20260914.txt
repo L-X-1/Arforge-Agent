@@ -1,0 +1,11 @@
+v2.0 R13 MCP 目录工具统一管线证据（2026-09-14）
+
+本批将 list_mcp_prompts、list_mcp_resources、list_mcp_resource_templates 从“权限询问后直接读 MCP service”迁入 McpGatewayAdapter.mcpRequestViaGateway。按每个实际服务器建立 durable child Action，绑定父 Action/session/message/call、服务器、操作、参数摘要及 declared transport scope；执行前再核对 scope。原 MCP supervisor、McpCatalog 分页/条目/字节/deadline、generation registry 仍是唯一读取 owner，没有新增 executor/client/权限数据库/恢复 owner。目录回执只保存 JSON-safe name/client/description/uri/uriTemplate 投影，不保存 Client；prompts 兼容全量读取时按真实 client 过滤。
+
+测试：
+D:\bun\bin\bun.exe test test/mcp/resource-projection.test.ts --timeout 30000
+11 pass / 0 fail / 48 expect() calls（含 generation 变化前置阻断）
+
+Prettier、git diff --check 通过；scoped Oxlint 0 errors（仅既有 warning）。包级 arforge typecheck 仍被既有 packages/tui JSX/BaseRenderable 诊断阻断，本批无新增类型诊断。
+
+未关闭：HTTP/CLI 直接 catalog、原生 service read/prompt API、rich Artifact、四类本地生命周期、代际冷恢复、默认 MCP 全量回归、真实外部服务矩阵；两个 Windows/Bun 1.3.14 stdio 失败仍保留，未换 Bun、扩权或降级 sandbox。full sandbox 仍在 R30 后。

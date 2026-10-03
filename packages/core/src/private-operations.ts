@@ -46,6 +46,88 @@ const secretPatterns = {
     /\b(?:api[_-]?key|secret|token|password|passwd|pwd|authorization)\s*[:=]\s*(?!["']?(?:example|sample|placeholder|changeme|redacted)\b)[^\s,;#]+/gi,
 } as const
 
+const walkMetadata = async (root: string) => {
+  const files: Array<{ readonly path: string; readonly size: number }> = []
+  const directories = [root]
+  while (directories.length > 0) {
+    const directory = directories.pop()!
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      // Symlinks/reparse points are intentionally not followed by a privacy
+      // overview. This keeps the report inside the selected profile and avoids
+      // reading unrelated user data through a link.
+      if (entry.isSymbolicLink()) continue
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        directories.push(file)
+        continue
+      }
+      if (!entry.isFile()) continue
+      // Use lstat as the second line of defence against a TOCTOU replacement
+      // between readdir and metadata collection. A reparse point/symlink must
+      // never turn a profile-only overview into an external tree traversal.
+      const stat = await fs.lstat(file)
+      if (!stat.isFile() || stat.isSymbolicLink()) continue
+      files.push({ path: file, size: stat.size })
+    }
+  }
+  return files
+}
+
+export interface PrivacyInventory {
+  readonly path: string
+  readonly files: number
+  readonly bytes: number
+  readonly credentialsPresent: boolean
+  readonly logsBytes: number
+  readonly backups: number
+}
+
+export interface PrivacyAudit {
+  readonly schemaVersion: 1
+  readonly localFirst: true
+  readonly arforgeHome: string
+  readonly arforgeHomeExists: boolean
+  readonly networkUse: "model API calls only when configured/requested"
+  readonly consentRecorded: boolean
+  readonly inventory: PrivacyInventory
+}
+
+/**
+ * Return a metadata-only privacy overview. The operation never reads file
+ * contents, follows links, or returns credential values; it is safe for the
+ * non-interactive CLI and Desktop status surfaces to share.
+ */
+export async function privacyAudit(inputRoot: string): Promise<PrivacyAudit> {
+  const root = path.resolve(inputRoot)
+  const rootExists = await fs
+    .stat(root)
+    .then((item) => item.isDirectory())
+    .catch(() => false)
+  const files = rootExists ? await walkMetadata(root) : []
+  const logsRoot = path.join(root, "log")
+  const backupsRoot = path.join(root, "backups")
+  const inside = (file: string, directory: string) => {
+    const relative = path.relative(directory, file)
+    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  }
+  return {
+    schemaVersion: 1,
+    localFirst: true,
+    arforgeHome: root,
+    arforgeHomeExists: rootExists,
+    networkUse: "model API calls only when configured/requested",
+    consentRecorded: files.some((item) => path.basename(item.path) === "privacy_consent.json"),
+    inventory: {
+      path: root,
+      files: files.length,
+      bytes: files.reduce((sum, item) => sum + item.size, 0),
+      credentialsPresent: files.some((item) => item.path === path.join(root, ".env")),
+      logsBytes: files.filter((item) => inside(item.path, logsRoot)).reduce((sum, item) => sum + item.size, 0),
+      backups: files.filter((item) => inside(item.path, backupsRoot)).length,
+    },
+  }
+}
+
 export interface SecretFinding {
   readonly path: string
   readonly categories: Readonly<Record<string, number>>

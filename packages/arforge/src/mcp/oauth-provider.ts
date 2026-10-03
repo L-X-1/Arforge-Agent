@@ -31,6 +31,12 @@ export class McpOAuthProvider implements OAuthClientProvider {
     protected config: McpOAuthConfig,
     private callbacks: McpOAuthCallbacks,
     protected auth: McpAuth.Interface,
+    /**
+     * Opaque persistence identity. The display name is deliberately kept
+     * separate: credentials, PKCE, and OAuth state must never be shared by
+     * two projects that happen to call their MCP server the same thing.
+     */
+    protected authKey: string = mcpName,
   ) {}
 
   get redirectUrl(): string {
@@ -63,7 +69,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
     // Check stored client info (from dynamic registration)
     // Use getForUrl to validate credentials are for the current server URL
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
+    const entry = await Effect.runPromise(this.auth.getForUrl(this.authKey, this.serverUrl))
     if (entry?.clientInfo) {
       // Check if client secret has expired
       if (entry.clientInfo.clientSecretExpiresAt && entry.clientInfo.clientSecretExpiresAt < Date.now() / 1000) {
@@ -82,7 +88,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
     await Effect.runPromise(
       this.auth.updateClientInfo(
-        this.mcpName,
+        this.authKey,
         {
           clientId: info.client_id,
           clientSecret: info.client_secret,
@@ -96,7 +102,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   async tokens(): Promise<OAuthTokens | undefined> {
     // Use getForUrl to validate tokens are for the current server URL
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.mcpName, this.serverUrl))
+    const entry = await Effect.runPromise(this.auth.getForUrl(this.authKey, this.serverUrl))
     if (!entry?.tokens) return undefined
 
     return {
@@ -113,7 +119,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   async saveTokens(tokens: OAuthTokens): Promise<void> {
     await Effect.runPromise(
       this.auth.updateTokens(
-        this.mcpName,
+        this.authKey,
         {
           accessToken: tokens.access_token,
           refreshToken: tokens.refresh_token,
@@ -130,11 +136,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateCodeVerifier(this.mcpName, codeVerifier))
+    await Effect.runPromise(this.auth.updateCodeVerifier(this.authKey, codeVerifier))
   }
 
   async codeVerifier(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+    const entry = await Effect.runPromise(this.auth.get(this.authKey))
     if (!entry?.codeVerifier) {
       throw new Error(`No code verifier saved for MCP server: ${this.mcpName}`)
     }
@@ -142,11 +148,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveState(state: string): Promise<void> {
-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, state))
+    await Effect.runPromise(this.auth.updateOAuthState(this.authKey, state))
   }
 
   async state(): Promise<string> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+    const entry = await Effect.runPromise(this.auth.get(this.authKey))
     if (entry?.oauthState) {
       return entry.oauthState
     }
@@ -158,24 +164,24 @@ export class McpOAuthProvider implements OAuthClientProvider {
     const newState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("")
-    await Effect.runPromise(this.auth.updateOAuthState(this.mcpName, newState))
+    await Effect.runPromise(this.auth.updateOAuthState(this.authKey, newState))
     return newState
   }
 
   async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
-    const entry = await Effect.runPromise(this.auth.get(this.mcpName))
+    const entry = await Effect.runPromise(this.auth.get(this.authKey))
     if (!entry) return
     switch (type) {
       case "all":
-        await Effect.runPromise(this.auth.remove(this.mcpName))
+        await Effect.runPromise(this.auth.remove(this.authKey))
         break
       case "client":
         delete entry.clientInfo
-        await Effect.runPromise(this.auth.set(this.mcpName, entry))
+        await Effect.runPromise(this.auth.set(this.authKey, entry))
         break
       case "tokens":
         delete entry.tokens
-        await Effect.runPromise(this.auth.set(this.mcpName, entry))
+        await Effect.runPromise(this.auth.set(this.authKey, entry))
         break
     }
   }
@@ -214,7 +220,7 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
     if (!this.pendingTokens) return
     await Effect.runPromise(
       this.auth.set(
-        this.mcpName,
+        this.authKey,
         {
           tokens: {
             accessToken: this.pendingTokens.access_token,

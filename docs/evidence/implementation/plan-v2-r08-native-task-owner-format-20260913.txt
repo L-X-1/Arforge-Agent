@@ -1,0 +1,4 @@
+16 scoped source/test files: bun x prettier --check; git diff --check (also docs/USER_GUIDE.md)
+Exit code: 0
+Checking formatting...
+All matched files use Prettier code style!

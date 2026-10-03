@@ -3,7 +3,9 @@
 Install the ZIP produced in `build/distributions` through
 **Settings → Plugins → Install Plugin from Disk**.
 
-The plugin starts `python -m arforge.bridge` inside a trusted project. It provides:
+The plugin starts the TypeScript `arforge bridge` command inside a trusted project.
+Startup performs a `protocol.describe` plus `health` handshake and refuses a
+retired Python or otherwise unknown runtime. It provides:
 
 - chat, selection explanation/fix and workspace review;
 - active file, cursor, selection and live IDE diagnostics as structured context;

@@ -104,10 +104,19 @@ def test_workspace_and_position_boundaries_fail_closed(tmp_path):
         manager.query("rename", source, 1, 1)
 
 
-def test_registered_tool_exports_operation_enum_and_structured_result(monkeypatch, tmp_path):
+def test_python_builtin_registry_does_not_register_legacy_lsp_tools():
+    """The TypeScript lsp tool is the only default product owner."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.lsp_tools" not in BUILTIN_TOOL_MODULES
+
+
+def test_legacy_lsp_module_remains_explicitly_importable(monkeypatch, tmp_path):
+    """Old Python callers keep an opt-in compatibility seam during migration."""
+
     from arforge.tool_executor import execute_tool_by_name
     from arforge.tool_registry import REGISTRY
-    from arforge.tools import load_builtin_tools
     from arforge.tools import file_tools, lsp_tools
 
     source = tmp_path / "sample.py"
@@ -115,16 +124,16 @@ def test_registered_tool_exports_operation_enum_and_structured_result(monkeypatc
     file_tools.set_workspace(tmp_path)
     manager = _manager(tmp_path)
     monkeypatch.setattr(lsp_tools, "get_lsp_manager", lambda _root: manager)
-    load_builtin_tools()
-    schema = next(
-        item for item in REGISTRY.to_openai_tools()
-        if item["function"]["name"] == "language_service"
-    )
-    operation_schema = schema["function"]["parameters"]["properties"]["operation"]
-    assert "goToDefinition" in operation_schema["enum"]
-    assert "diagnostics" in operation_schema["enum"]
 
     try:
+        schema = next(
+            item for item in REGISTRY.to_openai_tools()
+            if item["function"]["name"] == "language_service"
+        )
+        operation_schema = schema["function"]["parameters"]["properties"]["operation"]
+        assert "goToDefinition" in operation_schema["enum"]
+        assert "diagnostics" in operation_schema["enum"]
+
         result = execute_tool_by_name(
             "language_service",
             {

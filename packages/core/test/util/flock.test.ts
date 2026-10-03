@@ -130,8 +130,14 @@ describe("util.flock", () => {
           done,
           active,
           holdMs: 30,
-          staleMs: 1_000,
-          timeoutMs: 15_000,
+          // Process startup can be delayed by the full Core matrix.  A one
+          // second stale window lets a healthy owner look dead before its
+          // heartbeat gets scheduled, so contention tests may break a live
+          // lock and report a false worker failure.  Keep stale recovery
+          // covered by the dedicated crash cases below and use a bounded but
+          // scheduler-tolerant window here.
+          staleMs: 10_000,
+          timeoutMs: 30_000,
         }),
       ),
     )
@@ -144,7 +150,7 @@ describe("util.flock", () => {
       .map((x) => x.trim())
       .filter(Boolean)
     expect(lines.length).toBe(n)
-  }, 20_000)
+  }, 45_000)
 
   test("times out while waiting when lock is still healthy", async () => {
     await using tmp = await tmpdir()

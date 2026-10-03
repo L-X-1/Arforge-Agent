@@ -13,9 +13,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -23,11 +26,22 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 public final class BridgeClient implements Disposable {
     public static final String PROTOCOL = "arforge.bridge";
     public static final String VERSION = "1.2";
     public static final int MAX_REQUEST_BYTES = 1024 * 1024;
+    private static final Set<String> REQUIRED_METHODS = Set.of(
+            "protocol.describe",
+            "health",
+            "workspace.get",
+            "session.create",
+            "session.resume",
+            "chat.start",
+            "chat.cancel",
+            "git.diff"
+    );
 
     private final Gson gson = new Gson();
     private final AtomicLong ids = new AtomicLong(1);
@@ -37,6 +51,7 @@ public final class BridgeClient implements Disposable {
     private volatile Consumer<JsonObject> eventConsumer = ignored -> {};
     private volatile Process process;
     private volatile BufferedWriter writer;
+    private volatile Set<String> methods = Set.of();
 
     public CompletableFuture<JsonObject> start(
             String command,
@@ -60,7 +75,39 @@ public final class BridgeClient implements Disposable {
                     new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)
             );
             startReaders(process);
-            return request("health", new JsonObject(), Duration.ofSeconds(15));
+            return request("protocol.describe", new JsonObject(), Duration.ofSeconds(15))
+                    .thenCompose(description -> {
+                        Set<String> advertised = advertisedMethods(description);
+                        Set<String> missing = new HashSet<>(REQUIRED_METHODS);
+                        missing.removeAll(advertised);
+                        if (!isTypeScriptDescription(description) || !missing.isEmpty()) {
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(
+                                            missing.isEmpty()
+                                                    ? "Arforge Bridge 不是受支持的 TypeScript 运行时"
+                                                    : "Arforge Bridge 缺少必需能力："
+                                                            + missing.stream().sorted().collect(Collectors.joining(", "))
+                                    )
+                            );
+                        }
+                        methods = Collections.unmodifiableSet(advertised);
+                        return request("health", new JsonObject(), Duration.ofSeconds(15));
+                    })
+                    .thenCompose(health -> {
+                        if (!isTypeScriptHealth(health)) {
+                            return CompletableFuture.failedFuture(
+                                    new IllegalStateException(
+                                            "Arforge Bridge 健康检查未确认 TypeScript 运行时"
+                                    )
+                            );
+                        }
+                        return CompletableFuture.completedFuture(health);
+                    })
+                    .whenComplete((ignored, error) -> {
+                        if (error != null) {
+                            terminateProcess(error);
+                        }
+                    });
         } catch (IOException error) {
             return CompletableFuture.failedFuture(error);
         }
@@ -83,6 +130,11 @@ public final class BridgeClient implements Disposable {
         if (!isRunning() || writer == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Arforge Bridge 未运行")
+            );
+        }
+        if (!methods.isEmpty() && !methods.contains(method)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("当前 Bridge 未宣布能力：" + method)
             );
         }
         long id = ids.getAndIncrement();
@@ -212,6 +264,35 @@ public final class BridgeClient implements Disposable {
                 && VERSION.equals(message.get("version").getAsString());
     }
 
+    private boolean isTypeScriptDescription(JsonObject description) {
+        return description != null
+                && description.has("protocol")
+                && PROTOCOL.equals(description.get("protocol").getAsString())
+                && description.has("runtime")
+                && "typescript".equals(description.get("runtime").getAsString());
+    }
+
+    private boolean isTypeScriptHealth(JsonObject health) {
+        return health != null
+                && health.has("status")
+                && "ok".equals(health.get("status").getAsString())
+                && health.has("runtime")
+                && "typescript".equals(health.get("runtime").getAsString());
+    }
+
+    private Set<String> advertisedMethods(JsonObject description) {
+        if (description == null || !description.has("methods") || !description.get("methods").isJsonArray()) {
+            return Set.of();
+        }
+        Set<String> result = new HashSet<>();
+        description.getAsJsonArray("methods").forEach(value -> {
+            if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+                result.add(value.getAsString());
+            }
+        });
+        return result;
+    }
+
     private String diagnostic(int exitCode) {
         synchronized (stderr) {
             if (!stderr.isEmpty()) {
@@ -224,10 +305,25 @@ public final class BridgeClient implements Disposable {
     private void closeWithError(Throwable error) {
         process = null;
         writer = null;
+        methods = Set.of();
         for (CompletableFuture<JsonObject> future : pending.values()) {
             future.completeExceptionally(error);
         }
         pending.clear();
+    }
+
+    private void terminateProcess(Throwable error) {
+        Process current = process;
+        process = null;
+        writer = null;
+        methods = Set.of();
+        for (CompletableFuture<JsonObject> future : pending.values()) {
+            future.completeExceptionally(error);
+        }
+        pending.clear();
+        if (current != null && current.isAlive()) {
+            current.destroy();
+        }
     }
 
     @Override
@@ -235,6 +331,7 @@ public final class BridgeClient implements Disposable {
         Process current = process;
         process = null;
         writer = null;
+        methods = Set.of();
         timers.shutdownNow();
         if (current != null && current.isAlive()) {
             current.destroy();

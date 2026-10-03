@@ -6,6 +6,29 @@ type SessionSwitchProbe = {
   stop: () => void
 }
 
+type TimelineStabilitySample = Pick<SessionSwitchSample, "last" | "bottomErrorPx"> & {
+  viewportCount: number
+  timelineRowCount: number
+  lastMessageCount?: number
+  scrollTop?: number
+  scrollHeight?: number
+  clientHeight?: number
+  viewportTop?: number
+  viewportBottom?: number
+  spacerBottom?: number
+}
+
+export function timelineStabilityError(
+  lastID: string,
+  samples: readonly Pick<SessionSwitchSample, "last" | "bottomErrorPx">[],
+  cause: unknown,
+) {
+  return new Error(
+    `Timeline did not stabilize: lastMessageID=${lastID}, samples=${samples.length}, recent=${JSON.stringify(samples.slice(-3))}`,
+    { cause },
+  )
+}
+
 async function installSessionSwitchProbe(
   page: Page,
   input: {
@@ -89,7 +112,7 @@ async function installSessionSwitchProbe(
             last: visible.includes(lastID),
             requiredPartVisible,
             bottomAnchorRequired: requireBottomAnchor !== false,
-            bottomErrorPx: spacer ? spacer.bottom - view.bottom : undefined,
+            bottomErrorPx: spacer ? root.scrollHeight - root.clientHeight - root.scrollTop : undefined,
             review,
           })
         } else {
@@ -129,7 +152,7 @@ async function installSessionSwitchProbe(
   }, input)
 }
 
-async function waitForStableSessionSwitch(page: Page) {
+async function waitForStableSessionSwitch(page: Page, input: { lastID: string; requiredPartID?: string }) {
   await page.waitForFunction(() => {
     const samples = (window as Window & { __sessionSwitchProbe?: SessionSwitchProbe }).__sessionSwitchProbe?.samples
     if (!samples) return false
@@ -147,6 +170,45 @@ async function waitForStableSessionSwitch(page: Page) {
         )
       )
     })
+  }, undefined, { timeout: 30_000 }).catch(async (error: unknown) => {
+    const diagnostics = await page.evaluate(({ lastID, requiredPartID }) => {
+      const probe = (window as Window & { __sessionSwitchProbe?: SessionSwitchProbe }).__sessionSwitchProbe
+      const viewports = [...document.querySelectorAll<HTMLElement>(".scroll-view__viewport")]
+      const root = viewports.find((element) => element.querySelector("[data-timeline-row]"))
+      const view = root?.getBoundingClientRect()
+      const bounds = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect()
+        return { top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height }
+      }
+      const visible = (element: HTMLElement) => {
+        if (!view) return false
+        const rect = element.getBoundingClientRect()
+        return rect.width > 0 && rect.height > 0 && rect.bottom > view.top && rect.top < view.bottom
+      }
+      const messages = root ? [...root.querySelectorAll<HTMLElement>("[data-message-id]")] : []
+      const parts = root ? [...root.querySelectorAll<HTMLElement>("[data-timeline-part-id]")] : []
+      return {
+        sampleCount: probe?.samples.length ?? 0,
+        recent: probe?.samples.slice(-3) ?? [],
+        viewportCount: viewports.length,
+        viewport: root ? {
+          ...bounds(root),
+          scrollTop: root.scrollTop,
+          scrollHeight: root.scrollHeight,
+          clientHeight: root.clientHeight,
+        } : undefined,
+        lastMatches: messages.filter((element) => element.dataset.messageId === lastID).map(bounds),
+        requiredPartMatches: parts.filter((element) => element.dataset.timelinePartId === requiredPartID).map(bounds),
+        visibleMessageIDs: [...new Set(messages.filter(visible).map((element) => element.dataset.messageId))].slice(-64),
+        visiblePartIDs: [...new Set(parts.filter(visible).map((element) => element.dataset.timelinePartId))].slice(-64),
+        partIDs: [...new Set(parts.map((element) => element.dataset.timelinePartId))].slice(-200),
+      }
+    }, { lastID: input.lastID, requiredPartID: input.requiredPartID }).catch(() => undefined)
+    if (!diagnostics) throw error
+    throw new Error(
+      `Session switch did not stabilize: ${JSON.stringify({ lastID: input.lastID, requiredPartID: input.requiredPartID, ...diagnostics })}`,
+      { cause: error },
+    )
   })
 }
 
@@ -173,45 +235,70 @@ export async function measureSessionSwitch(
 ) {
   const { switch: run, ...probe } = input
   await installSessionSwitchProbe(page, probe)
+  let failed = false
   try {
     await run()
-    await waitForStableSessionSwitch(page)
+    await waitForStableSessionSwitch(page, probe)
     return await collectSessionSwitchResult(page)
+  } catch (error) {
+    failed = true
+    throw error
   } finally {
     await page.evaluate(() => {
       ;(window as Window & { __sessionSwitchProbe?: SessionSwitchProbe }).__sessionSwitchProbe?.stop()
+    }).catch((error: unknown) => {
+      if (!failed) throw error
     })
   }
 }
 
 export async function waitForStableTimeline(page: Page, lastID: string) {
-  const samples: Pick<SessionSwitchSample, "last" | "bottomErrorPx">[] = []
+  const samples: TimelineStabilitySample[] = []
   await expect
     .poll(
       async () => {
         samples.push(
           await page.evaluate(
             (lastID) =>
-              new Promise<Pick<SessionSwitchSample, "last" | "bottomErrorPx">>((resolve) => {
+              new Promise<TimelineStabilitySample>((resolve) => {
                 requestAnimationFrame(() =>
                   setTimeout(() => {
-                    const root = [...document.querySelectorAll<HTMLElement>(".scroll-view__viewport")].find((element) =>
+                    const viewports = [...document.querySelectorAll<HTMLElement>(".scroll-view__viewport")]
+                    const root = viewports.find((element) =>
                       element.querySelector("[data-timeline-row]"),
                     )
                     if (!root) {
-                      resolve({ last: false })
+                      resolve({
+                        last: false,
+                        viewportCount: viewports.length,
+                        timelineRowCount: document.querySelectorAll("[data-timeline-row]").length,
+                      })
                       return
                     }
                     const view = root.getBoundingClientRect()
-                    const last = [...root.querySelectorAll<HTMLElement>("[data-message-id]")].some((element) => {
-                      if (element.dataset.messageId !== lastID) return false
+                    const matching = [...root.querySelectorAll<HTMLElement>("[data-message-id]")].filter(
+                      (element) => element.dataset.messageId === lastID,
+                    )
+                    const last = matching.some((element) => {
                       const rect = element.getBoundingClientRect()
                       return rect.bottom > view.top && rect.top < view.bottom
                     })
                     const spacer = root
                       .querySelector<HTMLElement>('[data-timeline-row="bottom-spacer"]')
                       ?.getBoundingClientRect()
-                    resolve({ last, bottomErrorPx: spacer ? spacer.bottom - view.bottom : undefined })
+                    resolve({
+                      last,
+                      bottomErrorPx: spacer ? root.scrollHeight - root.clientHeight - root.scrollTop : undefined,
+                      viewportCount: viewports.length,
+                      timelineRowCount: root.querySelectorAll("[data-timeline-row]").length,
+                      lastMessageCount: matching.length,
+                      scrollTop: root.scrollTop,
+                      scrollHeight: root.scrollHeight,
+                      clientHeight: root.clientHeight,
+                      viewportTop: view.top,
+                      viewportBottom: view.bottom,
+                      spacerBottom: spacer?.bottom,
+                    })
                   }, 0),
                 )
               }),
@@ -223,4 +310,7 @@ export async function waitForStableTimeline(page: Page, lastID: string) {
       { timeout: 30_000, intervals: [0] },
     )
     .toBe(true)
+    .catch((error: unknown) => {
+      throw timelineStabilityError(lastID, samples, error)
+    })
 }

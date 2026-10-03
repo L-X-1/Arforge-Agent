@@ -27,6 +27,7 @@ export const canonicalSnapshot = (snapshot: RequestSnapshot): string =>
     method: snapshot.method,
     url: snapshot.url,
     headers: canonicalizeJson(snapshot.headers),
+    bodyEncoding: snapshot.bodyEncoding ?? "text",
     body: Option.match(decodeJson(snapshot.body), {
       onNone: () => snapshot.body,
       onSome: canonicalizeJson,
@@ -80,6 +81,12 @@ export const requestDiff = (expected: RequestSnapshot, received: RequestSnapshot
   }
   const headers = headerDiffs(expected.headers, received.headers)
   if (headers.length > 0) lines.push("headers:", ...headers.slice(0, 8))
+  if ((expected.bodyEncoding ?? "text") !== (received.bodyEncoding ?? "text")) {
+    lines.push(
+      "bodyEncoding:",
+      `  expected ${expected.bodyEncoding ?? "text"}, received ${received.bodyEncoding ?? "text"}`,
+    )
+  }
   const expectedBody = jsonBody(expected.body)
   const receivedBody = jsonBody(received.body)
   const body =

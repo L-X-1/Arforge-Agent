@@ -1,5 +1,6 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
+import { interruptedErrorMessage } from "@arforge-ai/core/tool/execution-state"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema } from "effect"
@@ -30,6 +31,10 @@ const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
+  /** Production processors execute the provider stream inside the caller's
+   * transaction boundary. Lightweight compatibility/test handles may omit
+   * this capability and retain the pre-transaction adapter path. */
+  readonly transactionalProvider?: true
   readonly message: SessionV1.Assistant
   readonly updateToolCall: (
     toolCallID: string,
@@ -473,7 +478,7 @@ const layer = Layer.effect(
                 sessionID: ctx.sessionID,
                 messageID: ctx.assistantMessage.parentID,
               })
-              .pipe(Effect.ignore, Effect.forkIn(scope))
+              .pipe(Effect.provideService(Database.Service, database), Effect.ignore, Effect.forkIn(scope))
             if (
               !ctx.assistantMessage.summary &&
               isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
@@ -585,7 +590,7 @@ const layer = Layer.effect(
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution aborted",
+              error: interruptedErrorMessage,
               metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
@@ -683,6 +688,7 @@ const layer = Layer.effect(
       })
 
       return {
+        transactionalProvider: true,
         get message() {
           return ctx.assistantMessage
         },

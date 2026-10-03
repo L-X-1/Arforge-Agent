@@ -1,9 +1,11 @@
 import { useControlCenterText } from "@/components/control-center/control-center-text"
+import { useLanguage } from "@/context/language"
 import { Button } from "@arforge-ai/ui/button"
-import { For, Show, createEffect, on } from "solid-js"
+import { For, Show, createEffect, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { OperationsApi } from "@/utils/server"
 import { hasOperationDirectory } from "./session-operation-boundary"
+import "@/components/preview/workbench-review.css"
 type RunList = Awaited<ReturnType<OperationsApi["agentCapabilities"]["runList"]>>["data"]
 type RunSummary = RunList["items"][number]
 type RunReportResult = Awaited<ReturnType<OperationsApi["agentCapabilities"]["runReport"]>>["data"]
@@ -25,6 +27,9 @@ export function SessionRunHistory(props: {
   disabled?: boolean
 }) {
   const t = useControlCenterText()
+  const language = useLanguage()
+  let request = 0
+  onCleanup(() => request++)
   const [state, setState] = createStore({
     loading: true,
     error: "",
@@ -33,6 +38,7 @@ export function SessionRunHistory(props: {
     report: undefined as RunReport | undefined,
   })
   const refresh = async () => {
+    if (props.disabled) return
     const location = props.location()
     if (!hasOperationDirectory(location)) {
       setState({
@@ -42,29 +48,38 @@ export function SessionRunHistory(props: {
       return
     }
     if (state.loading && state.items.length > 0) return
+    const current = ++request
+    const api = props.api()
     setState({ loading: true, error: "" })
     try {
-      const result = await props.api().agentCapabilities.runList({
+      const result = await api.agentCapabilities.runList({
         ...location,
         limit: state.limit,
       })
+      if (current !== request) return
       setState({ items: [...result.data.items] })
       if (state.report && !result.data.items.some((item) => item.run_id === state.report?.run_id)) {
         setState("report", undefined)
       }
     } catch (error) {
+      if (current !== request) return
       setState("error", publicError(error, t("Run history could not be loaded. Refresh and try again.")))
     } finally {
-      setState("loading", false)
+      if (current === request) setState("loading", false)
     }
   }
   const open = async (runID: string) => {
+    if (props.disabled || state.loading || !hasOperationDirectory(props.location())) return
+    const current = ++request
+    const api = props.api()
+    const location = props.location()
     setState({ loading: true, error: "" })
     try {
-      const result = await props.api().agentCapabilities.runReport({
-        ...props.location(),
+      const result = await api.agentCapabilities.runReport({
+        ...location,
         runID,
       })
+      if (current !== request) return
       if (!result.data.found) {
         setState({
           report: undefined,
@@ -74,24 +89,27 @@ export function SessionRunHistory(props: {
       }
       setState("report", result.data.report)
     } catch (error) {
+      if (current !== request) return
       setState("error", publicError(error, t("Run history could not be loaded. Refresh and try again.")))
     } finally {
-      setState("loading", false)
+      if (current === request) setState("loading", false)
     }
   }
   createEffect(
-    on([() => props.location().location.directory, () => props.location().location.workspace], () => {
+    on([() => props.api(), () => props.location().location.directory, () => props.location().location.workspace], () => {
+      request++
+      setState({ items: [], report: undefined, error: "", loading: false })
       if (hasOperationDirectory(props.location())) void refresh()
     }),
   )
   return (
-    <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3" data-testid="run-history">
+    <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3" data-testid="run-history" aria-busy={state.loading}>
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 class="text-12-medium text-text-strong">{t("Persistent run history")}</h3>
           <p class="text-12-regular text-text-weak">
             {t(
-              "Read the Python Core transaction, trace, and message artifacts through the shared typed Server API. Reports are read-only and remain owned by one persistence source.",
+              "Read the Arforge Core transaction, trace, and message artifacts through the shared typed Server API. Reports are read-only and remain owned by one persistence source.",
             )}
           </p>
         </div>
@@ -122,8 +140,9 @@ export function SessionRunHistory(props: {
       </div>
 
       <Show when={state.error}>
-        <p class="rounded-md border border-border-warning p-3 text-12-regular text-text-warning">{state.error}</p>
+        <p role="alert" class="rounded-md border border-border-warning p-3 text-12-regular text-text-warning">{state.error}</p>
       </Show>
+      <Show when={state.loading}><p role="status" class="text-12-regular text-text-weak">{language.t("common.loading")}</p></Show>
 
       <div class="flex flex-col gap-2">
         <For each={state.items}>
@@ -166,7 +185,7 @@ export function SessionRunHistory(props: {
                 {t("Close report")}
               </Button>
             </div>
-            <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div data-slot="run-report-metrics" class="grid grid-cols-2 gap-2 md:grid-cols-4">
               <Metric label={t("Changed files")} value={report().changed_files.length} />
               <Metric label={t("Commands")} value={report().commands_run.length} />
               <Metric label={t("Trace events")} value={report().trace_events} />

@@ -1,3 +1,4 @@
+import { runTerminalNewShortcut, terminalPanelOperationPending } from "./terminal-panel-operations"
 import { useNavigate } from "@solidjs/router"
 import { useCommand, type CommandOption } from "@/context/command"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
@@ -8,17 +9,20 @@ import { useLayout } from "@/context/layout"
 import { usePermission } from "@/context/permission"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
 import { findLast } from "@arforge-ai/core/util/array"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { extractPromptFromParts } from "@/utils/prompt"
 import { UserMessage } from "@arforge-ai/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionOwnership } from "./session-ownership"
 import { useLocal } from "@/context/local"
+import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
+import { requestSessionRevert, requestSessionUnrevert } from "@/utils/session-revert-control"
+import { formatServerError } from "@/utils/server-errors"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -43,6 +47,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const permission = usePermission()
   const prompt = usePrompt()
   const sdk = useSDK()
+  const serverSDK = useServerSDK()
   const settings = useSettings()
   const sync = useSync()
   const terminal = useTerminal()
@@ -56,18 +61,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const value = await load()
     owner.run(() => show(value))
   }
-  const runCommand = async <T,>(input: {
-    owner: ReturnType<ReturnType<typeof createSessionOwnership>["capture"]>
-    prompt: T
-    request: () => Promise<unknown>
-    updatePrompt: (prompt: T) => void
-    updateViewport: () => void
-  }) => {
-    await input.request()
-    input.updatePrompt(input.prompt)
-    input.owner.run(input.updateViewport)
-  }
-
   const info = () => {
     const id = params.id
     if (!id) return
@@ -127,7 +120,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const navigateMessageByOffset = actions.navigateMessageByOffset
-  const setActiveMessage = actions.setActiveMessage
   const focusInput = actions.focusInput
 
   const sessionCommand = withCategory(language.t("command.category.session"))
@@ -264,17 +256,23 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const openTerminal = () => {
-    if (terminal.all().length > 0) terminal.new({ focus: true })
-    if (terminal.all().length === 0) terminal.requestFocus()
-    view().terminal.open()
+    const panel = view().terminal
+    runTerminalNewShortcut({
+      count: terminal.all().length,
+      opened: panel.opened(),
+      pending: terminal.pending,
+      create: (options) => terminal.new(options),
+      requestFocus: () => terminal.requestFocus(),
+      open: () => panel.open(),
+    })
   }
 
   const closeTerminal = () => {
     const id = terminal.active()
     if (!id) return
-    const last = terminal.all().length === 1
-    void terminal.close(id)
-    if (last) view().terminal.close()
+    if (terminalPanelOperationPending(terminal.pending, "close", id)) return
+    // The panel observes the acknowledged PTY removal; failures keep it visible.
+    void terminal.bind().close(id)
   }
 
   const chooseMcp = () => {
@@ -305,61 +303,61 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const undo = async () => {
     const sessionID = params.id
     if (!sessionID) return
-    const owner = sessionOwnership.capture()
     const session = sdk().api.session
-    const directory = sdk().directory
-    const promptSession = prompt.capture()
     const revert = info()?.revert?.messageID
     const messages = userMessages()
     const message = findLast(messages, (x) => !revert || x.id < revert)
     if (!message) return
-    const parts = sync().data.part[message.id]
-
     if (sync().data.session_working(sessionID)) {
       await session.interrupt({ sessionID }).catch(() => {})
     }
-
-    await runCommand({
-      owner,
-      prompt: promptSession,
-      request: () => session.revert.stage({ sessionID, messageID: message.id }),
-      updatePrompt: (promptSession) => {
-        if (parts) promptSession.set(extractPromptFromParts(parts, { directory }))
-      },
-      updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id < message.id)),
-    })
+    try {
+      const result = await requestSessionRevert({
+        api: serverSDK().operationsApi,
+        server: serverSDK().scope,
+        project: sdk().directory,
+        location: { directory: sdk().directory },
+        sessionID,
+        messageID: message.id,
+      })
+      if (result.state === "status") showControlOperationStatusNotice(result.status, (key) => language.t(key))
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: formatServerError(error, language.t),
+      })
+    }
   }
 
   const redo = async () => {
     const sessionID = params.id
     if (!sessionID) return
-    const owner = sessionOwnership.capture()
-    const session = sdk().api.session
     const messages = userMessages()
-    const promptSession = prompt.capture()
 
     const revertMessageID = info()?.revert?.messageID
     if (!revertMessageID) return
 
     const next = messages.find((x) => x.id > revertMessageID)
-    if (!next) {
-      await runCommand({
-        owner,
-        prompt: promptSession,
-        request: () => session.revert.clear({ sessionID }),
-        updatePrompt: (promptSession) => promptSession.reset(),
-        updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id >= revertMessageID)),
+    try {
+      const common = {
+        api: serverSDK().operationsApi,
+        server: serverSDK().scope,
+        project: sdk().directory,
+        location: { directory: sdk().directory },
+        sessionID,
+      }
+      const result = next
+        ? await requestSessionRevert({ ...common, messageID: next.id })
+        : await requestSessionUnrevert(common)
+      if (result.state === "status") showControlOperationStatusNotice(result.status, (key) => language.t(key))
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: formatServerError(error, language.t),
       })
-      return
     }
-
-    await runCommand({
-      owner,
-      prompt: promptSession,
-      request: () => session.revert.stage({ sessionID, messageID: next.id }),
-      updatePrompt: () => undefined,
-      updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id < next.id)),
-    })
   }
 
   const compact = async () => {

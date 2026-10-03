@@ -31,6 +31,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Ripgrep } from "@arforge-ai/core/ripgrep"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { SessionExecution } from "@arforge-ai/core/session/execution"
 
 const originalEnv = {
   ARFORGE_AUTH_CONTENT: process.env.ARFORGE_AUTH_CONTENT,
@@ -56,6 +57,7 @@ const workspaceLayer = (experimentalWorkspaces: boolean) =>
         InstanceStore.bootstrapNode,
         Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void })),
       ],
+      [SessionExecution.node, SessionExecution.noopLayer],
     ],
   )
 

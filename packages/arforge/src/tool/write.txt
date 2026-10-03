@@ -1,5 +1,10 @@
 Writes a file to the local filesystem.
 
+For `.xlsx`, `.docx`, `.pptx`, and `.pdf` targets, use the same `write` tool
+with bounded JSON rows/slides or Markdown-like text. The canonical writer
+creates the artifact without launching Office; after creation, use the
+matching read/preview capability to verify the result.
+
 Usage:
 - This tool will overwrite the existing file if there is one at the provided path.
 - If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first.

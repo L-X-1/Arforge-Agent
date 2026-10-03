@@ -20,9 +20,11 @@ import { Skill } from "@/skill"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { Location } from "@arforge-ai/core/location"
 import { LocationServiceMap, locationServiceMapLayer } from "@arforge-ai/core/location-services"
+import { Database } from "@arforge-ai/core/database/database"
 import { Reference } from "@arforge-ai/core/reference"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 
 export const DEFAULT_VISIBLE_LANGUAGE_GUIDANCE = [
   "<output_language>",
@@ -126,15 +128,18 @@ const layer = Layer.effect(
         )
         if (instructions.length === 0) return
 
-        return [
-          "<mcp_instructions>",
-          ...instructions.flatMap((item) => [
-            `  <server name="${item.name}">`,
-            ...item.instructions.split("\n").map((line) => `    ${line}`),
-            "  </server>",
-          ]),
-          "</mcp_instructions>",
-        ].join("\n")
+        return ContextFirewall.untrusted(
+          "remote_instruction",
+          [
+            "<mcp_instructions>",
+            ...instructions.flatMap((item) => [
+              `  <server name="${item.name}">`,
+              ...item.instructions.split("\n").map((line) => `    ${line}`),
+              "  </server>",
+            ]),
+            "</mcp_instructions>",
+          ].join("\n"),
+        )
       }),
     })
   }),
@@ -143,7 +148,7 @@ const layer = Layer.effect(
 const locationServiceMapNode = LayerNode.make({
   service: LocationServiceMap.Service,
   layer: locationServiceMapLayer,
-  deps: [],
+  deps: [Database.node],
 })
 
 export const node = LayerNode.make({

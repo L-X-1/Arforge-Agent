@@ -16,6 +16,7 @@ import { SessionMessage } from "./session/message"
 import { SessionSchema } from "./session/schema"
 import { AgentV2 } from "./agent"
 import { PrimaryDeliveryState } from "./primary-delivery-state"
+import { ToolOutputStore } from "./tool-output-store"
 
 export const MAX_MESSAGE_CHARS = 20_000
 export const MAX_ATTACHMENTS = 8
@@ -76,6 +77,8 @@ export interface DeliverInput {
   readonly message: string
   readonly status: PrimaryDelivery.Status
   readonly attachments: ReadonlyArray<string>
+  /** Gateway-scoped leaf authorization supplied by the built-in tool path. */
+  readonly authorize?: (input: PermissionV2.AssertInput) => Effect.Effect<void, unknown>
 }
 
 export interface Interface {
@@ -97,6 +100,9 @@ const layer = Layer.effect(
     const permission = yield* PermissionV2.Service
     const state = yield* PrimaryDeliveryState.Service
     const goals = yield* GoalV2.Service
+    const artifacts = yield* ToolOutputStore.Service
+    const assertPermission = (input: DeliverInput, request: PermissionV2.AssertInput) =>
+      input.authorize ? input.authorize(request) : permission.assert(request)
 
     const inspect = Effect.fn("PrimaryDelivery.inspect")(function* (rawPath: string, input: DeliverInput) {
       const value = rawPath.trim()
@@ -119,8 +125,7 @@ const layer = Layer.effect(
         callID: input.callID,
       }
       if (target.externalDirectory)
-        yield* permission
-          .assert({
+        yield* assertPermission(input, {
             ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
             sessionID: input.sessionID,
             agent: input.agent,
@@ -131,8 +136,7 @@ const layer = Layer.effect(
               () => new DeliveryError({ code: "NOT_AUTHORIZED", message: "attachment is not authorized" }),
             ),
           )
-      yield* permission
-        .assert({
+      yield* assertPermission(input, {
           action: "read",
           resources: [target.resource],
           save: ["*"],
@@ -163,8 +167,22 @@ const layer = Layer.effect(
           byte.toString(16).padStart(2, "0"),
         ).join(""),
       )
+      const artifactRef = yield* artifacts
+        .bindBytes({
+          bytes: content,
+          owner: { scope: "session", id: input.sessionID },
+          kind: "primary_delivery",
+          mime,
+          label: path.basename(target.canonical),
+        })
+        .pipe(
+          Effect.mapError(
+            () => new DeliveryError({ code: "READ_FAILED", message: "attachment could not be retained safely" }),
+          ),
+        )
       return PrimaryDelivery.Artifact.make({
         artifactID: `msg-${sha256.slice(0, 16)}`,
+        artifactRef,
         path: target.canonical,
         displayName: path.basename(target.canonical),
         mime,
@@ -193,8 +211,7 @@ const layer = Layer.effect(
           "the running Goal must be completed or blocked before delivering a primary user message",
         )
 
-      yield* permission
-        .assert({
+      yield* assertPermission(input, {
           action: "deliver_user_message",
           resources: ["*"],
           save: ["*"],
@@ -208,8 +225,12 @@ const layer = Layer.effect(
 
       const artifacts: PrimaryDelivery.Artifact[] = []
       const paths = new Set<string>()
+      const inspectedPaths = new Set<string>()
       let total = 0
       for (const attachment of input.attachments) {
+        const candidate = path.resolve(location.directory, attachment.trim())
+        if (inspectedPaths.has(candidate)) continue
+        inspectedPaths.add(candidate)
         const artifact = yield* inspect(attachment, input)
         if (paths.has(artifact.path)) continue
         paths.add(artifact.path)
@@ -275,5 +296,6 @@ export const node = makeLocationNode({
     LocationMutation.node,
     PermissionV2.node,
     PrimaryDeliveryState.node,
+    ToolOutputStore.node,
   ],
 })

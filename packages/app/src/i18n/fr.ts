@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "Suggéré",
   "command.category.view": "Affichage",
   "command.category.project": "Projet",
@@ -297,6 +300,8 @@ export const dict = {
   "mcp.status.connected": "connecté",
   "mcp.status.failed": "échoué",
   "mcp.status.needs_auth": "nécessite auth",
+  "mcp.status.needs_client_registration": "enregistrement du client requis",
+  "mcp.status.needs_approval": "autorisation requise",
   "mcp.auth.clickToAuthenticate": "Cliquez pour vous authentifier",
   "mcp.status.disabled": "désactivé",
   "dialog.fork.empty": "Aucun message à partir duquel bifurquer",
@@ -1247,7 +1252,7 @@ export const dict = {
   "controlCenter.m174": "Restaurer",
   "controlCenter.m175": "Historique d'exécution persistant",
   "controlCenter.m176":
-    "Lisez les artefacts de transaction, de trace et de message Python Core via le Server API partagé. Les rapports sont en lecture seule et restent la propriété d'une seule source de persistance.",
+    "Lisez les artefacts de transaction, de trace et de message Arforge Core via le Server API partagé. Les rapports sont en lecture seule et restent la propriété d'une seule source de persistance.",
   "controlCenter.m177": "Limite",
   "controlCenter.m178": "Actualiser",
   "controlCenter.m179": "fichiers ·",
@@ -1300,6 +1305,19 @@ export const dict = {
   "controlCenter.m222": "Erreur de diagnostic approfondi inconnue",
   "controlCenter.m223": "Évolution gouvernée",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Examinez les politiques candidates proposées à partir des preuves d’apprentissage et encadrez les changements de capacité par une évaluation isolée, une approbation humaine, un déploiement progressif et un retour arrière.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Examinez les politiques candidates proposées à partir des preuves d’apprentissage et encadrez les changements de capacité par une évaluation isolée, une approbation humaine, un déploiement progressif et un retour arrière.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

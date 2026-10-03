@@ -137,9 +137,9 @@ def check_path_write(role: AgentRole, target_path: str | Path) -> bool:
 
     # Allow primary and explicitly trusted additional workspace roots.
     try:
-        from arforge.workspace_roots import path_is_authorized
+        from arforge.ts_workspace import typescript_path_is_authorized
 
-        if path_is_authorized(target, primary=workspace):
+        if typescript_path_is_authorized(target, primary=workspace):
             return True
     except Exception:  # noqa: BLE001 - retain the conservative primary-root fallback
         try:

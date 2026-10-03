@@ -112,4 +112,23 @@ describe("State", () => {
       expect(finalized).toBe(2)
     }),
   )
+
+  it.effect("uses the closing batch when disposing a transform", () =>
+    Effect.gen(function* () {
+      const state = State.create({
+        initial: () => ({ values: [] as string[] }),
+        draft: (draft) => ({ add: (item: string) => draft.values.push(item) }),
+      })
+
+      const registration = yield* State.batch(
+        state.transform((draft) => {
+          draft.add("registered")
+        }),
+      )
+      expect(state.get().values).toEqual(["registered"])
+
+      yield* State.batch(registration.dispose)
+      expect(state.get().values).toEqual([])
+    }),
+  )
 })

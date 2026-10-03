@@ -189,7 +189,7 @@ describe("workspace HttpApi", () => {
       expect(yield* adapters.json).toContainEqual({
         type: "worktree",
         name: "Worktree",
-        description: "Create a git worktree",
+        description: "Worktree creation is disabled until this legacy adapter uses the control-plane Action Gateway",
       })
 
       expect(workspaces.status).toBe(200)
@@ -299,10 +299,13 @@ describe("workspace HttpApi", () => {
     }),
   )
 
-  it.live("creates a real git worktree workspace via the builtin adapter", () =>
+  it.live("blocks the legacy builtin worktree adapter before mutation", () =>
     Effect.gen(function* () {
       Flag.ARFORGE_EXPERIMENTAL_WORKSPACES = true
       const dir = yield* tmpdirScoped({ git: true })
+      const before = yield* Project.use
+        .fromDirectory(dir)
+        .pipe(Effect.flatMap(({ project }) => Project.use.sandboxes(project.id)))
 
       const created = yield* requestServer(WorkspacePaths.list, dir, {
         method: "POST",
@@ -311,9 +314,19 @@ describe("workspace HttpApi", () => {
       })
 
       const body = yield* Effect.promise(() => created.text())
-      expect({ status: created.status, body }).toMatchObject({ status: 200 })
-      const workspace = JSON.parse(body) as Workspace.Info
-      expect(workspace).toMatchObject({ type: "worktree" })
+      expect({ status: created.status, body: JSON.parse(body) }).toEqual({
+        status: 400,
+        body: {
+          name: "WorkspaceCreateError",
+          data: {
+            message: "Legacy Worktree adapter creation is disabled until it uses the control-plane Action Gateway",
+          },
+        },
+      })
+      const after = yield* Project.use
+        .fromDirectory(dir)
+        .pipe(Effect.flatMap(({ project }) => Project.use.sandboxes(project.id)))
+      expect(after).toEqual(before)
     }),
   )
 

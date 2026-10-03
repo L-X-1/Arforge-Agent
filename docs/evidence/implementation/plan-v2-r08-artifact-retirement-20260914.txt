@@ -1,0 +1,26 @@
+Command: bun test test/tool-output-store.test.ts --timeout 60000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+32 pass
+0 fail
+166 expect() calls
+Ran 32 tests across 1 file. [9.33s]
+
+Covered:
+- existing ToolOutputStore cleanup, owner, retention, digest, quota, range, catalog and interruption behavior;
+- a full 10,000-entry catalog fixture with one oldest removed tombstone marked durably on the entry;
+- deterministic tombstone eviction before a new registered receipt is appended;
+- preservation of the audit chain window and bounded 10,000-entry read model even after the first removed audit record rolls out of the in-memory audit window.
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun x oxlint --disable-nested-config src/tool-output-store.ts test/tool-output-store.test.ts --quiet
+Exit: 0
+Found 0 warnings and 0 errors.
+
+Command: git diff --check -- packages/core/src/tool-output-store.ts packages/core/test/tool-output-store.test.ts
+Exit: 0
+
+No real user database, credential, network, or external service was modified. The cap-pressure fixture was generated in a temporary test profile.

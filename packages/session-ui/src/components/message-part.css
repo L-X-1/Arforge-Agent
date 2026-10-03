@@ -1513,7 +1513,7 @@ body:not([data-new-layout]) {
   }
 
   [data-component="bash-output"] {
-    border: 1px solid var(--border-weak-base);
+    border: 0.5px solid var(--v2-border-border-base);
   }
 
   [data-component="edit-trigger"],
@@ -1674,10 +1674,24 @@ body:not([data-new-layout]) {
 [data-component="bash-output"],
 [data-component="edit-content"],
 [data-component="write-content"] {
-  border-color: var(--arforge-hairline);
+  /* Keep the V2 border token authoritative so density/theme overrides remain
+     observable on the material surface (and do not get shadowed by the
+     legacy material alias). */
+  border-color: var(--v2-border-border-base);
   border-radius: var(--arforge-radius-card);
   background: var(--arforge-material-code);
   box-shadow: var(--arforge-inner-highlight);
+}
+
+/* Shell output is already a framed code surface. A second inset highlight
+   would paint beyond a fractionally clipped virtual row and create a dark
+   seam at the bottom edge. */
+[data-component="bash-output"] {
+  box-shadow: none;
+  /* Border tokens may change when the surface/theme changes. Keep the
+     virtual-row outline synchronous so a fractional clip never captures an
+     in-flight color transition. */
+  transition: none;
 }
 
 [data-component="bash-output"] [data-slot="bash-pre"] code {

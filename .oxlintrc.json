@@ -47,6 +47,7 @@
     "**/.build",
     "**/.playwright-temp",
     "**/.sst",
+    "**/*.astro",
     "**/*.d.ts",
     "**/sdk.gen.ts"
   ]

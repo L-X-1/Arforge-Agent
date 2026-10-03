@@ -146,9 +146,11 @@ def set_workspace(workspace: str | Path) -> None:
     """Refresh safe prefixes from the primary and explicitly authorized roots."""
     primary = Path(workspace).resolve()
     try:
-        from arforge.workspace_roots import authorized_workspace_roots
+        from arforge.ts_workspace import typescript_workspace_roots
 
-        roots = authorized_workspace_roots(primary)
+        roots = typescript_workspace_roots(primary)
+        if roots is None:
+            raise RuntimeError("TypeScript workspace authorization bridge unavailable")
     except Exception:  # noqa: BLE001 - sandbox must retain a safe primary-root fallback
         roots = [primary]
     _SAFE_PREFIXES.clear()

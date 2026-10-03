@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "claim_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+  "owner": "manual-dispatcher-bootstrap",
+  "version": 1,
+  "status": "REVIEW_PENDING",
+  "pre_review_whitelist": true,
+  "protocol_manifest": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "protocol_manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "owner_registry": "docs/evidence/implementation/owner-registry.v1.json",
+  "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+  "allowed_paths": [
+    "tests/**/*.py",
+    "arforge/**/*.py",
+    "legacy_script/**/*.py",
+    "docs/evidence/implementation/legacy-python-tests.json",
+    "docs/evidence/implementation/attestations/python-tests.v1.sha256",
+    "docs/evidence/implementation/cards/PY-005-TEST-FIXTURE-LEDGER-001.md",
+    "docs/evidence/implementation/claims/PY-005-TEST-FIXTURE-LEDGER-001.json",
+    "docs/evidence/implementation/state.json",
+    "script/arforge-python-tests-ledger.ts",
+    "script/arforge-python-tests-ledger.test.ts",
+    "script/bunfig.toml"
+  ],
+  "forbidden_paths": [
+    "packages/*",
+    ".codex-tmp/*",
+    "node_modules/*",
+    "commit/push/PR/release paths"
+  ],
+  "created_from_source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "card_digest": "57cf7c5518746fe56aefe7f769ba83d123ef380f8b6e6d49349c1c9d3a151c77",
+  "artifact_digest": "571f3fd571bda8ea1637bc7778ad73b4f4fac139a03ceb64167ecd9e1b79986b"
+}

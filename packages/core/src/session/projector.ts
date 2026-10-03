@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { isDefaultTitle, normalizeGenerated } from "./title"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -212,6 +213,20 @@ const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
+    if (!SessionV1.Event.Created.durable || !SessionV1.Event.Updated.durable || !SessionEvent.TitleGenerated.durable)
+      return yield* Effect.die(new Error("Title projection requires durable metadata definitions"))
+    const createdTitleType = EventV2.versionedType(
+      SessionV1.Event.Created.type,
+      SessionV1.Event.Created.durable.version,
+    )
+    const updatedTitleType = EventV2.versionedType(
+      SessionV1.Event.Updated.type,
+      SessionV1.Event.Updated.durable.version,
+    )
+    const generatedTitleType = EventV2.versionedType(
+      SessionEvent.TitleGenerated.type,
+      SessionEvent.TitleGenerated.durable.version,
+    )
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         const stored = yield* db
@@ -230,6 +245,47 @@ const layer = Layer.effectDiscard(
             .run()
             .pipe(Effect.orDie)
         }
+      }),
+    )
+    yield* events.project(SessionEvent.TitleGenerated, (event) =>
+      Effect.gen(function* () {
+        const { sessionID, expectedTitle, title } = event.data
+        if (!isDefaultTitle(expectedTitle) || normalizeGenerated(title) !== title) return
+        // A title can change away from the default and back again. Reconstruct
+        // that intent from the existing durable metadata history, including
+        // generated titles so unrelated full-session updates are not mistaken
+        // for manual renames. This stays in the event's projection transaction.
+        let priorTitle = expectedTitle
+        for (const previous of yield* EventV2.readSerialized(db, {
+          aggregateIDs: [sessionID],
+          types: [createdTitleType, updatedTitleType, generatedTitleType],
+        })) {
+          if (previous.type === createdTitleType) {
+            priorTitle = Schema.decodeUnknownSync(SessionV1.Event.Created.data)(previous.data).info.title
+          } else if (previous.type === updatedTitleType) {
+            const nextTitle = Schema.decodeUnknownSync(SessionV1.Event.Updated.data)(previous.data).info.title
+            if (nextTitle !== priorTitle) return
+            priorTitle = nextTitle
+          } else if (previous.type === generatedTitleType) {
+            const generated = Schema.decodeUnknownSync(SessionEvent.TitleGenerated.data)(previous.data)
+            if (
+              priorTitle === generated.expectedTitle &&
+              isDefaultTitle(generated.expectedTitle) &&
+              normalizeGenerated(generated.title) === generated.title
+            )
+              priorTitle = generated.title
+          }
+        }
+        // The comparison and write run in the event projection transaction.
+        // Never publish a stale full-session snapshot over newer user edits.
+        yield* db
+          .update(SessionTable)
+          .set({ title, time_updated: sql`${SessionTable.time_updated}` })
+          .where(
+            and(eq(SessionTable.id, sessionID), eq(SessionTable.title, expectedTitle), isNull(SessionTable.parent_id)),
+          )
+          .run()
+          .pipe(Effect.orDie)
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
@@ -390,11 +446,18 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
+    yield* events.project(SessionEvent.RequestEnvelopePrepared, (event) => run(db, event))
+    yield* events.project(SessionEvent.RequestBindingPrepared, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
-    yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
+    yield* events.project(SessionEvent.Step.Ended, (event) =>
+      Effect.gen(function* () {
+        yield* run(db, event)
+        yield* applyUsage(db, event.data.sessionID, { cost: event.data.cost, tokens: event.data.tokens })
+      }),
+    )
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Ended, (event) => run(db, event))
@@ -408,7 +471,12 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     // yield* events.project(SessionEvent.Retried, (event) => run(db, event))
-    yield* events.project(SessionEvent.Compaction.Ended, (event) => run(db, event))
+    yield* events.project(SessionEvent.Compaction.Ended, (event) =>
+      Effect.gen(function* () {
+        yield* run(db, event)
+        if (event.data.usage) yield* applyUsage(db, event.data.sessionID, event.data.usage)
+      }),
+    )
     yield* events.project(SessionEvent.RevertEvent.Staged, (event) =>
       db
         .update(SessionTable)

@@ -22,18 +22,24 @@ export const Source = Schema.Union([
 ]).annotate({ identifier: "PermissionV2.Source" })
 export type Source = typeof Source.Type
 
-const RequestFields = {
+const AssertRequestFields = {
   sessionID: SessionID,
   action: Schema.String,
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
   source: Source.pipe(optional),
+  /**
+   * A trusted presentation flag emitted by PermissionV2 when the authorizer
+   * deliberately bypassed saved/configured allows (for example an L3 action).
+   * Clients must keep these requests visible for an explicit human reply.
+   */
+  requiresHumanConfirmation: Schema.Boolean.pipe(optional),
 }
 
 export const Request = Schema.Struct({
   id: ID,
-  ...RequestFields,
+  ...AssertRequestFields,
 }).annotate({ identifier: "PermissionV2.Request" })
 export interface Request extends Schema.Schema.Type<typeof Request> {}
 

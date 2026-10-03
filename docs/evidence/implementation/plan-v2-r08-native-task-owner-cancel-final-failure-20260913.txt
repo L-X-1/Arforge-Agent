@@ -1,0 +1,56 @@
+Final-source known failure, 2026-09-13
+Working directory: E:/Arforge-Agent/packages/arforge
+Command: bun test --timeout 60000 test/session/prompt.test.ts -t 'Formal cancellation before response content'
+Exit code: 1
+
+bun test v1.3.14 (0d9b296a)
+
+test\session\prompt.test.ts:
+[01:13:38.508] ERROR (#2): 2964 |         : undefined
+2965 |       const dispatch =
+2966 |         checkpoint && !checkpoint.legacy && checkpoint.kind === SessionCheckpoint.KIND ? checkpoint.dispatch : undefined
+2967 |       if (input.resumeFromCheckpoint && dispatch?.phase === "dispatching")
+2968 |         return yield* Effect.die(
+2969 |           new SessionCheckpoint.RecoveryRequiredError(
+                                       ^
+error: The prior request may already have been sent; automatic replay is blocked until its outcome is reconciled.
+ _tag: "SessionCheckpoint.RecoveryRequired",
+
+      at %ARFORGE_REPO%\packages\core\src\session\runner\llm.ts:2969:33
+      at SessionRunner.runLoop (%ARFORGE_REPO%\packages\core\src\session\runner\llm.ts:3408:13)
+      at SessionRunner.runLoop (definition) (%ARFORGE_REPO%\packages\core\src\session\runner\llm.ts:2824:28)
+      at Arforge.Run (%ARFORGE_REPO%\packages\core\src\session\runner\llm.ts:3434:18)
+      at SessionPrompt.drainAdmitted (%ARFORGE_REPO%\packages\arforge\src\session\prompt.ts:1753:21)
+      at SessionPrompt.drainAdmitted (definition) (%ARFORGE_REPO%\packages\arforge\src\session\prompt.ts:1718:34)
+      at SessionPrompt.prompt (%ARFORGE_REPO%\packages\arforge\test\session\prompt.test.ts:5624:12)
+      at SessionPrompt.prompt (definition) (%ARFORGE_REPO%\packages\arforge\src\session\prompt.ts:1746:100)
+
+2964 |         : undefined
+2965 |       const dispatch =
+2966 |         checkpoint && !checkpoint.legacy && checkpoint.kind === SessionCheckpoint.KIND ? checkpoint.dispatch : undefined
+2967 |       if (input.resumeFromCheckpoint && dispatch?.phase === "dispatching")
+2968 |         return yield* Effect.die(
+2969 |           new SessionCheckpoint.RecoveryRequiredError(
+                                       ^
+error: The prior request may already have been sent; automatic replay is blocked until its outcome is reconciled.
+ _tag: "SessionCheckpoint.RecoveryRequired",
+
+      at %ARFORGE_REPO%\packages\core\src\session\runner\llm.ts:2969:33
+      at ~effect/Effect/successCont (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:910:23)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at forkUnsafe (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:2537:8)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:1024:14
+      at ~effect/Effect/evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:730:22)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:653:9
+      at runTasks (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:150:15)
+      at afterScheduled (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:140:10)
+(fail) Formal cancellation before response content leaves a resumable run without phantom output [3598.54ms]
+
+ 0 pass
+ 199 filtered out
+ 1 fail
+ 9 expect() calls
+Ran 1 test across 1 file. [6.79s]

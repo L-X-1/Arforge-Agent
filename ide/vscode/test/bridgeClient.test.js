@@ -6,6 +6,17 @@ const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const { JsonlBridge } = require("../bridgeClient");
 
+const METHODS = [
+  "protocol.describe",
+  "health",
+  "workspace.get",
+  "session.create",
+  "session.resume",
+  "chat.start",
+  "chat.cancel",
+  "git.diff"
+];
+
 function fakeProcess(onRequest) {
   const child = new EventEmitter();
   child.stdin = new PassThrough();
@@ -33,14 +44,18 @@ test("starts with health handshake and correlates responses", async () => {
       version: "1.2",
       id: request.id,
       ok: true,
-      data: { method: request.method }
+      data: request.method === "health"
+        ? { method: request.method, status: "ok", runtime: "typescript" }
+        : request.method === "protocol.describe"
+          ? { protocol: "arforge.bridge", runtime: "typescript", methods: METHODS }
+          : { method: request.method }
     })}\n`);
   });
   const bridge = new JsonlBridge({ spawnProcess: () => child });
-  await bridge.start({ command: "python", args: [], cwd: "." });
-  const result = await bridge.request("status.get", {});
-  assert.equal(result.method, "status.get");
-  bridge.stop();
+  await bridge.start({ command: "arforge", args: [], cwd: "." });
+  const result = await bridge.request("workspace.get", {});
+  assert.equal(result.method, "workspace.get");
+  await bridge.stop();
 });
 
 test("delivers versioned events without consuming pending requests", async () => {
@@ -56,13 +71,18 @@ test("delivers versioned events without consuming pending requests", async () =>
     }
     process.stdout.write(`${JSON.stringify({
       protocol: "arforge.bridge", version: "1.2", id: request.id,
-      ok: true, data: {}
+      ok: true,
+      data: request.method === "health"
+        ? { status: "ok", runtime: "typescript" }
+        : request.method === "protocol.describe"
+          ? { protocol: "arforge.bridge", runtime: "typescript", methods: METHODS }
+          : {}
     })}\n`);
   });
   const bridge = new JsonlBridge({ spawnProcess: () => child });
   const events = [];
   bridge.on("event", (event) => events.push(event));
-  await bridge.start({ command: "python", cwd: "." });
+  await bridge.start({ command: "arforge", cwd: "." });
   await bridge.request("chat.start", {});
   assert.equal(events.length, 1);
   assert.equal(events[0].data.content, "hello");
@@ -74,15 +94,66 @@ test("rejects protocol mismatch and bridge exit", async () => {
   const child = fakeProcess((request, process) => {
     count += 1;
     process.stdout.write(`${JSON.stringify({
-      protocol: count === 1 ? "arforge.bridge" : "wrong",
-      version: "1.2", id: request.id, ok: true, data: {}
+      protocol: count <= 2 ? "arforge.bridge" : "wrong",
+      version: "1.2", id: request.id, ok: true,
+      data: request.method === "health"
+        ? { status: "ok", runtime: "typescript" }
+        : request.method === "protocol.describe"
+          ? { protocol: "arforge.bridge", runtime: "typescript", methods: METHODS }
+          : {}
     })}\n`);
   });
   const bridge = new JsonlBridge({ spawnProcess: () => child });
-  await bridge.start({ command: "python", cwd: "." });
+  await bridge.start({ command: "arforge", cwd: "." });
   await assert.rejects(
-    bridge.request("status.get", {}),
+    bridge.request("workspace.get", {}),
     (error) => error.code === "INVALID_RESPONSE"
   );
   bridge.stop();
+});
+
+test("fails closed when the bridge is not TypeScript", async () => {
+  let child;
+  const bridge = new JsonlBridge({
+    spawnProcess: () => {
+      child = fakeProcess((request, process) => {
+        process.stdout.write(`${JSON.stringify({
+          protocol: "arforge.bridge",
+          version: "1.2",
+          id: request.id,
+          ok: true,
+          data: request.method === "protocol.describe"
+            ? { protocol: "arforge.bridge", runtime: "python", methods: METHODS }
+            : { status: "ok", runtime: "python" }
+        })}\n`);
+      });
+      return child;
+    }
+  });
+  await assert.rejects(
+    bridge.start({ command: "arforge", cwd: "." }),
+    (error) => error.code === "BRIDGE_RUNTIME_UNSUPPORTED"
+  );
+  assert.equal(bridge.running, false);
+});
+
+test("rejects methods that are not advertised by the TypeScript bridge", async () => {
+  const child = fakeProcess((request, process) => {
+    process.stdout.write(`${JSON.stringify({
+      protocol: "arforge.bridge",
+      version: "1.2",
+      id: request.id,
+      ok: true,
+      data: request.method === "protocol.describe"
+        ? { protocol: "arforge.bridge", runtime: "typescript", methods: METHODS }
+        : { status: "ok", runtime: "typescript" }
+    })}\n`);
+  });
+  const bridge = new JsonlBridge({ spawnProcess: () => child });
+  await bridge.start({ command: "arforge", cwd: "." });
+  await assert.rejects(
+    bridge.request("status.get", {}),
+    (error) => error.code === "BRIDGE_METHOD_UNAVAILABLE"
+  );
+  await bridge.stop();
 });

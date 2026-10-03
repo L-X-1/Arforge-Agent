@@ -673,6 +673,46 @@ describe("LLMClient tools", () => {
     }),
   )
 
+  it.effect("carries structured ToolFailure metadata into the tool-error event", () =>
+    Effect.gen(function* () {
+      const conflict = Tool.make({
+        description: "A tool that reports a guarded file conflict.",
+        parameters: Schema.Struct({}),
+        success: Schema.Struct({ ok: Schema.Boolean }),
+        execute: () =>
+          Effect.fail(
+            new ToolFailure({
+              message: "File changed after permission approval.",
+              metadata: {
+                kind: "file_conflict",
+                code: "observed_version_mismatch",
+                observedVersion: "before",
+                currentVersion: "after",
+              },
+            }),
+          ),
+      })
+
+      const dispatch = yield* ToolRuntime.dispatch(
+        { conflict },
+        { type: "tool-call", id: "call_conflict", name: "conflict", input: {} },
+      )
+      const toolError = dispatch.events.find(LLMEvent.is.toolError)
+      expect(toolError).toMatchObject({
+        type: "tool-error",
+        id: "call_conflict",
+        name: "conflict",
+        message: "File changed after permission approval.",
+        error: {
+          kind: "file_conflict",
+          code: "observed_version_mismatch",
+          observedVersion: "before",
+          currentVersion: "after",
+        },
+      })
+    }),
+  )
+
   it.effect("stops when the model finishes without requesting more tools", () =>
     Effect.gen(function* () {
       const layer = scriptedResponses([

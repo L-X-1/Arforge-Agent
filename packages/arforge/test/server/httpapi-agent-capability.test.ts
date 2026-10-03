@@ -24,8 +24,8 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-describe("Python Agent capability HttpApi", () => {
-  test("routes governed evolution and actual recall APIs through the typed HTTP surface", async () => {
+describe("Agent capability HttpApi", () => {
+  test("routes governed evolution and typed memory recall APIs through the HTTP surface", async () => {
     await using workspace = await tmpdir()
 
     const evolutionStatusResponse = await request("/api/agent-capabilities/evolution/status", workspace.path)
@@ -77,14 +77,13 @@ describe("Python Agent capability HttpApi", () => {
       },
     })
 
-    const recallQualityResponse = await request("/api/agent-capabilities/memory/actual-recall-quality", workspace.path)
+    const recallQualityResponse = await request("/api/memory/recall-quality", workspace.path)
     expect(recallQualityResponse.status).toBe(200)
     expect(await recallQualityResponse.json()).toMatchObject({
-      location: { directory: workspace.path },
       data: {
-        schema_version: 1,
-        measurement: "actual_recall",
-        synthetic_self_recall: false,
+        status: "operational_baseline",
+        sampleSize: expect.any(Number),
+        examples: expect.any(Array),
       },
     })
   }, 30_000)

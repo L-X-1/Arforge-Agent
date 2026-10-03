@@ -1,0 +1,30 @@
+Command: bun test test/tool-output-store.test.ts --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+31 pass
+0 fail
+162 expect() calls
+Ran 31 tests across 1 file. [7.41s]
+
+Covered:
+- configured profile-wide max_total_bytes quota;
+- physical managed-artifact usage() report;
+- sequential rejection before bytes/index/audit are created;
+- concurrent imports serialized by the existing cross-process catalog lease;
+- aged unindexed artifact orphan cleanup without touching recent or unrelated files;
+- existing owner, retention, digest, catalog, cleanup and interruption behavior.
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun x oxlint packages/core/src/config/tool-output.ts packages/core/src/tool-output-store.ts packages/core/test/tool-output-store.test.ts
+Exit: 0
+0 errors; 8 warnings (existing unsafe assertions/legacy warnings; the new bindBytes consistent-return warning was removed).
+
+Command: bun run audit:migration-freshness
+Exit: 0
+valid=true; source-inputs=7568; python-capabilities=5080; python-tests=3394; dependency-leaves=7500; ts-composition source_file_count=1757; capability-links=4 (missing evidence remains 4 historical records).
+
+Source snapshot was regenerated after this code slice; the current digest and input count are
+validated by the migration-freshness command above.

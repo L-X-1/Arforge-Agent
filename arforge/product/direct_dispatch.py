@@ -9,6 +9,7 @@ loop, owns threads, or serialises transport.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -874,26 +875,40 @@ def _dispatch_product(
         return list_ui_themes()
     if method == "custom_agents.list":
         _require_only(params, set())
-        from arforge.custom_agent_profiles import (
-            custom_agents_enabled,
-            discover_custom_agent_profiles,
-            profile_directory,
-        )
-        from arforge.trust_screen import is_workspace_trusted
+        from arforge.cli_compat import invoke
+        from arforge.custom_agent_profiles import typescript_custom_agents_status
 
         workspace = Path.cwd().resolve()
-        profiles, errors = discover_custom_agent_profiles(workspace)
+        status = typescript_custom_agents_status(workspace)
+        if status is None:
+            raise BridgeError("METHOD_NOT_AVAILABLE", "TypeScript custom-agent owner is unavailable")
+        result = invoke(
+            ["custom-agents", "list", "--workspace", str(workspace), "--json"],
+            cwd=str(workspace),
+            env={
+                "ARFORGE_DB": ":memory:",
+                "ARFORGE_DB_URL": "",
+                "DATABASE_URL": "",
+                "NO_COLOR": "1",
+            },
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise BridgeError("METHOD_NOT_AVAILABLE", "TypeScript custom-agent owner is unavailable")
+        try:
+            payload = json.loads(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raise BridgeError("METHOD_NOT_AVAILABLE", "TypeScript custom-agent owner returned invalid JSON") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("profiles"), list) or not isinstance(payload.get("errors"), list):
+            raise BridgeError("METHOD_NOT_AVAILABLE", "TypeScript custom-agent owner returned an invalid report")
         return {
             "workspace": str(workspace),
-            "directory": str(profile_directory(workspace)),
-            # Report durable trust for this exact workspace. Process-wide
-            # auto-trust is an entry-flow instruction, not persisted evidence
-            # that a project-scoped agent profile is authorized here.
-            "workspace_trusted": is_workspace_trusted(workspace),
-            "enabled": custom_agents_enabled(workspace),
+            "directory": status.get("directory", str(workspace / ".arforge" / "agents")),
+            "workspace_trusted": status.get("workspace_trusted") is True,
+            "enabled": status.get("enabled") is True,
             "activation": "ARFORGE_ENABLE_CUSTOM_AGENTS=1",
-            "profiles": [profile.public() for profile in profiles],
-            "errors": errors,
+            "profiles": payload["profiles"],
+            "errors": payload["errors"],
         }
     if method == "output_styles.list":
         _require_only(params, set())

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect } from "bun:test"
-import { Effect, Exit, Layer, Option } from "effect"
+import { describe, expect } from "bun:test"
+import { Effect, Exit, Layer, Logger, Option } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { httpClient } from "@arforge-ai/core/effect/app-node-platform"
@@ -10,14 +10,16 @@ import { AccessToken, AccountID, OrgID, RefreshToken } from "../../src/account/s
 import { AccountRepo } from "../../src/account/repo"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Session } from "@/session/session"
-import type { SessionID } from "../../src/session/schema"
+import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
+import { SessionShare } from "@/share/session"
 import { SessionShareTable } from "@arforge-ai/core/share/sql"
 import { Database } from "@arforge-ai/core/database/database"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import type { SessionV1 } from "@arforge-ai/core/v1/session"
 import { eq } from "drizzle-orm"
 import { provideTmpdirInstance } from "../fixture/fixture"
-import { resetDatabase } from "../fixture/db"
-import { pollWithTimeout, testEffect } from "../lib/effect"
+import { testEffect } from "../lib/effect"
 
 const env = LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node]))
 const it = testEffect(env)
@@ -34,12 +36,18 @@ const json = (req: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unkno
 const none = HttpClient.make(() => Effect.die("unexpected http call"))
 
 function requestLayer(client: HttpClient.HttpClient) {
-  const replacement = [httpClient, Layer.succeed(HttpClient.HttpClient, client)] as const
-  return LayerNode.compile(LayerNode.group([ShareNext.node, AccountRepo.node]), [replacement])
+  const replacement: LayerNode.Replacements = [
+    [Database.node, Database.layerFromPath(":memory:")],
+    [httpClient, Layer.succeed(HttpClient.HttpClient, client)],
+  ]
+  return LayerNode.compile(LayerNode.group([ShareNext.node, AccountRepo.node]), replacement)
 }
 
 function integrationLayer(client: HttpClient.HttpClient) {
-  const replacement = [httpClient, Layer.succeed(HttpClient.HttpClient, client)] as const
+  const replacement: LayerNode.Replacements = [
+    [Database.node, Database.layerFromPath(":memory:")],
+    [httpClient, Layer.succeed(HttpClient.HttpClient, client)],
+  ]
   return LayerNode.compile(
     LayerNode.group([
       ShareNext.node,
@@ -49,8 +57,17 @@ function integrationLayer(client: HttpClient.HttpClient) {
       AccountRepo.node,
       Database.node,
     ]),
-    [replacement],
+    replacement,
   )
+}
+
+function sessionShareLayer(client: HttpClient.HttpClient, flags: Partial<RuntimeFlags.Info> = {}) {
+  const replacement: LayerNode.Replacements = [
+    [Database.node, Database.layerFromPath(":memory:")],
+    [httpClient, Layer.succeed(HttpClient.HttpClient, client)],
+  ]
+  const replacements = replacement.concat([[RuntimeFlags.node, RuntimeFlags.layer(flags)]])
+  return LayerNode.compile(LayerNode.group([SessionShare.node, Session.node, SessionProjector.node, Database.node]), replacements)
 }
 
 const share = (id: SessionID) =>
@@ -76,10 +93,6 @@ const seed = (url: string, org?: string) =>
       orgID: org ? Option.some(OrgID.make(org)) : Option.none(),
     }),
   )
-
-beforeEach(async () => {
-  await resetDatabase()
-})
 
 describe("ShareNext", () => {
   it.live("request uses legacy share API without active org account", () =>
@@ -133,96 +146,80 @@ describe("ShareNext", () => {
     ),
   )
 
-  it.live("create posts share, persists it, and returns the result", () =>
+  it.live("create fails closed before HTTP or persistence", () =>
     provideTmpdirInstance(
       () => {
-        const createRequests: HttpClientRequest.HttpClientRequest[] = []
+        const requests: HttpClientRequest.HttpClientRequest[] = []
         const client = HttpClient.make((req) => {
-          if (req.url.endsWith("/api/share")) {
-            createRequests.push(req)
-            return Effect.succeed(
-              json(req, {
-                id: "shr_abc",
-                url: "https://legacy-share.example.com/share/abc",
-                secret: "sec_123",
-              }),
-            )
-          }
-          return Effect.succeed(json(req, { ok: true }))
+          requests.push(req)
+          return Effect.die("unexpected HTTP call")
         })
         return Effect.gen(function* () {
           const session = yield* (yield* Session.Service).create({ title: "test" })
 
-          const result = yield* (yield* ShareNext.Service).create(session.id)
+          const error = yield* (yield* ShareNext.Service).create(session.id).pipe(Effect.flip)
 
-          expect(result.id).toBe("shr_abc")
-          expect(result.url).toBe("https://legacy-share.example.com/share/abc")
-          expect(result.secret).toBe("sec_123")
-
-          const row = yield* share(session.id)
-          expect(row?.id).toBe("shr_abc")
-          expect(row?.url).toBe("https://legacy-share.example.com/share/abc")
-          expect(row?.secret).toBe("sec_123")
-
-          expect(createRequests).toHaveLength(1)
-          expect(createRequests[0].method).toBe("POST")
-          expect(createRequests[0].url).toBe("https://legacy-share.example.com/api/share")
+          expect(error).toBeInstanceOf(ShareNext.MutationUnavailableError)
+          expect(error.operation).toBe("create")
+          expect(error.message).toContain("sealed ControlRun worker")
+          expect(yield* share(session.id)).toBeUndefined()
+          expect(requests).toEqual([])
         }).pipe(Effect.provide(integrationLayer(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),
   )
 
-  it.live("remove deletes the persisted share and calls the delete endpoint", () =>
+  it.live("remove fails closed before HTTP and preserves the publication receipt", () =>
     provideTmpdirInstance(
       () => {
         const seen: HttpClientRequest.HttpClientRequest[] = []
         const client = HttpClient.make((req) => {
           seen.push(req)
-          if (req.method === "POST") {
-            return Effect.succeed(
-              json(req, {
-                id: "shr_abc",
-                url: "https://legacy-share.example.com/share/abc",
-                secret: "sec_123",
-              }),
-            )
-          }
-          return Effect.succeed(HttpClientResponse.fromWeb(req, new Response(null, { status: 200 })))
+          return Effect.die("unexpected HTTP call")
         })
         return Effect.gen(function* () {
           const session = yield* (yield* Session.Service).create({ title: "test" })
+          const { db } = yield* Database.Service
+          yield* db
+            .insert(SessionShareTable)
+            .values({
+              session_id: session.id,
+              id: "shr_abc",
+              url: "https://legacy-share.example.com/share/abc",
+              secret: "sec_123",
+            })
+            .run()
+            .pipe(Effect.orDie)
           const service = yield* ShareNext.Service
 
-          yield* service.create(session.id)
-          yield* service.remove(session.id)
+          const error = yield* service.remove(session.id).pipe(Effect.flip)
 
-          expect(yield* share(session.id)).toBeUndefined()
-          expect(seen.map((req) => [req.method, req.url])).toEqual([
-            ["POST", "https://legacy-share.example.com/api/share"],
-            ["DELETE", "https://legacy-share.example.com/api/share/shr_abc"],
-          ])
+          expect(error).toBeInstanceOf(ShareNext.MutationUnavailableError)
+          expect(error.operation).toBe("remove")
+          expect(yield* share(session.id)).toMatchObject({ id: "shr_abc", secret: "sec_123" })
+          expect(seen).toEqual([])
         }).pipe(Effect.provide(integrationLayer(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),
   )
 
-  it.live("create fails on a non-ok response and does not persist a share", () =>
+  it.live("create does not consult endpoint configuration before failing closed", () =>
     provideTmpdirInstance(() => {
-      const client = HttpClient.make((req) => Effect.succeed(json(req, { error: "bad" }, 500)))
       return Effect.gen(function* () {
         const session = yield* (yield* Session.Service).create({ title: "test" })
 
         const exit = yield* ShareNext.Service.use((svc) => Effect.exit(svc.create(session.id)))
 
         expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(String(exit.cause)).toContain("ShareNext.MutationUnavailableError")
         expect(yield* share(session.id)).toBeUndefined()
-      }).pipe(Effect.provide(integrationLayer(client)))
+      }).pipe(Effect.provide(integrationLayer(none)))
     }),
   )
 
-  it.live("ShareNext coalesces rapid diff events into one delayed sync with latest data", () =>
+  it.live("does not register live sync listeners or send new message data and share secrets", () =>
     provideTmpdirInstance(
       () => {
         const seen: Array<{ url: string; body: string }> = []
@@ -235,11 +232,11 @@ describe("ShareNext", () => {
 
         return Effect.gen(function* () {
           const events = yield* EventV2Bridge.Service
-          const share = yield* ShareNext.Service
+          const shareNext = yield* ShareNext.Service
           const session = yield* Session.Service
 
           const info = yield* session.create({ title: "first" })
-          yield* share.init()
+          yield* shareNext.init()
           yield* Effect.sleep(50)
           const { db } = yield* Database.Service
           yield* db
@@ -253,6 +250,25 @@ describe("ShareNext", () => {
             .run()
             .pipe(Effect.orDie)
 
+          yield* session.setTitle({ sessionID: info.id, title: "updated after sharing" })
+          const messageID = MessageID.ascending()
+          yield* session.updateMessage({
+            id: messageID,
+            sessionID: info.id,
+            role: "user",
+            time: { created: Date.now() },
+            agent: "test",
+            model: { providerID: "test", modelID: "test" },
+            tools: {},
+            mode: "",
+          } as unknown as SessionV1.Info)
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            sessionID: info.id,
+            messageID,
+            type: "text",
+            text: "new secret message must remain local",
+          })
           yield* events.publish(Session.Event.Diff, {
             sessionID: info.id,
             diff: [
@@ -266,55 +282,111 @@ describe("ShareNext", () => {
               },
             ],
           })
-          yield* events.publish(Session.Event.Diff, {
-            sessionID: info.id,
-            diff: [
-              {
-                file: "b.ts",
-                patch:
-                  "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
-                additions: 2,
-                deletions: 0,
-                status: "modified",
-              },
-            ],
-          })
-          yield* pollWithTimeout(
-            Effect.sync(() => (seen.length === 1 ? true : undefined)),
-            "timed out waiting for share sync",
-            "5 seconds",
-          )
+          yield* Effect.sleep("1200 millis")
 
-          expect(seen).toHaveLength(1)
-          expect(seen[0].url).toBe("https://legacy-share.example.com/api/share/shr_abc/sync")
-
-          const body = JSON.parse(seen[0].body) as {
-            secret: string
-            data: Array<{
-              type: string
-              data: Array<{
-                file: string
-                patch: string
-                additions: number
-                deletions: number
-                status?: string
-              }>
-            }>
-          }
-          expect(body.secret).toBe("sec_123")
-          expect(body.data).toHaveLength(1)
-          expect(body.data[0].type).toBe("session_diff")
-          expect(body.data[0].data).toEqual([
-            {
-              file: "b.ts",
-              patch:
-                "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
-              additions: 2,
-              deletions: 0,
-              status: "modified",
-            },
-          ])
+          expect(seen).toEqual([])
         }).pipe(Effect.provide(integrationLayer(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
+  it.live("suppresses config auto-share while session creation succeeds and emits warning telemetry", () =>
+    provideTmpdirInstance(
+      () => {
+        const requests: HttpClientRequest.HttpClientRequest[] = []
+        const logs: Array<{ level: string; message: unknown }> = []
+        const client = HttpClient.make((req) => {
+          requests.push(req)
+          return Effect.succeed(
+            json(req, {
+              id: "shr_unexpected",
+              url: "https://legacy-share.example.com/share/unexpected",
+              secret: "sec_unexpected",
+            }),
+          )
+        })
+        const logger = Logger.make((options) => {
+          logs.push({ level: options.logLevel, message: options.message })
+        })
+
+        return Effect.gen(function* () {
+          const result = yield* SessionShare.Service.use((service) => service.create({ title: "local only" }))
+          yield* Effect.sleep("100 millis")
+
+          expect(result.title).toBe("local only")
+          expect(requests).toEqual([])
+          expect(yield* share(result.id)).toBeUndefined()
+
+          const warning = logs.find((entry) => entry.level === "Warn")
+          expect(JSON.stringify(warning?.message)).toContain(
+            "automatic session sharing suppressed until controlled publishing is available",
+          )
+          expect(JSON.stringify(warning?.message)).toContain('"outcome":"suppressed"')
+        }).pipe(Effect.provide(Logger.layer([logger])), Effect.provide(sessionShareLayer(client)))
+      },
+      {
+        config: {
+          share: "auto",
+          enterprise: { url: "https://legacy-share.example.com" },
+        },
+      },
+    ),
+  )
+
+  it.live("suppresses ARFORGE_AUTO_SHARE without invoking the legacy share client", () =>
+    provideTmpdirInstance(() => {
+      const requests: HttpClientRequest.HttpClientRequest[] = []
+      const client = HttpClient.make((req) => {
+        requests.push(req)
+        return Effect.succeed(
+          json(req, {
+            id: "shr_unexpected",
+            url: "https://legacy-share.example.com/share/unexpected",
+            secret: "sec_unexpected",
+          }),
+        )
+      })
+
+      return Effect.gen(function* () {
+        const result = yield* SessionShare.Service.use((service) => service.create({ title: "local only" }))
+        yield* Effect.sleep("100 millis")
+
+        expect(result.title).toBe("local only")
+        expect(requests).toEqual([])
+        expect(yield* share(result.id)).toBeUndefined()
+      }).pipe(Effect.provide(sessionShareLayer(client, { autoShare: true })))
+    }),
+  )
+
+  it.live("SessionShare hard-blocks explicit share and unshare without changing session metadata", () =>
+    provideTmpdirInstance(
+      () => {
+        const requests: HttpClientRequest.HttpClientRequest[] = []
+        const client = HttpClient.make((req) => {
+          requests.push(req)
+          return Effect.die("unexpected HTTP call")
+        })
+
+        return Effect.gen(function* () {
+          const service = yield* SessionShare.Service
+          const session = yield* Session.Service
+          const created = yield* service.create({ title: "explicit share" })
+
+          const shareError = yield* service.share(created.id).pipe(Effect.flip)
+          expect(shareError).toBeInstanceOf(SessionShare.MutationUnavailableError)
+          expect(shareError.operation).toBe("share")
+          expect((yield* session.get(created.id)).share).toBeUndefined()
+
+          yield* session.setShare({ sessionID: created.id, share: { url: "https://already.example/share/receipt" } })
+          const unshareError = yield* service.unshare(created.id).pipe(Effect.flip)
+
+          expect(unshareError).toBeInstanceOf(SessionShare.MutationUnavailableError)
+          expect(unshareError.operation).toBe("unshare")
+          expect((yield* session.get(created.id)).share?.url).toBe("https://already.example/share/receipt")
+          expect(yield* share(created.id)).toBeUndefined()
+          expect(requests).toEqual([])
+        }).pipe(Effect.provide(sessionShareLayer(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),

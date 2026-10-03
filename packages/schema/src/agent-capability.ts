@@ -53,7 +53,10 @@ export const DeepInsightSection = Schema.Struct({
   id: Schema.Literals([
     "features",
     "file-state",
+    "memory-feedback",
+    "feature-policy-contract",
     "permission-rules",
+    "permission-policy-contract",
     "permission-mode",
     "self-correct",
     "release-gates",
@@ -386,6 +389,51 @@ export const PluginTool = Schema.Struct({
   parameters: Schema.Unknown,
 }).annotate({ identifier: "AgentCapability.PluginTool" })
 
+export const PluginPermission = Schema.Struct({
+  action: Schema.NonEmptyString,
+  resources: Schema.Array(Schema.NonEmptyString),
+}).annotate({ identifier: "AgentCapability.PluginPermission" })
+export interface PluginPermission extends Schema.Schema.Type<typeof PluginPermission> {}
+
+export const PluginCompatibility = Schema.Struct({
+  api_version: Schema.Int,
+  runtime: Schema.String.pipe(optional),
+  platforms: Schema.Array(Schema.String),
+}).annotate({ identifier: "AgentCapability.PluginCompatibility" })
+export interface PluginCompatibility extends Schema.Schema.Type<typeof PluginCompatibility> {}
+
+export const PluginSignature = Schema.Struct({
+  status: Schema.Literals(["unsigned", "untrusted", "verified", "invalid"]),
+  algorithm: Schema.Literal("ed25519").pipe(optional),
+  key_id: Schema.String.pipe(optional),
+  signed_digest: Schema.NonEmptyString,
+  reason: Schema.String.pipe(optional),
+}).annotate({ identifier: "AgentCapability.PluginSignature" })
+export interface PluginSignature extends Schema.Schema.Type<typeof PluginSignature> {}
+
+export const PluginSecurityFinding = Schema.Struct({
+  rule: Schema.Literals([
+    "forbidden-runtime-boundary",
+    "undeclared-egress",
+    "undeclared-secret",
+    "signature",
+    "scan-limit",
+    "unsafe-path",
+  ]),
+  severity: Schema.Literals(["info", "warning", "blocking"]),
+  path: Schema.String,
+  message: Schema.String,
+}).annotate({ identifier: "AgentCapability.PluginSecurityFinding" })
+export interface PluginSecurityFinding extends Schema.Schema.Type<typeof PluginSecurityFinding> {}
+
+export const PluginSecurityReport = Schema.Struct({
+  status: Schema.Literals(["passed", "warning", "blocked"]),
+  findings: Schema.Array(PluginSecurityFinding),
+  scanned_files: NonNegativeInt,
+  scanned_bytes: NonNegativeInt,
+}).annotate({ identifier: "AgentCapability.PluginSecurityReport" })
+export interface PluginSecurityReport extends Schema.Schema.Type<typeof PluginSecurityReport> {}
+
 export const ManagedPlugin = Schema.Struct({
   name: Schema.NonEmptyString,
   version: Schema.String,
@@ -394,6 +442,14 @@ export const ManagedPlugin = Schema.Struct({
   tools: Schema.Array(PluginTool),
   manifest_path: Schema.String,
   entrypoint: Schema.String,
+  source: Schema.Literals(["profile", "workspace", "external"]),
+  sha256: Schema.NonEmptyString,
+  permissions: Schema.Array(PluginPermission),
+  egress: Schema.Array(Schema.String),
+  secrets: Schema.Array(Schema.String),
+  compatibility: PluginCompatibility,
+  signature: PluginSignature,
+  security: PluginSecurityReport,
   enabled: Schema.Boolean,
   problems: Schema.Array(Schema.String),
   managed: Schema.Boolean,
@@ -421,6 +477,13 @@ export const PluginInspection = Schema.Struct({
       tools: Schema.Array(PluginTool),
       manifest_path: Schema.String,
       entrypoint: Schema.String,
+      source: Schema.Literals(["profile", "workspace", "external"]),
+      permissions: Schema.Array(PluginPermission),
+      egress: Schema.Array(Schema.String),
+      secrets: Schema.Array(Schema.String),
+      compatibility: PluginCompatibility,
+      signature: PluginSignature,
+      security: PluginSecurityReport,
       enabled: Schema.Boolean,
       problems: Schema.Array(Schema.String),
       sha256: Schema.NonEmptyString,
@@ -465,6 +528,12 @@ export const WorkflowPreview = Schema.Struct({
     Schema.Struct({
       id: Schema.NonEmptyString,
       title: Schema.String,
+      kind: Schema.String.pipe(optional),
+      access: Schema.String.pipe(optional),
+      max_attempts: PositiveInt.pipe(optional),
+      depends_on: Schema.Array(Schema.String).pipe(optional),
+      continue_on_error: Schema.Boolean.pipe(optional),
+      condition: Schema.Unknown.pipe(optional),
       status: Schema.String,
       output: Schema.String,
       error: Schema.String,
@@ -492,8 +561,49 @@ export const WorkflowNode = Schema.Struct({
   error: Schema.String,
   started_at: NullableString,
   finished_at: NullableString,
+  budget_reserved_attempts: NonNegativeInt.pipe(optional),
+  child_run_id: Schema.String.pipe(optional),
 }).annotate({ identifier: "AgentCapability.WorkflowNode" })
 export interface WorkflowNode extends Schema.Schema.Type<typeof WorkflowNode> {}
+
+export const WorkflowRunBudget = Schema.Struct({
+  max_attempts: PositiveInt,
+  reserved_attempts: NonNegativeInt,
+  used_attempts: NonNegativeInt,
+  max_duration_ms: NonNegativeInt,
+}).annotate({ identifier: "AgentCapability.WorkflowRunBudget" })
+export interface WorkflowRunBudget extends Schema.Schema.Type<typeof WorkflowRunBudget> {}
+
+export const WorkflowScheduling = Schema.Struct({
+  schema_version: PositiveInt,
+  request_digest: Schema.String,
+  requested_max_parallel: PositiveInt,
+  effective_max_parallel: PositiveInt,
+  action: Schema.String,
+  execute_mode: Schema.String,
+  eligible: Schema.Boolean,
+  reasons: Schema.Array(Schema.String),
+  failed_checks: Schema.Array(Schema.String),
+  reason: Schema.String,
+  decision_digest: Schema.String,
+  evaluated_at: Schema.String,
+  evidence_digest: Schema.String.pipe(optional),
+  policy_revision: Schema.String.pipe(optional),
+}).annotate({ identifier: "AgentCapability.WorkflowScheduling" })
+export interface WorkflowScheduling extends Schema.Schema.Type<typeof WorkflowScheduling> {}
+
+export const WorkflowVerification = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  action_kind: Schema.Literal("workflow"),
+  action_version: Schema.Literal("1"),
+  passed: Schema.Boolean,
+  total: NonNegativeInt,
+  passed_count: NonNegativeInt,
+  failed_checks: Schema.Array(Schema.String),
+  evidence_digest: Schema.String,
+  evaluated_at: Schema.String,
+}).annotate({ identifier: "AgentCapability.WorkflowVerification" })
+export interface WorkflowVerification extends Schema.Schema.Type<typeof WorkflowVerification> {}
 
 export const WorkflowRun = Schema.Struct({
   schema_version: Schema.Literal(1),
@@ -511,6 +621,10 @@ export const WorkflowRun = Schema.Struct({
   started_at: NullableString,
   finished_at: NullableString,
   last_error: Schema.String,
+  definition_digest: Schema.String.pipe(optional),
+  budget: WorkflowRunBudget.pipe(optional),
+  scheduling: WorkflowScheduling.pipe(optional),
+  verification: WorkflowVerification.pipe(optional),
   progress: Schema.Struct({
     settled: NonNegativeInt,
     total: NonNegativeInt,
@@ -528,6 +642,58 @@ export const WorkflowRunList = Schema.Struct({
 }).annotate({ identifier: "AgentCapability.WorkflowRunList" })
 export interface WorkflowRunList extends Schema.Schema.Type<typeof WorkflowRunList> {}
 
+const Sha256Digest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
+
+export const EvolutionPromotionGateReceipt = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.NonEmptyString,
+  candidate_digest: Sha256Digest,
+  source_experience_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("exp_"))),
+  source_evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))),
+  source_evaluation_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("eva_"))),
+  source_provenance_digest: Sha256Digest,
+  evaluation: Schema.Struct({
+    id: Schema.String.check(Schema.isStartsWith("eva_")),
+    baseline_digest: Sha256Digest,
+    candidate_digest: Sha256Digest,
+    report_digest: Sha256Digest,
+  }),
+  approval_actor: Schema.NonEmptyString,
+  canary: Schema.Struct({
+    candidate_observations: NonNegativeInt,
+    control_observations: NonNegativeInt,
+    observation_ids: Schema.Array(Schema.NonEmptyString),
+    observation_digest: Sha256Digest,
+  }),
+  rollback_artifact: Schema.Struct({
+    artifact_id: Schema.String.check(Schema.isStartsWith("art_")),
+    digest: Sha256Digest,
+    plan_digest: Sha256Digest,
+  }),
+  policy: Schema.Struct({
+    version: Schema.NonEmptyString,
+    action_gateway_policy_version: Schema.NonEmptyString,
+    digest: Sha256Digest,
+  }),
+  checks: Schema.Struct({
+    immutable_artifact_digest: Schema.Boolean,
+    source_experience_evidence: Schema.Boolean,
+    baseline_candidate_evaluation: Schema.Boolean,
+    safety_pass: Schema.Boolean,
+    permission_pass: Schema.Boolean,
+    secret_pass: Schema.Boolean,
+    egress_pass: Schema.Boolean,
+    budget_pass: Schema.Boolean,
+    human_actor_approval: Schema.Boolean,
+    canary_cohort_observations: Schema.Boolean,
+    no_unacceptable_regression: Schema.Boolean,
+    rollback_artifact_plan: Schema.Boolean,
+    current_policy_version: Schema.Boolean,
+  }),
+  gate_passed: Schema.Literal(true),
+  gate_digest: Sha256Digest,
+}).annotate({ identifier: "AgentCapability.EvolutionPromotionGateReceipt" })
+
 export const EvolutionCandidateState = Schema.Struct({
   schema_version: Schema.Literal(1),
   candidate_id: Schema.NonEmptyString,
@@ -539,6 +705,8 @@ export const EvolutionCandidateState = Schema.Struct({
   approval: Schema.Unknown,
   deployment: Schema.Unknown,
   rollback: Schema.Unknown,
+  promotion_gate: Schema.Union([EvolutionPromotionGateReceipt, Schema.Null]),
+  evolution_level: Schema.Literals(["L0", "L2", "L3", "L4"]),
 }).annotate({ identifier: "AgentCapability.EvolutionCandidateState" })
 export interface EvolutionCandidateState extends Schema.Schema.Type<typeof EvolutionCandidateState> {}
 
@@ -560,6 +728,15 @@ export const EvolutionEvaluation = Schema.Struct({
   isolation: Schema.Literal("temporary_directory"),
   workspace_retained: Schema.Literal(false),
   gate_passed: Schema.Boolean,
+  budget: Schema.Struct({
+    max_attempts: NonNegativeInt,
+    attempts_used: NonNegativeInt,
+    max_duration_ms: NonNegativeInt,
+    duration_ms_used: NonNegativeInt,
+    max_cost_micros: NonNegativeInt,
+    cost_micros_used: NonNegativeInt,
+    passed: Schema.Boolean,
+  }),
   cases: Schema.Array(EvolutionEvaluationCase),
   evaluation_id: Schema.NonEmptyString,
   report_digest: Schema.NonEmptyString,
@@ -573,9 +750,40 @@ export const EvolutionCandidate = Schema.Struct({
   instruction: Schema.NonEmptyString,
   rationale: Schema.NonEmptyString,
   evidence_refs: Schema.Array(Schema.NonEmptyString),
+  source_experience_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("exp_"))),
+  source_evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))),
+  source_evaluation_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("eva_"))),
+  source_provenance_digest: Sha256Digest,
+  source_provenance_artifact: Schema.Union([
+    Schema.Struct({
+      digest: Sha256Digest,
+      record_digest: Sha256Digest,
+      kind: Schema.Literal("evolution-source-provenance"),
+      uri: Schema.NonEmptyString,
+    }),
+    Schema.Null,
+  ]),
+  capability_boundary: Schema.Struct({
+    permission_requests: Schema.Array(Schema.String),
+    secret_refs: Schema.Array(Schema.String),
+    network_egress: Schema.Array(Schema.String),
+  }),
+  evaluation_budget: Schema.Struct({
+    max_attempts: NonNegativeInt,
+    max_duration_ms: NonNegativeInt,
+    max_cost_micros: NonNegativeInt,
+  }),
+  baseline_digest: Sha256Digest,
+  rollback_artifact: Schema.Struct({
+    artifact_id: Schema.String.check(Schema.isStartsWith("art_")),
+    digest: Sha256Digest,
+    plan_digest: Sha256Digest,
+    operation: Schema.Literal("deactivate_strategy_overlay"),
+  }),
   created_by: Schema.NonEmptyString,
   created_at: Schema.NonEmptyString,
   constitution_version: Schema.NonEmptyString,
+  evolution_level: Schema.Literal("L2"),
   candidate_id: Schema.NonEmptyString,
   artifact_digest: Schema.NonEmptyString,
   state: EvolutionCandidateState,
@@ -601,6 +809,18 @@ export const EvolutionStatus = Schema.Struct({
     protected_prefixes: Schema.Array(Schema.String),
     self_approval_allowed: Schema.Literal(false),
     source_mutation_allowed: Schema.Literal(false),
+  }),
+  evolution_levels: Schema.Struct({
+    version: Schema.NonEmptyString,
+    levels: Schema.Record(
+      Schema.Literals(["L0", "L1", "L2", "L3", "L4", "L5"]),
+      Schema.Struct({
+        level: Schema.Literals(["L0", "L1", "L2", "L3", "L4", "L5"]),
+        capability: Schema.NonEmptyString,
+        operations: Schema.Array(Schema.NonEmptyString),
+        executable: Schema.Boolean,
+      }),
+    ),
   }),
   audit: Schema.Struct({
     schema_version: Schema.Literal(1),
@@ -653,6 +873,10 @@ export const EvolutionCanaryReport = Schema.Struct({
   success_rate_delta: Schema.Finite,
   safety_incidents: NonNegativeInt,
   control_safety_incidents: NonNegativeInt,
+  observation_ids: Schema.Array(Schema.NonEmptyString),
+  observation_digest: Sha256Digest,
+  policy_version: Schema.NonEmptyString,
+  policy_digest: Sha256Digest,
   checks: Schema.Record(Schema.String, Schema.Boolean),
   gate_passed: Schema.Boolean,
 }).annotate({ identifier: "AgentCapability.EvolutionCanaryReport" })
@@ -725,8 +949,6 @@ export const EvolutionExposureList = Schema.Struct({
   items: Schema.Array(EvolutionExposure),
 }).annotate({ identifier: "AgentCapability.EvolutionExposureList" })
 export interface EvolutionExposureList extends Schema.Schema.Type<typeof EvolutionExposureList> {}
-
-const Sha256Digest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
 
 export const EvolutionExposureArchiveItem = Schema.Struct({
   exposure_id: Schema.NonEmptyString,
@@ -909,3 +1131,208 @@ export const EvolutionAuditEventList = Schema.Struct({
   items: Schema.Array(EvolutionAuditEvent),
 }).annotate({ identifier: "AgentCapability.EvolutionAuditEventList" })
 export interface EvolutionAuditEventList extends Schema.Schema.Type<typeof EvolutionAuditEventList> {}
+
+const LifecycleDigest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/))
+const ExperienceCandidateStatus = Schema.Literals(["candidate", "active", "rejected", "expired"])
+
+export const ExperienceCandidate = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.String.check(Schema.isStartsWith("exc_")),
+  problem_signature: Schema.NonEmptyString,
+  applicable_scope: Schema.NonEmptyString,
+  conditions: Schema.Array(Schema.NonEmptyString),
+  attempted_strategy: Schema.NonEmptyString,
+  counterexamples: Schema.Array(Schema.NonEmptyString),
+  support_count: NonNegativeInt,
+  source_run_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("run_"))),
+  source_support_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("exs_"))),
+  evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))),
+  evaluation_digest: Schema.Union([LifecycleDigest, Schema.Null]),
+  review_actor: Schema.Union([Schema.String, Schema.Null]),
+  review_reason: Schema.Union([Schema.String, Schema.Null]),
+  review_status: Schema.Literals(["pending", "approved", "rejected", "expired"]),
+  status: ExperienceCandidateStatus,
+  policy_version: Schema.NonEmptyString,
+  expiry_at: Schema.Union([NonNegativeInt, Schema.Null]),
+  digest: LifecycleDigest,
+  revision: PositiveInt,
+  created_by: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+  updated_at: Schema.NonEmptyString,
+}).annotate({ identifier: "AgentCapability.ExperienceCandidate" })
+export interface ExperienceCandidate extends Schema.Schema.Type<typeof ExperienceCandidate> {}
+
+export const ExperienceCandidateList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  items: Schema.Array(ExperienceCandidate),
+}).annotate({ identifier: "AgentCapability.ExperienceCandidateList" })
+export interface ExperienceCandidateList extends Schema.Schema.Type<typeof ExperienceCandidateList> {}
+
+export const ExperienceReviewResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate: ExperienceCandidate,
+  experience_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("exp_"))),
+  receipt_digest: LifecycleDigest,
+}).annotate({ identifier: "AgentCapability.ExperienceReviewResult" })
+export interface ExperienceReviewResult extends Schema.Schema.Type<typeof ExperienceReviewResult> {}
+
+export const ExperienceSource = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  experience_id: Schema.String.check(Schema.isStartsWith("exp_")),
+  candidate_id: Schema.String.check(Schema.isStartsWith("exc_")),
+  summary: Schema.NonEmptyString,
+  evidence_count: NonNegativeInt,
+  record_digest: LifecycleDigest,
+  policy_version: Schema.NonEmptyString,
+  created_at: Schema.NonEmptyString,
+}).annotate({ identifier: "AgentCapability.ExperienceSource" })
+export interface ExperienceSource extends Schema.Schema.Type<typeof ExperienceSource> {}
+
+export const ExperienceSourceList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  items: Schema.Array(ExperienceSource),
+}).annotate({ identifier: "AgentCapability.ExperienceSourceList" })
+export interface ExperienceSourceList extends Schema.Schema.Type<typeof ExperienceSourceList> {}
+
+export const SkillLifecycleCandidate = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate_id: Schema.String.check(Schema.isStartsWith("skc_")),
+  skill_id: Schema.NonEmptyString,
+  version: Schema.NonEmptyString,
+  digest: LifecycleDigest,
+  status: Schema.Literals(["draft", "candidate", "canary", "active", "retired"]),
+  purpose: Schema.NonEmptyString,
+  triggers: Schema.Array(Schema.NonEmptyString),
+  allowed_tools: Schema.Array(Schema.NonEmptyString),
+  allowed_capabilities: Schema.Array(Schema.NonEmptyString),
+  source_experience_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("exp_"))),
+  source_evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))),
+  test_ids: Schema.Array(Schema.NonEmptyString),
+  evaluation_id: Schema.String.check(Schema.isStartsWith("eva_")),
+  evaluation_digest: Schema.Union([LifecycleDigest, Schema.Null]),
+  evaluation_passed: Schema.Union([Schema.Boolean, Schema.Null]),
+  baseline_candidate_id: Schema.Union([Schema.String.check(Schema.isStartsWith("skc_")), Schema.Null]),
+  revision: PositiveInt,
+  created_by: Schema.NonEmptyString,
+  review_actor: Schema.Union([Schema.String, Schema.Null]),
+  review_reason: Schema.Union([Schema.String, Schema.Null]),
+  traffic_percent: Schema.Union([Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })), Schema.Null]),
+  canary_digest: Schema.Union([LifecycleDigest, Schema.Null]),
+  rollback_version: Schema.Union([Schema.String, Schema.Null]),
+  record_digest: LifecycleDigest,
+  created_at: Schema.NonEmptyString,
+  updated_at: Schema.NonEmptyString,
+}).annotate({ identifier: "AgentCapability.SkillLifecycleCandidate" })
+export interface SkillLifecycleCandidate extends Schema.Schema.Type<typeof SkillLifecycleCandidate> {}
+
+export const SkillLifecycleCandidateList = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  count: NonNegativeInt,
+  items: Schema.Array(SkillLifecycleCandidate),
+}).annotate({ identifier: "AgentCapability.SkillLifecycleCandidateList" })
+export interface SkillLifecycleCandidateList extends Schema.Schema.Type<typeof SkillLifecycleCandidateList> {}
+
+export const SkillDeployment = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  skill_id: Schema.NonEmptyString,
+  active_candidate_id: Schema.String.check(Schema.isStartsWith("skc_")),
+  previous_candidate_id: Schema.Union([Schema.String.check(Schema.isStartsWith("skc_")), Schema.Null]),
+  generation: PositiveInt,
+  digest: LifecycleDigest,
+}).annotate({ identifier: "AgentCapability.SkillDeployment" })
+export interface SkillDeployment extends Schema.Schema.Type<typeof SkillDeployment> {}
+
+export const SkillPromotionResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate: SkillLifecycleCandidate,
+  deployment: SkillDeployment,
+  receipt_digest: LifecycleDigest,
+}).annotate({ identifier: "AgentCapability.SkillPromotionResult" })
+export interface SkillPromotionResult extends Schema.Schema.Type<typeof SkillPromotionResult> {}
+
+export const SkillRollbackResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  rolled_back: SkillLifecycleCandidate,
+  restored: SkillLifecycleCandidate,
+  deployment: SkillDeployment,
+  receipt_digest: LifecycleDigest,
+}).annotate({ identifier: "AgentCapability.SkillRollbackResult" })
+export interface SkillRollbackResult extends Schema.Schema.Type<typeof SkillRollbackResult> {}
+
+const NonNegativeFinite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const SkillResourceOutcome = Schema.Struct({
+  success: Schema.Boolean,
+  steps: NonNegativeFinite,
+  tokens: NonNegativeFinite,
+  cost_minor: NonNegativeFinite,
+  new_failures: NonNegativeFinite,
+  new_secret_findings: NonNegativeFinite,
+  new_egress_attempts: NonNegativeFinite,
+}).annotate({ identifier: "AgentCapability.SkillResourceOutcome" })
+export interface SkillResourceOutcome extends Schema.Schema.Type<typeof SkillResourceOutcome> {}
+
+export const SkillEvaluationObservation = Schema.Struct({
+  case_id: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(160)),
+  baseline: SkillResourceOutcome,
+  candidate: SkillResourceOutcome,
+  evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))).check(Schema.isMinLength(1)),
+}).annotate({ identifier: "AgentCapability.SkillEvaluationObservation" })
+export interface SkillEvaluationObservation extends Schema.Schema.Type<typeof SkillEvaluationObservation> {}
+
+export const SkillEvaluationReport = Schema.Struct({
+  candidate_digest: LifecycleDigest,
+  baseline_digest: LifecycleDigest,
+  sample_size: NonNegativeInt,
+  utility_delta: Schema.Finite,
+  regression_cases: Schema.Array(Schema.NonEmptyString),
+  new_failure_count: NonNegativeFinite,
+  new_secret_findings: NonNegativeFinite,
+  new_egress_attempts: NonNegativeFinite,
+  checks: Schema.Struct({
+    no_permission_expansion: Schema.Boolean,
+    no_new_secret: Schema.Boolean,
+    no_new_egress: Schema.Boolean,
+    no_regression: Schema.Boolean,
+    utility_non_regression: Schema.Boolean,
+  }),
+  passed: Schema.Boolean,
+  evidence_ids: Schema.Array(Schema.String.check(Schema.isStartsWith("evd_"))),
+}).annotate({ identifier: "AgentCapability.SkillEvaluationReport" })
+export interface SkillEvaluationReport extends Schema.Schema.Type<typeof SkillEvaluationReport> {}
+
+export const SkillEvaluationResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate: SkillLifecycleCandidate,
+  report: SkillEvaluationReport,
+}).annotate({ identifier: "AgentCapability.SkillEvaluationResult" })
+export interface SkillEvaluationResult extends Schema.Schema.Type<typeof SkillEvaluationResult> {}
+
+export const SkillCanaryObservationResult = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate: SkillLifecycleCandidate,
+  observation_id: Schema.String.check(Schema.isStartsWith("sko_")),
+  replayed: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.SkillCanaryObservationResult" })
+export interface SkillCanaryObservationResult extends Schema.Schema.Type<typeof SkillCanaryObservationResult> {}
+
+export const SkillCanarySummary = Schema.Struct({
+  observation_count: NonNegativeInt,
+  success_count: NonNegativeInt,
+  safety_incident_count: NonNegativeInt,
+  success_rate: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  minimum_observations: PositiveInt,
+  minimum_success_rate: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  promotion_ready: Schema.Boolean,
+}).annotate({ identifier: "AgentCapability.SkillCanarySummary" })
+export interface SkillCanarySummary extends Schema.Schema.Type<typeof SkillCanarySummary> {}
+
+export const SkillLifecycleCandidateDetail = Schema.Struct({
+  schema_version: Schema.Literal(1),
+  candidate: SkillLifecycleCandidate,
+  evaluation: Schema.Union([SkillEvaluationReport, Schema.Null]),
+  canary: SkillCanarySummary,
+}).annotate({ identifier: "AgentCapability.SkillLifecycleCandidateDetail" })
+export interface SkillLifecycleCandidateDetail extends Schema.Schema.Type<typeof SkillLifecycleCandidateDetail> {}

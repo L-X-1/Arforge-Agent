@@ -150,6 +150,13 @@ export const dict: Record<string, string> = {
   "ui.basicTool.called": "Called `{{tool}}`",
   "ui.toolErrorCard.failed": "Failed",
   "ui.toolErrorCard.copyError": "Copy error",
+  "ui.toolErrorCard.fileConflict.changed": "File changed after approval",
+  "ui.toolErrorCard.fileConflict.targetExists": "File appeared after approval",
+  "ui.toolErrorCard.fileConflict.instruction": "Read the file again, review the current content, then retry.",
+  "ui.toolErrorCard.fileConflict.targetExistsInstruction":
+    "A file appeared after approval. Read it, confirm the intended content, then retry.",
+  "ui.toolErrorCard.fileConflict.path": "File",
+  "ui.toolErrorCard.fileConflict.versions": "Observed {{observed}} · current {{current}}",
 
   "ui.common.file.one": "file",
   "ui.common.file.other": "files",
@@ -169,6 +176,29 @@ export const dict: Record<string, string> = {
   "ui.permission.deny": "Deny",
   "ui.permission.allowAlways": "Allow always",
   "ui.permission.allowOnce": "Allow once",
+  "ui.permission.humanConfirmation":
+    "This action needs your one-time manual confirmation. It will not be remembered as ‘Allow always’.",
+  "ui.permission.opaqueShell.summary":
+    "This is the exact Shell command entered by the user. Its file, network, and child-process effects cannot be fully determined before execution.",
+  "ui.permission.opaqueShell.cwd": "Working directory: {{cwd}}",
+  "ui.permission.opaqueShell.shell": "Shell: {{shell}}",
+  "ui.permission.opaqueShell.environment":
+    "The child process receives only a minimal runtime environment and does not inherit Arforge credentials.",
+  "ui.permission.taskCapabilities.title": "Sub-agent access",
+  "ui.permission.taskCapabilities.defaultReadOnly": "This task defaults to read-only access.",
+  "ui.permission.taskCapabilities.readOnly": "Only read-capable access is requested.",
+  "ui.permission.taskCapabilities.writeWarning":
+    "Write-capable access is requested. Review every action and scope before allowing it.",
+  "ui.permission.taskCapabilities.access.read": "Read",
+  "ui.permission.taskCapabilities.access.write": "Write",
+  "ui.permission.taskCapabilities.resources": "Scope: {{resources}}",
+  "ui.permission.taskBudget.title": "Execution limits",
+  "ui.permission.taskBudget.summary":
+    "{{attempts}} attempts · {{duration}} min · cost cap {{cost}} · {{tokens}} tokens",
+  "ui.permission.taskBudget.enforced":
+    "Time and output-token limits apply during execution; actual cost and total usage are settled afterward.",
+  "ui.permission.taskBudget.legacyWarning":
+    "This legacy task has no durable time, cost, or token enforcement. Allow it only if you trust the scope.",
 
   "ui.message.expand": "Expand message",
   "ui.message.collapse": "Collapse message",

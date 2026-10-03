@@ -132,18 +132,19 @@ test("shows source-bound TypeScript and Python contributions for one provider tu
   await expect(page.getByText(session.title).first()).toBeVisible()
   await page.keyboard.press("Control+,")
   const dialog = page.locator(".settings-v2-dialog")
+  await dialog.getByRole("button", { name: "Show advanced tools" }).click()
   await dialog.getByRole("tab", { name: "Memory / Learning" }).click()
 
   const evidence = dialog.getByTestId("context-fusion-evidence")
   await expect(evidence).toBeVisible()
-  await expect(evidence).toContainText("Actual dual-runtime context fusion")
+  await expect(evidence).toContainText("Actual context assembly evidence")
   await expect(evidence).toContainText("All runtime contributions prepared")
   await expect(evidence).toContainText("Provider call continued with a degraded contribution")
   await expect(evidence).toContainText(session.id)
   await expect(evidence).toContainText("msg_fusion_user")
   await expect(evidence).toContainText("typescript-core")
-  await expect(evidence).toContainText("python-sidecar")
-  await expect(evidence).toContainText("arforge.bridge/1.2")
+  await expect(evidence).toContainText("typescript-core")
+  await expect(evidence).toContainText("arforge.context/2")
   await expect(evidence).toContainText("Candidates: 1")
   await expect(evidence).toContainText("Active candidates: 1")
   await expect(evidence).toContainText("Injected candidates: 1")
@@ -180,7 +181,8 @@ function fusionEvent(degraded: boolean, seq: number) {
       totalInjectedBytes: degraded ? 320 : 512,
       providerCallReady: true,
       degraded,
-      bridgeProtocol: "arforge.bridge/1.2",
+      assemblyProtocol: "arforge.context/2",
+      runtimeTopology: "typescript-single-runtime",
       memory: {
         runtime: "typescript-core",
         status: "prepared",
@@ -195,7 +197,7 @@ function fusionEvent(degraded: boolean, seq: number) {
         injectedBytes: 64,
       },
       evolution: {
-        runtime: "python-sidecar",
+        runtime: "typescript-core",
         status: degraded ? "unavailable" : "prepared",
         contextDigest: digest("e"),
         injectedBytes: degraded ? 0 : 192,

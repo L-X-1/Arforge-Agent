@@ -1,4 +1,5 @@
-import { createMemo, createSignal, createUniqueId, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { createQuery } from "@tanstack/solid-query"
 import { Icon } from "@arforge-ai/ui/icon"
 import { SessionFilePanelV2, SessionFilePanelV2Empty } from "@arforge-ai/session-ui/v2/session-file-panel-v2"
@@ -42,7 +43,20 @@ export function SessionFileBrowserTab(props: {
   const resultsID = `session-file-browser-results-${createUniqueId()}`
   const [filter, setFilter] = createSignal("")
   const [explicitHighlight, setExplicitHighlight] = createSignal<string>()
-  const sidebarOpened = () => props.placeholder || props.state.sidebarOpened()
+  const [pane, setPane] = createStore({ compact: false, navigation: true })
+  let root!: HTMLDivElement
+  onMount(() => {
+    const observer = new ResizeObserver(() => setPane("compact", root.clientWidth < 560))
+    observer.observe(root)
+    onCleanup(() => observer.disconnect())
+  })
+  createEffect(() => { if (props.placeholder) setPane("navigation", true) })
+  const sidebarOpened = () => props.placeholder || (pane.compact ? pane.navigation : props.state.sidebarOpened())
+  const select = (path: string, permanent = false) => {
+    if (permanent) props.onSelectPermanent(path)
+    else props.onSelect(path)
+    setPane("navigation", false)
+  }
   const query = createMemo(() => filter().trim())
   const search = createQuery(() => {
     const value = query()
@@ -85,13 +99,21 @@ export function SessionFileBrowserTab(props: {
     if (!query()) return
     applyFileListKeyDown(event, files(), highlighted(), {
       onHighlight: setExplicitHighlight,
-      onSelect: props.onSelectPermanent,
+      onSelect: (path) => select(path, true),
     })
   }
 
   // Keep the sidebar outside Kobalte Tabs.Content: a morphing content value
   // unmounts the whole panel on every file-tab switch and resets sidebar scroll.
   return (
+    <div ref={root} data-component="review-file-workbench" data-compact={pane.compact} data-navigation={sidebarOpened()}>
+      <Show when={pane.compact}>
+        <div data-slot="workbench-pane-switch" role="group" aria-label={language.t("session.panel.reviewAndFiles")}>
+          <button type="button" aria-pressed={sidebarOpened()} onClick={() => setPane("navigation", true)}>{language.t("session.files.all")}</button>
+          <button type="button" disabled={props.placeholder} aria-pressed={!sidebarOpened()} onClick={() => setPane("navigation", false)}>{language.locale().startsWith("zh") ? "当前文件" : "Current file"}</button>
+          <span title={sdk().directory}>{title()}</span>
+        </div>
+      </Show>
     <SessionFilePanelV2
       toolbar={false}
       sidebar={
@@ -116,8 +138,8 @@ export function SessionFileBrowserTab(props: {
               <FileTreeV2
                 active={props.active}
                 kinds={props.kinds}
-                onFileClick={(node) => props.onSelect(node.path)}
-                onFileDoubleClick={(node) => props.onSelectPermanent(node.path)}
+                onFileClick={(node) => select(node.path)}
+                onFileDoubleClick={(node) => select(node.path, true)}
               />
             }
           >
@@ -130,6 +152,12 @@ export function SessionFileBrowserTab(props: {
                 </div>
               }
             >
+              <Show when={!search.isError} fallback={
+                <div role="alert" class="p-3 text-12-regular text-text-weak">
+                  <p>{search.error instanceof Error ? search.error.message : language.t("common.requestFailed")}</p>
+                  <button type="button" disabled={search.isFetching} onClick={() => void search.refetch()}>{language.locale().startsWith("zh") ? "重试搜索" : "Retry search"}</button>
+                </div>
+              }>
               <Show
                 when={files().length > 0}
                 fallback={
@@ -148,10 +176,11 @@ export function SessionFileBrowserTab(props: {
                   highlighted={highlighted()}
                   onFileClick={(path) => {
                     setExplicitHighlight(path)
-                    props.onSelect(path)
+                    select(path)
                   }}
-                  onFileDoubleClick={props.onSelectPermanent}
+                  onFileDoubleClick={(path) => select(path, true)}
                 />
+              </Show>
               </Show>
             </Show>
           </Show>
@@ -177,5 +206,6 @@ export function SessionFileBrowserTab(props: {
         </div>
       </Show>
     </SessionFilePanelV2>
+    </div>
   )
 }

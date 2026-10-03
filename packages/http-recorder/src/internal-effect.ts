@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { Deferred, Effect, Layer, Option, Ref } from "effect"
+import { Cause, Deferred, Effect, Exit, Layer, Option, Ref } from "effect"
 import {
   FetchHttpClient,
   Headers,
@@ -16,7 +16,14 @@ import { makeReplayState, resolveAutoMode } from "./recorder.js"
 import { make, type Redactor } from "./redactor.js"
 import { redactUrl } from "./redaction.js"
 import { httpInteractions } from "./schema.js"
-import type { CassetteMetadata, HttpInteraction, RequestMatcher, ResponseSnapshot } from "./types.js"
+import {
+  RECORDED_TRANSPORT_FAILURE,
+  type CassetteMetadata,
+  type HttpInteraction,
+  type RequestMatcher,
+  type RequestSnapshot,
+  type ResponseSnapshot,
+} from "./types.js"
 
 export { defaultMatcher }
 
@@ -28,7 +35,10 @@ export interface RecordReplayOptions {
   readonly metadata?: CassetteMetadata
   readonly redactor?: Redactor
   readonly match?: RequestMatcher
+  readonly maxRequestBodyBytes?: number
 }
+
+const DEFAULT_MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 
 const TEXT_CONTENT_TYPES = new Set([
   "application/graphql",
@@ -51,6 +61,72 @@ const isTextContentType = (contentType: string | undefined) => {
     TEXT_CONTENT_TYPES.has(mediaType)
   )
 }
+
+class RequestBodyCaptureFailure extends Error {
+  constructor(readonly reason: "read" | "limit" | "content-length") {
+    super(reason)
+  }
+}
+
+const readRequestBody = (web: Request, maximumBytes: number) =>
+  Effect.tryPromise({
+    try: async (signal) => {
+      if (!web.body) return new Uint8Array()
+      const reader = web.body.getReader()
+      const cancel = () => void reader.cancel().catch(() => undefined)
+      signal.addEventListener("abort", cancel, { once: true })
+      const chunks: Uint8Array[] = []
+      let length = 0
+      try {
+        while (true) {
+          const next = await reader.read()
+          if (next.done) break
+          length += next.value.length
+          if (length > maximumBytes) {
+            await reader.cancel()
+            throw new RequestBodyCaptureFailure("limit")
+          }
+          chunks.push(next.value)
+        }
+      } finally {
+        signal.removeEventListener("abort", cancel)
+        reader.releaseLock()
+      }
+      const body = new Uint8Array(length)
+      let offset = 0
+      for (const chunk of chunks) {
+        body.set(chunk, offset)
+        offset += chunk.length
+      }
+      return body
+    },
+    catch: (cause) => (cause instanceof RequestBodyCaptureFailure ? cause : new RequestBodyCaptureFailure("read")),
+  })
+
+const canonicalMultipartBody = (formData: FormData) =>
+  Effect.tryPromise({
+    try: async () => {
+      const entries: Array<Record<string, unknown>> = []
+      const iterable = formData.entries() as Iterable<[string, string | (Blob & { readonly name: string })]>
+      for (const [name, value] of iterable) {
+        if (typeof value === "string") {
+          entries.push({ [name]: { kind: "text", value } })
+          continue
+        }
+        entries.push({
+          [name]: {
+            kind: "file",
+            name: value.name,
+            type: value.type,
+            body: Buffer.from(await value.arrayBuffer()).toString("base64"),
+            bodyEncoding: "base64",
+          },
+        })
+      }
+      return JSON.stringify({ entries })
+    },
+    catch: () => new RequestBodyCaptureFailure("read"),
+  })
 
 const captureResponseBody = (response: HttpClientResponse.HttpClientResponse, contentType: string | undefined) =>
   response.arrayBuffer.pipe(
@@ -103,16 +179,68 @@ export const recordingLayer = (
       const match = options.match ?? defaultMatcher
       const requested = options.mode ?? "auto"
       const mode = requested === "auto" ? yield* resolveAutoMode(cassetteService, name) : requested
+      const maximumRequestBodyBytes = options.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+      if (!Number.isSafeInteger(maximumRequestBodyBytes) || maximumRequestBodyBytes <= 0) {
+        return yield* Effect.die(new Error("HttpRecorder maxRequestBodyBytes must be a positive safe integer"))
+      }
 
       const snapshotRequest = (request: HttpClientRequest.HttpClientRequest) =>
         Effect.gen(function* () {
-          const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-          return redactor.request({
+          const web = yield* HttpClientRequest.toWeb(request).pipe(
+            Effect.mapError(() => transportError(request, "Recorder could not materialize the request URL and body")),
+          )
+          const bytes = yield* readRequestBody(web, maximumRequestBodyBytes).pipe(
+            Effect.mapError((failure) =>
+              transportError(
+                request,
+                failure.reason === "limit"
+                  ? `Recorder request body exceeds maxRequestBodyBytes (${maximumRequestBodyBytes} bytes)`
+                  : "Recorder could not read the request body for deterministic reconstruction",
+              ),
+            ),
+          )
+          const declaredLength = web.headers.get("content-length")
+          if (declaredLength !== null && Number(declaredLength) !== bytes.length) {
+            return yield* Effect.fail(
+              transportError(request, "Recorder request body does not match its declared content-length"),
+            )
+          }
+          const contentType = web.headers.get("content-type") ?? undefined
+          const multipart = request.body._tag === "FormData"
+          const capturedBody: Pick<RequestSnapshot, "body" | "bodyEncoding"> =
+            request.body._tag === "Empty"
+              ? { body: "" }
+              : multipart
+                ? {
+                    body: yield* canonicalMultipartBody(request.body.formData).pipe(
+                      Effect.mapError(() =>
+                        transportError(request, "Recorder could not canonicalize the multipart request body"),
+                      ),
+                    ),
+                    bodyEncoding: "multipart",
+                  }
+                : isTextContentType(contentType)
+                  ? { body: new TextDecoder().decode(bytes) }
+                  : { body: Buffer.from(bytes).toString("base64"), bodyEncoding: "base64" }
+          const headers = Object.fromEntries(web.headers.entries())
+          if (multipart) headers["content-type"] = "multipart/form-data"
+          const snapshot = redactor.request({
             method: web.method,
             url: web.url,
-            headers: Object.fromEntries(web.headers.entries()),
-            body: yield* Effect.promise(() => web.text()),
+            headers,
+            ...capturedBody,
           })
+          const reconstructed =
+            request.body._tag === "Empty"
+              ? request
+              : HttpClientRequest.setBody(
+                  request,
+                  HttpBody.raw(bytes, {
+                    contentType,
+                    contentLength: declaredLength === null ? undefined : bytes.length,
+                  }),
+                )
+          return { snapshot, reconstructed } as const
         })
 
       if (mode === "passthrough") return upstream
@@ -121,32 +249,51 @@ export const recordingLayer = (
         const initial = yield* Deferred.make<void>()
         yield* Deferred.succeed(initial, undefined)
         const tail = yield* Ref.make(initial)
+        const recorded = yield* Ref.make<ReadonlyArray<HttpInteraction>>([])
+        yield* Effect.addFinalizer((exit) =>
+          Effect.gen(function* () {
+            // Every request completes its ordering token even when interrupted,
+            // so scope settlement can deterministically observe the full batch.
+            yield* Deferred.await(yield* Ref.get(tail))
+            if (!Exit.isSuccess(exit)) return
+            const interactions = yield* Ref.get(recorded)
+            if (interactions.length === 0) return
+            yield* cassetteService.commit(name, interactions, options.metadata).pipe(Effect.orDie)
+          }),
+        )
         return HttpClient.make((request) =>
           Effect.gen(function* () {
             const completed = yield* Deferred.make<void>()
             const previous = yield* Ref.modify(tail, (current) => [current, completed])
             return yield* Effect.gen(function* () {
-              const incoming = yield* snapshotRequest(request)
-              const response = yield* upstream.execute(request)
-              const captured = yield* captureResponseBody(response, response.headers["content-type"])
+              const prepared = yield* snapshotRequest(request)
+              const result = yield* Effect.exit(upstream.execute(prepared.reconstructed))
+              if (Exit.isFailure(result)) {
+                // Cancellation is lifecycle control, not an upstream transport
+                // outcome. Never persist a synthetic network failure for it.
+                if (Cause.hasInterrupts(result.cause)) return yield* Effect.failCause(result.cause)
+                const interaction: HttpInteraction = {
+                  transport: "http",
+                  request: prepared.snapshot,
+                  error: { kind: "transport", description: RECORDED_TRANSPORT_FAILURE },
+                }
+                yield* Deferred.await(previous)
+                yield* Ref.update(recorded, (current) => [...current, interaction])
+                return yield* Effect.failCause(result.cause)
+              }
+              const captured = yield* captureResponseBody(result.value, result.value.headers["content-type"])
               const responseSnapshot: ResponseSnapshot = {
-                status: response.status,
-                headers: response.headers as Record<string, string>,
+                status: result.value.status,
+                headers: result.value.headers as Record<string, string>,
                 ...captured,
               }
               const interaction: HttpInteraction = {
                 transport: "http",
-                request: incoming,
+                request: prepared.snapshot,
                 response: redactor.response(responseSnapshot),
               }
               yield* Deferred.await(previous)
-              yield* cassetteService
-                .append(name, interaction, options.metadata)
-                .pipe(
-                  Effect.catchTag("UnsafeCassetteError", (error) =>
-                    Effect.fail(transportError(request, error.message)),
-                  ),
-                )
+              yield* Ref.update(recorded, (current) => [...current, interaction])
               return responseFromSnapshot(request, responseSnapshot)
             }).pipe(Effect.ensuring(Deferred.succeed(completed, undefined)))
           }),
@@ -156,7 +303,7 @@ export const recordingLayer = (
       const replay = yield* makeReplayState(cassetteService, name, httpInteractions)
       return HttpClient.make((request) =>
         Effect.gen(function* () {
-          const incoming = yield* snapshotRequest(request)
+          const incoming = (yield* snapshotRequest(request)).snapshot
           const claimed = yield* replay
             .claim((interaction, index, interactions) => {
               const result = selectSequential(interactions, incoming, match, index)
@@ -172,9 +319,17 @@ export const recordingLayer = (
                       request,
                       `Fixture "${name}" not found. Run locally to record it (CI=true forces replay).`,
                     )
-                  : error,
+                  : error._tag === "CassetteInvalidError"
+                    ? transportError(
+                        request,
+                        `Fixture "${name}" is invalid: ${error.reason === "invalid-json" ? "invalid JSON" : "schema validation failed"}.`,
+                      )
+                    : error,
               ),
             )
+          if (claimed.interaction.error) {
+            return yield* Effect.fail(transportError(request, claimed.interaction.error.description))
+          }
           return responseFromSnapshot(request, claimed.interaction.response)
         }),
       )

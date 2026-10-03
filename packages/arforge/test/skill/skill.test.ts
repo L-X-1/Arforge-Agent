@@ -2,13 +2,8 @@ import { describe, expect } from "bun:test"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Effect, Layer } from "effect"
 import { Skill } from "../../src/skill"
-import { Discovery } from "../../src/skill/discovery"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
-import { EventV2Bridge } from "../../src/event-v2-bridge"
-import { Config } from "../../src/config/config"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
-import { FSUtil } from "@arforge-ai/core/fs-util"
-import { Global } from "@arforge-ai/core/global"
 import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer, tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import path from "path"
@@ -117,6 +112,47 @@ Instructions here.
           expect(item).toBeDefined()
           expect(item!.description).toBe("A test skill for verification.")
           expect(item!.location).toContain(path.join("skill", "test-skill", "SKILL.md"))
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("reloads the formal skill service and keeps an earlier snapshot stable", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const file = path.join(dir, ".arforge", "skill", "reloadable-skill", "SKILL.md")
+          yield* Effect.promise(() => fs.mkdir(path.dirname(file), { recursive: true }))
+          const beforeText = [
+            "---",
+            "name: reloadable-skill",
+            "description: Before reload.",
+            "---",
+            "",
+            "# Reloadable Skill",
+            "",
+          ].join("\n")
+          const afterText = beforeText.replace("Before reload.", "After reload.")
+          yield* Effect.promise(() => Bun.write(file, beforeText))
+
+          const skill = yield* Skill.Service
+          const before = yield* skill.snapshot()
+          expect(before.skills.find((item) => item.name === "reloadable-skill")?.description).toBe("Before reload.")
+          expect(Object.isFrozen(before)).toBe(true)
+          expect(Object.isFrozen(before.skills)).toBe(true)
+          expect(Object.isFrozen(before.skills[0])).toBe(true)
+
+          yield* Effect.promise(() => Bun.write(file, afterText))
+          expect((yield* skill.all()).find((item) => item.name === "reloadable-skill")?.description).toBe(
+            "Before reload.",
+          )
+
+          yield* skill.reload()
+          const after = yield* skill.snapshot()
+          expect(after.skills.find((item) => item.name === "reloadable-skill")?.description).toBe("After reload.")
+          expect(after.revision).toBeGreaterThan(before.revision)
+          expect(after.digest).not.toBe(before.digest)
+          expect(before.skills.find((item) => item.name === "reloadable-skill")?.description).toBe("Before reload.")
         }),
       { git: true },
     ),

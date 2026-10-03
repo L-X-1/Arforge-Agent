@@ -38,6 +38,12 @@ export type TimelineRowMap = {
 }
 
 export namespace Timeline {
+  export type Turn = {
+    user: UserMessage
+    assistants: AssistantMessage[]
+    deliveries: { assistantMessageID: string; delivery: PrimaryDeliveryInfo }[]
+  }
+
   export function constructSessionMessageRows(
     messages: SessionMessageInfo[],
     getMessage: (messageID: string) => UserMessage | AssistantMessage | undefined,
@@ -47,11 +53,32 @@ export namespace Timeline {
     inlineComments: boolean,
     projectedUserMessages: UserMessage[],
   ) {
-    const turns: {
-      user: UserMessage
-      assistants: AssistantMessage[]
-      deliveries: { assistantMessageID: string; delivery: PrimaryDeliveryInfo }[]
-    }[] = []
+    const { turns, activeMessageID } = constructSessionTurns(messages, getMessage, projectedUserMessages)
+    return {
+      activeMessageID,
+      rows: turns.flatMap((turn, index) =>
+        constructMessageRows(
+          turn.user,
+          getMessageParts,
+          turn.assistants,
+          index,
+          showReasoning,
+          status,
+          turn.user.id === activeMessageID,
+          inlineComments,
+          turn.deliveries,
+        ),
+      ),
+    }
+  }
+
+  // Membership depends on message metadata, not on streaming part contents.
+  export function constructSessionTurns(
+    messages: SessionMessageInfo[],
+    getMessage: (messageID: string) => UserMessage | AssistantMessage | undefined,
+    projectedUserMessages: UserMessage[],
+  ) {
+    const turns: Turn[] = []
     const turnByUserID = new Map<string, (typeof turns)[number]>()
     messages.forEach((message) => {
       const projected = getMessage(message.id)
@@ -103,19 +130,7 @@ export namespace Timeline {
     const activeMessageID = turns.at(-1)?.user.id
     return {
       activeMessageID,
-      rows: turns.flatMap((turn, index) =>
-        constructMessageRows(
-          turn.user,
-          getMessageParts,
-          turn.assistants,
-          index,
-          showReasoning,
-          status,
-          turn.user.id === activeMessageID,
-          inlineComments,
-          turn.deliveries,
-        ),
-      ),
+      turns,
     }
   }
 

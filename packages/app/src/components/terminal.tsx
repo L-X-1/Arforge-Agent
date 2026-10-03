@@ -574,11 +574,13 @@ export const Terminal = (props: TerminalProps) => {
           throw new Error(`PTY connect ticket failed with ${result.response.status}`)
         }
         return sdk()
-          .api.pty.connectToken({
-            ptyID: id,
-            location: { directory },
-            "x-arforge-ticket": "1",
-          })
+          .api.pty.connectToken(
+            {
+              ptyID: id,
+              location: { directory },
+            },
+            { headers: { "x-arforge-ticket": "1" } },
+          )
           .then((result) => result.data.ticket)
           .catch((err: unknown) => {
             if (err && typeof err === "object" && "_tag" in err && err._tag === "ForbiddenError") {

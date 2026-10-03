@@ -4,12 +4,13 @@ import { GlobalBus } from "@/bus/global"
 import { serviceUse } from "@arforge-ai/core/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
-import { disposeInstance as runDisposers } from "@/effect/instance-registry"
+import { disposeInstanceEffect as runDisposers } from "@/effect/instance-registry"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
+import { Database } from "@arforge-ai/core/database/database"
 
 export interface LoadInput {
   directory: string
@@ -34,15 +35,30 @@ interface Entry {
   readonly deferred: Deferred.Deferred<InstanceContext>
 }
 
-const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service> = Layer.effect(
+const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service | Database.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const project = yield* Project.Service
     const bootstrap = yield* InstanceBootstrap.Service
+    // Layer composition may expose only InstanceStore/Project/Session to a
+    // child load fiber even though the bootstrap implementation was built
+    // with Database. Capture the durable database handle at construction so
+    // bootstrap state/finalizers remain valid when a caller shadows the
+    // InstanceStore service (for example an isolated test instance).
+    const database = yield* Database.Service
+    // Layer finalizers are invoked by the scope-closing fiber, whose context
+    // may only contain the services visible to the caller. Keep the complete
+    // construction context so disposeAll can close instance-owned resources
+    // without falling through a pruned request/test context.
+    const constructionContext = Context.add(yield* Effect.context(), Database.Service, database)
     const scope = yield* Scope.Scope
     const cache = new Map<string, Entry>()
 
     const boot = (input: LoadInput & { directory: string }) =>
+      // Keep the durable database on the whole boot transaction. Project
+      // resolution can publish events and start concurrent listeners before
+      // the bootstrap hook itself runs; injecting only around bootstrap.run
+      // still lets those fibers inherit a caller's pruned HTTP context.
       Effect.gen(function* () {
         const ctx: InstanceContext =
           input.project && input.worktree
@@ -58,9 +74,10 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
                   project: result.project,
                 })),
               )
-        yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
+        const run = bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
+        yield* run
         return ctx
-      }).pipe(Effect.withSpan("InstanceStore.boot"))
+      }).pipe(Effect.provideService(Database.Service, database), Effect.withSpan("InstanceStore.boot"))
 
     const removeEntry = (directory: string, entry: Entry) =>
       Effect.sync(() => {
@@ -93,7 +110,11 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
 
     const disposeContext = Effect.fn("InstanceStore.disposeContext")(function* (ctx: InstanceContext) {
       yield* Effect.logInfo("disposing instance", { directory: ctx.directory })
-      yield* Effect.promise(() => runDisposers(ctx.directory))
+      // Instance handlers may run with only the location-facing services
+      // visible from the route layer. Keep the durable database handle that
+      // belongs to this store on the disposer boundary as well, so scoped
+      // state invalidation never depends on a pruned caller context.
+      yield* runDisposers(ctx.directory, database).pipe(Effect.provideService(Database.Service, database))
       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
     })
 
@@ -134,7 +155,7 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
             yield* Effect.logInfo("reloading instance", { directory: directory })
             if (previous) {
               yield* Deferred.await(previous.deferred).pipe(Effect.ignore)
-              yield* Effect.promise(() => runDisposers(directory))
+              yield* runDisposers(directory, database).pipe(Effect.provideService(Database.Service, database))
               yield* emitDisposed({ directory, project: input.project?.id })
             }
             yield* completeLoad(directory, input, entry)
@@ -187,9 +208,13 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
     })
 
     const provide = <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-      load(input).pipe(Effect.flatMap((ctx) => effect.pipe(Effect.provideService(InstanceRef, ctx))))
+      load(input).pipe(
+        Effect.flatMap((ctx) =>
+          effect.pipe(Effect.provideService(InstanceRef, ctx), Effect.provideService(Database.Service, database)),
+        ),
+      )
 
-    yield* Effect.addFinalizer(() => disposeAll().pipe(Effect.ignore))
+    yield* Effect.addFinalizer(() => disposeAll().pipe(Effect.provide(constructionContext), Effect.ignore))
 
     return Service.of({
       load,
@@ -207,7 +232,7 @@ export const bootstrapNode = LayerNode.unbound(InstanceBootstrap.Service, Node.t
 export const node = makeGlobalNode({
   service: Service,
   layer: layer,
-  deps: [Project.node, bootstrapNode],
+  deps: [Project.node, bootstrapNode, Database.node],
 })
 
 export * as InstanceStore from "./instance-store"

@@ -229,9 +229,10 @@ describe("revert + compact workflow", () => {
           expect(messageIds).toContain(assistantMsg1.id)
           expect(messageIds).toContain(assistantMsg2.id)
 
-          yield* revert.revert({
+          yield* session.setRevert({
             sessionID,
-            messageID: userMsg2.id,
+            revert: { messageID: userMsg2.id },
+            summary: { additions: 0, deletions: 0, files: 0 },
           })
 
           let sessionInfo = yield* session.get(sessionID)
@@ -326,9 +327,10 @@ describe("revert + compact workflow", () => {
             text: "Hi there!",
           })
 
-          yield* revert.revert({
+          yield* session.setRevert({
             sessionID,
-            messageID: userMsg.id,
+            revert: { messageID: userMsg.id },
+            summary: { additions: 0, deletions: 0, files: 0 },
           })
 
           let sessionInfo = yield* session.get(sessionID)
@@ -452,7 +454,35 @@ describe("revert + compact workflow", () => {
   )
 
   it.live(
-    "restore messages in sequential order",
+    "fails closed before clearing an existing legacy revert state",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const session = yield* Session.Service
+          const revert = yield* SessionRevert.Service
+          const info = yield* session.create({})
+          const message = yield* user(info.id)
+          yield* session.setRevert({
+            sessionID: info.id,
+            revert: { messageID: message.id, snapshot: "snapshot_receipt" },
+            summary: { additions: 0, deletions: 0, files: 0 },
+          })
+
+          const error = yield* revert.unrevert({ sessionID: info.id }).pipe(Effect.flip)
+
+          expect(error).toBeInstanceOf(SessionRevert.MutationUnavailableError)
+          expect(error.operation).toBe("unrevert")
+          expect((yield* session.get(info.id)).revert).toMatchObject({
+            messageID: message.id,
+            snapshot: "snapshot_receipt",
+          })
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live(
+    "fails closed before restoring files from a legacy multi-file revert",
     provideTmpdirInstance(
       (dir) =>
         Effect.gen(function* () {
@@ -509,14 +539,14 @@ describe("revert + compact workflow", () => {
           const second = yield* turn("b.txt", "b2")
           const third = yield* turn("c.txt", "c3")
 
-          yield* revert.revert({
-            sessionID: sid,
-            messageID: first,
-          })
-          expect((yield* session.get(sid)).revert?.messageID).toBe(first)
-          expect(yield* read(path.join(dir, "a.txt"))).toBe("a0")
-          expect(yield* read(path.join(dir, "b.txt"))).toBe("b0")
-          expect(yield* read(path.join(dir, "c.txt"))).toBe("c0")
+          const error = yield* revert.revert({ sessionID: sid, messageID: first }).pipe(Effect.flip)
+          expect(error).toBeInstanceOf(SessionRevert.MutationUnavailableError)
+          expect(error.operation).toBe("revert")
+          expect((yield* session.get(sid)).revert).toBeUndefined()
+          expect(yield* read(path.join(dir, "a.txt"))).toBe("a1")
+          expect(yield* read(path.join(dir, "b.txt"))).toBe("b2")
+          expect(yield* read(path.join(dir, "c.txt"))).toBe("c3")
+          return
 
           yield* revert.revert({
             sessionID: sid,
@@ -549,7 +579,7 @@ describe("revert + compact workflow", () => {
   )
 
   it.live(
-    "restore same file in sequential order",
+    "fails closed before restoring a repeatedly edited file",
     provideTmpdirInstance(
       (dir) =>
         Effect.gen(function* () {
@@ -605,12 +635,12 @@ describe("revert + compact workflow", () => {
           const third = yield* turn("a3")
           expect(yield* read(path.join(dir, "a.txt"))).toBe("a3")
 
-          yield* revert.revert({
-            sessionID: sid,
-            messageID: first,
-          })
-          expect((yield* session.get(sid)).revert?.messageID).toBe(first)
-          expect(yield* read(path.join(dir, "a.txt"))).toBe("a0")
+          const error = yield* revert.revert({ sessionID: sid, messageID: first }).pipe(Effect.flip)
+          expect(error).toBeInstanceOf(SessionRevert.MutationUnavailableError)
+          expect(error.operation).toBe("revert")
+          expect((yield* session.get(sid)).revert).toBeUndefined()
+          expect(yield* read(path.join(dir, "a.txt"))).toBe("a3")
+          return
 
           yield* revert.revert({
             sessionID: sid,

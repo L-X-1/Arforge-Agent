@@ -7,11 +7,14 @@ import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
 import { makeLocationNode } from "../effect/app-node"
 import { LayerNodePlatform } from "../effect/app-node-platform"
-import { PermissionV2 } from "../permission"
 import { collectBoundedResponseBody } from "./http-body"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { scopedChange } from "./effect-semantics"
+import { Egress } from "../egress"
+import { ContextFirewall } from "../context-firewall"
+import type { FetchedAsset } from "../runtime/asset-localization"
 
 export const name = "webfetch"
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -86,14 +89,105 @@ const assertHttpUrl = (url: URL) => {
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("URL must use http:// or https://")
 }
 
-const execute = (http: HttpClient.HttpClient, url: string, format: Format, userAgent = browserUserAgent) =>
-  http.execute(request(url, format, userAgent)).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk))
+const execute = (
+  http: HttpClient.HttpClient,
+  egress: Egress.Authorizer,
+  url: string,
+  format: Format,
+  userAgent = browserUserAgent,
+  timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+  redirectFrom?: string,
+  redirects = 0,
+): Effect.Effect<HttpClientResponse.HttpClientResponse, unknown, never> =>
+  executeWithTrace(http, egress, url, format, userAgent, timeoutSeconds, redirectFrom, redirects).pipe(
+    Effect.map((trace) => trace.response),
+  )
+
+type RedirectTrace = Readonly<{
+  readonly response: HttpClientResponse.HttpClientResponse
+  readonly redirects: ReadonlyArray<string>
+  readonly finalURL: string
+}>
+
+const executeWithTrace = (
+  http: HttpClient.HttpClient,
+  egress: Egress.Authorizer,
+  url: string,
+  format: Format,
+  userAgent = browserUserAgent,
+  timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+  redirectFrom?: string,
+  redirects = 0,
+): Effect.Effect<RedirectTrace, unknown, never> =>
+  Effect.gen(function* () {
+    yield* egress.assert({ url, method: "GET", ...(redirectFrom === undefined ? {} : { redirectFrom }) })
+    const response = yield* http.execute(request(url, format, userAgent)).pipe(
+      Effect.timeoutOrElse({
+        duration: Duration.seconds(timeoutSeconds),
+        orElse: () => Effect.fail(new Error("Request timed out")),
+      }),
+    )
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.location
+      if (!location) return yield* Effect.fail(new Error("HTTP redirect did not include a Location header"))
+      if (redirects >= 3) return yield* Effect.fail(new Error("HTTP redirect limit exceeded"))
+      const target = yield* Effect.try({
+        try: () => new URL(location, url).toString(),
+        catch: (error) => error,
+      })
+      const next = yield* executeWithTrace(http, egress, target, format, userAgent, timeoutSeconds, url, redirects + 1)
+      return {
+        ...next,
+        redirects: [target, ...next.redirects],
+      }
+    }
+    return {
+      response: yield* HttpClientResponse.filterStatusOk(response),
+      redirects: [],
+      finalURL: url,
+    }
+  })
 
 const collectBody = (response: HttpClientResponse.HttpClientResponse) =>
   collectBoundedResponseBody(
     response,
     MAX_RESPONSE_BYTES,
     () => new Error(`Response too large (exceeds ${MAX_RESPONSE_BYTES} byte limit)`),
+  )
+
+/**
+ * Fetch one bounded binary asset through the same Core webfetch transport and
+ * egress checks used by the model-facing read-only tool. This is intentionally
+ * not a second tool: the staged localization adapter injects this callback
+ * into its one ActionGateway operation, so redirects and raw bytes remain on
+ * the existing HttpClient/egress owner.
+ */
+export const fetchRawAsset = (
+  http: HttpClient.HttpClient,
+  egress: Egress.Authorizer,
+  url: string,
+  timeoutSeconds = DEFAULT_TIMEOUT_SECONDS,
+): Effect.Effect<FetchedAsset, unknown, never> =>
+  Effect.gen(function* () {
+    const trace = yield* executeWithTrace(http, egress, url, "html", browserUserAgent, timeoutSeconds).pipe(
+      Effect.catchIf(isCloudflareChallenge, () =>
+        executeWithTrace(http, egress, url, "html", "arforge", timeoutSeconds),
+      ),
+    )
+    const contentType = trace.response.headers["content-type"] || ""
+    const bytes = yield* collectBody(trace.response)
+    return {
+      url,
+      ...(trace.redirects.length > 0 ? { redirects: trace.redirects } : {}),
+      finalURL: trace.finalURL,
+      contentType,
+      bytes,
+    }
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.seconds(timeoutSeconds),
+      orElse: () => Effect.fail(new Error("Request timed out")),
+    }),
   )
 
 const mimeFrom = (contentType: string) => contentType.split(";", 1)[0]?.trim().toLowerCase() ?? ""
@@ -117,17 +211,25 @@ const convert = (content: string, contentType: string, format: Format) => {
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const http = yield* HttpClient.HttpClient
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description,
+          effects: (input) =>
+            scopedChange({
+              networkScope: [input.url],
+              idempotency: "idempotent",
+              retryability: "safe",
+              reversibility: "not_applicable",
+              externalServices: ["HTTP origin from url"],
+              successCriteria: ["response is within size and timeout limits and decodes to the requested format"],
+            }),
           input: Input,
           output: Output,
-          toModelOutput: ({ output }) => [{ type: "text", text: output.output }],
+          toModelOutput: ({ output }) => [{ type: "text", text: ContextFirewall.untrusted("web", output.output) }],
           execute: (input, context) =>
             Effect.gen(function* () {
               yield* Effect.try({
@@ -135,7 +237,7 @@ const layer = Layer.effectDiscard(
                 catch: (error) => error,
               })
 
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [input.url],
                 save: ["*"],
@@ -146,8 +248,24 @@ const layer = Layer.effectDiscard(
               })
 
               const { body, contentType } = yield* Effect.gen(function* () {
-                const response = yield* execute(http, input.url, input.format).pipe(
-                  Effect.catchIf(isCloudflareChallenge, () => execute(http, input.url, input.format, "arforge")),
+                const response = yield* execute(
+                  http,
+                  context.egress,
+                  input.url,
+                  input.format,
+                  browserUserAgent,
+                  input.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+                ).pipe(
+                  Effect.catchIf(isCloudflareChallenge, () =>
+                    execute(
+                      http,
+                      context.egress,
+                      input.url,
+                      input.format,
+                      "arforge",
+                      input.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+                    ),
+                  ),
                 )
                 const contentType = response.headers["content-type"] || ""
                 const mime = mimeFrom(contentType)
@@ -173,7 +291,11 @@ const layer = Layer.effectDiscard(
                 format: input.format,
                 output,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to fetch ${input.url}` }))),
+            }).pipe(
+              Effect.mapError(
+                (error) => Tool.toToolFailure(error) ?? new ToolFailure({ message: `Unable to fetch ${input.url}` }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
@@ -183,7 +305,7 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/webfetch",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, LayerNodePlatform.httpClient],
 })
 
 export function extractTextFromHTML(html: string) {

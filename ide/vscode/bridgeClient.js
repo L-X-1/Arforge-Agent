@@ -7,6 +7,16 @@ const readline = require("node:readline");
 const PROTOCOL = "arforge.bridge";
 const VERSION = "1.2";
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const REQUIRED_METHODS = [
+  "protocol.describe",
+  "health",
+  "workspace.get",
+  "session.create",
+  "session.resume",
+  "chat.start",
+  "chat.cancel",
+  "git.diff"
+];
 
 class BridgeError extends Error {
   constructor(code, message) {
@@ -25,6 +35,7 @@ class JsonlBridge extends EventEmitter {
     this.pending = new Map();
     this.nextId = 1;
     this.stderr = [];
+    this.methods = null;
   }
 
   get running() {
@@ -57,12 +68,48 @@ class JsonlBridge extends EventEmitter {
         diagnostic || `Arforge Bridge 已退出（code ${String(code)}）`
       );
     });
-    await this.request("health", {}, 10000);
+    try {
+      const description = await this.request("protocol.describe", {}, 10000);
+      const advertised = Array.isArray(description?.methods)
+        ? new Set(description.methods.filter((method) => typeof method === "string"))
+        : new Set();
+      const missing = REQUIRED_METHODS.filter((method) => !advertised.has(method));
+      if (
+        !description ||
+        description.runtime !== "typescript" ||
+        description.protocol !== PROTOCOL ||
+        missing.length > 0
+      ) {
+        throw new BridgeError(
+          missing.length > 0 ? "BRIDGE_CAPABILITIES_UNSUPPORTED" : "BRIDGE_RUNTIME_UNSUPPORTED",
+          missing.length > 0
+            ? `Arforge Bridge 缺少必需能力：${missing.join(", ")}`
+            : "Arforge Bridge 不是受支持的 TypeScript 运行时"
+        );
+      }
+      this.methods = advertised;
+      const health = await this.request("health", {}, 10000);
+      if (!health || health.runtime !== "typescript" || health.status !== "ok") {
+        throw new BridgeError(
+          "BRIDGE_RUNTIME_UNSUPPORTED",
+          "Arforge Bridge 健康检查未确认 TypeScript 运行时"
+        );
+      }
+      return health;
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
   }
 
   request(method, params = {}, timeoutMs = this.requestTimeoutMs) {
     if (!this.child || !this.child.stdin || this.child.killed) {
       return Promise.reject(new BridgeError("BRIDGE_UNAVAILABLE", "Arforge Bridge 未运行"));
+    }
+    if (this.methods && !this.methods.has(method)) {
+      return Promise.reject(
+        new BridgeError("BRIDGE_METHOD_UNAVAILABLE", `当前 Bridge 未宣布能力：${method}`)
+      );
     }
     const id = this.nextId++;
     const request = { protocol: PROTOCOL, version: VERSION, id, method, params };
@@ -88,6 +135,7 @@ class JsonlBridge extends EventEmitter {
   stop() {
     const child = this.child;
     this.child = null;
+    this.methods = null;
     this._rejectPending("BRIDGE_STOPPED", "Arforge Bridge 已停止");
     if (!child || child.killed) return Promise.resolve();
     return new Promise((resolve) => {
@@ -110,7 +158,11 @@ class JsonlBridge extends EventEmitter {
     }
     if (value && value.event === true) {
       if (value.protocol === PROTOCOL && value.version === VERSION) {
-        this.emit("event", value);
+        // Responses and unsolicited events can arrive in the same stdout
+        // chunk. Defer event delivery to the microtask queue so a successful
+        // chat.start response can publish its operation id before clients
+        // route the first operation.started event.
+        queueMicrotask(() => this.emit("event", value));
       }
       return;
     }
@@ -134,6 +186,7 @@ class JsonlBridge extends EventEmitter {
 
   _close(code, message) {
     this.child = null;
+    this.methods = null;
     this._rejectPending(code, message);
     this.emit("closed", new BridgeError(code, message));
   }

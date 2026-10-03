@@ -8,14 +8,23 @@ import { PermissionV2 } from "@arforge-ai/core/permission"
 import { Project } from "@arforge-ai/core/project"
 import { ProjectTable } from "@arforge-ai/core/project/sql"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Location } from "@arforge-ai/core/location"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { SessionTodo } from "@arforge-ai/core/session/todo"
 import { TodoWriteTool } from "@arforge-ai/core/tool/todowrite"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 const sessionID = SessionV2.ID.make("ses_todowrite_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -48,6 +57,7 @@ const it = testEffect(
     [
       [PermissionV2.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, current],
     ],
   ),
 )
@@ -99,7 +109,9 @@ describe("TodoWriteTool", () => {
           content: [{ type: "text", text: JSON.stringify(todoList, null, 2) }],
         },
       })
-      expect(assertions).toMatchObject([{ sessionID, action: "todowrite", resources: ["*"], save: ["*"] }])
+      expect(assertions).toMatchObject([
+        { sessionID, agent: "build", action: "todowrite", resources: ["*"], forceAsk: true },
+      ])
       expect(yield* service.get(sessionID)).toEqual(todoList)
     }),
   )
@@ -116,10 +128,12 @@ describe("TodoWriteTool", () => {
         yield* executeTool(registry, call([{ content: "blocked", status: "completed", priority: "high" }])),
       ).toEqual({
         type: "error",
-        value: "Unable to update todos",
+        value: "Permission denied for todowrite: *",
       })
       expect(yield* service.get(sessionID)).toEqual([{ content: "keep", status: "pending", priority: "low" }])
-      expect(assertions).toMatchObject([{ sessionID, action: "todowrite", resources: ["*"], save: ["*"] }])
+      expect(assertions).toMatchObject([
+        { sessionID, agent: "build", action: "todowrite", resources: ["*"], forceAsk: true },
+      ])
     }),
   )
 })

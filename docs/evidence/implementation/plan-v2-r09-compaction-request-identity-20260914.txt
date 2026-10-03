@@ -1,0 +1,31 @@
+Command: bun test test/session-runner.test.ts --test-name-pattern "compaction|Compaction|compression" --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+15 pass
+187 filtered out
+0 fail
+70 expect() calls
+Ran 15 tests across 1 file. [10.24s]
+
+Covered:
+- automatic/proactive and provider-overflow compaction on the formal SessionRunner;
+- committed RequestPrepared envelope digest and final transmission equality;
+- runID/turn_step/attempt identity in the summary request envelope;
+- request persistence failure, changed-row, incomplete summary and billing guards;
+- published settlement recovery and no duplicate summary request.
+
+Command: bun test test/context-surface.test.ts --timeout 30000 --rerun-every
+Exit: 0
+12 pass; 0 fail; 68 expect() calls.
+
+Command: bun test test/session/compaction-checkpoint.test.ts --timeout 30000 --rerun-every
+Exit: 0
+5 pass; 0 fail; 21 expect() calls.
+
+Command: bun test test/session-compaction.test.ts --timeout 30000 --rerun-every
+Exit: 0
+3 pass; 0 fail; 8 expect() calls.
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit

@@ -279,6 +279,33 @@ describe("layout workspace helpers", () => {
     ).toEqual({ server: serverKey("https://debian.example") })
   })
 
+  test("does not read the active selection after closing unmounts its owner", () => {
+    let closed = false
+    const selected = {
+      get server() {
+        if (closed) throw new Error("stale selection")
+        return serverKey("sidecar")
+      },
+      get directory() {
+        if (closed) throw new Error("stale selection")
+        return "C:\\workspace"
+      },
+    }
+
+    expect(
+      closeHomeProject(
+        selected,
+        serverKey("sidecar"),
+        {
+          close: () => {
+            closed = true
+          },
+        },
+        "C:\\workspace",
+      ),
+    ).toEqual({ server: serverKey("sidecar") })
+  })
+
   test("defers home project navigation until its server is active", () => {
     expect(
       homeProjectNavigation(serverKey("sidecar"), serverKey("https://debian.example"), "/YW1hem9u/session"),

@@ -14,12 +14,14 @@ import grillMeContent from "./skill/grill-me.md" with { type: "text" }
 import openspecContent from "./skill/openspec.md" with { type: "text" }
 import trellisContent from "./skill/trellis.md" with { type: "text" }
 import superpowersContent from "./skill/superpowers.md" with { type: "text" }
+import visionToolsContent from "./skill/vision-tools.md" with { type: "text" }
 
 export const CustomizeArforgeContent = customizeArforgeContent
 
-// Capability skills ship with the Python runtime bundle (dev checkout or the
-// packaged desktop resources). Registering them as a directory source keeps a
-// single upstream copy while making them routable by SkillGuidance.
+// Capability skills ship with the repository/resource skill bundle (dev
+// checkout or an explicitly configured packaged resource root). Registering
+// them as a directory source keeps a single upstream copy while making them
+// routable by SkillGuidance without starting or requiring Python.
 function bundledAgentSkillsRoot(): string | undefined {
   const runtimeRoot = process.env.ARFORGE_AGENT_RUNTIME_ROOT || findDevelopmentRuntimeRoot(process.cwd())
   if (!runtimeRoot) return
@@ -56,6 +58,12 @@ const developmentSkills = [
       "Applies disciplined software delivery methods: proportionate design, test-first implementation, systematic debugging, code review, and fresh verification.",
     content: superpowersContent,
   },
+  {
+    name: "vision-tools",
+    description:
+      "Converts images into text evidence before reasoning via the vision evidence pipeline (glance, ground, detect, trace, pixel_diff, dominant_colors as steps). Mandatory for any task that requires seeing an image.",
+    content: visionToolsContent,
+  },
 ] as const
 
 export const Plugin = define({
@@ -87,9 +95,10 @@ export const Plugin = define({
           }),
         )
       }
-      // Full-capability skills (design-taste-frontend and friends) are kept in
-      // the Python bundle; directory-source loading reuses the same copy and
-      // silently no-ops when the runtime root is unavailable.
+      // Full-capability skills (design-taste-frontend and friends) remain in
+      // the shared resource bundle; directory-source loading reuses the same
+      // copy and silently no-ops when the explicitly configured root is
+      // unavailable.
       const bundledRoot = bundledAgentSkillsRoot()
       if (bundledRoot) {
         draft.source(

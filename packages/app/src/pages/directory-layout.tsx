@@ -2,7 +2,7 @@ import { DataProvider } from "@arforge-ai/session-ui/context"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@arforge-ai/core/util/encode"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
-import { type Accessor, createEffect, createMemo, createResource, onCleanup, type ParentProps, Show } from "solid-js"
+import { type Accessor, createEffect, createMemo, createResource, type ParentProps, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { LocalProvider } from "@/context/local"
 import { SDKProvider } from "@/context/sdk"
@@ -12,6 +12,7 @@ import { Schema } from "effect"
 import type { ServerConnection } from "@/context/server"
 import { sessionHref } from "@/utils/session-route"
 import { useServerSync } from "@/context/server-sync"
+import { createSessionPin } from "@/pages/session/session-pin"
 
 export function DirectoryDataProvider(
   props: ParentProps<{
@@ -70,12 +71,7 @@ export function DirectoryDataProvider(
         .catch(() => {}),
   )
 
-  createEffect(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-    serverSync().session.pin(sessionID)
-    onCleanup(() => serverSync().session.unpin(sessionID))
-  })
+  createSessionPin(() => serverSync().session, () => params.id)
 
   return (
     <Show when={directory()} keyed>

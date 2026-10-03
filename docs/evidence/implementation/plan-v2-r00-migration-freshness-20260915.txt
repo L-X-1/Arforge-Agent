@@ -1,0 +1,27 @@
+R00 migration ledger freshness volatile-output boundary fix (2026-09-15)
+
+Changed:
+  file: script/arforge-python-dependencies-ledger.ts
+  rule: exclude Playwright test-results and playwright-report directories from dependency source scans
+  reason: generated traces/reports are deleted or rewritten between audits and are not stable migration inputs
+
+Tests:
+  command: D:\bun\bin\bun.exe test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-dependencies-ledger.test.ts --rerun-every
+  result: 5 pass / 0 fail / 14 expect() calls / exit 0
+
+Regenerated dependency ledger:
+  command: D:\bun\bin\bun.exe run script/arforge-python-dependencies-ledger.ts generate-python-dependencies-ledger --root . --write
+  result: scanned_file_count=5085, dependency_leaf_count=6708, asset_count=6, exit 0
+
+Freshness:
+  command: D:\bun\bin\bun.exe run audit:migration-freshness
+  result: valid=true; all seven checks valid
+
+Python consumer audit:
+  command: D:\bun\bin\bun.exe run audit:python-consumers
+  result: valid=true; remaining_consumer_count=0
+
+Safety:
+  - no product runtime or user data changed
+  - temporary Playwright output is excluded only from the static dependency ledger
+  - full OS sandbox remains post-R30

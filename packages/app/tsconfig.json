@@ -21,6 +21,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "package.json"],
+  "include": ["src", "package.json", "e2e/fixtures/office-documents.ts"],
   "exclude": ["dist", "ts-dist"]
 }

@@ -1,7 +1,9 @@
 import type { SessionMessageInfo } from "@arforge-ai/client/promise"
+import type { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 
 export type PrimaryDeliveryArtifactInfo = {
   artifactID: string
+  artifactRef?: AgentRuntime.OpaqueArtifactRef
   path: string
   displayName: string
   mime: string

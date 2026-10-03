@@ -11,6 +11,7 @@ import { isDefaultTitle as isDefaultTerminalTitle } from "@/context/terminal-tit
 import { useTerminal, type LocalPTY } from "@/context/terminal"
 import { useLanguage } from "@/context/language"
 import { focusTerminalById } from "@/pages/session/helpers"
+import { terminalPanelOperationPending, type TerminalPanelAction } from "@/pages/session/terminal-panel-operations"
 
 export function SortableTerminalTabV2(props: {
   terminal: LocalPTY
@@ -38,6 +39,8 @@ export function SortableTerminalTabV2(props: {
   let input: HTMLInputElement | undefined
   let blurFrame: number | undefined
   let editRequested = false
+  let disposed = false
+  const busy = (action: TerminalPanelAction) => terminalPanelOperationPending(terminal.pending, action, props.terminal.id)
 
   const isDefaultTitle = () => {
     const number = props.terminal.titleNumber
@@ -55,12 +58,11 @@ export function SortableTerminalTabV2(props: {
     return language.t("terminal.title")
   }
 
-  const close = () => {
-    const count = terminal.all().length
-    void terminal.close(props.terminal.id)
-    if (count === 1) {
-      props.onClose?.()
-    }
+  const close = async () => {
+    if (busy("close")) return
+    const ops = terminal.bind()
+    await ops.close(props.terminal.id)
+    if (!disposed && terminal.all().length === 0) props.onClose?.()
   }
 
   const focus = () => {
@@ -79,19 +81,26 @@ export function SortableTerminalTabV2(props: {
       e.preventDefault()
     }
 
+    if (busy("rename")) return
     setStore("blurEnabled", false)
     setStore("title", props.terminal.title)
     setStore("editing", true)
   }
 
-  const save = () => {
-    if (!store.blurEnabled) return
-
+  const save = async () => {
+    if (!store.blurEnabled || busy("rename")) return
     const value = store.title.trim()
-    if (value && value !== props.terminal.title) {
-      terminal.update({ id: props.terminal.id, title: value })
+    if (!value || value === props.terminal.title) {
+      setStore("editing", false)
+      return
     }
-    setStore("editing", false)
+    const id = props.terminal.id
+    const ops = terminal.bind()
+    setStore("blurEnabled", false)
+    await ops.update({ id, title: value })
+    if (disposed) return
+    if (props.terminal.id === id && props.terminal.title === value) setStore("editing", false)
+    else setStore("blurEnabled", true)
   }
 
   const keydown = (e: KeyboardEvent) => {
@@ -113,7 +122,7 @@ export function SortableTerminalTabV2(props: {
   }
 
   createEffect(() => {
-    if (!store.editing) return
+    if (!store.editing || busy("rename")) return
     if (!input) return
     input.focus()
     input.select()
@@ -125,6 +134,7 @@ export function SortableTerminalTabV2(props: {
   })
 
   onCleanup(() => {
+    disposed = true
     if (blurFrame === undefined) return
     cancelAnimationFrame(blurFrame)
   })
@@ -159,6 +169,7 @@ export function SortableTerminalTabV2(props: {
                     e.stopPropagation()
                     close()
                   }}
+                  disabled={busy("close")}
                   aria-label={language.t("terminal.close")}
                 />
               }
@@ -172,6 +183,8 @@ export function SortableTerminalTabV2(props: {
                 <input
                   ref={input}
                   type="text"
+                  disabled={busy("rename")}
+                  aria-busy={busy("rename")}
                   value={store.title}
                   onInput={(e) => setStore("title", e.currentTarget.value)}
                   onBlur={save}
@@ -196,11 +209,11 @@ export function SortableTerminalTabV2(props: {
                     requestAnimationFrame(() => edit())
                   }}
                 >
-                  <DropdownMenu.Item onSelect={() => (editRequested = true)}>
+                  <DropdownMenu.Item disabled={busy("rename")} onSelect={() => (editRequested = true)}>
                     <Icon name="edit" class="w-4 h-4 mr-2" />
                     {language.t("common.rename")}
                   </DropdownMenu.Item>
-                  <DropdownMenu.Item onSelect={close}>
+                  <DropdownMenu.Item disabled={busy("close")} onSelect={close}>
                     <Icon name="close" class="w-4 h-4 mr-2" />
                     {language.t("common.close")}
                   </DropdownMenu.Item>
@@ -234,6 +247,7 @@ export function SortableTerminalTabV2(props: {
                     e.stopPropagation()
                     close()
                   }}
+                  disabled={busy("close")}
                   aria-label={language.t("terminal.close")}
                 />
               }
@@ -254,6 +268,8 @@ export function SortableTerminalTabV2(props: {
                 <input
                   ref={input}
                   type="text"
+                  disabled={busy("rename")}
+                  aria-busy={busy("rename")}
                   value={store.title}
                   onInput={(e) => setStore("title", e.currentTarget.value)}
                   onBlur={save}
@@ -273,8 +289,8 @@ export function SortableTerminalTabV2(props: {
                 requestAnimationFrame(() => edit())
               }}
             >
-              <MenuV2.Item onSelect={() => (editRequested = true)}>{language.t("common.rename")}</MenuV2.Item>
-              <MenuV2.Item onSelect={close}>{language.t("common.close")}</MenuV2.Item>
+              <MenuV2.Item disabled={busy("rename")} onSelect={() => (editRequested = true)}>{language.t("common.rename")}</MenuV2.Item>
+              <MenuV2.Item disabled={busy("close")} onSelect={close}>{language.t("common.close")}</MenuV2.Item>
             </MenuV2.Context.Content>
           </MenuV2.Context.Portal>
         </MenuV2.Context>

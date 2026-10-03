@@ -1,15 +1,20 @@
 export * as LearningV2 from "./learning"
 
 import { Learning } from "@arforge-ai/schema/learning"
-import { and, desc, eq, gte } from "drizzle-orm"
+import { and, desc, eq, gte, inArray } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { Database } from "./database/database"
 import { makeLocationNode } from "./effect/app-node"
+import { ExperienceEvidenceTable } from "./experience-store/sql"
 import { Location } from "./location"
 import { redact } from "./redact"
 import { LearningOutcomePatternTable, LearningOutcomeTable, LearningPatternTable } from "./learning/sql"
+import { DurableAction } from "./runtime/durable-action"
+import { DurableRun } from "./runtime/durable-run"
+import * as RuntimeEvaluation from "./runtime/evaluation"
 import { SessionSchema } from "./session/schema"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 
 export const OutcomeID = Learning.OutcomeID
 export type OutcomeID = Learning.OutcomeID
@@ -37,6 +42,11 @@ export class SyncLimitError extends Schema.TaggedErrorClass<SyncLimitError>()("L
   limit: Schema.Int,
 }) {}
 
+export class InvalidVerifiedOutcomeError extends Schema.TaggedErrorClass<InvalidVerifiedOutcomeError>()(
+  "Learning.InvalidVerifiedOutcomeError",
+  { reason: Schema.String },
+) {}
+
 export interface RecordInput {
   readonly sessionID?: SessionSchema.ID
   readonly turnIndex?: number
@@ -58,6 +68,16 @@ export interface RecordInput {
   readonly fingerprint?: string
 }
 
+export interface VerifiedRecordInput extends Omit<RecordInput, "success"> {
+  readonly runID: string
+  readonly actionID: string
+  readonly evaluationID: string
+  readonly evidenceIDs: ReadonlyArray<string>
+  readonly terminal: true
+  readonly verifierPassed: boolean
+  readonly outcome: "success" | "failure" | "partial"
+}
+
 export interface DogfoodCandidate {
   readonly task: string
   readonly success: boolean
@@ -69,6 +89,8 @@ export interface DogfoodCandidate {
 
 export interface Interface {
   readonly record: (input: RecordInput) => Effect.Effect<Outcome>
+  /** Durable outcome mapping; only this path may produce reusable experience evidence. */
+  readonly recordVerified: (input: VerifiedRecordInput) => Effect.Effect<Outcome, InvalidVerifiedOutcomeError>
   readonly undo: (outcomeID: OutcomeID) => Effect.Effect<UndoResult>
   readonly status: () => Effect.Effect<Status>
   readonly context: (query: string) => Effect.Effect<string>
@@ -91,24 +113,58 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
+    const runs = yield* DurableRun.Service
+    const actions = yield* DurableAction.Service
+    const evaluations = yield* RuntimeEvaluation.Service
     const location = yield* Location.Service
     const projectID = String(location.project.id)
     const workspacePath = canonicalPath(location.directory)
-    const scope = and(
-      eq(LearningOutcomeTable.project_id, projectID),
-      eq(LearningOutcomeTable.workspace_path, workspacePath),
-    )
-    const patternScope = and(
-      eq(LearningPatternTable.project_id, projectID),
-      eq(LearningPatternTable.workspace_path, workspacePath),
-    )
+    const currentOwnership = Effect.gen(function* () {
+      const principal = yield* Database.CurrentPrincipal
+      return {
+        tenantID: principal?.tenantID ?? "ten_local",
+        userID: principal?.userID ?? "usr_local",
+      }
+    })
+    const outcomeScope = (ownership: { readonly tenantID: string; readonly userID: string }) =>
+      and(
+        eq(LearningOutcomeTable.tenant_id, ownership.tenantID),
+        eq(LearningOutcomeTable.owner_user_id, ownership.userID),
+        eq(LearningOutcomeTable.project_id, projectID),
+        eq(LearningOutcomeTable.workspace_path, workspacePath),
+      )
+    const patternScope = (ownership: { readonly tenantID: string; readonly userID: string }) =>
+      and(
+        eq(LearningPatternTable.tenant_id, ownership.tenantID),
+        eq(LearningPatternTable.owner_user_id, ownership.userID),
+        eq(LearningPatternTable.project_id, projectID),
+        eq(LearningPatternTable.workspace_path, workspacePath),
+      )
 
-    const record: Interface["record"] = Effect.fn("Learning.record")(function* (input) {
+    type PersistInput = RecordInput & {
+      readonly runID?: string
+      readonly actionID?: string
+      readonly evaluationID?: string
+      readonly evidenceIDs?: ReadonlyArray<string>
+      readonly terminal?: boolean
+      readonly verifierPassed?: boolean
+    }
+
+    const persist = Effect.fn("Learning.persist")(function* (input: PersistInput) {
+      const ownership = yield* currentOwnership
       const row = yield* db
         .insert(LearningOutcomeTable)
         .values({
+          tenant_id: ownership.tenantID,
+          owner_user_id: ownership.userID,
           id: OutcomeID.create(),
           session_id: input.sessionID,
+          run_id: input.runID ?? null,
+          action_id: input.actionID ?? null,
+          evaluation_id: input.evaluationID ?? null,
+          evidence_ids: input.evidenceIDs ?? [],
+          terminal: input.terminal ?? null,
+          verifier_passed: input.verifierPassed ?? null,
           project_id: projectID,
           workspace_path: workspacePath,
           turn_index: boundedInt(input.turnIndex, 0, Number.MAX_SAFE_INTEGER),
@@ -143,7 +199,7 @@ const layer = Layer.effect(
           .from(LearningPatternTable)
           .where(
             and(
-              patternScope,
+              patternScope(ownership),
               eq(LearningPatternTable.type, "failure"),
               eq(LearningPatternTable.description, description),
             ),
@@ -158,13 +214,15 @@ const layer = Layer.effect(
                 confidence: confidence(existing.frequency + 1),
                 time_updated: Date.now(),
               })
-              .where(eq(LearningPatternTable.id, existing.id))
+              .where(and(patternScope(ownership), eq(LearningPatternTable.id, existing.id)))
               .returning()
               .get()
               .pipe(Effect.orDie)
           : yield* db
               .insert(LearningPatternTable)
               .values({
+                tenant_id: ownership.tenantID,
+                owner_user_id: ownership.userID,
                 id: PatternID.create(),
                 project_id: projectID,
                 workspace_path: workspacePath,
@@ -179,7 +237,12 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
         yield* db
           .insert(LearningOutcomePatternTable)
-          .values({ outcome_id: row.id, pattern_id: pattern.id })
+          .values({
+            tenant_id: ownership.tenantID,
+            owner_user_id: ownership.userID,
+            outcome_id: row.id,
+            pattern_id: pattern.id,
+          })
           .onConflictDoNothing()
           .run()
           .pipe(Effect.orDie)
@@ -187,18 +250,166 @@ const layer = Layer.effect(
       return toOutcome(row)
     })
 
+    // Public telemetry can never mint verified/reusable authority. Durable
+    // provenance is accepted only by recordVerified after canonical loading.
+    const record: Interface["record"] = Effect.fn("Learning.record")(function* (input) {
+      return yield* persist({
+        ...input,
+        runID: undefined,
+        actionID: undefined,
+        evaluationID: undefined,
+        evidenceIDs: undefined,
+        terminal: undefined,
+        verifierPassed: undefined,
+      })
+    })
+
+    const recordVerified: Interface["recordVerified"] = Effect.fn("Learning.recordVerified")(function* (input) {
+      const references = [input.runID, input.actionID, input.evaluationID]
+      if (references.some((value) => !value.trim()) || input.evidenceIDs.length === 0)
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "verified outcomes require run, action, evaluation, and at least one evidence reference",
+        })
+      if (
+        !input.runID.startsWith("run_") ||
+        !input.actionID.startsWith("act_") ||
+        !input.evaluationID.startsWith("eva_") ||
+        input.evidenceIDs.some((id) => !id.startsWith("evd_"))
+      )
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "verified outcome references have invalid durable ID prefixes",
+        })
+      if (!input.terminal)
+        return yield* new InvalidVerifiedOutcomeError({ reason: "verified outcomes require a terminal run" })
+      if (input.outcome === "success" && !input.verifierPassed)
+        return yield* new InvalidVerifiedOutcomeError({ reason: "successful outcomes require verifierPassed=true" })
+      const run = yield* runs
+        .load(AgentRuntime.RunID.make(input.runID))
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new InvalidVerifiedOutcomeError({ reason: `verified outcome Run is unavailable: ${String(error)}` }),
+          ),
+        )
+      const terminal = run.run.status === "completed" || run.run.status === "failed" || run.run.status === "cancelled"
+      if (!terminal)
+        return yield* new InvalidVerifiedOutcomeError({ reason: "verified outcomes require a terminal durable Run" })
+      if (input.outcome === "success" && run.run.status !== "completed")
+        return yield* new InvalidVerifiedOutcomeError({ reason: "successful outcomes require a completed durable Run" })
+      const action = yield* actions
+        .load(AgentRuntime.ActionID.make(input.actionID))
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new InvalidVerifiedOutcomeError({ reason: `verified outcome Action is unavailable: ${String(error)}` }),
+          ),
+        )
+      if (action.action.runID !== run.run.id || action.action.status !== "settled" || !action.observation)
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "verified outcomes require a settled Action/Observation belonging to the durable Run",
+        })
+      if (input.outcome === "success" && action.observation.status !== "succeeded")
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "successful outcomes require a succeeded durable Action observation",
+        })
+      const evaluation = yield* evaluations.get(AgentRuntime.EvaluationID.make(input.evaluationID))
+      if (!evaluation || evaluation.runID !== run.run.id)
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "verified outcomes require a canonical EvaluationResult for the same Run",
+        })
+      if (input.outcome === "success" && (!evaluation.passed || input.verifierPassed !== true))
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "successful outcomes require a passed canonical EvaluationResult",
+        })
+      const ownership = yield* currentOwnership
+      const expectedEvidenceIDs = [...new Set(input.evidenceIDs)].toSorted()
+      const evidenceRows = yield* db
+        .select()
+        .from(ExperienceEvidenceTable)
+        .where(
+          and(
+            eq(ExperienceEvidenceTable.tenant_id, ownership.tenantID),
+            eq(ExperienceEvidenceTable.owner_user_id, ownership.userID),
+            inArray(
+              ExperienceEvidenceTable.id,
+              expectedEvidenceIDs.map((id) => AgentRuntime.EvidenceID.make(id)),
+            ),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      if (evidenceRows.length !== expectedEvidenceIDs.length)
+        return yield* new InvalidVerifiedOutcomeError({ reason: "verified outcome Evidence is not durably stored" })
+      for (const row of evidenceRows) {
+        let evidence: AgentRuntime.Evidence
+        try {
+          evidence = Schema.decodeUnknownSync(AgentRuntime.Evidence)(row.record)
+        } catch {
+          return yield* new InvalidVerifiedOutcomeError({ reason: "stored Evidence cannot be decoded" })
+        }
+        if (
+          evidence.runID !== run.run.id ||
+          evidence.actionID !== action.action.id ||
+          evidence.verificationStatus !== "verified" ||
+          (evidence.trust !== "verified" && evidence.trust !== "trusted") ||
+          evidence.instructionAllowed ||
+          !evidence.observationIDs?.some((id) => id === action.observation!.id)
+        )
+          return yield* new InvalidVerifiedOutcomeError({
+            reason: "stored Evidence is not verifier-backed by the same Run/Action/Observation",
+          })
+      }
+      const evaluationEvidenceIDs = evaluation.evidenceIDs.map(String).toSorted()
+      if (evaluationEvidenceIDs.join("\u0000") !== expectedEvidenceIDs.join("\u0000"))
+        return yield* new InvalidVerifiedOutcomeError({
+          reason: "verified outcome Evidence does not match the canonical EvaluationResult",
+        })
+      if (input.fingerprint) {
+        const replay = yield* db
+          .select()
+          .from(LearningOutcomeTable)
+          .where(and(outcomeScope(ownership), eq(LearningOutcomeTable.fingerprint, input.fingerprint)))
+          .get()
+          .pipe(Effect.orDie)
+        if (replay) {
+          if (
+            replay.run_id !== input.runID ||
+            replay.action_id !== input.actionID ||
+            replay.evaluation_id !== input.evaluationID ||
+            [...(replay.evidence_ids ?? [])].toSorted().join("\u0000") !== expectedEvidenceIDs.join("\u0000") ||
+            replay.success !== (input.outcome === "success")
+          )
+            return yield* new InvalidVerifiedOutcomeError({
+              reason: "verified outcome idempotency key already belongs to different provenance",
+            })
+          return toOutcome(replay)
+        }
+      }
+      return yield* persist({
+        ...input,
+        success: input.outcome === "success",
+      })
+    })
+
     const undo: Interface["undo"] = Effect.fn("Learning.undo")(function* (outcomeID) {
+      const ownership = yield* currentOwnership
       const outcome = yield* db
         .select()
         .from(LearningOutcomeTable)
-        .where(and(eq(LearningOutcomeTable.id, outcomeID), scope))
+        .where(and(eq(LearningOutcomeTable.id, outcomeID), outcomeScope(ownership)))
         .get()
         .pipe(Effect.orDie)
       if (!outcome) return UndoResult.make({ outcomeID, deleted: false, linkedPatterns: [] })
       const links = yield* db
         .select({ patternID: LearningOutcomePatternTable.pattern_id })
         .from(LearningOutcomePatternTable)
-        .where(eq(LearningOutcomePatternTable.outcome_id, outcomeID))
+        .where(
+          and(
+            eq(LearningOutcomePatternTable.tenant_id, ownership.tenantID),
+            eq(LearningOutcomePatternTable.owner_user_id, ownership.userID),
+            eq(LearningOutcomePatternTable.outcome_id, outcomeID),
+          ),
+        )
         .all()
         .pipe(Effect.orDie)
       const actions: Array<{ patternID: PatternID; action: "decremented" | "deleted" }> = []
@@ -209,7 +420,7 @@ const layer = Layer.effect(
               const pattern = yield* tx
                 .select()
                 .from(LearningPatternTable)
-                .where(and(eq(LearningPatternTable.id, link.patternID), patternScope))
+                .where(and(eq(LearningPatternTable.id, link.patternID), patternScope(ownership)))
                 .get()
               if (!pattern) continue
               if (pattern.frequency > 1) {
@@ -220,15 +431,21 @@ const layer = Layer.effect(
                     confidence: confidence(pattern.frequency - 1),
                     time_updated: Date.now(),
                   })
-                  .where(eq(LearningPatternTable.id, pattern.id))
+                  .where(and(patternScope(ownership), eq(LearningPatternTable.id, pattern.id)))
                   .run()
                 actions.push({ patternID: pattern.id, action: "decremented" })
               } else {
-                yield* tx.delete(LearningPatternTable).where(eq(LearningPatternTable.id, pattern.id)).run()
+                yield* tx
+                  .delete(LearningPatternTable)
+                  .where(and(patternScope(ownership), eq(LearningPatternTable.id, pattern.id)))
+                  .run()
                 actions.push({ patternID: pattern.id, action: "deleted" })
               }
             }
-            yield* tx.delete(LearningOutcomeTable).where(eq(LearningOutcomeTable.id, outcomeID)).run()
+            yield* tx
+              .delete(LearningOutcomeTable)
+              .where(and(outcomeScope(ownership), eq(LearningOutcomeTable.id, outcomeID)))
+              .run()
           }),
         )
         .pipe(Effect.orDie)
@@ -236,17 +453,18 @@ const layer = Layer.effect(
     })
 
     const status: Interface["status"] = Effect.fn("Learning.status")(function* () {
+      const ownership = yield* currentOwnership
       const outcomes = yield* db
         .select()
         .from(LearningOutcomeTable)
-        .where(scope)
+        .where(outcomeScope(ownership))
         .orderBy(desc(LearningOutcomeTable.time_created))
         .all()
         .pipe(Effect.orDie)
       const patterns = yield* db
         .select()
         .from(LearningPatternTable)
-        .where(patternScope)
+        .where(patternScope(ownership))
         .orderBy(desc(LearningPatternTable.frequency), desc(LearningPatternTable.time_updated))
         .all()
         .pipe(Effect.orDie)
@@ -289,10 +507,11 @@ const layer = Layer.effect(
     const context: Interface["context"] = Effect.fn("Learning.context")(function* (query) {
       const terms = new Set(tokenize(query))
       if (terms.size === 0) return ""
+      const ownership = yield* currentOwnership
       const patterns = yield* db
         .select()
         .from(LearningPatternTable)
-        .where(patternScope)
+        .where(patternScope(ownership))
         .orderBy(desc(LearningPatternTable.frequency), desc(LearningPatternTable.time_updated))
         .limit(100)
         .all()
@@ -300,7 +519,7 @@ const layer = Layer.effect(
       const outcomes = yield* db
         .select()
         .from(LearningOutcomeTable)
-        .where(scope)
+        .where(outcomeScope(ownership))
         .orderBy(desc(LearningOutcomeTable.time_created))
         .limit(100)
         .all()
@@ -348,12 +567,13 @@ const layer = Layer.effect(
     })
 
     const proposalCandidates: Interface["proposalCandidates"] = Effect.fn("Learning.proposalCandidates")(function* () {
+      const ownership = yield* currentOwnership
       const patterns = yield* db
         .select()
         .from(LearningPatternTable)
         .where(
           and(
-            patternScope,
+            patternScope(ownership),
             gte(LearningPatternTable.frequency, ProposalPolicy.minimumFrequency),
             gte(LearningPatternTable.confidence, ProposalPolicy.minimumConfidence),
           ),
@@ -367,6 +587,7 @@ const layer = Layer.effect(
 
     const syncDogfood: Interface["syncDogfood"] = Effect.fn("Learning.syncDogfood")(function* (candidates) {
       if (candidates.length > MaximumSync) return yield* new SyncLimitError({ limit: MaximumSync })
+      const ownership = yield* currentOwnership
       let imported = 0
       let skipped = 0
       let failedCandidates = 0
@@ -380,7 +601,7 @@ const layer = Layer.effect(
           const exists = yield* db
             .select({ id: LearningOutcomeTable.id })
             .from(LearningOutcomeTable)
-            .where(and(scope, eq(LearningOutcomeTable.fingerprint, fingerprint)))
+            .where(and(outcomeScope(ownership), eq(LearningOutcomeTable.fingerprint, fingerprint)))
             .get()
             .pipe(Effect.orDie)
           if (exists) {
@@ -404,14 +625,14 @@ const layer = Layer.effect(
       return SyncResult.make({ seen: candidates.length, imported, skipped, failedCandidates })
     })
 
-    return Service.of({ record, undo, status, context, proposalCandidates, syncDogfood })
+    return Service.of({ record, recordVerified, undo, status, context, proposalCandidates, syncDogfood })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Database.node, Location.node],
+  deps: [Database.node, Location.node, DurableRun.globalNode, DurableAction.globalNode, RuntimeEvaluation.node],
 })
 
 type OutcomeRow = typeof LearningOutcomeTable.$inferSelect
@@ -421,6 +642,12 @@ function toOutcome(row: OutcomeRow): Outcome {
   return Outcome.make({
     id: row.id,
     ...(row.session_id ? { sessionID: row.session_id } : {}),
+    ...(row.run_id ? { runID: row.run_id } : {}),
+    ...(row.action_id ? { actionID: row.action_id } : {}),
+    ...(row.evaluation_id ? { evaluationID: row.evaluation_id } : {}),
+    ...(row.evidence_ids ? { evidenceIDs: row.evidence_ids } : {}),
+    ...(row.terminal === null ? {} : { terminal: row.terminal }),
+    ...(row.verifier_passed === null ? {} : { verifierPassed: row.verifier_passed }),
     projectID: row.project_id,
     workspacePath: row.workspace_path,
     turnIndex: row.turn_index,

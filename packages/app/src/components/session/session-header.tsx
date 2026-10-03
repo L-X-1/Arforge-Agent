@@ -139,7 +139,13 @@ const showRequestError = (language: ReturnType<typeof useLanguage>, err: unknown
   })
 }
 
-export function SessionHeader() {
+export function SessionHeader(
+  props: {
+    executionRunning?: boolean
+    executionStepCount?: number
+    onOpenExecution?: () => void
+  } = {},
+) {
   const layout = useLayout()
   const sessionOperationsText = useSessionOperationsText()
   const command = useCommand()
@@ -249,6 +255,16 @@ export function SessionHeader() {
     operationsVisible: !!params.id,
     operationsLabel: sessionOperationsText().title,
     onOperationsOpen: () => openOperations(),
+    executionVisible: !!params.id,
+    executionRunning: props.executionRunning ?? false,
+    executionStepCount: props.executionStepCount ?? 0,
+    executionLabel:
+      language.locale() === "zh"
+        ? "查看执行过程"
+        : language.locale() === "zht"
+          ? "查看執行過程"
+          : "View execution process",
+    onExecutionOpen: props.onOpenExecution ?? (() => openOperations()),
   }))
 
   const selectApp = (app: OpenApp) => {
@@ -451,11 +467,12 @@ export function SessionHeader() {
                       <Tooltip placement="bottom" value={sessionOperationsText().title}>
                         <Button
                           variant="ghost"
-                          class="titlebar-icon w-8 h-6 p-0 box-border shrink-0"
+                          class="titlebar-icon w-8 xl:w-auto h-6 p-0 xl:px-2 box-border shrink-0"
                           onClick={openOperations}
                           aria-label={sessionOperationsText().title}
                         >
                           <Icon size="small" name="sliders" />
+                          <span class="hidden xl:inline text-11-medium">{sessionOperationsText().title}</span>
                         </Button>
                       </Tooltip>
                     </Show>
@@ -546,6 +563,11 @@ type SessionHeaderV2ActionsState = {
   operationsVisible: boolean
   operationsLabel: string
   onOperationsOpen: () => void
+  executionVisible: boolean
+  executionRunning: boolean
+  executionStepCount: number
+  executionLabel: string
+  onExecutionOpen: () => void
 }
 
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
@@ -553,16 +575,44 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
 
   return (
     <div class="flex items-center gap-2">
+      <Show when={props.state.executionVisible}>
+        <TooltipV2 class="shrink-0" placement="bottom" value={props.state.executionLabel}>
+          <IconButtonV2
+            type="button"
+            variant="ghost-muted"
+            size="large"
+            class="!w-auto min-w-9 shrink-0 gap-1.5 px-2"
+            state={props.state.executionRunning ? "pressed" : undefined}
+            onClick={props.state.onExecutionOpen}
+            aria-label={props.state.executionLabel}
+            icon={
+              <span class="flex items-center gap-1.5">
+                <span
+                  class="size-2 rounded-full bg-v2-icon-icon-muted"
+                  classList={{ "animate-pulse !bg-v2-icon-icon-accent": props.state.executionRunning }}
+                  aria-hidden="true"
+                />
+                <span class="text-[11px] font-[530]">{props.state.executionStepCount}</span>
+              </span>
+            }
+          />
+        </TooltipV2>
+      </Show>
       <Show when={props.state.operationsVisible}>
         <TooltipV2 class="shrink-0" placement="bottom" value={props.state.operationsLabel}>
           <IconButtonV2
             type="button"
             variant="ghost-muted"
             size="large"
-            class="!w-9 shrink-0"
+            class="!w-auto min-w-9 shrink-0 gap-1.5 px-2"
             onClick={props.state.onOperationsOpen}
             aria-label={props.state.operationsLabel}
-            icon={<IconV2 name="settings-gear" />}
+            icon={
+              <span class="flex items-center gap-1.5">
+                <IconV2 name="settings-gear" />
+                <span class="hidden xl:inline text-[11px] font-[530]">{props.state.operationsLabel}</span>
+              </span>
+            }
           />
         </TooltipV2>
       </Show>

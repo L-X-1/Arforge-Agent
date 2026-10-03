@@ -2,11 +2,11 @@ import { index, integer, primaryKey, sqliteTable, text } from "../database/diale
 import { OwnershipColumns } from "../identity/sql"
 
 /**
- * Canonical durable state for the preserved Python workflow orchestrator.
+ * Canonical durable state for the native TypeScript workflow orchestrator.
  *
- * Core owns the schema and migration lifecycle. The Python capability runtime
- * is the bounded writer that schedules graph nodes; App, Desktop, CLI and
- * Server reach it through the typed AgentCapability contract.
+ * Core owns the schema, migration lifecycle and bounded writer that schedules
+ * graph nodes. Historical Python code is only a migration/reference input;
+ * App, Desktop, CLI and Server use the typed AgentCapability contract.
  */
 export const WorkflowGraphRunTable = sqliteTable(
   "workflow_graph_runs",
@@ -48,7 +48,7 @@ export const WorkflowGraphNodeTable = sqliteTable(
     position: integer().notNull(),
     title: text().notNull(),
     kind: text().notNull(),
-    access: text().notNull().default("write"),
+    access: text().notNull().default("read"),
     status: text().notNull(),
     attempt: integer().notNull().default(0),
     max_attempts: integer().notNull().default(1),

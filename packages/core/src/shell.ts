@@ -194,7 +194,7 @@ export function args(file: string, command: string, cwd: string) {
       cwd,
     ]
   }
-  if (n === "cmd") return ["/c", command]
+  if (n === "cmd") return ["/d", "/s", "/c", `"${command}"`]
   if (ps(file)) return ["-NoProfile", "-Command", command]
   return ["-c", command]
 }

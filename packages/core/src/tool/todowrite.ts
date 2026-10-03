@@ -3,11 +3,11 @@ export * as TodoWriteTool from "./todowrite"
 import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
 import { SessionTodo } from "../session/todo"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact } from "./effect-semantics"
 
 export const name = "todowrite"
 
@@ -24,9 +24,8 @@ export const toModelOutput = (output: Output) => JSON.stringify(output.todos, nu
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const todos = yield* SessionTodo.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
@@ -35,10 +34,14 @@ const layer = Layer.effectDiscard(
             "Create and maintain a structured task list for the current coding session. Use it to track progress during multi-step work and keep todo statuses current.",
           input: Input,
           output: Output,
+          effects: majorImpact({
+            expectedArtifacts: ["session todo projection"],
+            successCriteria: ["the complete session-local todo list is replaced atomically"],
+          }),
           toModelOutput: ({ output }) => [{ type: "text", text: toModelOutput(output) }],
           execute: (input, context) =>
             Effect.gen(function* () {
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: ["*"],
                 save: ["*"],
@@ -48,7 +51,11 @@ const layer = Layer.effectDiscard(
               })
               yield* todos.update({ sessionID: context.sessionID, todos: input.todos })
               return { todos: input.todos }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: "Unable to update todos" }))),
+            }).pipe(
+              Effect.mapError(
+                (error) => Tool.toToolFailure(error) ?? new ToolFailure({ message: "Unable to update todos" }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
@@ -58,5 +65,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/todowrite",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, SessionTodo.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, SessionTodo.node],
 })

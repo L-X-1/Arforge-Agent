@@ -105,13 +105,29 @@ async function setup(page: Page) {
     }),
   )
   await page.route(`**/api/pty/${ptyID}/connect-token*`, (route) => {
+    const requestHeaders = route.request().headers()
+    const origin = requestHeaders.origin
+    if (route.request().method() === "OPTIONS") {
+      return route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": origin ?? "*",
+          ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+          "access-control-allow-methods": "POST,OPTIONS",
+          "access-control-allow-headers": requestHeaders["access-control-request-headers"] ?? "x-arforge-ticket",
+        },
+      })
+    }
     expect(route.request().headers()["x-arforge-ticket"]).toBe("1")
     const url = new URL(route.request().url())
     expect(url.searchParams.get("location[directory]")).toBe(directory)
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
+      headers: {
+        "access-control-allow-origin": origin ?? "*",
+        ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+      },
       body: JSON.stringify({ location: ptyLocation(), data: { ticket: "e2e-ticket", expires_in: 60 } }),
     })
   })

@@ -6,10 +6,13 @@
 // Used by:
 //   - test/lib/run-process.ts          (subprocess CLI tests)
 //   - test/server/httpapi-sdk.test.ts  (in-process SDK tests)
+import { Shell } from "@arforge-ai/core/shell"
+
 export function testProviderConfig(llmUrl: string) {
   return {
     formatter: false,
     lsp: false,
+    shell: Shell.gitbash() ?? "bash",
     provider: {
       test: {
         name: "Test",

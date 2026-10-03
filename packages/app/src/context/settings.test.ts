@@ -9,6 +9,8 @@ import {
   resolveNewLayoutDesigns,
   shouldDisplayTabsToast,
   shouldEnableNewLayout,
+  sansFontFamily,
+  sansUnsetDefault,
 } from "./settings"
 
 describe("layout transition", () => {
@@ -75,5 +77,20 @@ describe("layout transition", () => {
     expect(shouldEnableNewLayout("1.17.20", "1.17.21")).toBe(false)
     expect(shouldEnableNewLayout(undefined, "1.17.19")).toBe(false)
     expect(shouldEnableNewLayout("dev", "1.17.20")).toBe(false)
+  })
+})
+
+
+describe("V2 font preference defaults", () => {
+  test("uses the bundled UI family only for an unset preference", () => {
+    expect(sansUnsetDefault).toBe("Noto Sans SC")
+    expect(sansFontFamily(undefined)).toStartWith('"Noto Sans SC", ')
+  })
+
+  test("preserves explicit system and named preferences", () => {
+    expect(sansFontFamily("")).not.toContain("Noto Sans SC")
+    expect(sansFontFamily("   ")).not.toContain("Noto Sans SC")
+    expect(sansFontFamily("User Font")).toStartWith('"User Font", ')
+    expect(sansFontFamily("Noto Serif SC")).toStartWith('"Noto Serif SC", ')
   })
 })

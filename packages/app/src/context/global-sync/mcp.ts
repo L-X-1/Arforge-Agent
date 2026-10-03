@@ -1,7 +1,7 @@
 import type { McpServer } from "@arforge-ai/client/promise"
 
 export async function toggleMcp(input: {
-  status: McpServer["status"]["status"]
+  status: McpServer["status"]["status"] | "needs_approval"
   connect: () => Promise<void>
   disconnect: () => Promise<void>
   authenticate: () => Promise<void>
@@ -11,6 +11,7 @@ export async function toggleMcp(input: {
   await {
     connected: input.disconnect,
     needs_auth: input.authenticate,
+    needs_approval: input.connect,
     disabled: input.connect,
     failed: input.connect,
     needs_client_registration: input.connect,

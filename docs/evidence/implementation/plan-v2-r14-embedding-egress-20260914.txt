@@ -1,0 +1,58 @@
+Command: bun test test/runtime/embedding.test.ts --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14
+8 pass
+0 fail
+18 expect() calls
+
+Covered:
+- no transport when API backend is configured without explicit authorized request;
+- Egress denial before fetch;
+- explicit consent + authorized local HTTP fixture success;
+- bounded vector response and finite values;
+- remote 503 fallback retains egress=sent and localOnly=false;
+- pre-cancelled request fails before transport.
+
+Command: bun test test/code-retrieval.test.ts --timeout 30000 --rerun-every
+Exit: 0
+3 pass
+0 fail
+13 expect() calls
+
+Command: bun test test/memory.test.ts --timeout 30000 --rerun-every
+Exit: 0
+11 pass
+0 fail
+76 expect() calls
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun run typecheck (packages/schema)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun run typecheck (packages/protocol)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun run typecheck (packages/sdk/js)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun run script/generate.ts
+Exit: 0
+Regenerated packages/sdk/openapi.json and packages/sdk/js/src/v2/gen/*; MemorySemanticResults.localOnly is boolean.
+
+Command: bun x oxlint packages/core/src/runtime/embedding.ts packages/core/src/code-retrieval.ts packages/core/test/runtime/embedding.test.ts --quiet
+Exit: 0
+0 warnings
+0 errors
+
+Command: bun x oxlint packages/schema/src/memory.ts packages/core/src/memory.ts --quiet
+Exit: 0
+12 existing consistent-return/assertion warnings
+0 errors
+
+No real user database, credential, or external service was modified. HTTP tests used an isolated loopback fixture and a fixture-only key.

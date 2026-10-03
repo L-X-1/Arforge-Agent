@@ -300,6 +300,17 @@ export class PreparedRequest extends Schema.Class<PreparedRequest>("LLM.Prepared
   protocol: ProtocolID,
   model: ModelSchema,
   body: Schema.Unknown,
+  /** Actual encoded transport body, distinct from the protocol preview above.
+   * No headers/credentials are included. Content still requires the caller's
+   * privacy policy before persistence. Absent for unsupported transports. */
+  transmission: Schema.optional(
+    Schema.Struct({
+      transport: Schema.String,
+      body: Schema.Unknown,
+      /** Redacted endpoints cannot be treated as exact reconstruction inputs. */
+      endpoint: Schema.optional(Schema.Struct({ url: Schema.String, exact: Schema.Boolean })),
+    }),
+  ),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
 

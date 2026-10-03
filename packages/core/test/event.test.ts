@@ -4,7 +4,9 @@ import { EventV2 } from "@arforge-ai/core/event"
 import { Event } from "@arforge-ai/schema/event"
 import { Session } from "@arforge-ai/schema/session"
 import { SessionEvent } from "@arforge-ai/schema/session-event"
+import { SessionMessage } from "@arforge-ai/schema/session-message"
 import { SessionV1 } from "@arforge-ai/schema/session-v1"
+import { SessionDurable } from "@arforge-ai/schema/durable-event-manifest"
 import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
@@ -76,6 +78,13 @@ const DurableMessage = SessionV1.Event.MessageRemoved
 const durableData = (sessionID: Session.ID, text: string) => ({
   sessionID,
   messageID: SessionV1.MessageID.ascending(`msg_${text}`),
+})
+const HistoryMessage = SessionEvent.Synthetic
+const historyData = (sessionID: Session.ID, text: string) => ({
+  sessionID,
+  messageID: SessionMessage.ID.create(),
+  timestamp: DateTime.nowUnsafe(),
+  text,
 })
 
 const it = testEffect(
@@ -416,6 +425,147 @@ describe("EventV2", () => {
         .pipe(Effect.orDie)
 
       expect(rows.map((row) => row.seq)).toEqual([0, 1])
+    }),
+  )
+
+  it.effect("reads serialized rows for selected aggregates through the EventV2 owner", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const first = EventV2.ID.create()
+      const second = EventV2.ID.create()
+
+      yield* events.publish(SyncMessage, { id: first, text: "first" })
+      yield* events.publish(SyncMessage, { id: first, text: "second" })
+      yield* events.publish(SyncMessage, { id: second, text: "other" })
+      yield* events.publish(VersionedMessage, { id: first, text: "different event family" })
+
+      const rows = yield* EventV2.readSerialized(db, { aggregateIDs: [second, first, second] })
+      const sortedRows = rows.toSorted((left, right) =>
+        left.aggregateID === right.aggregateID
+          ? left.seq - right.seq
+          : left.aggregateID.localeCompare(right.aggregateID),
+      )
+      expect(rows.map((row) => [row.aggregateID, row.seq])).toEqual(sortedRows.map((row) => [row.aggregateID, row.seq]))
+      expect(rows.map((row) => row.id.startsWith("evt_")).every(Boolean)).toBe(true)
+      expect(rows.find((row) => row.aggregateID === first && row.seq === 1)?.data).toEqual({
+        id: first,
+        text: "second",
+      })
+
+      expect(yield* EventV2.readSerialized(db, { aggregateIDs: [EventV2.ID.create()] })).toEqual([])
+      expect(yield* EventV2.readSerialized(db, { aggregateIDs: [first], types: [] })).toEqual([])
+      expect(yield* EventV2.readSerialized(db, { aggregateIDs: [first], types: ["not-present.1"] })).toEqual([])
+      const selected = yield* EventV2.readSerialized(db, {
+        aggregateIDs: [first],
+        types: ["not-present.1", "test.sync.1", "test.sync.1"],
+      })
+      expect(selected).toEqual(rows.filter((row) => row.aggregateID === first && row.type === "test.sync.1"))
+      expect(yield* EventV2.readSerialized(db, { aggregateIDs: [first], types: ["test.versioned.1"] })).toEqual([])
+      expect(
+        (yield* EventV2.readSerialized(db, { aggregateIDs: [first], types: ["test.versioned.2"] })).map(
+          (row) => row.seq,
+        ),
+      ).toEqual([2])
+      expect(
+        String(yield* EventV2.readSerialized(db, { aggregateIDs: [first], types: [""] }).pipe(Effect.exit)),
+      ).toContain("event types")
+      const invalid = yield* EventV2.readSerialized(db, { aggregateIDs: [] }).pipe(Effect.exit)
+      expect(String(invalid)).toContain("aggregateID")
+    }),
+  )
+
+  it.effect("rejects a stale optimistic aggregate sequence without appending an event", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "first" })
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "second" })
+
+      const stale = yield* events
+        .publish(SyncMessage, { id: aggregateID, text: "stale-owner" }, { expectedSequence: 0 })
+        .pipe(Effect.exit)
+      const rows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, aggregateID))
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(String(stale)).toContain("expected sequence 0, found 1")
+      expect(rows.map((row) => row.seq)).toEqual([0, 1])
+    }),
+  )
+
+  it.effect("reads session history fail-closed on unknown tails, gaps, and excess fields", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const read = (aggregateID: Session.ID) =>
+        EventV2.readAggregate(db, {
+          aggregateID,
+          limit: 10,
+          strict: true,
+          manifest: SessionDurable,
+        })
+
+      const unknownTail = Session.ID.create()
+      yield* events.publish(HistoryMessage, historyData(unknownTail, "known"))
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: EventV2.ID.create(),
+          aggregate_id: unknownTail,
+          seq: 1,
+          type: "foreign.aggregate.event.1",
+          data: {},
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const unknownExit = yield* read(unknownTail).pipe(Effect.exit)
+      expect(String(unknownExit)).toContain("Unknown durable event type")
+
+      const gap = Session.ID.create()
+      yield* events.publish(HistoryMessage, historyData(gap, "first"))
+      const first = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, gap))
+        .get()
+        .pipe(Effect.orDie)
+      if (!first) return yield* Effect.die(new Error("expected first session event row"))
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: EventV2.ID.create(),
+          aggregate_id: gap,
+          seq: 2,
+          type: EventV2.versionedType(HistoryMessage.type, 1),
+          data: first.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const gapExit = yield* read(gap).pipe(Effect.exit)
+      expect(String(gapExit)).toContain("not contiguous")
+
+      const excess = Session.ID.create()
+      yield* events.publish(HistoryMessage, historyData(excess, "strict"))
+      const row = yield* db
+        .select({ id: EventTable.id, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, excess))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* Effect.die(new Error("expected session event row"))
+      yield* db
+        .update(EventTable)
+        .set({ data: { ...row.data, untrustedExtraField: true } })
+        .where(eq(EventTable.id, row.id))
+        .run()
+        .pipe(Effect.orDie)
+      const excessExit = yield* read(excess).pipe(Effect.exit)
+      expect(String(excessExit)).toContain("failed strict schema decoding")
     }),
   )
 
@@ -1094,6 +1244,32 @@ describe("EventV2", () => {
         .pipe(Effect.orDie)
 
       expect(row).toEqual({ seq: 0, ownerID: "owner-2" })
+    }),
+  )
+
+  it.effect("reads the exact committed publication and rejects mismatched receipts", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const receipt = yield* events.publish(SyncMessage, { id: "committed-receipt", text: "original" })
+      yield* events.publish(SyncMessage, { id: "committed-receipt", text: "newer" })
+      const stored = yield* EventV2.readCommitted(db, SyncMessage, receipt)
+      expect(stored.id).toBe(receipt.id)
+      expect(stored.seq).toBe(0)
+      expect(stored.data).toEqual({ id: "committed-receipt", text: "original" })
+      if (!receipt.durable) throw new Error("Expected a durable publication")
+      for (const candidate of [
+        { ...receipt, durable: undefined },
+        { ...receipt, id: EventV2.ID.create() },
+        { ...receipt, durable: { ...receipt.durable, seq: 1 } },
+        { ...receipt, durable: { ...receipt.durable, aggregateID: "another-aggregate" } },
+        { ...receipt, durable: { ...receipt.durable, version: 2 } },
+        { ...receipt, data: { ...receipt.data, text: "altered" } },
+      ]) {
+        const exit = yield* EventV2.readCommitted(db, SyncMessage, candidate).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+      }
+      expect(yield* EventV2.readCommitted(db, SyncMessage, receipt)).toEqual(stored)
     }),
   )
 

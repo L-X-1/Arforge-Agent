@@ -27,7 +27,8 @@ const decodeSessionID = Schema.decodeUnknownEffect(SessionV2.ID)
 export const sessionLocationLayer = Layer.effect(
   SessionLocationMiddleware,
   Effect.gen(function* () {
-    const { db } = yield* Database.Service
+    const database = yield* Database.Service
+    const { db } = database
     const locations = yield* LocationServiceMap.Service
 
     return SessionLocationMiddleware.of((effect) =>
@@ -63,6 +64,7 @@ export const sessionLocationLayer = Layer.effect(
               }),
             ),
           ),
+          Effect.provideService(Database.Service, database),
         )
       }),
     )

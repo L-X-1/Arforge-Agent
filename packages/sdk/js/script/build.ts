@@ -5,7 +5,9 @@ const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
 import { $ } from "bun"
+import { readFile, writeFile } from "node:fs/promises"
 import path from "path"
+import * as prettier from "prettier"
 
 import { createClient } from "@hey-api/openapi-ts"
 
@@ -71,7 +73,8 @@ await createClient({
   ],
 })
 
-const generatedTypes = await Bun.file("./src/v2/gen/types.gen.ts").text()
+const generatedTypesPath = "./src/v2/gen/types.gen.ts"
+const generatedTypes = await readFile(generatedTypesPath, "utf8")
 if (/export type SessionNext\w+1 =/.test(generatedTypes)) {
   throw new Error("Session history generated duplicate Session event variants")
 }
@@ -82,9 +85,10 @@ const historyTypesPatched = generatedTypes.replace(
 if (historyTypesPatched === generatedTypes) {
   throw new Error("Session history numeric query patch did not apply")
 }
-await Bun.write("./src/v2/gen/types.gen.ts", historyTypesPatched)
+await writeFile(generatedTypesPath, historyTypesPatched, "utf8")
 
-const generatedSdk = await Bun.file("./src/v2/gen/sdk.gen.ts").text()
+const generatedSdkPath = "./src/v2/gen/sdk.gen.ts"
+const generatedSdk = await readFile(generatedSdkPath, "utf8")
 const historySdkPatched = generatedSdk.replace(
   /(Get session history[\s\S]*?parameters: \{\s*sessionID: string[;,]\s*limit\?: )string([;,]\s*after\?: )string/,
   "$1number$2number",
@@ -92,7 +96,7 @@ const historySdkPatched = generatedSdk.replace(
 if (historySdkPatched === generatedSdk) {
   throw new Error("Session history numeric SDK patch did not apply")
 }
-await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
+await writeFile(generatedSdkPath, historySdkPatched, "utf8")
 
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which
@@ -101,8 +105,7 @@ await Bun.write("./src/v2/gen/sdk.gen.ts", historySdkPatched)
 // from a mock generator gets type-checked against the wrong shape. Drop the
 // arg so TReturn defaults to void.
 const sseTypesPath = "./src/v2/gen/client/types.gen.ts"
-const sseTypesFile = Bun.file(sseTypesPath)
-const sseTypesSource = await sseTypesFile.text()
+const sseTypesSource = await readFile(sseTypesPath, "utf8")
 const sseTypesPatched = sseTypesSource.replace(
   "=> Promise<ServerSentEventsResult<TData, TError>>",
   "=> Promise<ServerSentEventsResult<TData>>",
@@ -110,10 +113,38 @@ const sseTypesPatched = sseTypesSource.replace(
 if (sseTypesPatched === sseTypesSource) {
   throw new Error(`SseFn patch did not apply; @hey-api/openapi-ts output may have changed (${sseTypesPath})`)
 }
-await Bun.write(sseTypesPath, sseTypesPatched)
+await writeFile(sseTypesPath, sseTypesPatched, "utf8")
 
-await $`bun prettier --write src/gen`
-await $`bun prettier --write src/v2`
+// Format generated files in this process. A child Prettier process can race
+// with @hey-api's Windows file handles and report UNKNOWN even though the
+// generated source is valid; the in-process API avoids that false-negative.
+const retryFileIO = async <T>(operation: () => Promise<T>): Promise<T> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? String(error.code) : ""
+      if (!new Set(["EBUSY", "EPERM", "EUNKNOWN"]).has(code) || attempt >= 4) throw error
+      await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** attempt))
+    }
+  }
+}
+
+const formatFiles = async (files: ReadonlyArray<string>) => {
+  for (const file of files) {
+    const source = await retryFileIO(() => readFile(file, "utf8"))
+    const config = (await prettier.resolveConfig(file, { editorconfig: true })) ?? {}
+    const formatted = await prettier.format(source, { ...config, filepath: file })
+    if (formatted !== source) await retryFileIO(() => writeFile(file, formatted, "utf8"))
+  }
+}
+
+const generatedFiles = (directory: string) =>
+  Array.from(new Bun.Glob(`${directory}/**/*.ts`).scanSync())
+    .map((file) => file.replaceAll("\\", "/"))
+    .sort()
+await formatFiles(generatedFiles("src/gen"))
+await formatFiles(generatedFiles("src/v2"))
 await $`rm -rf dist`
 await $`bun tsc`
 await $`rm openapi.json`

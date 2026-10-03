@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "endpoint": "/global/health",
+  "status_values": ["passed", "failed"],
+  "required_bindings": ["artifact_path", "artifact_digest", "rollback_artifact_digest"],
+  "pass_requirements": [
+    "successful_requests=observed_requests",
+    "p95_latency_ms<=750",
+    "critical_alerts=0",
+    "failure_reasons=[]",
+    "observation_end>observation_start"
+  ],
+  "safety": {
+    "base_url_credentials": false,
+    "business_payloads": false,
+    "max_requests": 100
+  }
+}

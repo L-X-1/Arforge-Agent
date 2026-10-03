@@ -5,6 +5,7 @@ import { encodeFilePath } from "@/context/file/path"
 import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"
 import { Identifier } from "@/utils/id"
 import { createCommentMetadata, formatCommentNote } from "@/utils/comment-note"
+import { formatHtmlSelectionSnapshot, type HtmlSelectionSnapshot } from "@/utils/html-selection-reference"
 
 type PromptRequestPart = (TextPartInput | FilePartInput | AgentPartInput) & { id: string }
 
@@ -17,6 +18,7 @@ type ContextFile = {
   commentID?: string
   commentOrigin?: "review" | "file"
   preview?: string
+  htmlSelection?: HtmlSelectionSnapshot
 }
 
 type BuildRequestPartsInput = {
@@ -27,6 +29,7 @@ type BuildRequestPartsInput = {
   messageID: string
   sessionID: string
   sessionDirectory: string
+  serverScope?: string
 }
 
 const absolute = (directory: string, path: string) => {
@@ -143,7 +146,13 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
   })
 
   const used = new Set(files.map((part) => part.url))
-  const context = input.context.flatMap((item) => {
+  const context = input.context.flatMap<PromptRequestPart>((item) => {
+    if (item.htmlSelection !== undefined) {
+      return [{
+        id: Identifier.ascending("part"), type: "text", synthetic: true,
+        text: formatHtmlSelectionSnapshot(item.htmlSelection, { path: item.path, directory: input.sessionDirectory, serverScope: input.serverScope }),
+      } satisfies PromptRequestPart]
+    }
     const path = absolute(input.sessionDirectory, item.path)
     const url = `file://${encodeFilePath(path)}${fileQuery(item.selection)}`
     const comment = item.comment?.trim()

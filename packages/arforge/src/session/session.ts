@@ -45,15 +45,9 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { SessionMessage } from "@arforge-ai/schema/session-message"
-
-const parentTitlePrefix = "新会话 - "
-const childTitlePrefix = "子会话 - "
-
-export function isDefaultTitle(title: string) {
-  return new RegExp(
-    `^(${parentTitlePrefix}|${childTitlePrefix})\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$`,
-  ).test(title)
-}
+import { SandboxPolicy } from "@arforge-ai/core/sandbox/policy"
+import { childPrefix as childTitlePrefix, parentPrefix as parentTitlePrefix } from "@arforge-ai/core/session/title"
+export { isDefaultTitle } from "@arforge-ai/core/session/title"
 
 type SessionRow = typeof SessionTable.$inferSelect
 
@@ -399,9 +393,7 @@ export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?
     .toNumber()
   return {
     cost: safe(
-      Number.isFinite(copilotNanoAiu)
-        ? new Decimal(copilotNanoAiu).div(100_000_000_000).toNumber()
-        : calculatedCost,
+      Number.isFinite(copilotNanoAiu) ? new Decimal(copilotNanoAiu).div(100_000_000_000).toNumber() : calculatedCost,
     ),
     tokens,
   }
@@ -431,6 +423,8 @@ export interface Interface {
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
+  /** Persist the effective execution preset in the existing session metadata owner. */
+  readonly setSandboxProfile: (input: { sessionID: SessionID; profile: SandboxPolicy.Profile }) => Effect.Effect<void>
   readonly setAgentModel: (input: {
     sessionID: SessionID
     agent: string
@@ -787,6 +781,17 @@ const layer: Layer.Layer<
       yield* patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }).pipe(Effect.orDie)
     })
 
+    const setSandboxProfile = Effect.fn("Session.setSandboxProfile")(function* (input: {
+      sessionID: SessionID
+      profile: SandboxPolicy.Profile
+    }) {
+      const current = yield* get(input.sessionID).pipe(Effect.orDie)
+      yield* patch(input.sessionID, {
+        metadata: SandboxPolicy.setProfileMetadata(current.metadata, input.profile),
+        time: { updated: Date.now() },
+      }).pipe(Effect.orDie)
+    })
+
     const setAgentModel = Effect.fn("Session.setAgentModel")(function* (input: {
       sessionID: SessionID
       agent: string
@@ -938,6 +943,7 @@ const layer: Layer.Layer<
       setTitle,
       setArchived,
       setMetadata,
+      setSandboxProfile,
       setAgentModel,
       setPermission,
       setRevert,

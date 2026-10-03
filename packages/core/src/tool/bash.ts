@@ -2,6 +2,7 @@ export * as BashTool from "./bash"
 
 import path from "path"
 import { ToolFailure } from "@arforge-ai/llm"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { Duration, Effect, Layer, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../config"
@@ -9,11 +10,12 @@ import { makeLocationNode } from "../effect/app-node"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
-import { PermissionV2 } from "../permission"
+import { allowlistedChildEnvironment } from "../secret-environment"
 import { PositiveInt } from "../schema"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact } from "./effect-semantics"
 
 export const name = "bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
@@ -68,7 +70,6 @@ const isTimeout = (error: AppProcess.AppProcessError) =>
 // TODO: Replace token-based command-argument external-directory advisories with parser-based detection.
 // TODO: Restore PowerShell and cmd-specific invocation/path handling on Windows.
 // TODO: Add plugin shell.env environment augmentation once V2 plugin hooks exist.
-// TODO: Add durable/live progress metadata streaming for long-running commands once V2 tool invocation progress context is wired.
 // TODO: Persist background job status and define restart recovery before exposing remote observation.
 // TODO: Re-add model-facing background launch only with owner-bound get/wait/cancel tools and completion delivery.
 // TODO: Add HTTP background-job observation only after durable status, restart recovery, and authorization are defined.
@@ -96,17 +97,25 @@ const externalCommandDirectories = Effect.fn("BashTool.externalCommandDirectorie
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const mutation = yield* LocationMutation.Service
     const fs = yield* FSUtil.Service
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows.`,
+          effects: (input) =>
+            majorImpact({
+              filesystemScope: [input.workdir ?? ".", "paths referenced by command"],
+              networkScope: ["host network authority"],
+              secretScope: ["allowlisted child environment; no Arforge control-plane secrets"],
+              externalServices: ["host shell", "processes and services invoked by command"],
+              expectedArtifacts: ["command-dependent"],
+              successCriteria: ["command exits and captured output reports its exit status"],
+            }),
           input: Input,
           output: Output,
           structured: StructuredOutput,
@@ -121,6 +130,10 @@ const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             Effect.gen(function* () {
+              const reportProgress = (update: AgentRuntime.ActionProgressUpdate) => {
+                const progress = context.reportProgress?.(update)
+                return progress ? progress.pipe(Effect.catch(() => Effect.void)) : Effect.void
+              }
               const source = {
                 type: "tool" as const,
                 messageID: context.assistantMessageID,
@@ -129,7 +142,7 @@ const layer = Layer.effectDiscard(
               const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
               const external = target.externalDirectory
               if (external)
-                yield* permission.assert({
+                yield* context.permission.assert({
                   ...LocationMutation.externalDirectoryPermission(external),
                   sessionID: context.sessionID,
                   agent: context.agent,
@@ -139,10 +152,11 @@ const layer = Layer.effectDiscard(
                 (directory) =>
                   `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
               )
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [input.command],
-                save: [input.command],
+                save: [],
+                forceAsk: true,
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source,
@@ -158,20 +172,62 @@ const layer = Layer.effectDiscard(
               const command = ChildProcess.make(input.command, [], {
                 cwd: target.canonical,
                 shell,
+                env: allowlistedChildEnvironment(process.env),
                 stdin: "ignore",
                 detached: process.platform !== "win32",
                 forceKillAfter: Duration.seconds(3),
               })
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+              const partialChunks: Buffer[] = []
+              let capturedBytes = 0
+              let captureTruncated = false
+              yield* reportProgress({
+                phase: "executing",
+                completed: 0,
+                total: 1,
+                detail: "Shell command started",
+              })
               const result = yield* appProcess
                 .run(command, {
                   combineOutput: true,
                   timeout: Duration.millis(timeout),
                   maxOutputBytes: MAX_CAPTURE_BYTES,
+                  onCombinedOutput: context.retainPartialOutput
+                    ? (chunk) =>
+                        Effect.gen(function* () {
+                          const remaining = MAX_CAPTURE_BYTES - capturedBytes
+                          if (remaining > 0) {
+                            const kept = Buffer.from(chunk.subarray(0, remaining))
+                            partialChunks.push(kept)
+                            capturedBytes += kept.length
+                          }
+                          if (chunk.length > remaining) captureTruncated = true
+                          yield* context.retainPartialOutput!({
+                            structured: { truncated: captureTruncated, interrupted: true },
+                            content: [
+                              {
+                                type: "text",
+                                text:
+                                  Buffer.concat(partialChunks).toString("utf8") +
+                                  (captureTruncated
+                                    ? "\n[output capture truncated at the in-memory safety limit]"
+                                    : ""),
+                              },
+                            ],
+                          })
+                        })
+                    : undefined,
                 })
                 .pipe(
                   Effect.catchTag("AppProcessError", (error) =>
-                    isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
+                    isTimeout(error)
+                      ? reportProgress({
+                          phase: "failed",
+                          completed: 1,
+                          total: 1,
+                          detail: "Shell command timed out",
+                        }).pipe(Effect.andThen(Effect.succeed(undefined)))
+                      : Effect.fail(error),
                   ),
                 )
               if (!result) {
@@ -183,6 +239,13 @@ const layer = Layer.effectDiscard(
                 }
               }
 
+              yield* reportProgress({
+                phase: "settled",
+                completed: 1,
+                total: 1,
+                detail: "Shell command completed",
+              })
+
               const output = result.output?.toString("utf8") || "(no output)"
               const notice = result.outputTruncated
                 ? "[output capture truncated at the in-memory safety limit]"
@@ -193,7 +256,13 @@ const layer = Layer.effectDiscard(
                 truncated: result.outputTruncated === true,
                 ...(warnings.length ? { warnings } : {}),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+            }).pipe(
+              Effect.mapError(
+                (error) =>
+                  Tool.toToolFailure(error) ??
+                  new ToolFailure({ message: `Unable to execute command: ${input.command}` }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
@@ -203,5 +272,12 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/bash",
   layer,
-  deps: [ToolRegistry.node, LocationMutation.node, FSUtil.node, AppProcess.node, Config.node, PermissionV2.node],
+  deps: [
+    ToolRegistry.node,
+    ToolRegistry.builtInsNode,
+    LocationMutation.node,
+    FSUtil.node,
+    AppProcess.node,
+    Config.node,
+  ],
 })

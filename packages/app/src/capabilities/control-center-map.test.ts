@@ -46,4 +46,16 @@ describe("Scheme B capability mapping", () => {
       }
     }
   })
+
+  test("keeps the governed memory candidate lifecycle reachable through the Personal Workspace", () => {
+    const review = UI_CAPABILITY_REVIEW.find((entry) => entry.id === "memory-candidate-review-adapter")
+
+    expect(review?.disposition).toBe("semantic-ui")
+    expect(review?.methods).toEqual([
+      "memories.candidateReview",
+      "memories.candidateApprove",
+      "memories.candidateReject",
+      "memories.candidateActivate",
+    ])
+  })
 })

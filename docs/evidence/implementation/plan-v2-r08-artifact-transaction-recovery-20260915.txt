@@ -1,0 +1,35 @@
+R08 Artifact 写入事务恢复切片（2026-09-15）
+
+ToolOutputStore:
+  command: D:\bun\bin\bun.exe test test/tool-output-store.test.ts --rerun-every
+  result: 36 pass / 0 fail / 194 expect() calls / exit 0
+
+Real process crash matrix:
+  command: included in the same ToolOutputStore test file
+  result: marker, payload, index, and catalog boundaries each SIGKILL in an independent Windows/Bun worker; a fresh process recovered all four cases (three uncommitted cases removed, catalog-committed case retained)
+
+Core typecheck:
+  command: D:\bun\bin\bun.exe run typecheck
+  result: exit 0
+
+Prettier:
+  command: D:\bun\bin\bun.exe x prettier --check src/tool-output-store.ts test/tool-output-store.test.ts
+  result: passed after --write formatting
+
+Diff check:
+  command: git diff --check
+  result: exit 0 (only existing line-ending normalization notices)
+
+Freshness:
+  commands: bun run audit:migration-freshness; bun run audit:python-consumers
+  result: migration-freshness valid=true; python-consumer valid=true; remaining_consumer_count=0
+
+Changed behavior:
+  - pending_<handle>.json marker is written before payload/index.
+  - catalog entry is the only commit record.
+  - usage, bindBytes, and cleanup reconcile pending markers under the existing catalog lock.
+  - uncommitted payload/index are removed immediately; committed receipts keep their bytes.
+  - corrupt markers fail closed and remain inspectable.
+
+Scope:
+  Temporary profiles only. No network and no real user data. Full OS sandbox remains post-R30.

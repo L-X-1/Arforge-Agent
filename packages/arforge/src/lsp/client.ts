@@ -208,47 +208,52 @@ export async function create(input: {
 
   // --- Initialize handshake ---
 
+  const initializeRequest = connection.sendRequest<{ capabilities?: ServerCapabilities }>("initialize", {
+    rootUri: pathToFileURL(input.root).href,
+    processId: input.server.process.pid,
+    workspaceFolders: [
+      {
+        name: "workspace",
+        uri: pathToFileURL(input.root).href,
+      },
+    ],
+    initializationOptions: {
+      ...input.server.initialization,
+    },
+    capabilities: {
+      window: {
+        workDoneProgress: true,
+      },
+      workspace: {
+        configuration: true,
+        didChangeWatchedFiles: {
+          dynamicRegistration: true,
+        },
+        diagnostics: {
+          refreshSupport: false,
+        },
+      },
+      textDocument: {
+        synchronization: {
+          didOpen: true,
+          didChange: true,
+        },
+        diagnostic: {
+          dynamicRegistration: true,
+          relatedDocumentSupport: true,
+        },
+        publishDiagnostics: {
+          versionSupport: false,
+        },
+      },
+    },
+  })
+  const exited = (input.server.process as { exited?: Promise<number> }).exited
+  const processExited = exited?.then((code) => {
+    throw new Error(`language server exited before initialize (code ${code})`)
+  })
   const initialized = await withTimeout(
-    connection.sendRequest<{ capabilities?: ServerCapabilities }>("initialize", {
-      rootUri: pathToFileURL(input.root).href,
-      processId: input.server.process.pid,
-      workspaceFolders: [
-        {
-          name: "workspace",
-          uri: pathToFileURL(input.root).href,
-        },
-      ],
-      initializationOptions: {
-        ...input.server.initialization,
-      },
-      capabilities: {
-        window: {
-          workDoneProgress: true,
-        },
-        workspace: {
-          configuration: true,
-          didChangeWatchedFiles: {
-            dynamicRegistration: true,
-          },
-          diagnostics: {
-            refreshSupport: false,
-          },
-        },
-        textDocument: {
-          synchronization: {
-            didOpen: true,
-            didChange: true,
-          },
-          diagnostic: {
-            dynamicRegistration: true,
-            relatedDocumentSupport: true,
-          },
-          publishDiagnostics: {
-            versionSupport: false,
-          },
-        },
-      },
-    }),
+    processExited ? Promise.race([initializeRequest, processExited]) : initializeRequest,
     INITIALIZE_TIMEOUT_MS,
   ).catch((err) => {
     throw new InitializeError({ serverID: input.serverID, cause: err })

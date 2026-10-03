@@ -10,6 +10,7 @@ import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SystemContext } from "@arforge-ai/core/system-context"
 import { DEFAULT_VISIBLE_LANGUAGE_GUIDANCE, SystemContextBuiltIns } from "@arforge-ai/core/system-context/builtins"
 import { SystemContextRegistry } from "@arforge-ai/core/system-context/registry"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 
@@ -125,7 +126,7 @@ describe("SystemContextBuiltIns", () => {
           "",
           DEFAULT_VISIBLE_LANGUAGE_GUIDANCE,
           "",
-          `Instructions from: ${instructionFile}\nBe precise.`,
+          ContextFirewall.trustedProjectRules(instructionFile, `Instructions from: ${instructionFile}\nBe precise.`),
         ].join("\n"),
       )
     }),

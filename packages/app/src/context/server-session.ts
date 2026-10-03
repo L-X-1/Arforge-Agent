@@ -749,7 +749,10 @@ export function createServerSession(
     setMeta("loading", sessionID, true)
     let applied = false
     try {
-      const page = await fetchMessages(sessionID, limit, before, () => resetMessageLoad(sessionID, load))
+      const pageSize = Number.isSafeInteger(limit) && limit > 0
+        ? limit
+        : mode === "prepend" ? historyMessagePageSize : initialMessagePageSize
+      const page = await fetchMessages(sessionID, pageSize, before, () => resetMessageLoad(sessionID, load))
       const first = page.session.reduce<Message | undefined>(
         (oldest, message) => (!oldest || cmpMessage(message, oldest) < 0 ? message : oldest),
         undefined,
@@ -840,7 +843,9 @@ export function createServerSession(
         resolve(sessionID, options),
         cached && !options?.force
           ? Promise.resolve()
-          : loadMessages(sessionID, options?.messageLimit ?? meta.limit[sessionID] ?? initialMessagePageSize),
+          // The cached count can be zero or smaller than a page. Refresh a full
+          // recent window without shrinking already-loaded history.
+          : loadMessages(sessionID, options?.messageLimit ?? Math.max(meta.limit[sessionID] ?? 0, initialMessagePageSize)),
       ])
     })
   }

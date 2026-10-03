@@ -2,24 +2,29 @@ import { cmd } from "./cmd"
 import { ConfigV1 } from "@arforge-ai/core/v1/config/config"
 import { effectCmd } from "../effect-cmd"
 import { Cause } from "effect"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { MCP } from "../../mcp"
+import { McpControlGateway } from "../../mcp/control-gateway"
 import { McpAuth } from "../../mcp/auth"
-import { McpOAuthProvider } from "../../mcp/oauth-provider"
 import { Config } from "@/config/config"
 import { ConfigMCPV1 } from "@arforge-ai/core/v1/config/mcp"
+import { ConfigMCP } from "@arforge-ai/core/config/mcp"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstallationVersion } from "@arforge-ai/core/installation/version"
-import path from "path"
 import { Global } from "@arforge-ai/core/global"
-import { modify, applyEdits } from "jsonc-parser"
-import { Filesystem } from "@/util/filesystem"
-import { Effect } from "effect"
+import { LocationServiceMap } from "@arforge-ai/core/location-services"
+import { ControlPrincipal } from "@arforge-ai/core/runtime/control-principal"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { Effect, Schema } from "effect"
+import { CliError } from "../effect-cmd"
+
+const mcpCatalogError = (_error: unknown) =>
+  new CliError({
+    message: "读取 MCP 能力目录失败；请检查服务器连接、授权状态和传输范围后重试。",
+    exitCode: 1,
+  })
 
 function getAuthStatusIcon(status: MCP.AuthStatus): string {
   switch (status) {
@@ -99,6 +104,8 @@ export const McpCommand = cmd({
     yargs
       .command(McpAddCommand)
       .command(McpListCommand)
+      .command(McpHealthCommand)
+      .command(McpCapabilitiesCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
       .command(McpDebugCommand)
@@ -151,6 +158,10 @@ export const McpListCommand = effectCmd({
         statusIcon = "✗"
         statusText = "needs client registration"
         hint = "\n    " + status.error
+      } else if (status.status === "needs_approval") {
+        statusIcon = "?"
+        statusText = "needs approval"
+        hint = "\n    " + status.reason
       } else {
         statusIcon = "✗"
         statusText = "failed"
@@ -164,6 +175,63 @@ export const McpListCommand = effectCmd({
     }
 
     prompts.outro(`${servers.length} server(s)`)
+  }),
+})
+
+export const McpHealthCommand = effectCmd({
+  command: "health",
+  describe: "probe MCP servers and show retry/circuit health",
+  handler: Effect.fn("Cli.mcp.health")(function* () {
+    UI.empty()
+    prompts.intro("MCP Health")
+    const mcp = yield* MCP.Service
+    const health = yield* mcp.health({ probe: true })
+    const entries = Object.entries(health)
+    if (entries.length === 0) {
+      prompts.log.warn("No MCP servers configured")
+      prompts.outro("Done")
+      return
+    }
+    for (const [name, snapshot] of entries) {
+      const retry = snapshot.nextRetryAt === null ? "" : `; retry after ${new Date(snapshot.nextRetryAt).toISOString()}`
+      prompts.log.info(
+        `${name}: ${snapshot.phase}/${snapshot.health} — ${snapshot.safeMessage} (failures: ${snapshot.failureCount}${retry})`,
+      )
+    }
+    prompts.outro(`${entries.length} server(s) checked`)
+  }),
+})
+
+export const McpCapabilitiesCommand = effectCmd({
+  command: "capabilities",
+  aliases: ["caps"],
+  describe: "show the current generation-scoped MCP capability catalog",
+  handler: Effect.fn("Cli.mcp.capabilities")(function* () {
+    UI.empty()
+    prompts.intro("MCP Capabilities")
+    const mcp = yield* MCP.Service
+    const capabilities = (yield* McpControlGateway.catalog({
+      mcp,
+      principal: ControlPrincipal.LOCAL_PRINCIPAL,
+      requestID: AgentRuntime.ControlPlaneRequestID.create(),
+    }).pipe(Effect.mapError(mcpCatalogError))).capabilities
+    if (capabilities.length === 0) {
+      prompts.log.warn("No capabilities are currently available. Connect an MCP server first.")
+      prompts.outro("Done")
+      return
+    }
+
+    const grouped = new Map<string, typeof capabilities>()
+    for (const item of capabilities) grouped.set(item.server, [...(grouped.get(item.server) ?? []), item])
+    for (const [server, items] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const generation = items[0]?.generation
+      prompts.log.info(`${server} · generation ${generation ?? "?"}`)
+      for (const item of items) {
+        const target = item.reference ? ` — ${item.reference}` : ""
+        prompts.log.info(`  ${item.kind}: ${item.name}${target}`)
+      }
+    }
+    prompts.outro(`${capabilities.length} capability(s)`)
   }),
 })
 
@@ -345,86 +413,83 @@ export const McpLogoutCommand = effectCmd({
     UI.empty()
     prompts.intro("MCP OAuth Logout")
 
+    const cfg = yield* Config.Service
+    const mcp = yield* MCP.Service
     const credentials = yield* McpAuth.Service.use((auth) => auth.all())
-    const serverNames = Object.keys(credentials)
+    const config = yield* cfg.get()
+    // OAuth entries use an opaque project-scoped key. The CLI must only offer
+    // configured display names, then delegate lookup/removal to MCP.Service;
+    // using a persisted key as a name would HMAC it again and cross scopes.
+    const stored = yield* Effect.all(
+      Object.fromEntries(oauthServers(config).map(([name]) => [name, mcp.hasStoredTokens(name)])),
+      { concurrency: "unbounded" },
+    )
+    const serverNames = Object.entries(stored)
+      .filter(([, hasTokens]) => hasTokens)
+      .map(([name]) => name)
+    const configuredNames = oauthServers(config).map(([name]) => name)
+    // Pre-project-scoping records are deliberately never adopted. They can be
+    // explicitly cleaned up, but cannot be treated as current-project servers.
+    const legacyKeys = Object.keys(credentials).filter((key) => !key.startsWith("mcp-oauth:"))
 
-    if (serverNames.length === 0) {
+    if (!args.name && serverNames.length === 0 && legacyKeys.length === 0) {
       prompts.log.warn("No MCP OAuth credentials stored")
       prompts.outro("Done")
       return
     }
 
-    let serverName = args.name
-    if (!serverName) {
+    let selection:
+      | { readonly type: "configured"; readonly name: string }
+      | { readonly type: "legacy"; readonly key: string }
+    if (args.name) {
+      if (configuredNames.includes(args.name)) {
+        selection = { type: "configured", name: args.name }
+      } else if (legacyKeys.includes(args.name)) {
+        selection = { type: "legacy", key: args.name }
+      } else if (args.name.startsWith("mcp-oauth:")) {
+        prompts.log.error("OAuth credential keys are project-scoped. Use the configured MCP server name instead.")
+        prompts.outro("Done")
+        return
+      } else {
+        prompts.log.error(`No current-project OAuth credentials found for: ${args.name}`)
+        prompts.outro("Done")
+        return
+      }
+    } else {
       const selected = yield* Effect.promise(() =>
         prompts.select({
           message: "Select MCP server to logout",
-          options: serverNames.map((name) => {
-            const entry = credentials[name]
-            const hasTokens = !!entry.tokens
-            const hasClient = !!entry.clientInfo
-            let hint = ""
-            if (hasTokens && hasClient) hint = "tokens + client"
-            else if (hasTokens) hint = "tokens"
-            else if (hasClient) hint = "client registration"
-            return {
+          options: [
+            ...serverNames.map((name) => ({
               label: name,
-              value: name,
-              hint,
-            }
-          }),
+              value: `configured\u0000${name}`,
+              hint: "current project",
+            })),
+            ...legacyKeys.map((key) => ({
+              label: `Legacy credential: ${key}`,
+              value: `legacy\u0000${key}`,
+              hint: "not assigned to this project; removes only this legacy record",
+            })),
+          ],
         }),
       )
       if (prompts.isCancel(selected)) throw new UI.CancelledError()
-      serverName = selected
+      const separator = selected.indexOf("\u0000")
+      const kind = selected.slice(0, separator)
+      const value = selected.slice(separator + 1)
+      selection = kind === "configured" ? { type: "configured", name: value } : { type: "legacy", key: value }
     }
 
-    if (!credentials[serverName]) {
-      prompts.log.error(`No credentials found for: ${serverName}`)
-      prompts.outro("Done")
-      return
+    if (selection.type === "configured") {
+      yield* mcp.removeAuth(selection.name)
+      prompts.log.success(`Removed OAuth credentials for ${selection.name}`)
+    } else {
+      yield* McpAuth.Service.use((auth) => auth.remove(selection.key))
+      prompts.log.success(`Removed legacy OAuth credential record for ${selection.key}`)
     }
-
-    yield* MCP.Service.use((mcp) => mcp.removeAuth(serverName))
-    prompts.log.success(`Removed OAuth credentials for ${serverName}`)
     prompts.outro("Done")
   }),
 })
-
-async function resolveConfigPath(baseDir: string, global = false) {
-  // Check for existing config files (prefer .jsonc over .json, check .arforge/ subdirectory too)
-  const candidates = [path.join(baseDir, "arforge.json"), path.join(baseDir, "arforge.jsonc")]
-
-  if (!global) {
-    candidates.push(path.join(baseDir, ".arforge", "arforge.json"), path.join(baseDir, ".arforge", "arforge.jsonc"))
-  }
-
-  for (const candidate of candidates) {
-    if (await Filesystem.exists(candidate)) {
-      return candidate
-    }
-  }
-
-  // Default to arforge.json if none exist
-  return candidates[0]
-}
-
-async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configPath: string) {
-  let text = "{}"
-  if (await Filesystem.exists(configPath)) {
-    text = await Filesystem.readText(configPath)
-  }
-
-  // Use jsonc-parser to modify while preserving comments
-  const edits = modify(text, ["mcp", name], mcpConfig, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  const result = applyEdits(text, edits)
-
-  await Filesystem.write(configPath, result)
-
-  return configPath
-}
 
 export const McpAddCommand = effectCmd({
   command: "add [name]",
@@ -444,30 +509,61 @@ export const McpAddCommand = effectCmd({
         type: "string",
         array: true,
       })
+      .option("read-only-path", {
+        describe:
+          "request a read-only dependency directory (repeatable, relative to the workspace; approval required at connect)",
+        type: "string",
+        array: true,
+      })
+      .option("startup-timeout", {
+        describe: "MCP connection and initialization timeout in milliseconds",
+        type: "number",
+      })
+      .option("request-timeout", {
+        describe: "MCP request timeout after initialization, in milliseconds",
+        type: "number",
+      })
       .option("header", {
         describe: "HTTP header for a remote MCP server (KEY=VALUE)",
         type: "string",
         array: true,
       }),
+  // A named invocation saves global configuration and must not bootstrap the
+  // project or execute configured integrations before validating the edit.
+  instance: (args) => !args.name,
   handler: Effect.fn("Cli.mcp.add")(function* (args) {
-    const maybeCtx = yield* InstanceRef
-    if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
-    const ctx = maybeCtx
-    yield* Effect.promise(async () => {
+    const ctx = args.name ? undefined : yield* InstanceRef
+    const config = yield* Config.Service
+    const locations = yield* LocationServiceMap.Service
+    const global = Global.make()
+    const selected = yield* Effect.promise(async () => {
       const command = args["--"] ?? []
-      if (!args.name && (args.url || args.env?.length || args.header?.length || command.length)) {
+      if (
+        !args.name &&
+        (args.url ||
+          args.env?.length ||
+          args.header?.length ||
+          args["read-only-path"]?.length ||
+          args["startup-timeout"] !== undefined ||
+          args["request-timeout"] !== undefined ||
+          command.length)
+      ) {
         throw new Error("A server name is required for non-interactive MCP configuration")
       }
       if (args.name) {
         if (!!args.url === !!command.length) {
           throw new Error("Provide either --url <url> or a command after --")
         }
-        if (args.url && !URL.canParse(args.url)) {
-          throw new Error(`Invalid URL: ${args.url}`)
+        if (args.url && (!URL.canParse(args.url) || !["http:", "https:"].includes(new URL(args.url).protocol))) {
+          throw new Error("Invalid MCP URL. Use an HTTP or HTTPS URL.")
         }
         if (args.url && args.env?.length) {
           throw new Error("--env is only valid for local MCP servers")
         }
+        if (args.url && args["read-only-path"]?.length)
+          throw new Error("--read-only-path is only valid for local MCP servers")
+        if (args["read-only-path"] !== undefined && !Schema.is(ConfigMCP.ReadOnlyPaths)(args["read-only-path"]))
+          throw new Error("Invalid read-only dependency directory. Use non-empty paths without NUL characters.")
         if (command.length && args.header?.length) {
           throw new Error("--header is only valid for remote MCP servers")
         }
@@ -476,61 +572,63 @@ export const McpAddCommand = effectCmd({
           Object.fromEntries(
             values.map((entry) => {
               const index = entry.indexOf("=")
-              if (index < 1) throw new Error(`Invalid ${kind}: ${entry}. Expected KEY=VALUE`)
+              if (index < 1) throw new Error(`Invalid ${kind}. Expected KEY=VALUE.`)
               return [entry.slice(0, index), entry.slice(index + 1)]
             }),
           )
         const environment = entries(args.env ?? [], "environment variable")
         const headers = entries(args.header ?? [], "HTTP header")
+        const timeout = {
+          ...(args["startup-timeout"] === undefined ? {} : { startup: args["startup-timeout"] }),
+          ...(args["request-timeout"] === undefined ? {} : { request: args["request-timeout"] }),
+        }
+        if (!Schema.is(ConfigMCPV1.Timeout)(timeout))
+          throw new Error("Invalid MCP timeout. Use positive whole milliseconds for startup and request timeouts.")
+        const timeouts = Object.keys(timeout).length ? { timeout } : {}
         const mcpConfig: ConfigMCPV1.Info = args.url
           ? {
               type: "remote",
               url: args.url,
+              ...timeouts,
               ...(Object.keys(headers).length ? { headers } : {}),
             }
           : {
               type: "local",
               command,
+              ...timeouts,
+              ...(args["read-only-path"] === undefined ? {} : { read_only_paths: [...args["read-only-path"]] }),
               ...(Object.keys(environment).length ? { environment } : {}),
             }
 
-        const configPath = await resolveConfigPath(Global.Path.config, true)
-        await addMcpToConfig(args.name, mcpConfig, configPath)
-        prompts.log.success(`MCP server "${args.name}" added to ${configPath}`)
-        return
+        return { name: args.name, config: mcpConfig, global: true }
       }
 
       UI.empty()
       prompts.intro("Add MCP server")
 
+      if (!ctx) throw new Error("Project context is unavailable")
       const project = ctx.project
 
-      // Resolve config paths eagerly for hints
-      const [projectConfigPath, globalConfigPath] = await Promise.all([
-        resolveConfigPath(ctx.worktree),
-        resolveConfigPath(Global.Path.config, true),
-      ])
-
       // Determine scope
-      let configPath = globalConfigPath
+      let globalScope = true
       if (project.vcs === "git") {
         const scopeResult = await prompts.select({
           message: "Location",
           options: [
             {
               label: "Current project",
-              value: projectConfigPath,
-              hint: projectConfigPath,
+              value: "project",
+              hint: ctx.worktree,
             },
             {
               label: "Global",
-              value: globalConfigPath,
-              hint: globalConfigPath,
+              value: "global",
+              hint: global.config,
             },
           ],
         })
         if (prompts.isCancel(scopeResult)) throw new UI.CancelledError()
-        configPath = scopeResult
+        globalScope = scopeResult === "global"
       }
 
       const name = await prompts.text({
@@ -569,10 +667,7 @@ export const McpAddCommand = effectCmd({
           command: command.split(" "),
         }
 
-        await addMcpToConfig(name, mcpConfig, configPath)
-        prompts.log.success(`MCP server "${name}" added to ${configPath}`)
-        prompts.outro("MCP server added successfully")
-        return
+        return { name, config: mcpConfig, global: globalScope }
       }
 
       if (type === "remote") {
@@ -582,8 +677,8 @@ export const McpAddCommand = effectCmd({
           validate: (x) => {
             if (!x) return "Required"
             if (x.length === 0) return "Required"
-            const isValid = URL.canParse(x)
-            return isValid ? undefined : "Invalid URL"
+            const isValid = URL.canParse(x) && ["http:", "https:"].includes(new URL(x).protocol)
+            return isValid ? undefined : "Use an HTTP or HTTPS URL"
           },
         })
         if (prompts.isCancel(url)) throw new UI.CancelledError()
@@ -647,12 +742,17 @@ export const McpAddCommand = effectCmd({
           }
         }
 
-        await addMcpToConfig(name, mcpConfig, configPath)
-        prompts.log.success(`MCP server "${name}" added to ${configPath}`)
+        return { name, config: mcpConfig, global: globalScope }
       }
 
-      prompts.outro("MCP server added successfully")
+      throw new Error("Unknown MCP server type")
     })
+    const patch = { mcp: { [selected.name]: selected.config } }
+    const saved = yield* selected.global
+      ? config.updateGlobal(patch, locations)
+      : config.update(patch, locations, { directory: ctx?.worktree })
+    prompts.log.success(`MCP server "${selected.name}" added to ${saved.path}`)
+    if (!args.name) prompts.outro("MCP server added successfully")
   }),
 })
 
@@ -668,14 +768,10 @@ export const McpDebugCommand = effectCmd({
   handler: Effect.fn("Cli.mcp.debug")(function* (args) {
     const config = yield* Config.Service.use((cfg) => cfg.get())
     const mcp = yield* MCP.Service
-    const auth = yield* McpAuth.Service
     const serverConfig = config.mcp?.[args.name]
-    const authInfo =
+    const authStatus =
       serverConfig && isMcpRemote(serverConfig) && serverConfig.oauth !== false
-        ? yield* Effect.all({
-            authStatus: mcp.getAuthStatus(args.name),
-            entry: auth.get(args.name),
-          })
+        ? yield* mcp.getAuthStatus(args.name)
         : undefined
     yield* Effect.promise(async () => {
       UI.empty()
@@ -704,29 +800,8 @@ export const McpDebugCommand = effectCmd({
       prompts.log.info(`Server: ${serverName}`)
       prompts.log.info(`URL: ${serverConfig.url}`)
 
-      const { authStatus, entry } = authInfo!
-      prompts.log.info(`Auth status: ${getAuthStatusIcon(authStatus)} ${getAuthStatusText(authStatus)}`)
-
-      if (entry?.tokens) {
-        prompts.log.info(
-          `  Access token: ${entry.tokens.accessToken.length > 8 ? `${entry.tokens.accessToken.slice(0, 4)}***${entry.tokens.accessToken.slice(-4)}` : "***"}`,
-        )
-        if (entry.tokens.expiresAt) {
-          const expiresDate = new Date(entry.tokens.expiresAt * 1000)
-          const isExpired = entry.tokens.expiresAt < Date.now() / 1000
-          prompts.log.info(`  Expires: ${expiresDate.toISOString()} ${isExpired ? "(EXPIRED)" : ""}`)
-        }
-        if (entry.tokens.refreshToken) {
-          prompts.log.info(`  Refresh token: present`)
-        }
-      }
-      if (entry?.clientInfo) {
-        prompts.log.info(`  Client ID: ${entry.clientInfo.clientId}`)
-        if (entry.clientInfo.clientSecretExpiresAt) {
-          const expiresDate = new Date(entry.clientInfo.clientSecretExpiresAt * 1000)
-          prompts.log.info(`  Client secret expires: ${expiresDate.toISOString()}`)
-        }
-      }
+      const status = authStatus!
+      prompts.log.info(`Auth status: ${getAuthStatusIcon(status)} ${getAuthStatusText(status)}`)
 
       const spinner = prompts.spinner()
       spinner.start("Testing connection...")
@@ -762,55 +837,8 @@ export const McpDebugCommand = effectCmd({
 
         if (response.status === 401) {
           prompts.log.info("Initial unauthenticated check returned 401, so this server requires OAuth")
-
-          // Try to discover OAuth metadata
-          const oauthConfig = typeof serverConfig.oauth === "object" ? serverConfig.oauth : undefined
-          const authProvider = new McpOAuthProvider(
-            serverName,
-            serverConfig.url,
-            {
-              clientId: oauthConfig?.clientId,
-              clientSecret: oauthConfig?.clientSecret,
-              scope: oauthConfig?.scope,
-              redirectUri: oauthConfig?.redirectUri,
-            },
-            {
-              onRedirect: async () => {},
-            },
-            auth,
-          )
-
-          prompts.log.info("Testing OAuth flow (without completing authorization)...")
-
-          // Try creating transport with auth provider to trigger discovery
-          const transport = new StreamableHTTPClientTransport(new URL(serverConfig.url), {
-            authProvider,
-            requestInit: serverConfig.headers ? { headers: serverConfig.headers } : undefined,
-          })
-
-          try {
-            const client = new Client({
-              name: "arforge-debug",
-              version: InstallationVersion,
-            })
-            await client.connect(transport)
-            prompts.log.success("Connection successful (already authenticated)")
-            await client.close()
-          } catch (error) {
-            if (error instanceof UnauthorizedError) {
-              prompts.log.info(`OAuth flow triggered: ${error.message}`)
-
-              // Check if dynamic registration would be attempted
-              const clientInfo = await authProvider.clientInformation()
-              if (clientInfo) {
-                prompts.log.info(`Client ID available: ${clientInfo.client_id}`)
-              } else {
-                prompts.log.info("No client ID - dynamic registration will be attempted")
-              }
-            } else {
-              prompts.log.error(`Connection error: ${error instanceof Error ? error.message : String(error)}`)
-            }
-          }
+          prompts.log.info(`Project-scoped OAuth status: ${getAuthStatusText(status)}`)
+          prompts.log.info(`Run \"arforge mcp auth ${serverName}\" to start or refresh the trusted OAuth flow.`)
         } else if (response.status >= 200 && response.status < 300) {
           prompts.log.success("Server responded successfully (no auth required or already authenticated)")
           const body = await response.text()

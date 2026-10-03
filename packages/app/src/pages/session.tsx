@@ -32,6 +32,9 @@ import { SelectV2 } from "@arforge-ai/ui/v2/select-v2"
 import { isScrollKeyTarget, scrollKey, scrollKeyOwner } from "@arforge-ai/ui/scroll-view"
 import { Tabs } from "@arforge-ai/ui/tabs"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
+import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
+import { TooltipV2 } from "@arforge-ai/ui/v2/tooltip-v2"
 import { createAutoScroll } from "@arforge-ai/ui/hooks"
 import { previewSelectedLines } from "@arforge-ai/session-ui/pierre/selection-bridge"
 import { Button } from "@arforge-ai/ui/button"
@@ -56,7 +59,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, serverName, useServer } from "@/context/server"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
-import { useTabs } from "@/context/tabs"
+import { useTabs, type Tab } from "@/context/tabs"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
@@ -85,6 +88,7 @@ import {
 } from "@/pages/session/session-panel-width"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { SessionExecutionDock } from "@/pages/session/session-execution-dock"
+import { SessionExecutionStatusBar } from "@/pages/session/session-execution-status-bar"
 import { buildExecutionTrace, type ExecutionTraceStep } from "@/pages/session/execution-trace-model"
 import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
 import { SessionReviewEmptyChangesV2 } from "@arforge-ai/session-ui/v2/session-review-empty-changes-v2"
@@ -103,6 +107,8 @@ import { diffs as list } from "@/utils/diffs"
 import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { formatServerError, isLocalSessionNotFoundError, isSessionNotFoundError } from "@/utils/server-errors"
+import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
+import { requestSessionRevert, requestSessionUnrevert } from "@/utils/session-revert-control"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 import { createSessionOwnership } from "./session/session-ownership"
@@ -126,29 +132,6 @@ const sessionViewState = () => ({
 function isCurrentSessionNotFoundError(error: unknown, sessionID: string | undefined) {
   if (!sessionID) return false
   return isSessionNotFoundError(error, sessionID) || isLocalSessionNotFoundError(error, sessionID)
-}
-
-async function runPromptRollbackMutation<T, R>(input: {
-  capturePrompt: () => { current: () => T[]; set: (value: T[]) => void; reset: () => void }
-  optimistic: (prompt: { set: (value: T[]) => void; reset: () => void }) => void
-  request: () => Promise<R>
-  complete: (result: R) => void
-  rollback: () => void
-  fail: (error: unknown) => void
-}) {
-  const prompt = input.capturePrompt()
-  const previous = prompt.current().slice()
-  batch(() => input.optimistic(prompt))
-  await input
-    .request()
-    .then(input.complete)
-    .catch((error) => {
-      batch(() => {
-        input.rollback()
-        prompt.set(previous)
-      })
-      input.fail(error)
-    })
 }
 
 export function SessionPage() {
@@ -390,6 +373,19 @@ export default function Page() {
   const reviewFile = () => view().review.file()
   const sessionOwnership = createSessionOwnership(sessionKey)
   const newSessionDesign = createMemo(() => settings.general.newLayoutDesigns())
+  const tabsContext = useTabs()
+  const server = useServer()
+
+  const closeTab = () => {
+    if (params.id) {
+      // Close session tab
+      tabsContext.removeSessionTab({ server: server.key, sessionId: params.id })
+    } else {
+      // Close draft tab (new session page)
+      const draftIndex = tabsContext.store.findIndex((t: Tab) => t.type === "draft" && t.server === server.key)
+      if (draftIndex !== -1) tabsContext.closeTab(draftIndex)
+    }
+  }
 
   createEffect(() => {
     if (!prompt.ready()) return
@@ -467,7 +463,14 @@ export default function Page() {
   const executionDockVisible = createMemo(() => newSessionDesign() && isDesktop() && !!params.id)
   const executionTrace = createMemo(() => {
     const sessionID = params.id
-    if (!sessionID) return { steps: [] as ExecutionTraceStep[], status: "idle" as const }
+    if (!sessionID) {
+      return {
+        steps: [] as ExecutionTraceStep[],
+        status: "idle" as const,
+        completed: 0,
+        failed: 0,
+      }
+    }
     return buildExecutionTrace({
       messages: sync().data.message[sessionID] ?? [],
       parts: (messageID) => sync().data.part[messageID] ?? [],
@@ -475,6 +478,20 @@ export default function Page() {
     })
   })
   const executionRunning = createMemo(() => executionTrace().status !== "idle")
+  const executionStatusLabel = createMemo(() => {
+    const chinese = language.locale() === "zh" || language.locale() === "zht"
+    if (composer.permissionRequest()) return chinese ? "等待你批准权限" : "Waiting for your permission"
+    if (composer.questionRequest()) return chinese ? "等待你回答问题" : "Waiting for your answer"
+    if (executionTrace().status === "retry") return chinese ? "请求失败，正在重试" : "Request failed; retrying"
+    if (executionRunning()) return chinese ? "Arforge 正在执行" : "Arforge is working"
+    if (executionTrace().failed > 0) return chinese ? "本轮已结束，存在失败步骤" : "Finished with failed steps"
+    if (executionTrace().steps.length > 0) return chinese ? "本轮执行完成" : "Execution complete"
+    return chinese ? "准备就绪" : "Ready"
+  })
+  const executionStepCountLabel = createMemo(() => {
+    const count = executionTrace().steps.length
+    return language.locale() === "zh" || language.locale() === "zht" ? count + " 步" : count + " steps"
+  })
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
   const terminalOpen = createMemo(() => view().terminal.opened())
@@ -516,8 +533,9 @@ export default function Page() {
   const sessionPanelAvailable = createMemo(() => {
     const width = panelRowWidth()
     if (width === undefined) return undefined
-    const dock = executionDockVisible() && executionDock.opened ? Math.min(380, width * 0.36) : 0
-    return width - (settings.general.newLayoutDesigns() ? 12 : 0) - dock
+    const dockOpen = executionDockVisible() && executionDock.opened
+    const dock = dockOpen ? Math.min(380, width * 0.36) : 0
+    return width - (settings.general.newLayoutDesigns() && !dockOpen ? 12 : 0) - dock
   })
   const sessionPanelMax = createMemo(() => {
     const available = sessionPanelAvailable()
@@ -819,7 +837,12 @@ export default function Page() {
       const boundedDiff = valid(boundedValue)
       if (boundedDiff) return boundedDiff
       if (scoped.status === "rejected") {
-        console.debug("[session-review] failed to load scoped vcs diff", { mode, file, directory, error: scoped.reason })
+        console.debug("[session-review] failed to load scoped vcs diff", {
+          mode,
+          file,
+          directory,
+          error: scoped.reason,
+        })
       }
       if (bounded.status === "rejected") {
         console.debug("[session-review] failed to load bounded vcs diff", { mode, file, root, error: bounded.reason })
@@ -1568,8 +1591,13 @@ export default function Page() {
   )
 
   const autoScroll = createAutoScroll({
-    working: () => true,
+    working: () => {
+      const id = params.id
+      return !!id && sync().data.session_status[id]?.type === "busy"
+    },
     overflowAnchor: "none",
+    settleAfterStop: false,
+    followOnResize: () => !location.hash && !store.messageId && !ui.pendingMessage && !hasScrollGesture(),
   })
   createEffect(
     on(
@@ -1577,7 +1605,14 @@ export default function Page() {
       (id, previous) => {
         if (!id || !previous || id === previous) return
         if (location.hash || store.messageId || ui.pendingMessage) return
-        autoScroll.resume()
+        const owner = sessionOwnership.capture()
+        // The keyed timeline installs its new scroll handlers during this render.
+        // Reset after that handoff, not against the previous session's viewport.
+        queueMicrotask(() => owner.run(() => {
+          if (location.hash || store.messageId || ui.pendingMessage || hasScrollGesture()) return
+          autoScroll.resume()
+          scrollToEnd()
+        }))
       },
     ),
   )
@@ -1763,12 +1798,16 @@ export default function Page() {
     })
   }
 
-  const merge = (next: NonNullable<ReturnType<typeof info>>, target = sync()) => target.session.remember(next)
+  const sessionControlInput = (sessionID: string) => ({
+    api: serverSDK().operationsApi,
+    server: serverSDK().scope,
+    project: sdk().directory,
+    location: { directory: sdk().directory },
+    sessionID,
+  })
 
-  const roll = (sessionID: string, next: NonNullable<ReturnType<typeof info>>["revert"], target = sync()) => {
-    const session = target.session.get(sessionID)
-    if (!session) return
-    target.session.remember({ ...session, revert: next })
+  const announceSessionControl = (result: Awaited<ReturnType<typeof requestSessionRevert>>) => {
+    if (result.state === "status") showControlOperationStatusNotice(result.status, (key) => language.t(key))
   }
 
   const busy = (sessionID: string) => sync().data.session_working(sessionID)
@@ -2025,22 +2064,11 @@ export default function Page() {
 
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
-      const session = sdk().api.session
-      const target = sync()
-      const last = target.session.get(input.sessionID)?.revert
-      const value = draft(input.messageID)
-      await runPromptRollbackMutation({
-        capturePrompt: prompt.capture,
-        optimistic: (prompt) => {
-          roll(input.sessionID, { messageID: input.messageID }, target)
-          prompt.set(value)
-        },
-        request: () => halt(input.sessionID).then(() => session.revert.stage(input)),
-        complete: () => undefined,
-        rollback: () => roll(input.sessionID, last, target),
-        fail,
-      })
+      await halt(input.sessionID)
+      const result = await requestSessionRevert({ ...sessionControlInput(input.sessionID), messageID: input.messageID })
+      announceSessionControl(result)
     },
+    onError: fail,
   }))
 
   const restoreMutation = useMutation(() => ({
@@ -2048,30 +2076,14 @@ export default function Page() {
       const sessionID = params.id
       if (!sessionID) return
 
-      const session = sdk().api.session
-      const target = sync()
       const next = userMessages().find((item) => item.id > id)
-      const last = target.session.get(sessionID)?.revert
-
-      await runPromptRollbackMutation({
-        capturePrompt: prompt.capture,
-        optimistic: (promptSession) => {
-          roll(sessionID, next ? { messageID: next.id } : undefined, target)
-          if (next) {
-            promptSession.set(draft(next.id))
-            return
-          }
-          promptSession.reset()
-        },
-        request: () =>
-          !next
-            ? halt(sessionID).then(() => session.revert.clear({ sessionID }))
-            : halt(sessionID).then(() => session.revert.stage({ sessionID, messageID: next.id }).then(() => undefined)),
-        complete: () => undefined,
-        rollback: () => roll(sessionID, last, target),
-        fail,
-      })
+      await halt(sessionID)
+      const result = next
+        ? await requestSessionRevert({ ...sessionControlInput(sessionID), messageID: next.id })
+        : await requestSessionUnrevert(sessionControlInput(sessionID))
+      announceSessionControl(result)
     },
+    onError: fail,
   }))
 
   const reverting = createMemo(() => revertMutation.isPending || restoreMutation.isPending)
@@ -2243,11 +2255,24 @@ export default function Page() {
           background session refreshes. `latest` keeps the rendered
           conversation mounted while a refresh completes. */}
       {sessionSync.latest ?? ""}
-      <Show when={!!params.id && newSessionDesign()}>
+      <Show when={newSessionDesign() && (!params.id || mobileChanges() || !messagesReady())}>
         <div
           id="arforge-session-header"
           class="relative z-10 flex h-11 shrink-0 items-center border-b border-v2-border-border-muted"
-        />
+        >
+          <div class="flex-1" />
+          <TooltipV2 placement="bottom" value={language.t("command.tab.close")}>
+            <IconButtonV2
+              type="button"
+              variant="ghost-muted"
+              size="small"
+              class="mr-2 shrink-0"
+              icon={<IconV2 name="xmark-small" />}
+              onClick={closeTab}
+              aria-label={language.t("command.tab.close")}
+            />
+          </TooltipV2>
+        </div>
       </Show>
       <div
         data-arforge-session-content
@@ -2277,6 +2302,7 @@ export default function Page() {
                 {(_id) => (
                   <MessageTimeline
                     actions={actions}
+                    onCloseTab={closeTab}
                     scroll={ui.scroll}
                     onResumeScroll={resumeScroll}
                     setScrollRef={setScrollRef}
@@ -2299,6 +2325,14 @@ export default function Page() {
                       if (root) scheduleScrollState(root)
                     }}
                     userMessages={visibleUserMessages()}
+                    historyMore={historyMore()}
+                    historyLoading={historyLoading()}
+                    onLoadHistory={loadOlder}
+                    onSelectHistoryMessage={(message) => {
+                      autoScroll.pause()
+                      markUserScroll()
+                      scrollToMessage(message, "auto")
+                    }}
                     setHistoryAnchor={(handlers) => {
                       captureHistoryAnchor = handlers.capture
                       restoreHistoryAnchor = handlers.restore
@@ -2323,120 +2357,120 @@ export default function Page() {
         <Show when={(params.id || !newSessionDesign()) && !mobileChanges()}>
           {(_) => {
             const controller = createSessionComposerRegionController({
-            state: composer,
-            sessionKey,
-            sessionID: () => params.id,
-            prompt,
-            ready: () => !store.deferRender && messagesReady(),
-            centered,
-            todo: {
-              collapsed: () => view().todoCollapsed.get(),
-              onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
-            },
-            followup: () =>
-              params.id && !isChildSession()
-                ? {
-                    items: followupDock(),
-                    sending: sendingFollowup(),
-                    onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
-                    onEdit: editFollowup,
-                  }
-                : undefined,
-            revert: () =>
-              rolled().length > 0
-                ? {
-                    items: rolled(),
-                    restoring: restoring(),
-                    disabled: reverting(),
-                    onRestore: restore,
-                  }
-                : undefined,
-            onResponseSubmit: resumeScroll,
-            openParent: () => {
-              const id = info()?.parentID
-              if (!id) return
-              navigate(
-                params.serverKey
-                  ? sessionHref(requireServerKey(params.serverKey), id)
-                  : legacySessionHref(sdk().directory, id),
-              )
-            },
-            setPromptRef: (el) => {
-              inputRef = el
-            },
-            setDockRef: (el) => {
-              promptDock = el
-            },
-          })
+              state: composer,
+              sessionKey,
+              sessionID: () => params.id,
+              prompt,
+              ready: () => !store.deferRender && messagesReady(),
+              centered,
+              todo: {
+                collapsed: () => view().todoCollapsed.get(),
+                onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
+              },
+              followup: () =>
+                params.id && !isChildSession()
+                  ? {
+                      items: followupDock(),
+                      sending: sendingFollowup(),
+                      onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
+                      onEdit: editFollowup,
+                    }
+                  : undefined,
+              revert: () =>
+                rolled().length > 0
+                  ? {
+                      items: rolled(),
+                      restoring: restoring(),
+                      disabled: reverting(),
+                      onRestore: restore,
+                    }
+                  : undefined,
+              onResponseSubmit: resumeScroll,
+              openParent: () => {
+                const id = info()?.parentID
+                if (!id) return
+                navigate(
+                  params.serverKey
+                    ? sessionHref(requireServerKey(params.serverKey), id)
+                    : legacySessionHref(sdk().directory, id),
+                )
+              },
+              setPromptRef: (el) => {
+                inputRef = el
+              },
+              setDockRef: (el) => {
+                promptDock = el
+              },
+            })
             return (
               <SessionComposerRegion
                 controller={controller}
                 goalDock={<SessionGoalDock controller={sessionGoal} />}
                 promptInput={
-                <Show
-                  when={newSessionDesign()}
-                  fallback={
-                    <PromptInput
-                      controls={inputController()}
-                      goal={sessionGoal.goal}
-                      ref={(el) => {
-                        inputRef = el
-                      }}
-                      newSessionWorktree={newSessionWorktree()}
-                      onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
-                      onSubmit={() => {
-                        discardEditedQueueOnDirectSubmit()
-                        comments.clear()
-                        resumeScroll()
-                      }}
-                      edit={editingFollowup()}
-                      onEditLoaded={clearFollowupEdit}
-                      shouldQueue={queueEnabled}
-                      onQueue={queueFollowup}
-                      onAbort={() => {
-                        const id = params.id
-                        if (!id) return
-                        setFollowup("paused", id, true)
-                      }}
-                    />
-                  }
-                >
-                  {(_) => {
-                    const controller = usePromptInputV2Controller({
-                      get controls() {
-                        return inputController()
-                      },
-                      ref: (el) => {
-                        inputRef = el
-                      },
-                      get newSessionWorktree() {
-                        return newSessionWorktree()
-                      },
-                      onNewSessionWorktreeReset: () => setStore("newSessionWorktree", "main"),
-                      onSubmit: () => {
-                        discardEditedQueueOnDirectSubmit()
-                        comments.clear()
-                        resumeScroll()
-                      },
-                      shouldQueue: queueEnabled,
-                      onQueue: queueFollowup,
-                      onAbort: () => {
-                        const id = params.id
-                        if (!id) return
-                        setFollowup("paused", id, true)
-                      },
-                      goal: sessionGoal.goal,
-                    })
-                    return (
-                      <PromptInputV2Composer
-                        controller={controller}
-                        borderUnderlay
+                  <Show
+                    when={newSessionDesign()}
+                    fallback={
+                      <PromptInput
+                        controls={inputController()}
+                        goal={sessionGoal.goal}
+                        ref={(el) => {
+                          inputRef = el
+                        }}
+                        newSessionWorktree={newSessionWorktree()}
+                        onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
+                        onSubmit={() => {
+                          discardEditedQueueOnDirectSubmit()
+                          comments.clear()
+                          resumeScroll()
+                        }}
                         edit={editingFollowup()}
                         onEditLoaded={clearFollowupEdit}
+                        shouldQueue={queueEnabled}
+                        onQueue={queueFollowup}
+                        onAbort={() => {
+                          const id = params.id
+                          if (!id) return
+                          setFollowup("paused", id, true)
+                        }}
                       />
-                    )
-                  }}
-                </Show>
+                    }
+                  >
+                    {(_) => {
+                      const controller = usePromptInputV2Controller({
+                        get controls() {
+                          return inputController()
+                        },
+                        ref: (el) => {
+                          inputRef = el
+                        },
+                        get newSessionWorktree() {
+                          return newSessionWorktree()
+                        },
+                        onNewSessionWorktreeReset: () => setStore("newSessionWorktree", "main"),
+                        onSubmit: () => {
+                          discardEditedQueueOnDirectSubmit()
+                          comments.clear()
+                          resumeScroll()
+                        },
+                        shouldQueue: queueEnabled,
+                        onQueue: queueFollowup,
+                        onAbort: () => {
+                          const id = params.id
+                          if (!id) return
+                          setFollowup("paused", id, true)
+                        },
+                        goal: sessionGoal.goal,
+                      })
+                      return (
+                        <PromptInputV2Composer
+                          controller={controller}
+                          borderUnderlay
+                          edit={editingFollowup()}
+                          onEditLoaded={clearFollowupEdit}
+                        />
+                      )
+                    }}
+                  </Show>
                 }
               />
             )
@@ -2454,11 +2488,20 @@ export default function Page() {
         executionStepCount={executionTrace().steps.length}
         onOpenExecution={() => setExecutionDock("opened", !executionDock.opened)}
       />
+      <Show when={executionDockVisible()}>
+        <SessionExecutionStatusBar
+          running={executionRunning()}
+          stepCount={executionTrace().steps.length}
+          label={executionStatusLabel()}
+          countLabel={executionStepCountLabel()}
+          onOpen={() => setExecutionDock("opened", !executionDock.opened)}
+        />
+      </Show>
       <div
         ref={panelRow}
         class="flex-1 min-h-0 flex flex-col md:flex-row"
         classList={{
-          "gap-3": settings.general.newLayoutDesigns(),
+          "gap-3": settings.general.newLayoutDesigns() && !executionDock.opened,
         }}
       >
         <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
@@ -2584,7 +2627,7 @@ export default function Page() {
         </Show>
         <Show when={executionDockVisible() && executionDock.opened}>
           <div
-            class="absolute inset-y-0 right-0 z-30 w-[min(380px,36vw)] rounded-l-[16px] shadow-[var(--v2-elevation-floating)]"
+            class="absolute inset-y-0 right-0 z-30 w-[min(380px,36vw)] shadow-[var(--v2-elevation-floating)]"
             style={{ animation: "session-side-panel-enter 260ms ease-out" }}
           >
             <SessionExecutionDock opened onOpenChange={(opened) => setExecutionDock("opened", opened)} />

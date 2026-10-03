@@ -1,6 +1,5 @@
 import { ImagePreview } from "@arforge-ai/ui/image-preview"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
-import { ProviderIcon } from "@arforge-ai/ui/provider-icon"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
 import { Icon } from "@arforge-ai/ui/v2/icon"
 import { KeybindV2 } from "@arforge-ai/ui/v2/keybind-v2"
@@ -9,8 +8,10 @@ import type { Prompt, ReferenceInfo } from "@arforge-ai/sdk/v2/client"
 import { createEffect, createMemo, on, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
+import { useLocal } from "@/context/local"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
+import { captureModelComposerFocus, captureModelEntry, resolveModelBinding } from "@/components/prompt-input/model-binding"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
 import { promptDesignPlaceholder, promptPlaceholder } from "@/components/prompt-input/placeholder"
@@ -73,6 +74,21 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const controlCenterText = useControlCenterText()
+  const local = useLocal()
+  const modelBinding = () => resolveModelBinding(props.controller.model.selection, local.model, local.modelSelection)
+  const openUnpaidModel = () => {
+    const controller = props.controller
+    const entry = captureModelEntry({ model: () => props.controller.model.selection, binding: modelBinding })
+    const restoreFocus = captureModelComposerFocus(
+      document.querySelector<HTMLElement>('[data-component="prompt-input"]'),
+      () => props.controller === controller && entry.current(),
+      controller.restoreFocus,
+    )
+    return dialog.show(
+      () => <DialogSelectModelUnpaidV2 model={entry.model} binding={entry.binding} />,
+      () => { requestAnimationFrame(restoreFocus) },
+    )
+  }
 
   useCommands(props)
   useEditHandler(props)
@@ -101,12 +117,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
             title={language.t("command.model.choose")}
             keybind={command.keybindParts("model.choose")}
             model={props.controller.model.selection}
-            providerID={props.controller.model.selection.current()?.provider?.id}
-            modelName={props.controller.model.selection.current()?.name ?? language.t("dialog.model.select.title")}
+            binding={modelBinding()}
+            modelName={props.controller.model.selection.current()?.name ?? modelBinding()?.key()?.modelID ?? language.t("dialog.model.select.title")}
             onClose={props.controller.restoreFocus}
-            onUnpaidClick={() =>
-              dialog.show(() => <DialogSelectModelUnpaidV2 model={props.controller.model.selection} />)
-            }
+            onUnpaidClick={openUnpaidModel}
           />
         }
         permissionControl={
@@ -489,10 +503,17 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       keybind: command.keybindParts(item.id),
     })),
   )
+  const reportModelWriteError = (error: unknown) => showToast({
+    title: language.t("common.requestFailed"),
+    description: error instanceof Error ? error.message : String(error),
+  })
+  const setVariant = (value: string | undefined) => {
+    void Promise.resolve(props.controls.model.selection.variant.set(value)).catch(reportModelWriteError)
+  }
   const variants = createMemo(() => reasoningControlOptions(props.controls.model.selection.variant.list()))
   createEffect(() => {
     const current = props.controls.model.selection.variant.current()
-    if (deprecatedReasoningVariant(current)) props.controls.model.selection.variant.set(undefined)
+    if (deprecatedReasoningVariant(current)) setVariant(undefined)
   })
   const controller = createPromptInputV2Controller({
     store: () => prompt.capture().store,
@@ -570,7 +591,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       variant: {
         options: () => variants().map(({ id, label }) => ({ id, label })),
         current: () => props.controls.model.selection.variant.current() ?? "default",
-        onSelect: (value) => props.controls.model.selection.variant.set(value === "default" ? undefined : value),
+        onSelect: (value) => setVariant(value === "default" ? undefined : value),
         keybind: () => command.keybindParts("model.variant.cycle"),
       },
       submit: {
@@ -595,7 +616,7 @@ function PromptInputV2ModelControl(props: {
   title: string
   keybind: string[]
   model: PromptInputV2ComposerController["model"]["selection"]
-  providerID?: string
+  binding?: NonNullable<PromptInputV2ComposerController["model"]["selection"]["binding"]>
   modelName: string
   onClose: () => void
   onUnpaidClick: () => void
@@ -603,15 +624,6 @@ function PromptInputV2ModelControl(props: {
   const shouldAnimate = createMemo<boolean>((previous) => previous ?? props.loading)
   const content = () => (
     <>
-      <Show when={props.providerID}>
-        {(providerID) => (
-          <ProviderIcon
-            id={providerID()}
-            class="size-4 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity duration-150"
-            style={{ "will-change": "opacity", transform: "translateZ(0)" }}
-          />
-        )}
-      </Show>
       <span class="truncate leading-4">{props.modelName}</span>
       <span class="-ml-0.5 -mr-1 flex shrink-0">
         <Icon name="chevron-down" />
@@ -635,6 +647,8 @@ function PromptInputV2ModelControl(props: {
           fallback={
             <ButtonV2
               data-action="prompt-model"
+              type="button"
+              aria-label={props.title + ": " + props.modelName}
               variant="ghost-muted"
               size="normal"
               class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
@@ -648,6 +662,7 @@ function PromptInputV2ModelControl(props: {
         >
           <ModelSelectorPopoverV2
             model={props.model}
+            binding={props.binding}
             triggerAs={ButtonV2}
             triggerProps={{
               variant: "ghost-muted",
@@ -656,6 +671,8 @@ function PromptInputV2ModelControl(props: {
               class: "min-w-0 max-w-[220px] justify-start ![font-weight:440] group",
               classList: { "animate-in fade-in": shouldAnimate() },
               "data-action": "prompt-model",
+              type: "button",
+              "aria-label": props.title + ": " + props.modelName,
             }}
             onClose={props.onClose}
           >

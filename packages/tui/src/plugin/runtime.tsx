@@ -5,6 +5,7 @@ import type {
   TuiPluginStatus,
 } from "@arforge-ai/plugin/tui"
 import type { TuiConfig } from "../config"
+import { createComponent } from "@opentui/solid"
 import { createContext, createSignal, useContext, type JSX, type ParentProps } from "solid-js"
 import { createPluginRoutes } from "./api"
 import { createSlots, type HostSlots } from "./slots"

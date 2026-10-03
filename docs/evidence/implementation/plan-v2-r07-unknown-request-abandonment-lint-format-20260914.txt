@@ -1,0 +1,8 @@
+Command: bunx prettier --check packages/core/src/runtime/durable-run.ts packages/core/src/session/runner/llm.ts packages/arforge/src/cli/cmd/session.ts packages/arforge/test/fixture/request-recovery-worker.ts packages/arforge/test/cli/session-recovery-process.test.ts packages/arforge/test/session/prompt.test.ts docs/USER_GUIDE.md
+Exit: 0
+All matched files use Prettier code style.
+
+Command: bunx oxlint packages/core/src/runtime/durable-run.ts packages/core/src/session/runner/llm.ts packages/arforge/src/cli/cmd/session.ts packages/arforge/test/fixture/request-recovery-worker.ts packages/arforge/test/cli/session-recovery-process.test.ts packages/arforge/test/session/prompt.test.ts --quiet
+Exit: 0
+Found 113 warnings and 0 errors.
+Finished in 7.1s on 6 files with 130 rules using 32 threads.

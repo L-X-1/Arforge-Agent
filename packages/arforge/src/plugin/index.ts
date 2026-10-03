@@ -28,6 +28,7 @@ import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@arforge-ai/core/installation/version"
+import { Database } from "@arforge-ai/core/database/database"
 
 type State = {
   hooks: Hooks[]
@@ -302,7 +303,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node],
+  deps: [EventV2Bridge.node, Config.node, RuntimeFlags.node, Database.node],
 })
 
 export * as Plugin from "."

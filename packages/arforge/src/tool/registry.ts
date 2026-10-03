@@ -18,10 +18,6 @@ import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
-import { type ToolContext as PluginToolContext, type ToolDefinition } from "@arforge-ai/plugin"
-import type { JSONSchema7, JSONSchema7Definition } from "@ai-sdk/provider"
-import { Schema } from "effect"
-import z from "zod"
 import { Plugin } from "../plugin"
 import { Provider } from "@/provider/provider"
 
@@ -37,7 +33,6 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
-import { EffectBridge } from "@/effect/bridge"
 import { Question } from "../question"
 import { Todo } from "../session/todo"
 import { LSP } from "@/lsp/lsp"
@@ -54,6 +49,12 @@ import { ModelV2 } from "@arforge-ai/core/model"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
+import { safeCapabilityKey } from "@/mcp/capability-registry"
+import { McpToolProjection } from "@/mcp/tool-projection"
+import { McpResourceProjection } from "@/mcp/resource-projection"
+import { SandboxRunner } from "@/sandbox/runner"
+import { PluginToolSource } from "./plugin-source-adapter"
+import { SubagentChildExecutor } from "@arforge-ai/core/runtime/subagent-child-executor"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.arforge || flags.exa || flags.parallel
@@ -67,6 +68,25 @@ type State = {
   builtin: Tool.Def[]
   task: TaskDef
   read: ReadDef
+}
+
+export function partitionCustomTools<T extends { readonly id: string }>(
+  custom: ReadonlyArray<T>,
+  builtin: ReadonlyArray<{ readonly id: string }>,
+) {
+  const reserved = new Set(builtin.map((tool) => tool.id))
+  const accepted: T[] = []
+  const rejected: T[] = []
+  const claimed = new Set<string>()
+  for (const tool of custom) {
+    if (reserved.has(tool.id) || claimed.has(tool.id)) {
+      rejected.push(tool)
+      continue
+    }
+    claimed.add(tool.id)
+    accepted.push(tool)
+  }
+  return { accepted, rejected }
 }
 
 export interface Interface {
@@ -109,71 +129,12 @@ const layer = Layer.effect(
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
-    const agent = yield* Agent.Service
     const codeMode = flags.experimentalCodeMode ? yield* Effect.promise(() => import("./code-mode")) : undefined
     const codeModeTool = codeMode ? yield* codeMode.CodeModeTool : undefined
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
         const custom: Tool.Def[] = []
-
-        function fromPlugin(id: string, def: ToolDefinition): Tool.Def {
-          // Plugin tools still expose Zod args publicly; keep that compatibility
-          // boxed at the registry boundary and give the LLM the original JSON Schema.
-          // Normalize missing args to `{}` once — pre-1.14.49 the code was
-          // `z.object(def.args)` and Zod silently tolerated undefined (#27451, #27630).
-          const args = def.args ?? {}
-          const entries = Object.entries(args)
-          const allZod = entries.every((entry) => isZodType(entry[1]))
-          const zodParams = allZod ? z.object(args) : undefined
-          const jsonSchema = zodParams ? zodJsonSchema(zodParams) : legacyJsonSchema(entries)
-          const parameters = zodParams
-            ? Schema.declare<unknown>((u): u is unknown => zodParams.safeParse(u).success)
-            : Schema.Unknown
-          return {
-            id,
-            parameters,
-            jsonSchema,
-            description: def.description,
-            execute: (args, toolCtx) =>
-              Effect.gen(function* () {
-                // Bridge the host's Effect-based `ask` into a Promise-returning
-                // function for the plugin to make sure context persists
-                const bridge = yield* EffectBridge.make()
-                const pluginCtx: PluginToolContext = {
-                  ...toolCtx,
-                  ask: (req) => bridge.promise(toolCtx.ask(req)),
-                  directory: ctx.directory,
-                  worktree: ctx.worktree,
-                }
-                const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
-                const output = typeof result === "string" ? result : result.output
-                const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
-                const attachments = typeof result === "string" ? undefined : result.attachments
-                const info = yield* agent.get(toolCtx.agent)
-                const out = yield* truncate.output(output, {}, info)
-                return {
-                  title: typeof result === "string" ? "" : (result.title ?? ""),
-                  output: out.truncated ? out.content : output,
-                  attachments,
-                  metadata: {
-                    ...metadata,
-                    truncated: out.truncated,
-                    ...(out.truncated && { outputPath: out.outputPath }),
-                  },
-                }
-              }).pipe(
-                Effect.withSpan("Tool.execute", {
-                  attributes: {
-                    "tool.name": id,
-                    "session.id": toolCtx.sessionID,
-                    "message.id": toolCtx.messageID,
-                    ...(toolCtx.callID ? { "tool.call_id": toolCtx.callID } : {}),
-                  },
-                }),
-              ),
-          }
-        }
 
         const dirs = yield* config.directories()
         const matches = dirs.flatMap((dir) =>
@@ -186,15 +147,21 @@ const layer = Layer.effect(
           // Import it as `file://` so Node on Windows accepts the dynamic import.
           const mod = yield* Effect.promise(() => import(pathToFileURL(match).href))
           for (const [id, def] of Object.entries(mod)) {
-            if (!isPluginTool(def)) continue
-            custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
+            if (!PluginToolSource.isDefinition(def)) continue
+            custom.push(
+              PluginToolSource.make(id === "default" ? namespace : `${namespace}_${id}`, def, {
+                instance: ctx,
+                agents,
+                truncate,
+              }),
+            )
           }
         }
 
         const plugins = yield* plugin.list()
         for (const p of plugins) {
           for (const [id, def] of Object.entries(p.tool ?? {})) {
-            custom.push(fromPlugin(id, def))
+            custom.push(PluginToolSource.make(id, def, { instance: ctx, agents, truncate }))
           }
         }
 
@@ -221,27 +188,38 @@ const layer = Layer.effect(
           ...(codeModeTool ? { execute: Tool.init(codeModeTool) } : {}),
         })
 
+        const builtin = [
+          tool.invalid,
+          ...(questionEnabled ? [tool.question] : []),
+          tool.shell,
+          tool.read,
+          tool.glob,
+          tool.grep,
+          tool.edit,
+          tool.write,
+          tool.task,
+          tool.fetch,
+          tool.todo,
+          tool.search,
+          tool.skill,
+          tool.patch,
+          ...(tool.execute ? [tool.execute] : []),
+          ...(flags.experimentalLspTool ? [tool.lsp] : []),
+          ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+        ]
+        const partitioned = partitionCustomTools(custom, builtin)
+        for (const rejected of partitioned.rejected) {
+          yield* Effect.logWarning("Ignoring conflicting third-party tool name", {
+            tool: rejected.id,
+            reason: builtin.some((item) => item.id === rejected.id)
+              ? "reserved by a built-in tool"
+              : "already claimed by another third-party tool",
+          })
+        }
+
         return {
-          custom,
-          builtin: [
-            tool.invalid,
-            ...(questionEnabled ? [tool.question] : []),
-            tool.shell,
-            tool.read,
-            tool.glob,
-            tool.grep,
-            tool.edit,
-            tool.write,
-            tool.task,
-            tool.fetch,
-            tool.todo,
-            tool.search,
-            tool.skill,
-            tool.patch,
-            ...(tool.execute ? [tool.execute] : []),
-            ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
-          ],
+          custom: partitioned.accepted,
+          builtin,
           task: tool.task,
           read: tool.read,
         }
@@ -297,10 +275,171 @@ const layer = Layer.effect(
         return true
       })
 
+      const mcpDefinitions = flags.experimentalCodeMode
+        ? []
+        : yield* Effect.gen(function* () {
+            const mcpTools = yield* mcp.tools()
+            // Compatibility mocks and transitional providers may expose only
+            // tools; the production MCP service always supplies all catalogs.
+            const mcpPrompts = mcp.prompts ? yield* mcp.prompts() : {}
+            const mcpResources = mcp.resources ? yield* mcp.resources() : {}
+            const mcpResourceTemplates = mcp.resourceTemplates ? yield* mcp.resourceTemplates() : {}
+            if (
+              Object.keys(mcpTools).length === 0 &&
+              Object.keys(mcpPrompts).length === 0 &&
+              Object.keys(mcpResources).length === 0 &&
+              Object.keys(mcpResourceTemplates).length === 0
+            )
+              return [] as Tool.Def[]
+            const clientNames = Object.keys(yield* mcp.clients())
+            const existing = new Set(filtered.map((tool) => tool.id))
+            const projected: Tool.Def[] = []
+
+            const add = (tool: Tool.Def) => {
+              if (existing.has(tool.id)) {
+                return
+              }
+              existing.add(tool.id)
+              projected.push(tool)
+            }
+
+            for (const [key, entry] of Object.entries(mcpTools).sort(([a], [b]) => a.localeCompare(b))) {
+              if (existing.has(key)) {
+                yield* Effect.logWarning("Ignoring MCP tool with a conflicting native tool name", {
+                  tool: key,
+                  reason: "native ToolRegistry entry already owns the name",
+                })
+                continue
+              }
+              const server = McpCatalog.serverForToolKey(key, clientNames)
+              projected.push(
+                McpToolProjection.make({
+                  key,
+                  server,
+                  entry,
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+              existing.add(key)
+            }
+
+            const promptEntries = Object.entries(mcpPrompts).sort(([a], [b]) => a.localeCompare(b))
+            for (const [capabilityID, entry] of promptEntries) {
+              const key = McpCatalog.nativeCapabilityName("prompt", entry.client, entry.name)
+              add(
+                McpResourceProjection.makePrompt({
+                  key,
+                  capabilityID,
+                  server: entry.client,
+                  generation: entry.generation,
+                  entry,
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            }
+
+            const resourceEntries = Object.entries(mcpResources).sort(([a], [b]) => a.localeCompare(b))
+            for (const [, entry] of resourceEntries) {
+              const key = McpCatalog.nativeCapabilityName("resource", entry.client, entry.uri)
+              add(
+                McpResourceProjection.makeResource({
+                  key,
+                  // Public catalog keys preserve the provider URI for display,
+                  // while the registry identity is redacted and canonicalized
+                  // (including query/fragment removal).  Recompute that
+                  // identity at the projection boundary so a URI containing
+                  // credentials cannot make the tool carry a different ID
+                  // from the generation lease that readResource validates.
+                  capabilityID: safeCapabilityKey(entry.client, entry.uri),
+                  server: entry.client,
+                  generation: entry.generation,
+                  entry,
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            }
+
+            const templateEntries = Object.entries(mcpResourceTemplates).sort(([a], [b]) => a.localeCompare(b))
+            for (const [, entry] of templateEntries) {
+              const key = McpCatalog.nativeCapabilityName("resource_template", entry.client, entry.uriTemplate)
+              add(
+                McpResourceProjection.makeResourceTemplate({
+                  key,
+                  capabilityID: safeCapabilityKey(entry.client, entry.uriTemplate),
+                  server: entry.client,
+                  generation: entry.generation,
+                  entry,
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            }
+
+            if (Object.keys(mcpPrompts).length > 0)
+              add(
+                McpResourceProjection.makePromptList({
+                  key: "list_mcp_prompts",
+                  server: "mcp",
+                  kind: "prompt",
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            if (Object.keys(mcpResources).length > 0)
+              add(
+                McpResourceProjection.makeResourceRead({
+                  key: "read_mcp_resource",
+                  server: "mcp",
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            if (Object.keys(mcpResources).length > 0)
+              add(
+                McpResourceProjection.makeResourceList({
+                  key: "list_mcp_resources",
+                  server: "mcp",
+                  kind: "resource",
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            if (Object.keys(mcpResourceTemplates).length > 0)
+              add(
+                McpResourceProjection.makeResourceTemplateList({
+                  key: "list_mcp_resource_templates",
+                  server: "mcp",
+                  kind: "resource_template",
+                  mcp,
+                  plugin,
+                  agents,
+                  truncate,
+                }),
+              )
+            return projected
+          })
+
       const codeModeDescription = filtered.some((tool) => tool.id === "execute")
         ? yield* describeCodeMode(input)
         : undefined
-      const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
+      const visible = [...filtered, ...mcpDefinitions].filter((tool) => tool.id !== "execute" || codeModeDescription)
 
       return yield* Effect.forEach(
         visible,
@@ -326,6 +465,7 @@ const layer = Layer.effect(
               .join("\n"),
             parameters: output.parameters,
             jsonSchema,
+            origin: tool.origin,
             execute: tool.execute,
             formatValidationError: tool.formatValidationError,
           }
@@ -342,82 +482,6 @@ const layer = Layer.effect(
     return Service.of({ ids, all, named, tools })
   }),
 )
-
-function isZodType(value: unknown): value is z.ZodType {
-  return typeof value === "object" && value !== null && "_zod" in value
-}
-
-function isPluginTool(value: unknown): value is ToolDefinition {
-  return typeof value === "object" && value !== null && "args" in value && "description" in value && "execute" in value
-}
-
-function isJsonSchemaDefinition(value: unknown): value is JSONSchema7Definition {
-  return typeof value === "boolean" || (typeof value === "object" && value !== null && !Array.isArray(value))
-}
-
-function legacyJsonSchema(entries: [string, unknown][]): JSONSchema7 {
-  const properties = Object.fromEntries(
-    entries.filter((entry): entry is [string, JSONSchema7Definition] => isJsonSchemaDefinition(entry[1])),
-  )
-  return {
-    type: "object",
-    properties,
-    required: Object.keys(properties),
-  }
-}
-
-function zodJsonSchema(schema: z.ZodType): JSONSchema7 {
-  const result = normalizeZodJsonSchema(z.toJSONSchema(schema, { io: "input", metadata: zodMetadataRegistry(schema) }))
-  if (!isJsonSchemaObject(result)) throw new Error("plugin tool Zod schema produced a non-object JSON Schema")
-  const { $defs, ...rest } = result
-  return (
-    $defs && isJsonSchemaObject($defs) ? { ...rest, definitions: $defs as JSONSchema7["definitions"] } : rest
-  ) as JSONSchema7
-}
-
-function zodMetadataRegistry(schema: z.ZodType) {
-  const registry = z.registry<Record<string, unknown>>()
-  const seen = new WeakSet<object>()
-  const collect = (value: unknown) => {
-    if (typeof value !== "object" || value === null) return
-    if (seen.has(value)) return
-    seen.add(value)
-
-    if (isZodType(value)) {
-      const metadata = typeof value.meta === "function" ? value.meta() : undefined
-      const description = typeof value.description === "string" ? value.description : undefined
-      const merged = {
-        ...(metadata && typeof metadata === "object" ? metadata : {}),
-        ...(description ? { description } : {}),
-      }
-      if (Object.keys(merged).length) registry.add(value, merged)
-      collect(value._zod.def)
-      return
-    }
-
-    for (const item of Object.values(value)) collect(item)
-  }
-  collect(schema)
-  return registry
-}
-
-function normalizeZodJsonSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => normalizeZodJsonSchema(item))
-  if (typeof value !== "object" || value === null) return value
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry) =>
-        (entry[0] === "exclusiveMaximum" || entry[0] === "exclusiveMinimum") && typeof entry[1] === "boolean"
-          ? false
-          : true,
-      )
-      .map(([key, item]) => [key, normalizeZodJsonSchema(item)]),
-  )
-}
-
-function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
 
 export const node = LayerNode.make({
   service: Service,
@@ -441,8 +505,10 @@ export const node = LayerNode.make({
     Format.node,
     Truncate.node,
     RuntimeFlags.node,
+    SandboxRunner.node,
     MCP.node,
     Database.node,
+    SubagentChildExecutor.node,
     Ripgrep.node,
   ],
 })

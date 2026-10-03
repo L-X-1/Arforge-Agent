@@ -55,6 +55,8 @@ export interface Settings {
 
 export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
+// Empty is an explicit system-font choice; only an absent preference adopts V2.
+export const sansUnsetDefault = "Noto Sans SC"
 export const terminalDefault = "JetBrainsMono Nerd Font Mono"
 const legacyNewLayoutDesignsDefault = import.meta.env.VITE_ARFORGE_CHANNEL !== "prod"
 export const newLayoutDesignsDefault = true
@@ -163,7 +165,7 @@ export function monoFontFamily(font: string | undefined) {
 }
 
 export function sansFontFamily(font: string | undefined) {
-  return stack(font, sansBase)
+  return stack(font === undefined ? sansUnsetDefault : font, sansBase)
 }
 
 export function terminalInput(font: string | undefined) {
@@ -193,7 +195,7 @@ const defaultSettings: Settings = {
   appearance: {
     fontSize: 14,
     mono: "",
-    sans: "",
+    sans: sansUnsetDefault,
     terminal: "",
   },
   keybinds: {},

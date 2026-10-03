@@ -1,0 +1,25 @@
+Command: bun test test/mcp/catalog.test.ts --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+18 pass
+0 fail
+47 expect() calls
+Ran 18 tests across 1 file. [2.96s]
+
+Covered:
+- aggregate reservation commit/release across a failed and a healthy traversal;
+- aggregate total deadline aborting an active list request;
+- resetTimeoutOnProgress=false and bounded maxTotalTimeout on list requests;
+- existing per-traversal cursor/page/item/byte/deadline and caller-cancellation guards.
+
+Command: bun run audit:migration-freshness
+Exit: 0
+valid=true; source-inputs=7568; python-capabilities=5080; python-tests=3394; dependency-leaves=7500; ts-composition source_file_count=1757; capability-links=4 (missing evidence remains 4 historical records).
+
+Command: bun run audit:session-owner
+Exit: 0
+valid=true; owner=SessionExecution; findings=[]
+
+Command: bun run audit:tool-pipeline
+Exit: 0
+valid=true; fully_canonical=true; canonical=43; definitions=18; transport_only=4; transitional=0; findings=[]

@@ -7,6 +7,7 @@ import { makeLocationNode } from "../effect/app-node"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead } from "./effect-semantics"
 
 export const name = "cooperative_wait"
 
@@ -20,7 +21,7 @@ export const Input = Schema.Struct({
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const waits = yield* CooperativeWaitV2.Service
     yield* tools
       .register({
@@ -29,6 +30,9 @@ const layer = Layer.effectDiscard(
             "Wait cooperatively for a bounded duration without starting or occupying a shell process. The host can observe, cancel, or wake it, and periodic check-ins report liveness.",
           input: Input,
           output: CooperativeWaitV2.Result,
+          effects: automaticRead({
+            successCriteria: ["bounded cooperative wait completes, is cancelled, or is woken by the host"],
+          }),
           toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
           execute: (input, context) =>
             waits
@@ -58,5 +62,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/cooperative-wait",
   layer,
-  deps: [ToolRegistry.node, CooperativeWaitV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, CooperativeWaitV2.node],
 })

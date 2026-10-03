@@ -12,6 +12,9 @@ import { ToolRegistry } from "@/tool/registry"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { LocationServiceMap, locationServiceMapLayer } from "@arforge-ai/core/location-services"
+import { RelativePath } from "@arforge-ai/core/schema"
+import { Entry } from "@arforge-ai/schema/filesystem"
 
 const baseCtx: Omit<Tool.Context, "ask"> = {
   sessionID: SessionID.make("ses_test"),
@@ -23,11 +26,25 @@ const baseCtx: Omit<Tool.Context, "ask"> = {
   metadata: () => Effect.void,
 }
 
+const ripgrep = Layer.succeed(Ripgrep.Service, {
+  find: () => Effect.succeed([Entry.make({ path: RelativePath.make("scripts/demo.txt"), type: "file" })]),
+  glob: () => Effect.succeed([]),
+  grep: () => Effect.succeed([]),
+})
+
 afterEach(async () => {
   await disposeAllInstances()
 })
 
-const it = testEffect(LayerNode.compile(LayerNode.group([ToolRegistry.node, CrossSpawnSpawner.node, Ripgrep.node])))
+const it = testEffect(
+  LayerNode.compile(
+    LayerNode.group([ToolRegistry.node, CrossSpawnSpawner.node, Ripgrep.node, LocationServiceMap.node]),
+    [
+      [LocationServiceMap.node, locationServiceMapLayer],
+      [Ripgrep.node, ripgrep],
+    ],
+  ),
+)
 
 describe("tool.skill", () => {
   it.instance("execute returns skill content block with files", () =>

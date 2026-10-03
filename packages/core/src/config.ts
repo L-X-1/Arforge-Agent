@@ -2,7 +2,7 @@ export * as Config from "./config"
 
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
-import { type ParseError, parse } from "jsonc-parser"
+import { type ParseError, parse, modify, applyEdits } from "jsonc-parser"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Permission } from "@arforge-ai/schema/permission"
 import { FSUtil } from "./fs-util"
@@ -25,6 +25,11 @@ import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
+import { ConfigErrorV1 } from "./v1/config/error"
+import { ConfigProviderV1 } from "./v1/config/provider"
+import { ConfigMCPV1 } from "./v1/config/mcp"
+import { EffectFlock } from "./util/effect-flock"
+import { atomicWrite } from "./file-guard"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
   $schema: Schema.optional(Schema.String).annotate({
@@ -132,6 +137,172 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/Config") {}
 
+function patchDocument(text: string, value: unknown, pointer: string[] = []): string {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    pointer.at(-1) === "priceCatalog" ||
+    (pointer.length === 3 && pointer[0] === "mcp" && pointer[1] === "servers" && "type" in value)
+  ) {
+    return applyEdits(text, modify(text, pointer, value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }))
+  }
+  return Object.entries(value).reduce((result, [key, next]) => patchDocument(result, next, [...pointer, key]), text)
+}
+
+/** Writes the canonical file in place; preserves source comments and unrelated fields. */
+export const updateDocument = Effect.fn("Config.updateDocument")(function* (
+  directory: string,
+  patch: Readonly<Record<string, unknown>>,
+  options?: { local?: boolean; validate?: (document: { path: string; text: string }) => void },
+) {
+  const fs = yield* FSUtil.Service
+  const flock = yield* EffectFlock.Service
+  return yield* flock.withLock(
+    Effect.gen(function* () {
+      const candidates = [
+        ...(options?.local
+          ? [path.join(directory, ".arforge", "arforge.jsonc"), path.join(directory, ".arforge", "arforge.json")]
+          : []),
+        path.join(directory, "arforge.jsonc"),
+        path.join(directory, "arforge.json"),
+      ]
+      let file = path.join(directory, "arforge.jsonc")
+      for (const candidate of candidates) {
+        if (yield* fs.exists(candidate)) {
+          file = candidate
+          break
+        }
+      }
+      const before = yield* fs
+        .readFileString(file)
+        .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
+      // One-way preservation when saving an old profile for the first time. The
+      // legacy source remains untouched; subsequent saves use the canonical file.
+      const legacy =
+        before === undefined
+          ? yield* fs
+              .readFileString(path.join(directory, "config.json"))
+              .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)))
+          : undefined
+      const base = before ?? legacy
+      const invalid = () =>
+        new ConfigErrorV1.InvalidError({
+          path: file,
+          issues: [{ path: [], message: "The configuration is invalid; no changes were saved." }],
+        })
+      if (base !== undefined && decodeDocument(base, file).length === 0) return yield* Effect.die(invalid())
+      const after = patchDocument(base ?? "{}\n", patch)
+      if (decodeDocument(after, file).length === 0) return yield* Effect.die(invalid())
+      // A remaining compatibility consumer must validate its response before
+      // the commit. Reporting a failed save after modifying the file is unsafe.
+      options?.validate?.({ path: file, text: after })
+      const changed = before !== after
+      if (changed) {
+        if (before === undefined) yield* atomicWrite(file, after, undefined, { overwrite: false })
+        else {
+          if (!fs.writeIfUnchanged)
+            return yield* Effect.die(new Error("Conditional config writing is unavailable; nothing was saved."))
+          yield* fs.writeIfUnchanged(file, new TextEncoder().encode(before), after)
+        }
+      }
+      return { path: file, text: after, changed }
+    }),
+    `config:${path.resolve(directory)}`,
+  )
+})
+
+export const decodeDocument = (text: string, filepath?: string): Document[] => {
+  const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
+  const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
+  const decodeV1Info = Schema.decodeUnknownOption(ConfigV1.Info, decodeOptions)
+  const errors: ParseError[] = []
+  const input: unknown = parse(text, errors, { allowTrailingComma: true })
+  if (errors.length) return []
+
+  const mcp = typeof input === "object" && input !== null && "mcp" in input ? ConfigMCPV1.split(input.mcp) : {}
+  if (
+    mcp.legacy !== undefined &&
+    Option.isNone(Schema.decodeUnknownOption(ConfigV1.Info.fields.mcp, decodeOptions)(mcp.legacy))
+  )
+    throw new ConfigErrorV1.InvalidError({
+      path: filepath ?? "ARFORGE_CONFIG_CONTENT",
+      issues: [
+        {
+          path: ["mcp"],
+          message: "Invalid legacy MCP configuration; correct or migrate the server settings before retrying.",
+        },
+      ],
+    })
+  const canonicalMcp =
+    mcp.canonical === undefined ? undefined : Schema.decodeUnknownOption(ConfigMCP.Info, decodeOptions)(mcp.canonical)
+  if (canonicalMcp !== undefined && Option.isNone(canonicalMcp))
+    throw new ConfigErrorV1.InvalidError({
+      path: filepath ?? "ARFORGE_CONFIG_CONTENT",
+      issues: [
+        { path: ["mcp"], message: "Invalid TS MCP configuration; correct the server settings before retrying." },
+      ],
+    })
+  const legacy = ConfigMigrateV1.isV1(input) || mcp.legacy !== undefined
+  const legacyInput =
+    typeof input === "object" && input !== null && "mcp" in input ? { ...input, mcp: mcp.legacy } : input
+
+  const canonical =
+    typeof input === "object" && input !== null && "providers" in input
+      ? Schema.decodeUnknownOption(Schema.Record(Schema.String, ConfigProvider.Info), decodeOptions)(input.providers)
+      : undefined
+  if (canonical !== undefined && Option.isNone(canonical)) {
+    // Do not fall back to legacy or lower-priority prices after an explicit
+    // canonical provider configuration fails validation. Never include values.
+    throw new ConfigErrorV1.InvalidError({
+      path: filepath ?? "ARFORGE_CONFIG_CONTENT",
+      issues: [
+        {
+          path: ["providers"],
+          message: "Invalid TS provider configuration; correct the model and priceCatalog settings before retrying.",
+        },
+      ],
+    })
+  }
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "provider" in input &&
+    Option.isNone(
+      Schema.decodeUnknownOption(Schema.Record(Schema.String, ConfigProviderV1.Info), decodeOptions)(input.provider),
+    )
+  ) {
+    throw new ConfigErrorV1.InvalidError({
+      path: filepath ?? "ARFORGE_CONFIG_CONTENT",
+      issues: [
+        {
+          path: ["provider"],
+          message:
+            "Invalid legacy provider configuration; migrate or correct the model and priceCatalog settings before retrying.",
+        },
+      ],
+    })
+  }
+
+  const info = Option.getOrUndefined(
+    legacy
+      ? decodeV1Info(legacyInput).pipe(Option.map(ConfigMigrateV1.migrate), Option.flatMap(decodeInfo))
+      : decodeInfo(input),
+  )
+  if (!info) return []
+  const document = (info: Info) =>
+    new Document({ type: "document", ...(filepath === undefined ? {} : { path: filepath }), info })
+  // One file can contain migration spellings and canonical providers. Feed
+  // both through the existing ordered config/plugin pipeline, canonical last.
+  // This preserves model/variant merging and atomic price replacement without
+  // a second merge algorithm or losing canonical-only model metadata.
+  const overlay = {
+    ...(canonical !== undefined && Option.isSome(canonical) ? { providers: canonical.value } : {}),
+    ...(canonicalMcp !== undefined && Option.isSome(canonicalMcp) ? { mcp: canonicalMcp.value } : {}),
+  }
+  return legacy && Object.keys(overlay).length ? [document(info), document(new Info(overlay))] : [document(info)]
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -140,31 +311,25 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const policy = yield* Policy.Service
     const names = ["arforge.json", "arforge.jsonc"]
-    const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
-    const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
-    const decodeV1Info = Schema.decodeUnknownOption(ConfigV1.Info, decodeOptions)
+
+    // Keep the inline configuration escape hatch on the canonical V2 config
+    // owner.  The legacy CLI has historically used ARFORGE_CONFIG_CONTENT for
+    // isolated subprocesses and embedders; if V2 ignores it, the formal
+    // runner sees an empty catalog even though the mature adapter loaded the
+    // same provider.  Decode through the same V1 migration path as files so
+    // old `provider`/`formatter` shapes remain compatible while TS remains
+    // the single runtime owner.
 
     const loadFile = Effect.fnUntraced(function* (filepath: string) {
       const text = yield* fs.readFileStringSafe(filepath)
-      if (!text) return
-
-      const errors: ParseError[] = []
-      const input: unknown = parse(text, errors, { allowTrailingComma: true })
-      if (errors.length) return
-
-      const info = Option.getOrUndefined(
-        ConfigMigrateV1.isV1(input)
-          ? decodeV1Info(input).pipe(Option.map(ConfigMigrateV1.migrate), Option.flatMap(decodeInfo))
-          : decodeInfo(input),
-      )
-      if (!info) return
-      return new Document({ type: "document", path: filepath, info })
+      if (!text) return []
+      return decodeDocument(text, filepath)
     })
 
     const loadDirectory = Effect.fnUntraced(function* (directory: AbsolutePath) {
       return [
         ...(yield* Effect.forEach(names, (file) => loadFile(path.join(directory, file))).pipe(
-          Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
+          Effect.map((configs) => configs.flat()),
         )),
         new Directory({ type: "directory", path: directory }),
       ]
@@ -195,12 +360,16 @@ const layer = Layer.effect(
     const directPaths = discovered.filter((item) => path.basename(item) !== ".arforge").toReversed()
     const direct = yield* Effect.forEach(directPaths, loadFile).pipe(
       Effect.orDie,
-      Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
+      Effect.map((configs) => configs.flat()),
     )
     const supplementary = yield* Effect.forEach(directories, loadDirectory).pipe(Effect.orDie)
     // Apply general settings first and more specific settings last:
-    // global config, project files, then canonical project directories.
-    const configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat()]
+    // global config, project files, canonical project directories, then an
+    // explicit inline override.  The latter mirrors the legacy loader's
+    // local ARFORGE_CONFIG_CONTENT precedence and is intentionally ephemeral
+    // (no synthetic path is exposed to relative-file/plugin resolution).
+    const inline = process.env.ARFORGE_CONFIG_CONTENT ? decodeDocument(process.env.ARFORGE_CONFIG_CONTENT) : []
+    const configs = [...(supplementary[0] ?? []), ...direct, ...supplementary.slice(1).flat(), ...inline]
     // Rules use the opposite order so a user-global rule can override a
     // repository rule. Statement order inside each file stays unchanged.
     yield* policy.load(

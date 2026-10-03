@@ -1,8 +1,9 @@
 import { afterEach, describe, expect } from "bun:test"
+import * as fs from "fs/promises"
 import path from "path"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { FSUtil } from "@arforge-ai/core/fs-util"
-import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import { Git } from "../../src/git"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
@@ -11,12 +12,25 @@ import { Worktree } from "../../src/worktree"
 import { disposeAllInstances, provideInstance, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
+let activeSafetyHook: Worktree.SafetyTestHookInterface | undefined
+const safetyHooks = Layer.succeed(
+  Worktree.SafetyTestHooks,
+  Worktree.SafetyTestHooks.of({
+    beforeGuard: (point) => Effect.suspend(() => activeSafetyHook?.beforeGuard?.(point) ?? Effect.void),
+    afterSideEffect: (point) => Effect.suspend(() => activeSafetyHook?.afterSideEffect?.(point) ?? Effect.void),
+  }),
+)
+
 const it = testEffect(
-  LayerNode.compile(LayerNode.group([Worktree.node, FSUtil.node, Git.node]), [
-    [InstanceStore.bootstrapNode, InstanceBootstrap.node],
-  ]),
+  Layer.provideMerge(
+    LayerNode.compile(LayerNode.group([Worktree.node, FSUtil.node, Git.node]), [
+      [InstanceStore.bootstrapNode, InstanceBootstrap.node],
+    ]),
+    safetyHooks,
+  ),
 )
 const wintest = process.platform !== "win32" ? it.instance : it.instance.skip
+const windowsOnly = process.platform === "win32" ? it.instance : it.instance.skip
 
 function normalize(input: string) {
   return input.replace(/\\/g, "/").toLowerCase()
@@ -74,6 +88,12 @@ const gitResult = Effect.fn("WorktreeTest.gitResult")(function* (cwd: string, ar
   const service = yield* Git.Service
   return yield* service.run(args, { cwd })
 })
+
+const directoryLink = (link: string, target: string) =>
+  Effect.tryPromise({
+    try: () => fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir"),
+    catch: (cause) => new Error(cause instanceof Error ? cause.message : String(cause)),
+  })
 
 describe("Worktree", () => {
   afterEach(() => disposeAllInstances())
@@ -237,6 +257,304 @@ describe("Worktree", () => {
           }),
         ),
       { git: true },
+    )
+
+    windowsOnly(
+      "control-plane create blocks a junction inserted after preflight",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const name = `junction-${Date.now().toString(36)}`
+          const prepared = yield* svc.prepareCreate({ name }, "cpr_junction_00000001")
+          const outside = path.join(test.directory, `${name}-outside`)
+          yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(outside, "sentinel.txt"), "must-survive"))
+          yield* Effect.promise(() => fs.mkdir(path.dirname(prepared.info.directory), { recursive: true }))
+          yield* directoryLink(prepared.info.directory, outside)
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(() => fs.rm(prepared.info.directory, { recursive: true, force: true })),
+          )
+
+          const exit = yield* Effect.exit(svc.createPrepared(prepared, "act_junction_00000001"))
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "sentinel.txt"), "utf8"))).toBe(
+            "must-survive",
+          )
+          const listed = yield* git(test.directory, ["worktree", "list", "--porcelain"])
+          expect(normalize(listed)).not.toContain(normalize(prepared.info.directory))
+        }),
+      { git: true },
+    )
+
+    it.instance(
+      "control-plane create blocks a linked managed-root parent chain",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const prepared = yield* svc.prepareCreate(
+            { name: `parent-link-${Date.now().toString(36)}` },
+            "cpr_parent_link_000001",
+          )
+          const controlledRoot = prepared.roots.managedWorktreeRoot
+          const outside = path.join(test.directory, "outside-managed-root")
+          yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(outside, "sentinel.txt"), "must-survive"))
+          yield* Effect.promise(() => fs.mkdir(path.dirname(controlledRoot), { recursive: true }))
+          yield* directoryLink(controlledRoot, outside)
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(() => fs.rm(controlledRoot, { recursive: true, force: true })),
+          )
+
+          const exit = yield* Effect.exit(svc.createPrepared(prepared, "act_parent_link_000001"))
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "sentinel.txt"), "utf8"))).toBe(
+            "must-survive",
+          )
+          expect(
+            yield* Effect.promise(() =>
+              fs
+                .stat(prepared.info.directory)
+                .then(() => true)
+                .catch(() => false),
+            ),
+          ).toBe(false)
+        }),
+      { git: true },
+    )
+
+    it.instance(
+      "control-plane create blocks reservation-root identity replacement",
+      () =>
+        Effect.gen(function* () {
+          const svc = yield* Worktree.Service
+          const requestID = "cpr_reservation_identity_01"
+          const discovered = yield* svc.prepareCreate({ name: "reservation-identity" }, requestID)
+          const reservationRoot = discovered.roots.reservationRoot
+          yield* Effect.promise(() => fs.mkdir(reservationRoot, { recursive: true }))
+          const prepared = yield* svc.prepareCreate({ name: "reservation-identity" }, requestID)
+          const approvedRoot = `${reservationRoot}.approved`
+          yield* Effect.promise(() => fs.rename(reservationRoot, approvedRoot))
+          yield* Effect.promise(() => fs.mkdir(reservationRoot))
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(async () => {
+              await fs.rm(reservationRoot, { recursive: true, force: true })
+              await fs.rename(approvedRoot, reservationRoot).catch(() => undefined)
+            }),
+          )
+
+          const exit = yield* Effect.exit(svc.createPrepared(prepared, "act_reservation_identity_01"))
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(
+            yield* Effect.promise(() =>
+              fs
+                .stat(prepared.reservationPath)
+                .then(() => true)
+                .catch(() => false),
+            ),
+          ).toBe(false)
+        }),
+      { git: true },
+    )
+  })
+
+  describe("control-plane race guards", () => {
+    it.instance(
+      "remove never recursively deletes a replacement inserted after Git removal",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const name = `remove-race-${Date.now().toString(36)}`
+          const created = yield* svc.prepareCreate({ name }, "cpr_remove_race_create_01")
+          const info = yield* svc.createPrepared(created, "act_remove_race_create_01")
+          const prepared = yield* svc.prepareRemove({ directory: info.directory }, "cpr_remove_race_execute_01")
+          const outside = path.join(test.directory, `${name}-outside`)
+          yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(outside, "sentinel.txt"), "must-survive"))
+          const completed: Worktree.SafetySideEffect[] = []
+          let injected = false
+          activeSafetyHook = {
+            beforeGuard: (point) =>
+              point === "remove.fs-recursive-clean" && !injected
+                ? Effect.promise(async () => {
+                    injected = true
+                    await fs.symlink(outside, info.directory, process.platform === "win32" ? "junction" : "dir")
+                  })
+                : Effect.void,
+            afterSideEffect: (point) => Effect.sync(() => completed.push(point)),
+          }
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              activeSafetyHook = undefined
+            }),
+          )
+
+          const exit = yield* Effect.exit(svc.removePrepared(prepared, "act_remove_race_execute_01"))
+          activeSafetyHook = undefined
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(injected).toBe(true)
+          expect(completed).toContain("remove.git-worktree-remove")
+          expect(completed).not.toContain("remove.fs-recursive-clean")
+          expect(completed).not.toContain("remove.project-registry-remove")
+          expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "sentinel.txt"), "utf8"))).toBe(
+            "must-survive",
+          )
+
+          yield* Effect.promise(() => fs.rm(info.directory, { recursive: true, force: true }))
+          yield* gitResult(test.directory, ["worktree", "prune"])
+          if (info.branch) yield* gitResult(test.directory, ["branch", "-D", "--", info.branch])
+          yield* Effect.promise(() => fs.rm(prepared.roots.reservationRoot, { recursive: true, force: true }))
+        }),
+      { git: true },
+      15_000,
+    )
+
+    it.instance(
+      "reset stops all later Git effects when the target changes between stages",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const name = `reset-race-${Date.now().toString(36)}`
+          const created = yield* svc.prepareCreate({ name }, "cpr_reset_race_create_001")
+          const info = yield* svc.createPrepared(created, "act_reset_race_create_001")
+          yield* Effect.promise(() => Bun.write(path.join(info.directory, "untracked.txt"), "remove during clean"))
+          const prepared = yield* svc.prepareReset({ directory: info.directory }, "cpr_reset_race_execute_01")
+          const parked = `${info.directory}.approved`
+          const outside = path.join(test.directory, `${name}-outside`)
+          yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(outside, "sentinel.txt"), "must-survive"))
+          const completed: Worktree.SafetySideEffect[] = []
+          let injected = false
+          activeSafetyHook = {
+            beforeGuard: (point) =>
+              point === "reset.git-clean" && !injected
+                ? Effect.promise(async () => {
+                    injected = true
+                    await fs.rename(info.directory, parked)
+                    await fs.symlink(outside, info.directory, process.platform === "win32" ? "junction" : "dir")
+                  })
+                : Effect.void,
+            afterSideEffect: (point) => Effect.sync(() => completed.push(point)),
+          }
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(async () => {
+              activeSafetyHook = undefined
+              await fs.rm(info.directory, { recursive: true, force: true }).catch(() => undefined)
+              await fs.rename(parked, info.directory).catch(() => undefined)
+            }),
+          )
+
+          const exit = yield* Effect.exit(svc.resetPrepared(prepared, "act_reset_race_execute_01"))
+          activeSafetyHook = undefined
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(injected).toBe(true)
+          expect(completed).toContain("reset.git-reset-hard")
+          expect(completed).not.toContain("reset.git-clean")
+          expect(completed).not.toContain("reset.git-submodule-update")
+          expect(completed).not.toContain("reset.git-status")
+          expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "sentinel.txt"), "utf8"))).toBe(
+            "must-survive",
+          )
+
+          yield* Effect.promise(async () => {
+            await fs.rm(info.directory, { recursive: true, force: true })
+            await fs.rename(parked, info.directory)
+          })
+          yield* svc.remove({ directory: info.directory })
+          yield* Effect.promise(() => fs.rm(prepared.roots.reservationRoot, { recursive: true, force: true }))
+        }),
+      { git: true },
+      15_000,
+    )
+
+    windowsOnly(
+      "reset prune rejects an internal parent replaced by an outside junction",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const svc = yield* Worktree.Service
+          const name = `reset-prune-race-${Date.now().toString(36)}`
+          const created = yield* svc.prepareCreate({ name }, "cpr_reset_prune_create_01")
+          const info = yield* svc.createPrepared(created, "act_reset_prune_create_01")
+          const prepared = yield* svc.prepareReset({ directory: info.directory }, "cpr_reset_prune_execute_01")
+          const parent = path.join(info.directory, "prune-parent")
+          const locked = path.join(parent, "locked")
+          const parked = `${parent}.approved`
+          const outside = path.join(test.directory, `${name}-outside`)
+          const outsideTarget = path.join(outside, "locked")
+          yield* Effect.promise(() => fs.mkdir(locked, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(locked, "untracked.txt"), "git-clean-target"))
+          yield* Effect.promise(() => fs.mkdir(outsideTarget, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(path.join(outsideTarget, "sentinel.txt"), "must-survive"))
+
+          const locker = Bun.spawn([process.execPath, "-e", "console.log('ready'); setInterval(() => {}, 1000)"], {
+            cwd: locked,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const reader = locker.stdout.getReader()
+          const ready = yield* Effect.promise(() => reader.read())
+          reader.releaseLock()
+          expect(new TextDecoder().decode(ready.value)).toContain("ready")
+
+          const completed: Worktree.SafetySideEffect[] = []
+          let injected = false
+          let parkedParent = false
+          let junctionInstalled = false
+          activeSafetyHook = {
+            beforeGuard: (point) =>
+              point === "reset.fs-prune" && !injected
+                ? Effect.promise(async () => {
+                    injected = true
+                    locker.kill()
+                    await locker.exited
+                    await fs.rename(parent, parked)
+                    parkedParent = true
+                    await fs.symlink(outside, parent, "junction")
+                    junctionInstalled = true
+                  })
+                : Effect.void,
+            afterSideEffect: (point) => Effect.sync(() => completed.push(point)),
+          }
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(async () => {
+              activeSafetyHook = undefined
+              if (locker.exitCode === null) {
+                locker.kill()
+                await locker.exited
+              }
+              if (junctionInstalled) await fs.unlink(parent).catch(() => undefined)
+              if (parkedParent) await fs.rename(parked, parent).catch(() => undefined)
+            }),
+          )
+
+          const exit = yield* Effect.exit(svc.resetPrepared(prepared, "act_reset_prune_execute_01"))
+          activeSafetyHook = undefined
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(injected).toBe(true)
+          expect(completed).toContain("reset.git-clean")
+          expect(completed).not.toContain("reset.fs-prune")
+          expect(completed).not.toContain("reset.git-clean-retry")
+          expect(yield* Effect.promise(() => fs.readFile(path.join(outsideTarget, "sentinel.txt"), "utf8"))).toBe(
+            "must-survive",
+          )
+
+          if (junctionInstalled) {
+            yield* Effect.promise(() => fs.unlink(parent))
+            junctionInstalled = false
+          }
+          if (parkedParent) {
+            yield* Effect.promise(() => fs.rename(parked, parent))
+            parkedParent = false
+          }
+          yield* svc.remove({ directory: info.directory })
+          yield* Effect.promise(() => fs.rm(prepared.roots.reservationRoot, { recursive: true, force: true }))
+        }),
+      { git: true },
+      20_000,
     )
   })
 

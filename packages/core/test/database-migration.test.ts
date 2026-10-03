@@ -29,6 +29,11 @@ import { Database } from "@arforge-ai/core/database/database"
 import { SessionProjector } from "@arforge-ai/core/session/projector"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { tmpdir } from "./fixture/tmpdir"
+import runtimeBillingMigration from "@arforge-ai/core/database/migration/20260811184807_runtime_billing"
+import runtimeBillingReceiptMigration from "@arforge-ai/core/database/migration/20260908114322_runtime_billing_receipt"
+import childSettlementRecoveryOutboxMigration from "@arforge-ai/core/database/migration/20260902192412_child_settlement_recovery_outbox"
+import childSettlementRecoveryOutboxReceiptDigestMigration from "@arforge-ai/core/database/migration/20260902192806_child_settlement_recovery_outbox_receipt_digest"
+import childSettlementRecoveryOutboxOwnerProgressMigration from "@arforge-ai/core/database/migration/20260903205327_20260904120000_child_settlement_recovery_outbox_owner_progress"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
@@ -76,6 +81,9 @@ describe("DatabaseMigration", () => {
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_context_epoch'`),
         ).toEqual({ name: "session_context_epoch" })
         expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_run_usage'`),
+        ).toEqual({ name: "session_run_usage" })
+        expect(
           yield* db.get(
             sql`SELECT name FROM pragma_table_info('session_context_epoch') WHERE name IN ('agent', 'replacement_seq', 'revision')`,
           ),
@@ -95,6 +103,141 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("adds runtime usage persistence to an existing database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* DatabaseMigration.applyOnly(db, [runtimeBillingMigration])
+
+        yield* db.run(sql`
+          INSERT INTO session_run_usage (
+            id, run_id, session_id, provider_id, model_id, usage_source,
+            unknown_input, image_input, audio_input, cache_read_input, cache_write_input,
+            text_output, reasoning_output, audio_output, unpriced_categories, recorded_at
+          ) VALUES (
+            'billing_1', 'run_1', 'session_1', 'deepseek', 'deepseek-v4-flash', 'provider',
+            10, 0, 0, 3, 1, 8, 2, 0, '["unknown-input"]', 42
+          )
+        `)
+
+        expect(
+          yield* db.get(sql`SELECT run_id, model_id, unknown_input, cache_read_input FROM session_run_usage`),
+        ).toEqual({
+          run_id: "run_1",
+          model_id: "deepseek-v4-flash",
+          unknown_input: 10,
+          cache_read_input: 3,
+        })
+        yield* DatabaseMigration.applyOnly(db, [runtimeBillingReceiptMigration])
+        yield* DatabaseMigration.applyOnly(db, [runtimeBillingReceiptMigration])
+        expect(yield* db.get(sql`SELECT id, unknown_input, billing_receipt FROM session_run_usage`)).toEqual({
+          id: "billing_1",
+          unknown_input: 10,
+          billing_receipt: null,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_run_usage_session_idx'`,
+          ),
+        ).toEqual({ name: "session_run_usage_session_idx" })
+      }),
+    )
+  })
+
+  test("adds the metadata-only settlement recovery receipt to an existing database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* DatabaseMigration.applyOnly(db, [
+          childSettlementRecoveryOutboxMigration,
+          childSettlementRecoveryOutboxReceiptDigestMigration,
+        ])
+
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'child_settlement_recovery_outbox'`,
+          ),
+        ).toEqual({ name: "child_settlement_recovery_outbox" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM pragma_table_info('child_settlement_recovery_outbox') WHERE name = 'receipt_digest'`,
+          ),
+        ).toEqual({ name: "receipt_digest" })
+        expect(
+          yield* db.get(
+            sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'child_settlement_recovery_outbox'`,
+          ),
+        ).toMatchObject({ sql: expect.stringContaining("recovery-required") })
+      }),
+    )
+  })
+
+  test("adds the receipt digest column without breaking a row from the prior migration", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const intentID = "stl_" + "a".repeat(64)
+        const expectedDigests = JSON.stringify({ childResult: "c".repeat(64), parentBudget: "d".repeat(64) })
+        yield* DatabaseMigration.applyOnly(db, [childSettlementRecoveryOutboxMigration])
+        yield* db.run(sql`
+          INSERT INTO child_settlement_recovery_outbox (
+            tenant_id, owner_user_id, intent_id, parent_run_id, child_run_id,
+            commit_digest, mode, status, owner_order, expected_digests,
+            reason, revision, time_created, time_updated
+          ) VALUES (
+            'ten_migration', 'usr_migration', ${intentID},
+            'run_migration_parent', 'run_migration_child', ${"b".repeat(64)},
+            'recovery-outbox', 'prepared', '["child-result","parent-budget"]',
+            ${expectedDigests},
+            '', 0, 1, 1
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [childSettlementRecoveryOutboxReceiptDigestMigration])
+
+        expect(yield* db.get(sql`SELECT receipt_digest FROM child_settlement_recovery_outbox`)).toEqual({
+          receipt_digest: "",
+        })
+      }),
+    )
+  })
+
+  test("adds the nullable owner-promotion checkpoint without changing legacy rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const intentID = "stl_" + "e".repeat(64)
+        const expectedDigests = JSON.stringify({ childResult: "c".repeat(64), parentBudget: "d".repeat(64) })
+        yield* DatabaseMigration.applyOnly(db, [
+          childSettlementRecoveryOutboxMigration,
+          childSettlementRecoveryOutboxReceiptDigestMigration,
+        ])
+        yield* db.run(sql`
+          INSERT INTO child_settlement_recovery_outbox (
+            tenant_id, owner_user_id, intent_id, parent_run_id, child_run_id,
+            commit_digest, mode, status, owner_order, expected_digests,
+            reason, revision, time_created, time_updated, receipt_digest
+          ) VALUES (
+            'ten_migration_progress', 'usr_migration_progress', ${intentID},
+            'run_migration_parent', 'run_migration_child', ${"b".repeat(64)},
+            'recovery-outbox', 'prepared', '["child-result","parent-budget"]',
+            ${expectedDigests}, '', 0, 1, 1, ${"a".repeat(64)}
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [childSettlementRecoveryOutboxOwnerProgressMigration])
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM pragma_table_info('child_settlement_recovery_outbox') WHERE name = 'owner_progress'`,
+          ),
+        ).toEqual({ name: "owner_progress" })
+        expect(yield* db.get(sql`SELECT owner_progress FROM child_settlement_recovery_outbox`)).toEqual({
+          owner_progress: null,
+        })
       }),
     )
   })
@@ -272,6 +415,7 @@ describe("DatabaseMigration", () => {
         const database = Layer.succeed(Database.Service, {
           db,
           runAsPrincipal: (_principal, effect) => effect,
+          transactionAsPrincipal: (_principal, callback) => db.transaction(callback) as never,
         })
         yield* EventV2.Service.use((service) =>
           service.publish(SessionV1.Event.Updated, {

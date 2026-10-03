@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from arforge.core.file_state import get_file_state_tracker
 from arforge.security.file_ops import safe_write
-from arforge.workspace_roots import path_is_authorized
+from arforge.ts_workspace import typescript_path_is_authorized
 
 
 MAX_NOTEBOOK_BYTES = 10 * 1024 * 1024
@@ -214,7 +214,7 @@ class NotebookService:
         resolved = path.resolve()
         if resolved.suffix.lower() != ".ipynb":
             raise NotebookError("notebook path must end with .ipynb")
-        if not path_is_authorized(resolved, primary=self.workspace):
+        if not typescript_path_is_authorized(resolved, primary=self.workspace):
             raise NotebookError("notebook path escapes authorized workspaces")
         return resolved
 

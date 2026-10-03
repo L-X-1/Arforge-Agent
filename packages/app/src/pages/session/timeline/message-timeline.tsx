@@ -34,6 +34,7 @@ import { Icon } from "@arforge-ai/ui/icon"
 import { IconButton } from "@arforge-ai/ui/icon-button"
 import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
 import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
+import { TooltipV2 } from "@arforge-ai/ui/v2/tooltip-v2"
 import { DropdownMenu } from "@arforge-ai/ui/dropdown-menu"
 import { MenuV2 } from "@arforge-ai/ui/v2/menu-v2"
 import { Dialog } from "@arforge-ai/ui/dialog"
@@ -41,10 +42,12 @@ import { DialogFooter, DialogHeader, DialogTitleGroup, DialogV2 } from "@arforge
 import { InlineInput } from "@arforge-ai/ui/inline-input"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
 import { SessionRetry } from "@arforge-ai/session-ui/session-retry"
+import { reasoningHeading } from "@arforge-ai/session-ui/reasoning-heading"
 import { isScrollKeyTarget, scrollKey, scrollKeyOwner, ScrollView } from "@arforge-ai/ui/scroll-view"
 import { StickyAccordionHeader } from "@arforge-ai/ui/sticky-accordion-header"
 import { TextField } from "@arforge-ai/ui/text-field"
 import { TextShimmer } from "@arforge-ai/ui/text-shimmer"
+import { TextReveal } from "@arforge-ai/ui/text-reveal"
 import type {
   AssistantMessage,
   Message as MessageType,
@@ -76,6 +79,9 @@ import { observeElementOffsetReconnectAware } from "./observe-element-offset"
 import { createTimelineProjection } from "./projection"
 import { MessageComment, SummaryDiff, TimelineRow, TimelineRowMap } from "./rows"
 import { filterVirtualIndexes } from "./virtual-items"
+import { HistoryRail } from "./history-rail"
+import { historyEntries } from "./history-rail-model"
+import { waitForHistoryTarget } from "./history-jump"
 
 const emptyMessages: MessageType[] = []
 const emptyParts: PartType[] = []
@@ -93,6 +99,9 @@ type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "TurnGap" }>
 type TimelineRowByTag<T extends TimelineRow.TimelineRow["_tag"]> = Extract<TimelineRow.TimelineRow, { _tag: T }>
 
 const timelineFallbackItemSize = 60
+const timelineToolbarHeight = 64
+const timelineToolbarPadding = 16
+const timelineBottomPadding = 64
 const timelineCache = new Map<string, { measurements: VirtualItem[]; toolOpen: Record<string, boolean | undefined> }>()
 
 const taskDescription = (part: PartType, sessionID: string) => {
@@ -134,12 +143,22 @@ const markBoundaryGesture = (input: {
   }
 }
 
-function TimelineThinkingRow() {
+function TimelineThinkingRow(props: { heading?: string }) {
   const language = useLanguage()
 
   return (
     <div data-slot="session-turn-thinking">
       <TextShimmer text={language.t("ui.sessionTurn.status.thinking")} />
+      <Show when={props.heading}>
+        {(heading) => (
+          <TextReveal
+            class="session-turn-thinking-heading"
+            text={heading()}
+            travel={25}
+            duration={700}
+          />
+        )}
+      </Show>
     </div>
   )
 }
@@ -256,10 +275,15 @@ export function MessageTimeline(props: {
   centered: boolean
   setContentRef: (el: HTMLDivElement) => void
   userMessages: UserMessage[]
+  onSelectHistoryMessage?: (message: UserMessage) => void
+  historyMore?: boolean
+  historyLoading?: boolean
+  onLoadHistory?: () => Promise<void>
   anchor: (id: string) => string
   setRevealMessage?: (fn: (id: string) => void) => void
   setScrollToEnd?: (fn: () => void) => void
   setHistoryAnchor?: (handlers: { capture: () => void; restore: (done: boolean) => void }) => void
+  onCloseTab?: () => void
 }) {
   let touchGesture: number | undefined
 
@@ -284,6 +308,16 @@ export function MessageTimeline(props: {
     const id = sessionID()
     if (!id) return idle
     return sync().data.session_status[id] ?? idle
+  })
+  let initialBottomAnchor = props.shouldAnchorBottom()
+  let disposed = false
+  createEffect(() => {
+    // Initial measurements may arrive after mount, including async file tools.
+    // This permission ends with user navigation or the first live turn; it is
+    // never re-enabled by a later transition back to idle.
+    if (sessionStatus().type !== "idle" || props.hasScrollGesture() || !props.shouldAnchorBottom()) {
+      initialBottomAnchor = false
+    }
   })
   const sessionMessages = createMemo(() => (sessionID() ? (sync().data.message[sessionID()!] ?? []) : []))
   const projectedMessages = createMemo(() => {
@@ -333,6 +367,9 @@ export function MessageTimeline(props: {
     return language.t("command.session.new")
   })
   const showHeader = createMemo(() => !!(titleValue() || parentID()))
+  // Keep the toolbar visible for untitled sessions so the close action remains
+  // available while the first message is being composed.
+  const showToolbar = createMemo(() => showHeader() || !!props.onCloseTab)
   const projection = createTimelineProjection({
     messages: sessionMessages,
     userMessages: () => props.userMessages,
@@ -352,11 +389,13 @@ export function MessageTimeline(props: {
   const timelineRows = projection.rows
 
   let prependAnchor: { key: string; offset: number } | undefined
+  const [prependAnchorKey, setPrependAnchorKey] = createSignal<string>()
   let prependAnchorFrame: number | undefined
   let prependLoading = false
   const clearPrependAnchor = () => {
     prependLoading = false
     prependAnchor = undefined
+    setPrependAnchorKey(undefined)
     if (prependAnchorFrame === undefined) return
     cancelAnimationFrame(prependAnchorFrame)
     prependAnchorFrame = undefined
@@ -376,6 +415,7 @@ export function MessageTimeline(props: {
     if (!anchor) return
     if (!anchor.element.dataset.timelineKey) return
     prependAnchor = { key: anchor.element.dataset.timelineKey, offset: anchor.rect.top - view.top }
+    setPrependAnchorKey(prependAnchor.key)
   }
   const restorePrependAnchor = (done: boolean) => {
     if (done) prependLoading = false
@@ -396,14 +436,18 @@ export function MessageTimeline(props: {
         ? element.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.offset
         : undefined
       if (delta !== undefined && Math.abs(delta) > 0.5) {
+        if (virtualContent) virtualContent.style.height = `${virtualizer.getTotalSize()}px`
         root.scrollTop += delta
         stable = 0
-      } else {
+      } else if (delta !== undefined) {
         stable += 1
+      } else {
+        // An unmounted anchor is not evidence that the viewport is stable.
+        stable = 0
       }
       frames += 1
       if (stable >= 30 || frames >= 180) {
-        if (!prependLoading) prependAnchor = undefined
+        if (!prependLoading) clearPrependAnchor()
         return
       }
       prependAnchorFrame = requestAnimationFrame(apply)
@@ -439,32 +483,51 @@ export function MessageTimeline(props: {
         return TimelineRow.key(row)
       }
     },
+    // Core's keyed prepend anchoring is part of its end-anchor mode. Keep it
+    // enabled while reading idle history too; resize following is controlled
+    // separately below so late error rows cannot pull the reader to the end.
     anchorTo: "end",
-    followOnAppend: true,
+    get followOnAppend() {
+      return sessionStatus().type !== "idle"
+    },
     scrollEndThreshold: 80,
     get scrollMargin() {
-      return showHeader() ? 64 : 0
+      return showToolbar() ? timelineToolbarHeight : 0
     },
     overscan: 50,
-    paddingEnd: 64,
-    rangeExtractor: (range) => {
-      const id = activeMessageID()
-      const active = id ? (messageLastRowIndex().get(id) ?? -1) : -1
-      const indexes = defaultRangeExtractor({ ...range, overscan: renderOverscan() })
-      return filterVirtualIndexes(
-        [...new Set([...resizePinnedIndexes, ...indexes, ...(active < 0 ? [] : [active])])].sort((a, b) => a - b),
-        range.count,
-      )
+    paddingEnd: timelineBottomPadding,
+    get rangeExtractor() {
+      const key = prependAnchorKey()
+      const anchorIndex = key ? timelineRows().findIndex((row) => TimelineRow.key(row) === key) : -1
+      return (range: Parameters<typeof defaultRangeExtractor>[0]) => {
+        const id = activeMessageID()
+        const active = id ? (messageLastRowIndex().get(id) ?? -1) : -1
+        const indexes = defaultRangeExtractor({ ...range, overscan: renderOverscan() })
+        // A prepend moves the old viewport outside the new range. Keep its
+        // stable row mounted until the DOM-based anchor correction completes.
+        return filterVirtualIndexes(
+          [...new Set([
+            ...resizePinnedIndexes,
+            ...indexes,
+            ...(anchorIndex < 0 ? [] : [anchorIndex]),
+            ...(active < 0 ? [] : [active]),
+          ])].sort((a, b) => a - b),
+          range.count,
+        )
+      }
     },
   })
   const resizeItem = virtualizer.resizeItem
   let resizeAnchorScheduled = false
   const anchorResizedBottom = () => {
-    if (resizeAnchorScheduled || props.hasScrollGesture()) return
+    // Once the turn is idle, a late measurement (for example an interruption
+    // error replacing a running placeholder) must not pull the user's viewport
+    // to the new bottom and hide content they were already reading.
+    if (disposed || (sessionStatus().type === "idle" && !initialBottomAnchor) || resizeAnchorScheduled || props.hasScrollGesture()) return
     resizeAnchorScheduled = true
     queueMicrotask(() => {
       resizeAnchorScheduled = false
-      if (!props.shouldAnchorBottom() || props.hasScrollGesture()) return
+      if (disposed || (sessionStatus().type === "idle" && !initialBottomAnchor) || !props.shouldAnchorBottom() || props.hasScrollGesture()) return
       virtualizer.scrollToEnd()
     })
   }
@@ -488,7 +551,17 @@ export function MessageTimeline(props: {
         })
       })
     }
-    resizeItem(index, size)
+    // An idle first mount still follows its async measurements before paint.
+    // After the reader interacts or a live turn starts, retain the existing
+    // idle/error behavior instead of automatically following late row growth.
+    const idle = sessionStatus().type === "idle" && !initialBottomAnchor
+    const anchor = virtualizer.options.anchorTo
+    if (idle && anchor === "end") virtualizer.options.anchorTo = "start"
+    try {
+      resizeItem(index, size)
+    } finally {
+      if (idle && anchor === "end") virtualizer.options.anchorTo = anchor
+    }
     if (root && props.shouldAnchorBottom()) anchorResizedBottom()
   }
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
@@ -500,6 +573,19 @@ export function MessageTimeline(props: {
     () => new Map(virtualizer.getVirtualItems().map((item) => [item.key, item] as const)),
   )
   const virtualRowKeys = createMemo(() => virtualizer.getVirtualItems().map((item) => item.key as string))
+  const promptHistory = createMemo(() => historyEntries(props.userMessages, getMsgParts))
+  const visiblePromptID = createMemo(() => {
+    const items = virtualizer.getVirtualItems()
+    const offset = (virtualizer.scrollOffset ?? 0) + (showToolbar() ? timelineToolbarHeight : 0)
+    const first = items.find((item) => item.end > offset)
+    return first ? timelineRows()[first.index]?.userMessageID : props.userMessages.at(-1)?.id
+  })
+  const historyReply = (id: string) =>
+    (assistantMessagesByParent().get(id) ?? emptyAssistantMessages)
+      .flatMap((message) => getMsgParts(message.id))
+      .filter((part) => part.type === "text" && !part.synthetic && !part.ignored)
+      .map((part) => part.type === "text" ? part.text : "")
+      .join("\n")
   createEffect(() => {
     props.setRevealMessage?.((id) => {
       const index = messageRowIndex().get(id)
@@ -512,6 +598,11 @@ export function MessageTimeline(props: {
 
   let overscanFrame: number | undefined
   onMount(() => {
+    // onMount runs before paint. Do not wait for a second animation frame to
+    // align a cold tab whose estimated rows have just been measured.
+    queueMicrotask(() => {
+      if (!disposed && props.shouldAnchorBottom() && !props.hasScrollGesture()) virtualizer.scrollToEnd()
+    })
     overscanFrame = requestAnimationFrame(() => {
       if (props.shouldAnchorBottom()) virtualizer.scrollToEnd()
       overscanFrame = requestAnimationFrame(() => {
@@ -524,6 +615,9 @@ export function MessageTimeline(props: {
 
   const maybeAnchorBottom = () => {
     if (timelineRows().length === 0) return
+    if (sessionStatus().type === "idle") return
+    const lastRow = timelineRows().at(-1)
+    if (lastRow?._tag === "TurnDivider" && lastRow.label === "interrupted") return
     if (!props.shouldAnchorBottom() || props.hasScrollGesture()) return
     if (resizePinFrame !== undefined) cancelAnimationFrame(resizePinFrame)
     clearPrependAnchor()
@@ -543,6 +637,8 @@ export function MessageTimeline(props: {
   })
 
   onCleanup(() => {
+    disposed = true
+    initialBottomAnchor = false
     clearPrependAnchor()
     timelineCache.delete(ownerSessionKey)
     timelineCache.set(ownerSessionKey, { measurements: virtualizer.takeSnapshot(), toolOpen: { ...toolOpen } })
@@ -1108,7 +1204,7 @@ export function MessageTimeline(props: {
         data-timeline-row={input.row()._tag}
         classList={{
           "min-w-0 w-full max-w-full": true,
-          "md:max-w-[820px] 2xl:max-w-[1040px]": props.centered,
+          "md:max-w-[calc(var(--arforge-review-reading-width,760px)+40px)] 2xl:max-w-[840px]": props.centered,
           "md:mx-auto": props.centered,
           "pt-3": previousAssistantPart(),
         }}
@@ -1288,10 +1384,26 @@ export function MessageTimeline(props: {
       }
       case "Thinking": {
         const thinkingRow = row as Accessor<TimelineRowByTag<"Thinking">>
+        const heading = createMemo(() => {
+          if (settings.general.showReasoningSummaries()) return undefined
+          const assistants = assistantMessagesByParent().get(thinkingRow().userMessageID) ?? emptyAssistantMessages
+          for (let messageIndex = assistants.length - 1; messageIndex >= 0; messageIndex -= 1) {
+            const assistant = assistants[messageIndex]
+            if (!assistant) continue
+            const parts = getMsgParts(assistant.id)
+            for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
+              const part = parts[partIndex]
+              if (part?.type !== "reasoning") continue
+              const value = reasoningHeading(part.text)
+              if (value) return value
+            }
+          }
+          return undefined
+        })
         return (
           <TimelineRowFrame row={thinkingRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-              <TimelineThinkingRow />
+              <TimelineThinkingRow heading={heading()} />
             </div>
           </TimelineRowFrame>
         )
@@ -1372,10 +1484,14 @@ export function MessageTimeline(props: {
         data-timeline-key={props.rowKey}
         style={{
           position: "absolute",
-          top: `${item().start - (showHeader() ? 64 : 0)}px`,
+          top: `${item().start - (showToolbar() ? timelineToolbarHeight : 0)}px`,
           left: "0",
           width: "100%",
           height: `${item().size}px`,
+          // A virtual row may intentionally be fractionally shorter than its
+          // content. Let the outer clip establish that exact geometry instead
+          // of allowing the inner natural height to impose a min-content size.
+          "min-height": "0",
           overflow: "clip",
           // Rounded virtual measurements can otherwise clip a framed row's outer paint.
           "overflow-clip-margin": row()._tag === "TurnGap" ? undefined : "0.5px",
@@ -1403,6 +1519,29 @@ export function MessageTimeline(props: {
 
   return (
     <div class="relative w-full h-full min-w-0">
+      <HistoryRail
+        scope={sessionKey()}
+        entries={promptHistory()}
+        activeID={visiblePromptID()}
+        locale={language.locale()}
+        reply={historyReply}
+        replying={(id) => sessionStatus().type !== "idle" && props.userMessages.at(-1)?.id === id}
+        hasOlder={props.historyMore}
+        loading={props.historyLoading}
+        onLoadOlder={props.onLoadHistory}
+        onSelect={(id) => {
+          const message = props.userMessages.find((value) => value.id === id)
+          if (!message || !props.onSelectHistoryMessage) return false
+          const scope = sessionKey()
+          clearPrependAnchor()
+          props.onSelectHistoryMessage(message)
+          return waitForHistoryTarget(
+            () => document.getElementById(props.anchor(id)),
+            listRoot,
+            () => sessionKey() === scope && !!listRoot()?.isConnected,
+          )
+        }}
+      />
       <div
         class="absolute left-1/2 -translate-x-1/2 z-[60] pointer-events-none transition-all duration-200 ease-out"
         classList={{
@@ -1469,12 +1608,13 @@ export function MessageTimeline(props: {
         onClick={props.onAutoScrollInteraction}
         class="relative min-w-0 w-full h-full"
         style={{
-          "--sticky-accordion-top": showHeader() ? "48px" : "0px",
+          "--sticky-accordion-top": showToolbar() ? "48px" : "0px",
         }}
       >
-        <Show when={showHeader()}>
+        <Show when={showToolbar()}>
           <div
             data-session-title
+            style={{ "padding-bottom": `${timelineToolbarPadding}px` }}
             classList={{
               "sticky top-0 z-30": true,
               "bg-[linear-gradient(to_bottom,var(--v2-background-bg-base)_48px,transparent)]":
@@ -1482,14 +1622,16 @@ export function MessageTimeline(props: {
               "bg-[linear-gradient(to_bottom,var(--background-stronger)_48px,transparent)]":
                 !settings.general.newLayoutDesigns(),
               "w-full": true,
-              "pb-4": true,
               "pr-3": true,
               "pl-2.5": settings.general.newLayoutDesigns(),
               "pl-2 md:pl-4": !settings.general.newLayoutDesigns(),
               "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered && !settings.general.newLayoutDesigns(),
             }}
           >
-            <div class="h-12 w-full flex items-center justify-between gap-2">
+            <div
+              class="w-full flex items-center justify-between gap-2"
+              style={{ height: `${timelineToolbarHeight - timelineToolbarPadding}px` }}
+            >
               <div
                 classList={{
                   "flex items-center gap-1 min-w-0 flex-1": true,
@@ -1578,6 +1720,18 @@ export function MessageTimeline(props: {
                       "gap-3": !settings.general.newLayoutDesigns(),
                     }}
                   >
+                    <Show when={props.onCloseTab}>
+                      <TooltipV2 placement="bottom" value={language.t("command.tab.close")}>
+                        <IconButtonV2
+                          type="button"
+                          variant="ghost-muted"
+                          size="large"
+                          icon={<IconV2 name="xmark-small" />}
+                          onClick={props.onCloseTab}
+                          aria-label={language.t("command.tab.close")}
+                        />
+                      </TooltipV2>
+                    </Show>
                     <SessionContextUsage
                       placement="bottom"
                       buttonAppearance={settings.general.newLayoutDesigns() ? "v2" : "default"}
@@ -1934,8 +2088,11 @@ export function MessageTimeline(props: {
             <div
               data-timeline-row="bottom-spacer"
               aria-hidden="true"
-              class="h-16 absolute top-0 left-0 w-full"
-              style={{ transform: `translateY(${virtualizer.getTotalSize() - 64}px)` }}
+              class="absolute top-0 left-0 w-full"
+              style={{
+                height: `${timelineBottomPadding}px`,
+                transform: `translateY(${virtualizer.getTotalSize() - timelineBottomPadding}px)`,
+              }}
             />
           </Show>
         </div>

@@ -8,6 +8,7 @@ import { SkillV2 } from "@arforge-ai/core/skill"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
 import { ConfigApi } from "./groups/config"
+import { BootstrapApi } from "./groups/bootstrap"
 import { ControlApi } from "./groups/control"
 import { ControlPlaneApi } from "./groups/control-plane"
 import { EventApi } from "./groups/event"
@@ -25,6 +26,7 @@ import { SessionApi } from "./groups/session"
 import { SyncApi } from "./groups/sync"
 import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
+import { SelfHostedShareApi } from "./groups/self-hosted-share"
 import { makeApi } from "@arforge-ai/protocol/api"
 import { LocationMiddleware } from "@arforge-ai/server/location"
 import { SessionLocationMiddleware } from "@arforge-ai/server/middleware/session-location"
@@ -59,6 +61,7 @@ export const RootHttpApi = HttpApi.make("arforge-root")
   .middleware(Authorization)
 
 export const InstanceHttpApi = HttpApi.make("arforge-instance")
+  .addHttpApi(BootstrapApi)
   .addHttpApi(ConfigApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
@@ -71,6 +74,7 @@ export const InstanceHttpApi = HttpApi.make("arforge-instance")
   .addHttpApi(PermissionApi)
   .addHttpApi(ProviderApi)
   .addHttpApi(SessionApi)
+  .addHttpApi(SelfHostedShareApi)
   .addHttpApi(SyncApi)
   .addHttpApi(TuiApi)
   .addHttpApi(WorkspaceApi)

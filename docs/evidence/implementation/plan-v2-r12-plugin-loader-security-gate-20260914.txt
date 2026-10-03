@@ -1,0 +1,8 @@
+Plan v2.0 R12 — Plugin loader manifest security gate（2026-09-14）
+
+Arforge test/plugin/loader-shared.test.ts — 29 pass / 0 fail / 43 expect calls.
+新增 fixture 在 import 前被 Core plugin-contract 阻断，副作用文件不存在。
+Scoped Oxlint — 0 warnings / 0 errors; Prettier and git diff --check passed.
+Package typecheck still has only pre-existing packages/tui JSX/BaseRenderable diagnostics.
+
+本批只接 loader 前置安全 gate；不声明 OS 隔离、PluginControl 全入口、撤销/受限宿主或签名信任闭环完成，未改用户数据，full sandbox 按 R30 后执行。

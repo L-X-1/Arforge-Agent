@@ -5,9 +5,12 @@ import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Database } from "@arforge-ai/core/database/database"
 import { Location } from "@arforge-ai/core/location"
 import { MemoryV2 } from "@arforge-ai/core/memory"
+import { MemoryCandidateTable, MemoryTable } from "@arforge-ai/core/memory/sql"
 import { Project } from "@arforge-ai/core/project"
 import { RuntimeInsight } from "@arforge-ai/core/runtime/insight"
+import { Egress } from "@arforge-ai/core/egress"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { testEffect } from "./lib/effect"
 
 const directory = AbsolutePath.make("C:/workspaces/alpha")
@@ -31,6 +34,7 @@ describe("Memory", () => {
         importance: MemoryV2.Importance.make(4),
       })
       expect(created).toMatchObject({
+        version: 1,
         source: "user",
         scope: "workspace",
         projectID: Project.ID.global,
@@ -44,15 +48,15 @@ describe("Memory", () => {
         }),
       )
       expect(duplicate).toBeInstanceOf(MemoryV2.DuplicateError)
-      expect(
-        yield* Effect.flip(
-          memory.create({
-            content: MemoryV2.Content.make("A model-created global claim"),
-            source: "model",
-            scope: "global",
-          }),
-        ),
-      ).toBeInstanceOf(MemoryV2.InvalidScopeError)
+      const candidateError = yield* Effect.flip(
+        memory.create({
+          content: MemoryV2.Content.make("A model-created global claim"),
+          source: "model",
+          scope: "global",
+        }),
+      )
+      expect(candidateError).toBeInstanceOf(MemoryV2.GovernanceError)
+      expect(yield* (yield* Database.Service).db.select().from(MemoryCandidateTable).all()).toHaveLength(1)
 
       const updated = yield* memory.update({
         memoryID: created.id,
@@ -60,11 +64,35 @@ describe("Memory", () => {
         reviewLevel: MemoryV2.ReviewLevel.make(2),
       })
       expect(updated.importance).toBe(5)
+      expect(updated.version).toBe(2)
       expect(updated.reviewLevel).toBe(2)
       expect(updated.time.reviewed).toBeDefined()
 
       const missing = MemoryV2.ID.make("mem_missing")
-      expect(yield* memory.deleteMany([created.id, missing, created.id])).toEqual({
+      expect(
+        yield* memory.maintenanceDeleteMany([
+          {
+            memoryID: created.id,
+            expectedVersion: 2,
+            actionID: AgentRuntime.ActionID.create(),
+            actor: "maintenance",
+            maintenanceAuthority: true,
+            explicitDestructive: true,
+            redactionEvidenceID: AgentRuntime.EvidenceID.create(),
+            reason: "test cleanup",
+          },
+          {
+            memoryID: missing,
+            expectedVersion: 0,
+            actionID: AgentRuntime.ActionID.create(),
+            actor: "maintenance",
+            maintenanceAuthority: true,
+            explicitDestructive: true,
+            redactionEvidenceID: AgentRuntime.EvidenceID.create(),
+            reason: "test cleanup",
+          },
+        ]),
+      ).toEqual({
         deleted: [created.id],
         notFound: [missing],
       })
@@ -107,66 +135,165 @@ describe("Memory", () => {
     }),
   )
 
+  it.effect("reports remote embedding fact only for an explicitly authorized request", () =>
+    Effect.gen(function* () {
+      const previous = process.env.ARFORGE_EMBED_BACKEND
+      process.env.ARFORGE_EMBED_BACKEND = "api"
+      let calls = 0
+      let authorization = ""
+      const server = Bun.serve({
+        port: 0,
+        fetch: async (request) => {
+          calls++
+          authorization = request.headers.get("authorization") ?? ""
+          return Response.json({ data: [{ embedding: [1, 0] }, { embedding: [1, 0] }] })
+        },
+      })
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => server.stop(true)).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.ARFORGE_EMBED_BACKEND
+              else process.env.ARFORGE_EMBED_BACKEND = previous
+            }),
+          ),
+        ),
+      )
+
+      const memory = yield* MemoryV2.Service
+      const first = yield* memory.create({
+        content: MemoryV2.Content.make("remote embedding memory"),
+        type: MemoryV2.Type.make("fact"),
+      })
+      const origin = `http://127.0.0.1:${server.port}`
+      const remote = {
+        baseUrl: origin,
+        model: "fixture",
+        credential: { name: "fixture-key", resolve: async () => "fixture-secret" },
+        credentialScope: ["embedding:test"],
+        consent: true,
+        binding: {
+          principal: { tenantID: "ten_local", userID: "usr_local" },
+          workspaceID: "c:/workspaces/alpha",
+          dataScope: "memory:global:c:/workspaces/alpha",
+          origin,
+          method: "POST" as const,
+          model: "fixture",
+          credentialIdentity: "fixture-key",
+          consent: true,
+        },
+        egress: Egress.make({
+          action: "memory-embedding-test",
+          networkScope: [origin],
+          secretScope: ["embedding:test"],
+          allowedMethods: ["POST"],
+          grantedResources: ["*"],
+        }),
+      } as const
+      const result = yield* memory.semantic({
+        query: "remote embedding",
+        embeddingRequest: remote,
+      })
+      expect(result.algorithm).toBe("hybrid_bm25_embedding_api")
+      expect(result.localOnly).toBe(false)
+      expect(result.items.some((item) => item.memory.id === first.id)).toBe(true)
+      expect(calls).toBe(1)
+      expect(authorization).toBe("Bearer fixture-secret")
+
+      const denied = yield* memory.semantic({
+        query: "remote embedding",
+        embeddingRequest: {
+          ...remote,
+          binding: { ...remote.binding, workspaceID: "c:/workspaces/beta" },
+        },
+      })
+      expect(denied.localOnly).toBe(true)
+      expect(denied.embeddingEgress).toBe("denied")
+      expect(calls).toBe(1)
+    }),
+  )
+
   it.effect("auto-extracts only explicit durable signals and rejects transient statements", () =>
     Effect.gen(function* () {
       const memory = yield* MemoryV2.Service
       expect(yield* memory.extract("For now, always skip tests.")).toEqual([])
       const extracted = yield* memory.extract("Please remember that all schema changes require migration tests.")
-      expect(extracted).toHaveLength(1)
-      expect(extracted[0]).toMatchObject({
-        source: "auto",
-        scope: "workspace",
-        type: "constraint",
-        tags: ["governed-auto"],
-      })
+      expect(extracted).toHaveLength(0)
+      expect(yield* (yield* Database.Service).db.select().from(MemoryCandidateTable).all()).toHaveLength(1)
     }),
   )
 
-  it.effect(
-    "records every semantic recall into RuntimeInsight for the process panel",
-    () =>
-      Effect.gen(function* () {
-        RuntimeInsight.reset()
-        const memory = yield* MemoryV2.Service
-        const created = yield* memory.create({
-          content: MemoryV2.Content.make("登录鉴权失败时先检查令牌过期时间"),
-          type: MemoryV2.Type.make("workflow"),
-          tags: MemoryV2.Tags.make([MemoryV2.Tag.make("认证")]),
-          importance: MemoryV2.Importance.make(4),
-        })
-        const ranked = yield* memory.semantic({ query: "登录认证错误", topK: 5 })
-        expect(ranked.items.length).toBeGreaterThan(0)
+  it.effect("records every semantic recall into RuntimeInsight for the process panel", () =>
+    Effect.gen(function* () {
+      RuntimeInsight.reset()
+      const memory = yield* MemoryV2.Service
+      const created = yield* memory.create({
+        content: MemoryV2.Content.make("登录鉴权失败时先检查令牌过期时间"),
+        type: MemoryV2.Type.make("workflow"),
+        tags: MemoryV2.Tags.make([MemoryV2.Tag.make("认证")]),
+        importance: MemoryV2.Importance.make(4),
+      })
+      const ranked = yield* memory.semantic({ query: "登录认证错误", topK: 5 })
+      expect(ranked.items.length).toBeGreaterThan(0)
 
-        const recalls = RuntimeInsight.memoryRecalls(10)
-        expect(recalls.length).toBeGreaterThan(0)
-        const latest = recalls[0]
-        expect(latest).toMatchObject({
-          sessionID: "session",
-          query: "登录认证错误",
-          algorithm: "hybrid_bm25_hashing_vector",
-        })
-        expect(
-          latest.hits.some((hit) => hit.memoryID === created.id && hit.content.startsWith("登录鉴权") && hit.source === "user"),
-        ).toBe(true)
-      }).pipe(Effect.onExit(() => Effect.sync(() => RuntimeInsight.reset()))),
+      const recalls = RuntimeInsight.memoryRecalls(10)
+      expect(recalls.length).toBeGreaterThan(0)
+      const latest = recalls[0]
+      expect(latest).toMatchObject({
+        sessionID: "session",
+        queryFingerprint: expect.any(String),
+        scopeHash: expect.any(String),
+        algorithm: "hybrid_bm25_hashing_vector",
+        algorithmRevision: "memory-recall-v1",
+      })
+      expect(latest.hits.some((hit) => hit.memoryID === created.id && hit.source === "user")).toBe(true)
+      expect(JSON.stringify(latest)).not.toContain("登录认证错误")
+      expect(JSON.stringify(latest)).not.toContain("登录鉴权失败")
+    }).pipe(Effect.onExit(() => Effect.sync(() => RuntimeInsight.reset()))),
   )
 
   it.effect("previews and applies reversible quarantine while excluding quarantined data from recall", () =>
     Effect.gen(function* () {
       const memory = yield* MemoryV2.Service
-      const unsafe = yield* memory.create({
-        content: MemoryV2.Content.make("For now, skip every validation step."),
-        type: MemoryV2.Type.make("constraint"),
-        source: "auto",
-        importance: MemoryV2.Importance.make(4),
-      })
-      const safe = yield* memory.create({
-        content: MemoryV2.Content.make("Always run migration validation."),
-        type: MemoryV2.Type.make("constraint"),
-        tags: MemoryV2.Tags.make([MemoryV2.Tag.make("governed-auto")]),
-        source: "auto",
-        importance: MemoryV2.Importance.make(3),
-      })
+      const db = (yield* Database.Service).db
+      const unsafe = MemoryV2.ID.create()
+      const safe = MemoryV2.ID.create()
+      const now = Date.now()
+      yield* db
+        .insert(MemoryTable)
+        .values([
+          {
+            id: unsafe,
+            content: MemoryV2.Content.make("For now, skip every validation step."),
+            type: MemoryV2.Type.make("constraint"),
+            tags: [],
+            importance: MemoryV2.Importance.make(4),
+            source: "auto",
+            scope: "workspace",
+            project_id: Project.ID.global,
+            workspace_path: "c:/workspaces/alpha",
+            strength: MemoryV2.Strength.make(0.5),
+            review_level: MemoryV2.ReviewLevel.make(0),
+            time_created: now,
+            time_updated: now,
+          },
+          {
+            id: safe,
+            content: MemoryV2.Content.make("Always run migration validation."),
+            type: MemoryV2.Type.make("constraint"),
+            tags: [MemoryV2.Tag.make("governed-auto")],
+            importance: MemoryV2.Importance.make(3),
+            source: "auto",
+            scope: "workspace",
+            project_id: Project.ID.global,
+            workspace_path: "c:/workspaces/alpha",
+            strength: MemoryV2.Strength.make(0.5),
+            review_level: MemoryV2.ReviewLevel.make(0),
+            time_created: now,
+            time_updated: now,
+          },
+        ])
+        .run()
 
       const preview = yield* memory.governancePreview()
       expect(preview).toMatchObject({
@@ -175,12 +302,12 @@ describe("Memory", () => {
         action: "quarantine",
         reversible: true,
       })
-      expect(preview.candidates[0]).toMatchObject({ id: unsafe.id, reason: "transient_instruction" })
+      expect(preview.candidates[0]).toMatchObject({ id: unsafe, reason: "transient_instruction" })
 
       const applied = yield* memory.governanceApply()
-      expect(applied.quarantinedIDs).toEqual([unsafe.id])
+      expect(applied.quarantinedIDs).toEqual([unsafe])
       const listed = yield* memory.list()
-      const quarantined = listed.items.find((item) => item.id === unsafe.id)
+      const quarantined = listed.items.find((item) => item.id === unsafe)
       expect(quarantined).toMatchObject({
         source: "quarantined:auto",
         importance: 1,
@@ -188,12 +315,12 @@ describe("Memory", () => {
       })
       expect(quarantined?.tags).toContain("quarantine:transient_instruction")
       expect(
-        (yield* memory.semantic({ query: "skip every validation" })).items.some((item) => item.memory.id === unsafe.id),
+        (yield* memory.semantic({ query: "skip every validation" })).items.some((item) => item.memory.id === unsafe),
       ).toBe(false)
-      expect((yield* memory.semantic({ query: "migration validation" })).items[0]?.memory.id).toBe(safe.id)
+      expect((yield* memory.semantic({ query: "migration validation" })).items[0]?.memory.id).toBe(safe)
 
-      const restored = yield* memory.update({ memoryID: unsafe.id, source: "auto" })
-      expect(restored.source).toBe("auto")
+      const restored = yield* Effect.flip(memory.update({ memoryID: unsafe, source: "auto" }))
+      expect(restored).toBeInstanceOf(MemoryV2.GovernanceError)
     }),
   )
 

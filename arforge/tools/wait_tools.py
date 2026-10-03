@@ -1,4 +1,9 @@
-"""Cooperative wait tool that never occupies a shell process."""
+"""Explicit Python compatibility wrapper for the cooperative wait tool.
+
+The product owner is the TypeScript/Core ``cooperative_wait`` tool.  This
+module remains importable for legacy Python loops and fixtures, but is excluded
+from the default Python registry so it cannot compete with that owner.
+"""
 
 from __future__ import annotations
 

@@ -13,7 +13,23 @@ import {
   buildHomeArchivedSessionRecords,
   filterHomeArchivedSessionRecords,
   type HomeArchivedSessionRecord,
+  unarchiveSessionTime,
 } from "./home-archived-sessions-model"
+
+type NullableArchiveTime = { archived: number | null }
+
+/**
+ * The server accepts `time.archived: null` as the unarchive operation. The
+ * generated SDK declaration has not yet reflected that nullable field, so
+ * keep the compatibility boundary here rather than changing the payload to
+ * `undefined` (which would omit the operation entirely).
+ */
+function updateSessionArchiveTime(
+  update: (input: { sessionID: string; directory: string; time: { archived?: number } }) => Promise<unknown>,
+  input: { sessionID: string; directory: string; time: NullableArchiveTime },
+) {
+  return update(input as { sessionID: string; directory: string; time: { archived?: number } })
+}
 
 export function homeArchivedSessionsKey(server: string) {
   return ["home", "archived-sessions", server] as const
@@ -62,10 +78,10 @@ export function createHomeArchivedSessionsController(home: HomeController) {
     if (!ctx) return
     setPending({ id: record.session.id, action: "restore" })
     try {
-      await ctx.sdk.client.session.update({
+      await updateSessionArchiveTime(ctx.sdk.client.session.update.bind(ctx.sdk.client.session), {
         sessionID: record.session.id,
         directory: record.session.directory,
-        time: { archived: null },
+        time: unarchiveSessionTime,
       })
       await Promise.all([load.refetch(), refreshActiveSessions()])
       showToast({ title: language.t("home.archived.restored"), variant: "success" })

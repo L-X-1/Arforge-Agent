@@ -12,12 +12,28 @@ export class Timeout extends Schema.Class<Timeout>("ConfigV2.MCP.Timeout")({
   }),
 }) {}
 
+export const DefaultTimeout = 30_000
+
+/** One phase-specific precedence rule; the returned execution settings cannot drift. */
+export function resolveTimeouts(timeout?: typeof Timeout.Type, defaults?: typeof Timeout.Type) {
+  return Object.freeze({
+    startup: timeout?.startup ?? defaults?.startup ?? DefaultTimeout,
+    request: timeout?.request ?? defaults?.request ?? DefaultTimeout,
+  })
+}
+
+export const ReadOnlyPaths = Schema.Array(Schema.String.check(Schema.isPattern(/^[^\0]*[^\0\s][^\0]*$/u))).annotate({
+  description:
+    "Additional dependency directories approved for reads, relative to the workspace. Never adds write permission or removes an existing writable-root grant. Changes require a new local MCP approval.",
+})
+
 export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
   type: Schema.Literal("local"),
   command: Schema.String.pipe(Schema.Array),
   cwd: Schema.String.pipe(Schema.optional).annotate({
     description: "Working directory for the MCP server process. Relative paths resolve from the workspace directory.",
   }),
+  read_only_paths: ReadOnlyPaths.pipe(Schema.optional),
   environment: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),
   timeout: Timeout.pipe(Schema.optional),
@@ -40,7 +56,9 @@ export class Remote extends Schema.Class<Remote>("ConfigV2.MCP.Remote")({
   timeout: Timeout.pipe(Schema.optional),
 }) {}
 
-export const Server = Schema.Union([Local, Remote]).pipe(Schema.toTaggedUnion("type"))
+// A higher-priority document may only toggle a server declared below it.
+export const Override = Schema.Struct({ disabled: Schema.Boolean, type: Schema.optional(Schema.Never) })
+export const Server = Schema.Union([Local, Remote, Override])
 
 export class Info extends Schema.Class<Info>("ConfigV2.MCP")({
   timeout: Timeout.pipe(Schema.optional),

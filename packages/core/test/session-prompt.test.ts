@@ -29,16 +29,22 @@ const activeSessions = new Set<SessionV2.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    exclusive: () => Effect.die(new Error("Exclusive execution is not part of this fixture")),
     active: Effect.sync(() => new Set(activeSessions)),
     resume: (sessionID) =>
       Effect.sync(() => {
         executionCalls.push(sessionID)
       }),
+    resumeWith: () => Effect.void,
     interrupt: (sessionID) =>
       Effect.sync(() => {
         interruptCalls.push(sessionID)
       }),
     wake: (sessionID) =>
+      Effect.sync(() => {
+        wakeCalls.push(sessionID)
+      }),
+    wakeAndWait: (sessionID) =>
       Effect.sync(() => {
         wakeCalls.push(sessionID)
       }),
@@ -127,8 +133,8 @@ describe("SessionV2.prompt", () => {
       executionCalls.length = 0
       wakeCalls.length = 0
       yield* session.wait(sessionID)
-      expect(executionCalls).toEqual([sessionID])
-      expect(wakeCalls).toEqual([])
+      expect(executionCalls).toEqual([])
+      expect(wakeCalls).toEqual([sessionID])
     }),
   )
 

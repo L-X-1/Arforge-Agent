@@ -1,4 +1,5 @@
 import { splitProps, type JSX } from "solid-js"
+import { resizeHandleKeyboardSize } from "./resize-handle-keyboard"
 
 export interface ResizeHandleProps extends Omit<JSX.HTMLAttributes<HTMLDivElement>, "onResize"> {
   direction: "horizontal" | "vertical"
@@ -27,6 +28,25 @@ export function ResizeHandle(props: ResizeHandleProps) {
     "class",
     "classList",
   ])
+
+  const handleKeyDown: JSX.EventHandler<HTMLDivElement, KeyboardEvent> = (event) => {
+    const handler = rest.onKeyDown
+    if (Array.isArray(handler)) handler[0](handler[1], event)
+    else if (typeof handler === "function") handler(event)
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return
+    const size = resizeHandleKeyboardSize({
+      key: event.key,
+      direction: local.direction,
+      edge: local.edge,
+      size: local.size,
+      min: local.min,
+      max: local.max,
+      shiftKey: event.shiftKey,
+    })
+    if (size === undefined) return
+    event.preventDefault()
+    local.onResize(size)
+  }
 
   const handlePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return
@@ -96,12 +116,18 @@ export function ResizeHandle(props: ResizeHandleProps) {
       data-direction={local.direction}
       data-edge={local.edge ?? (local.direction === "vertical" ? "start" : "end")}
       role="separator"
+      tabIndex={rest.tabIndex ?? 0}
+      aria-valuemin={local.min}
+      aria-valuemax={local.max}
+      aria-valuenow={local.size}
+      aria-label={rest["aria-label"] ?? "Resize panel"}
       aria-orientation={local.direction === "horizontal" ? "vertical" : "horizontal"}
       classList={{
         ...local.classList,
         [local.class ?? ""]: !!local.class,
       }}
       onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
     />
   )
 }

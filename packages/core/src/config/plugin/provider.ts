@@ -1,10 +1,11 @@
 export * as ConfigProviderPlugin from "./provider"
 
 import { define } from "../../plugin/definition"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Config } from "../../config"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
+import { Billing } from "@arforge-ai/schema/billing"
 
 export const Plugin = define({
   id: "config-provider",
@@ -63,6 +64,11 @@ export const Plugin = define({
                 if (config.family !== undefined) model.family = config.family
                 if (config.name !== undefined) model.name = config.name
                 if (config.api !== undefined) model.api = { ...model.api, ...config.api }
+                if (config.profile !== undefined) {
+                  model.profile = Schema.encodeSync(ModelV2.Profile)(config.profile) as unknown as NonNullable<
+                    typeof model.profile
+                  >
+                }
                 if (config.capabilities !== undefined) {
                   model.capabilities = {
                     tools: config.capabilities.tools,
@@ -92,7 +98,7 @@ export const Plugin = define({
                 }
                 if (config.cost !== undefined) {
                   model.cost = (Array.isArray(config.cost) ? config.cost : [config.cost]).map((cost) => ({
-                    tier: cost.tier && { ...cost.tier },
+                    ...(cost.tier !== undefined ? { tier: { ...cost.tier } } : {}),
                     input: cost.input,
                     output: cost.output,
                     cache: {
@@ -101,8 +107,16 @@ export const Plugin = define({
                     },
                   }))
                 }
+                if (config.priceCatalog !== undefined)
+                  Object.assign(model, { priceCatalog: Schema.encodeSync(Billing.PriceCatalog)(config.priceCatalog) })
                 if (config.disabled !== undefined) model.enabled = !config.disabled
-                if (config.limit !== undefined) model.limit = { ...model.limit, ...config.limit }
+                if (config.limit !== undefined) {
+                  const limit = { ...model.limit }
+                  if (config.limit.context !== undefined) limit.context = config.limit.context
+                  if (config.limit.input !== undefined) limit.input = config.limit.input
+                  if (config.limit.output !== undefined) limit.output = config.limit.output
+                  model.limit = limit
+                }
               })
             }
           }

@@ -281,7 +281,7 @@ def test_oversized_notebook_is_rejected_before_parsing(tmp_path):
 def test_registered_tools_have_workspace_permissions_and_enum_schema(monkeypatch, tmp_path):
     from arforge.tool_executor import execute_tool_by_name
     from arforge.tool_registry import REGISTRY
-    from arforge.tools import file_tools, load_builtin_tools
+    from arforge.tools import file_tools, load_builtin_tools, notebook_tools
 
     monkeypatch.setenv("ARFORGE_AUTO_APPROVE", "1")
     original_workspace = file_tools.WORKSPACE
@@ -290,6 +290,9 @@ def test_registered_tools_have_workspace_permissions_and_enum_schema(monkeypatch
         path = tmp_path / "sample.ipynb"
         _write(path, _notebook())
         load_builtin_tools()
+        # The legacy Python wrappers are explicit compatibility imports; the
+        # TS/Core NotebookTools node owns the default product registration.
+        assert notebook_tools.notebook_read_tool is not None
 
         read_tool = REGISTRY.get("notebook_read")
         edit_tool = REGISTRY.get("notebook_edit")
@@ -348,3 +351,11 @@ def test_notebook_write_outside_workspace_is_dynamically_dangerous(tmp_path):
         ) == "workspace_write"
     finally:
         file_tools.set_workspace(original_workspace)
+
+
+def test_python_builtin_registry_excludes_legacy_notebook_wrappers():
+    """TS/Core NotebookTools is canonical; Python remains opt-in compatibility."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.notebook_tools" not in BUILTIN_TOOL_MODULES

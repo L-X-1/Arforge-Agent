@@ -157,3 +157,36 @@ def test_quick_plan_uses_the_same_mandatory_rules_path(tmp_path, monkeypatch):
 
     assert result == "plan"
     assert "quick-plan-rules" in captured["messages"][0]["content"]
+
+
+def test_project_conventions_inject_agents_md_beside_arforge_md(tmp_path, monkeypatch):
+    """AGENTS.md conventions are injected after ARFORGE.md and never duplicate it."""
+    from arforge.core.agent_core import ArforgeAgent
+
+    workspace = tmp_path / "project"
+    _write_rules(workspace, "rules-from-arforge")
+    (workspace / "AGENTS.md").write_text("## 开发规范\n\nconvention-marker\n", encoding="utf-8")
+    agent = ArforgeAgent(reasoning_enabled=False, multiagent_enabled=False)
+    monkeypatch.setattr(agent, "refresh_memory_text", lambda _query: "")
+
+    with execution_scope("project-conventions", workspace=workspace):
+        content = agent.build_messages("实现一个登录功能。")[0]["content"]
+
+    assert "rules-from-arforge" in content
+    assert "convention-marker" in content
+    assert content.index("rules-from-arforge") < content.index("convention-marker")
+
+
+def test_project_conventions_absent_without_agents_md(tmp_path, monkeypatch):
+    from arforge.core.agent_core import ArforgeAgent
+
+    workspace = tmp_path / "project"
+    _write_rules(workspace, "rules-only")
+    agent = ArforgeAgent(reasoning_enabled=False, multiagent_enabled=False)
+    monkeypatch.setattr(agent, "refresh_memory_text", lambda _query: "")
+
+    with execution_scope("project-conventions-none", workspace=workspace):
+        content = agent.build_messages("实现一个登录功能。")[0]["content"]
+
+    assert "rules-only" in content
+    assert "### AGENTS.md" not in content

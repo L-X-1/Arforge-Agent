@@ -5,6 +5,7 @@ import { createStore, type SetStoreFunction } from "solid-js/store"
 import type { FileSelection } from "@/context/file"
 import { Persist, persisted } from "@/utils/persist"
 import type { ServerScope } from "@/utils/server-scope"
+import { isHtmlSelectionSnapshot, type HtmlSelectionSnapshot } from "@/utils/html-selection-reference"
 
 interface PartBase {
   content: string
@@ -57,6 +58,7 @@ export type FileContextItem = {
   commentID?: string
   commentOrigin?: "review" | "file"
   preview?: string
+  htmlSelection?: HtmlSelectionSnapshot
 }
 
 export type ContextItem = FileContextItem
@@ -138,6 +140,13 @@ function contextItemKey(item: ContextItem) {
   const end = item.selection?.endLine
   const key = `${item.type}:${item.path}:${start}:${end}`
 
+  if (item.htmlSelection !== undefined) {
+    const snapshot = item.htmlSelection
+    return isHtmlSelectionSnapshot(snapshot)
+      ? `${key}:html=${snapshot.revision}:${snapshot.start}:${snapshot.end}:${snapshot.mode}`
+      : `${key}:html=invalid`
+  }
+
   if (item.commentID) return `${key}:c=${item.commentID}`
   const comment = item.comment?.trim()
   if (!comment) return key
@@ -146,7 +155,7 @@ function contextItemKey(item: ContextItem) {
 }
 
 export function isCommentItem(item: ContextItem | (ContextItem & { key: string })) {
-  return item.type === "file" && !!item.comment?.trim()
+  return item.type === "file" && item.htmlSelection === undefined && !!item.comment?.trim()
 }
 
 function createPromptActions(setStore: SetStoreFunction<PromptStore>) {

@@ -34,12 +34,15 @@ import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
-import { SessionRunState } from "@/session/run-state"
+import { SessionRevertReadonlyLocal } from "@/session/revert-readonly-local"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
+import { SessionShareReadonlyLocal } from "@/share/readonly-local"
+import { SessionShareReceiptStore } from "@/share/receipt-store"
+import { SessionShareProvider } from "@/share/provider"
 import { ShareNext } from "@/share/share-next"
 import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
@@ -48,9 +51,16 @@ import { Storage } from "@/storage/storage"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Worktree } from "@/worktree"
+import { WorktreeControlScheduler } from "@/control-operation/worktree-scheduler"
+import { SessionRevertControlScheduler } from "@/control-operation/session-revert-scheduler"
+import { SessionRevertControlOperationNode } from "@/control-operation/session-revert-node"
+import { SessionShareControlOperationNode } from "@/control-operation/session-share-node"
+import { SessionShareControlScheduler } from "@/control-operation/session-share-scheduler"
+import { ControlOperationNode } from "@/control-operation/node"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MoveSession } from "@arforge-ai/core/control-plane/move-session"
 import { Database } from "@arforge-ai/core/database/database"
+import { makeGlobalNode } from "@arforge-ai/core/effect/app-node"
 import { AppNodeBuilderV1 } from "@/effect/app-node-builder-v1"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { httpClient } from "@arforge-ai/core/effect/app-node-platform"
@@ -66,8 +76,22 @@ import { SessionProjector } from "@arforge-ai/core/session/projector"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { ScheduledPromptV2 } from "@arforge-ai/core/scheduled-prompt"
 import { TriggerV2 } from "@arforge-ai/core/trigger"
+import { node as tenantPlatformNode } from "@arforge-ai/core/tenant-platform"
+import { ControlClaimIndex } from "@arforge-ai/core/runtime"
+import { RollbackArtifact } from "@arforge-ai/core/runtime"
+import { DurableAction } from "@arforge-ai/core/runtime/durable-action"
+import { node as artifactMaintenanceScanNode } from "@arforge-ai/core/runtime/artifact-maintenance-scan"
+import { node as profileMaintenanceLifecycleNode } from "@arforge-ai/core/runtime/profile-maintenance-lifecycle"
+import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
+import { SubagentControl } from "@arforge-ai/core/runtime/subagent-control"
+import { SubagentControlRecovery } from "@arforge-ai/core/runtime/subagent-control-recovery"
+import { RuntimeInvariants } from "@arforge-ai/core/runtime"
+import { PersonalJobV2 } from "@arforge-ai/core/personal-job"
+import { PersonalJobExecutor } from "@arforge-ai/core/personal-job-executor"
+import { Credential } from "@arforge-ai/core/credential"
+import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
-import { SessionExecutionMature } from "@/session/execution"
+import { SessionExecutionFormal } from "@/session/execution-formal"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@arforge-ai/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
@@ -85,6 +109,7 @@ import { EventApi } from "./groups/event"
 import { PtyConnectApi } from "./groups/pty"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
+import { bootstrapHandlers } from "./handlers/bootstrap"
 import { controlHandlers } from "./handlers/control"
 import { controlPlaneHandlers } from "./handlers/control-plane"
 import { experimentalHandlers } from "./handlers/experimental"
@@ -103,12 +128,13 @@ import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@arforge-ai/server/handlers"
-import { buildLocationServiceMap, LocationServiceMap } from "@arforge-ai/core/location-services"
+import { buildSharedLocationServiceMap, LocationServiceMap } from "@arforge-ai/core/location-services"
 import { layer as locationLayer } from "@arforge-ai/server/location"
 import { sessionLocationLayer } from "@arforge-ai/server/middleware/session-location"
 import { PtyEnvironment } from "@arforge-ai/server/pty-environment"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@arforge-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
+import { selfHostedShareHandlers } from "./handlers/self-hosted-share"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
@@ -161,6 +187,7 @@ const ptyConnectApiRoutes = HttpApiBuilder.layer(PtyConnectApi).pipe(
 )
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
+    bootstrapHandlers,
     configHandlers,
     experimentalHandlers,
     fileHandlers,
@@ -173,6 +200,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     permissionHandlers,
     providerHandlers,
     sessionHandlers,
+    selfHostedShareHandlers,
     syncHandlers,
     tuiHandlers,
     workspaceHandlers,
@@ -223,6 +251,7 @@ const app = LayerNode.group([
   Npm.node,
   FSUtil.node,
   Database.node,
+  Credential.node,
   Auth.node,
   Account.node,
   Config.node,
@@ -243,15 +272,18 @@ const app = LayerNode.group([
   PermissionSaved.node,
   Todo.node,
   Session.node,
+  SessionExecution.node,
+  SessionV2.node,
+  ScheduledPromptV2.node,
   SessionProjector.node,
   SessionStatus.node,
   BackgroundJob.node,
   RuntimeFlags.node,
   EventV2Bridge.node,
-  SessionRunState.node,
   SessionProcessor.node,
   SessionCompaction.node,
   SessionRevert.node,
+  SessionRevertReadonlyLocal.node,
   SessionSummary.node,
   SessionPrompt.node,
   Instruction.node,
@@ -267,23 +299,50 @@ const app = LayerNode.group([
   Vcs.node,
   Workspace.node,
   Worktree.node,
+  WorktreeControlScheduler.node,
+  SessionRevertControlScheduler.node,
+  SessionRevertControlOperationNode.node,
+  SessionShareControlOperationNode.node,
+  SessionShareControlScheduler.node,
+  ControlOperationNode.node,
   Installation.node,
   ShareNext.node,
   SessionShare.node,
+  SessionShareReadonlyLocal.node,
+  SessionShareReceiptStore.node,
+  SessionShareProvider.node,
   InstanceStore.node,
   httpClient,
   EventV2.node,
+  ControlClaimIndex.node,
+  RollbackArtifact.node,
   TriggerV2.node,
+  ToolOutputStore.cleanupNode,
+  DurableRun.node,
+  SubagentControl.node,
+  SubagentControlRecovery.node,
+  RuntimeInvariants.node,
+  DurableAction.node,
+  artifactMaintenanceScanNode,
+  profileMaintenanceLifecycleNode,
+  PersonalJobV2.node,
+  PersonalJobExecutor.node,
+  tenantPlatformNode,
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
 ])
 
+export const locationServiceMapV2 = buildSharedLocationServiceMap()
+export const locationServiceMapV2Node = makeGlobalNode({
+  service: LocationServiceMap.Service,
+  layer: locationServiceMapV2,
+  deps: [Database.node],
+})
+
 export function createRoutes(
   corsOptions?: CorsOptions,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const locationServiceMapV2 = buildLocationServiceMap()
-
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -300,7 +359,7 @@ export function createRoutes(
       corsVaryFix,
       fenceLayer,
       cors(corsOptions),
-      AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationServiceMapV2]]),
+      AppNodeBuilderV1.build(MoveSession.node, [[LocationServiceMap.node, locationServiceMapV2Node]]),
       HttpServer.layerServices,
     ]),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
@@ -309,13 +368,18 @@ export function createRoutes(
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
       AppNodeBuilderV1.build(LayerNode.group([SessionV2.node, ScheduledPromptV2.node]), [
-        [LocationServiceMap.node, locationServiceMapV2],
-        [SessionExecution.node, SessionExecutionMature.node],
+        [LocationServiceMap.node, locationServiceMapV2Node],
+        [SessionExecution.node, SessionExecutionFormal.node],
       ]),
     ),
     Layer.provide(locationServiceMapV2),
 
-    Layer.provide(AppNodeBuilderV1.build(app)),
+    Layer.provide(
+      AppNodeBuilderV1.build(app, [
+        [LocationServiceMap.node, locationServiceMapV2Node],
+        [SessionExecution.node, SessionExecutionFormal.node],
+      ]),
+    ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
     // so Observability must come after every service graph. Otherwise eagerly forked
     // fibers (e.g. the ModelsDev background refresh) capture Effect's default stdout

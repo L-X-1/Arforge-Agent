@@ -29,6 +29,7 @@ let blockRemoveTarget: string | undefined
 let removeStarted: Deferred.Deferred<void> | undefined
 let releaseRemove: Deferred.Deferred<void> | undefined
 let afterEditApproval = (): Effect.Effect<void> => Effect.void
+let afterObservedRead: (() => Effect.Effect<void>) | undefined
 
 const permission = Layer.succeed(
   PermissionV2.Service,
@@ -61,6 +62,7 @@ const reset = () => {
   removeStarted = undefined
   releaseRemove = undefined
   afterEditApproval = () => Effect.void
+  afterObservedRead = undefined
 }
 
 const filesystem = Layer.effect(
@@ -72,9 +74,20 @@ const filesystem = Layer.effect(
       readFile: (target) =>
         Effect.sync(() => {
           if (!editApproved) readsBeforeEditApproval++
-        }).pipe(Effect.andThen(fs.readFile(target))),
+        }).pipe(
+          Effect.andThen(fs.readFile(target)),
+          Effect.tap(() => {
+            if (!editApproved || !afterObservedRead) return Effect.void
+            const callback = afterObservedRead
+            afterObservedRead = undefined
+            return callback()
+          }),
+        ),
       remove: (target, options) => {
-        if (failRemoveTarget && path.basename(target) === failRemoveTarget) return Effect.die("forced remove failure")
+        if (failRemoveTarget && path.basename(target) === failRemoveTarget)
+          return Effect.fail(new FSUtil.FileSystemError({ method: "remove", cause: "forced remove failure" })) as unknown as ReturnType<
+            typeof fs.remove
+          >
         if (blockRemoveTarget && path.basename(target) === blockRemoveTarget && removeStarted && releaseRemove)
           return Deferred.succeed(removeStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseRemove)),
@@ -185,8 +198,14 @@ describe("ApplyPatchTool", () => {
                   ],
                 })
                 expect(assertions).toMatchObject([
-                  { sessionID, action: "edit", resources: ["nested/new.txt", "update.txt", "remove.txt"], save: ["*"] },
+                  {
+                    sessionID,
+                    agent: "build",
+                    action: "edit",
+                    resources: ["nested/new.txt", "remove.txt", "update.txt"],
+                  },
                 ])
+                expect(assertions[0]?.resources).not.toContain("*")
                 expect(readsBeforeEditApproval).toBe(0)
                 expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "nested/new.txt"), "utf8"))).toBe(
                   "created\n",
@@ -221,7 +240,9 @@ describe("ApplyPatchTool", () => {
                   ),
                 ).toEqual({ type: "error", value: "apply_patch moves are not supported yet" })
                 expect(yield* exists(path.join(tmp.path, "created.txt"))).toBe(false)
-                expect(assertions).toEqual([])
+                // The static preflight already asserted the canonical scope
+                // before the tool rejected the move; no hunk was applied.
+                expect(assertions.map((input) => input.action)).toEqual(["edit"])
               }),
             ),
           ),
@@ -247,7 +268,7 @@ describe("ApplyPatchTool", () => {
                     call(`*** Begin Patch\n*** Update File: ${target}\n@@\n-before\n+after\n*** End Patch`),
                   ),
                 ).toMatchObject({ type: "text" })
-                expect(assertions.map((input) => input.action)).toEqual(["external_directory", "edit"])
+                expect(assertions.map((input) => input.action)).toEqual(["edit", "external_directory"])
                 expect(readsBeforeEditApproval).toBe(0)
                 expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after\n")
               }),
@@ -283,8 +304,8 @@ describe("ApplyPatchTool", () => {
                     ),
                   ),
                 ).toMatchObject({ type: "text" })
-                expect(assertions.map((input) => input.action)).toEqual(["external_directory", "edit"])
-                expect(assertions[0]?.resources).toEqual([
+                expect(assertions.map((input) => input.action)).toEqual(["edit", "external_directory"])
+                expect(assertions[1]?.resources).toEqual([
                   path.join(yield* Effect.promise(() => fs.realpath(outside.path)), "*").replaceAll("\\", "/"),
                 ])
               }),
@@ -371,7 +392,37 @@ describe("ApplyPatchTool", () => {
     ),
   )
 
-  it.live("preserves a later commit defect after earlier sequential applications", () =>
+  it.live("rejects a delete when the observed content changes before commit", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "observed-delete.txt")
+        afterObservedRead = () => Effect.promise(() => fs.writeFile(target, "winner\n")).pipe(Effect.orDie)
+        return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const result = yield* executeTool(
+                  registry,
+                  call("*** Begin Patch\n*** Delete File: observed-delete.txt\n*** End Patch"),
+                )
+                expect(result).toEqual({
+                  type: "error",
+                  value:
+                    "File changed after permission approval. Read it again before applying the patch at observed-delete.txt.",
+                })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("winner\n")
+              }),
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("compensates earlier applications when a later commit fails", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -383,16 +434,18 @@ describe("ApplyPatchTool", () => {
           Effect.andThen(
             withTool(tmp.path, (registry) =>
               Effect.gen(function* () {
-                expect(
-                  Exit.isFailure(
-                    yield* executeTool(
-                      registry,
-                      call("*** Begin Patch\n*** Delete File: first.txt\n*** Delete File: second.txt\n*** End Patch"),
-                    ).pipe(Effect.exit),
-                  ),
-                ).toBe(true)
-                expect(yield* exists(first)).toBe(false)
+                const result = yield* executeTool(
+                  registry,
+                  call("*** Begin Patch\n*** Delete File: first.txt\n*** Delete File: second.txt\n*** End Patch"),
+                )
+                expect(result.type).toBe("error")
+                expect(result).toEqual({
+                  type: "error",
+                  value: "Unable to apply patch at second.txt Batch compensation completed.",
+                })
+                expect(yield* exists(first)).toBe(true)
                 expect(yield* exists(second)).toBe(true)
+                expect(yield* Effect.promise(() => fs.readFile(first, "utf8"))).toBe("first")
               }),
             ),
           ),

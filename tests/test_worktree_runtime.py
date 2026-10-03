@@ -267,6 +267,7 @@ def test_registered_worktree_tools_export_strict_schema(monkeypatch, tmp_path):
     from arforge.tool_registry import REGISTRY
     from arforge.tools import load_builtin_tools
     from arforge.tools import file_tools
+    import arforge.tools.worktree_tools  # noqa: F401 - explicit compatibility seam
 
     root = _repo(tmp_path)
     manager = WorktreeManager(tmp_path / "state.json")
@@ -296,3 +297,9 @@ def test_registered_worktree_tools_export_strict_schema(monkeypatch, tmp_path):
             manager.exit("tool-session", "remove")
     finally:
         file_tools.set_workspace(original_workspace)
+
+
+def test_worktree_compatibility_tools_are_not_default_bootstrap_owners():
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.worktree_tools" not in BUILTIN_TOOL_MODULES

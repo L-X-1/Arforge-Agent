@@ -10,6 +10,7 @@ import { Hash } from "@arforge-ai/core/util/hash"
 import { Config } from "@/config/config"
 import { Global } from "@arforge-ai/core/global"
 import { Info } from "@arforge-ai/schema/file-diff"
+import { Database } from "@arforge-ai/core/database/database"
 
 export const Patch = Schema.Struct({
   hash: Schema.String,
@@ -801,7 +802,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, AppProcess.node, Config.node],
+  deps: [FSUtil.node, AppProcess.node, Config.node, Database.node],
 })
 
 export * as Snapshot from "."

@@ -2,10 +2,10 @@ import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { Catalog } from "@arforge-ai/core/catalog"
 import { Credential } from "@arforge-ai/core/credential"
-import { EventV2 } from "@arforge-ai/core/event"
 import { Integration } from "@arforge-ai/core/integration"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { PluginV2 } from "@arforge-ai/core/plugin"
+import { PluginEvents } from "@arforge-ai/core/plugin/events"
 import { PluginHost } from "@arforge-ai/core/plugin/host"
 import { ArforgeConsolePlugin } from "@arforge-ai/core/plugin/provider/arforge-console"
 import { ProviderV2 } from "@arforge-ai/core/provider"
@@ -17,10 +17,10 @@ const it = testEffect(PluginTestLayer)
 const invokePlugin = Effect.fn(function* () {
   const plugin = yield* PluginV2.Service
   const host = yield* PluginHost.make(plugin)
-  const events = yield* EventV2.Service
+  const events = yield* PluginEvents.Service
   const integration = yield* Integration.Service
   yield* ArforgeConsolePlugin.effect(host).pipe(
-    Effect.provideService(EventV2.Service, events),
+    Effect.provideService(PluginEvents.Service, events),
     Effect.provideService(Integration.Service, integration),
   )
 })

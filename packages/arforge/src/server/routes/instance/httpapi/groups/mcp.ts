@@ -1,4 +1,5 @@
 import { MCP } from "@/mcp"
+import { McpSupervisorSnapshot } from "@/mcp/supervisor"
 import { ConfigMCPV1 } from "@arforge-ai/core/v1/config/mcp"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
@@ -14,12 +15,15 @@ export const AddPayload = Schema.Struct({
 })
 
 export const StatusMap = Schema.Record(Schema.String, MCP.Status)
+export const HealthMap = Schema.Record(Schema.String, McpSupervisorSnapshot)
 export const AuthStartResponse = Schema.Struct({
   authorizationUrl: Schema.String,
   oauthState: Schema.String,
 })
 export const AuthCallbackPayload = Schema.Struct({
   code: Schema.String,
+  /** Capability returned by authStart; binds the code to one OAuth attempt. */
+  oauthState: Schema.String,
 })
 export const AuthRemoveResponse = Schema.Struct({
   success: Schema.Literal(true),
@@ -31,6 +35,7 @@ export class UnsupportedOAuthError extends Schema.ErrorClass<UnsupportedOAuthErr
 
 export const McpPaths = {
   status: "/mcp",
+  health: "/mcp/health",
   auth: "/mcp/:name/auth",
   authCallback: "/mcp/:name/auth/callback",
   authAuthenticate: "/mcp/:name/auth/authenticate",
@@ -50,6 +55,16 @@ export const McpApi = HttpApi.make("mcp")
             identifier: "mcp.status",
             summary: "Get MCP status",
             description: "Get the status of all Model Context Protocol (MCP) servers.",
+          }),
+        ),
+        HttpApiEndpoint.get("health", McpPaths.health, {
+          query: WorkspaceRoutingQuery,
+          success: described(HealthMap, "MCP supervisor health"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.health",
+            summary: "Check MCP health",
+            description: "Probe connected MCP servers and return redacted retry/circuit state.",
           }),
         ),
         HttpApiEndpoint.post("add", McpPaths.status, {

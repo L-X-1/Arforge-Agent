@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "Sugerido",
   "command.category.view": "Visualizar",
   "command.category.project": "Projeto",
@@ -296,6 +299,8 @@ export const dict = {
   "mcp.status.connected": "conectado",
   "mcp.status.failed": "falhou",
   "mcp.status.needs_auth": "precisa de autenticação",
+  "mcp.status.needs_client_registration": "registro do cliente necessário",
+  "mcp.status.needs_approval": "aprovação necessária",
   "mcp.auth.clickToAuthenticate": "Clique para autenticar",
   "mcp.status.disabled": "desabilitado",
   "dialog.fork.empty": "Nenhuma mensagem para bifurcar",
@@ -573,7 +578,7 @@ export const dict = {
   "home.archived.restored": "Sessão restaurada",
   "home.archived.restoreFailed": "Falha ao restaurar a sessão",
   "home.archived.delete.title": "Excluir sessão arquivada",
-  "home.archived.delete.confirm": "Excluir permanentemente \"{{name}}\"? Esta ação não pode ser desfeita.",
+  "home.archived.delete.confirm": 'Excluir permanentemente "{{name}}"? Esta ação não pode ser desfeita.',
   "home.archived.delete.button": "Excluir permanentemente",
   "home.archived.deleted": "Sessão excluída permanentemente",
   "home.archived.loadFailed": "Não foi possível carregar as sessões arquivadas.",
@@ -1250,7 +1255,7 @@ export const dict = {
   "controlCenter.m174": "Restaurar",
   "controlCenter.m175": "Histórico de execução persistente",
   "controlCenter.m176":
-    "Leia os artefatos de transação, rastreamento e mensagem do Python Core por meio do tipo compartilhado Server API. Os relatórios são somente leitura e permanecem pertencentes a uma fonte de persistência.",
+    "Leia os artefatos de transação, rastreamento e mensagem do Arforge Core por meio do tipo compartilhado Server API. Os relatórios são somente leitura e permanecem pertencentes a uma fonte de persistência.",
   "controlCenter.m177": "Limite",
   "controlCenter.m178": "Atualizar",
   "controlCenter.m179": "arquivos ·",
@@ -1303,6 +1308,19 @@ export const dict = {
   "controlCenter.m222": "Erro desconhecido de diagnóstico profundo",
   "controlCenter.m223": "Evolução governada",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Revise candidatos de política propostos por evidências de aprendizado e governe mudanças de capacidade com avaliação isolada, aprovação humana, implantação gradual e reversão.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Revise candidatos de política propostos por evidências de aprendizado e governe mudanças de capacidade com avaliação isolada, aprovação humana, implantação gradual e reversão.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

@@ -6,11 +6,15 @@ import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@arforge-ai/core/effect/app-node-platform"
 import { PermissionV2 } from "@arforge-ai/core/permission"
 import { SessionV2 } from "@arforge-ai/core/session"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { WebSearchTool } from "@arforge-ai/core/tool/websearch"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
 import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+import { location } from "./fixture/location"
 
 const sessionID = SessionV2.ID.make("ses_websearch_test")
 const payload = (text: string) =>
@@ -131,6 +135,13 @@ const it = testEffect(
       [LayerNodePlatform.httpClient, http],
       [WebSearchTool.configNode, websearchConfig],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [
+        Location.node,
+        Layer.succeed(
+          Location.Service,
+          Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+        ),
+      ],
     ],
   ),
 )
@@ -162,20 +173,45 @@ describe("WebSearchTool registration", () => {
             },
           },
         }),
-      ).toEqual({ type: "text", value: "exa results" })
-      expect(assertions).toMatchObject([
+      ).toEqual({ type: "text", value: ContextFirewall.untrusted("web", "exa results") })
+      // The trusted built-in's declared network/secret/external scope is
+      // elevated to an exact L2 scoped preflight by the gateway: the assert
+      // carries the canonical scope set, never the wildcard leaf shape.
+      expect(assertions).toEqual([
         {
           sessionID,
+          agent: toolIdentity.agent,
           action: "websearch",
-          resources: ["effect typescript"],
-          save: ["*"],
+          resources: [
+            "EXA_API_KEY",
+            "Exa",
+            "PARALLEL_API_KEY",
+            "Parallel",
+            "effect typescript",
+            "https://mcp.exa.ai/mcp",
+            "https://search.parallel.ai/mcp",
+          ],
+          save: [
+            "EXA_API_KEY",
+            "Exa",
+            "PARALLEL_API_KEY",
+            "Parallel",
+            "effect typescript",
+            "https://mcp.exa.ai/mcp",
+            "https://search.parallel.ai/mcp",
+          ],
           metadata: {
-            query: "effect typescript",
-            numResults: 3,
-            livecrawl: "preferred",
-            type: "fast",
-            contextMaxCharacters: 2500,
-            provider: "exa",
+            riskTier: "L2",
+            authority: "scoped_grant",
+            filesystemScope: [],
+            networkScope: ["https://mcp.exa.ai/mcp", "https://search.parallel.ai/mcp"],
+            secretScope: ["EXA_API_KEY", "PARALLEL_API_KEY"],
+            externalServices: ["Exa", "Parallel"],
+          },
+          source: {
+            type: "tool",
+            messageID: toolIdentity.assistantMessageID,
+            callID: "call-exa",
           },
         },
       ])
@@ -232,10 +268,10 @@ describe("WebSearchTool registration", () => {
       })
       expect(requests[0]?.body).not.toHaveProperty("params.arguments.model_name")
       expect(settled).toEqual({
-        result: { type: "text", value: "parallel results" },
+        result: { type: "text", value: ContextFirewall.untrusted("web", "parallel results") },
         output: {
           structured: { provider: "parallel", text: "parallel results" },
-          content: [{ type: "text", text: "parallel results" }],
+          content: [{ type: "text", text: ContextFirewall.untrusted("web", "parallel results") }],
         },
       })
       expect(JSON.stringify(settled)).not.toContain("parallel-secret")
@@ -275,7 +311,7 @@ describe("WebSearchTool registration", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-empty", name: "websearch", input: { query: "nothing" } },
         }),
-      ).toEqual({ type: "text", value: WebSearchTool.NO_RESULTS })
+      ).toEqual({ type: "text", value: ContextFirewall.untrusted("web", WebSearchTool.NO_RESULTS) })
     }),
   )
 

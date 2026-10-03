@@ -241,6 +241,13 @@ describe("Truncate", () => {
   describe("cleanup", () => {
     const DAY_MS = 24 * 60 * 60 * 1000
 
+    test("computes identifier age across the 36-bit timestamp rollover", () => {
+      const period = Truncate.IDENTIFIER_TIMESTAMP_PERIOD_MS
+
+      expect(Truncate.identifierTimestampAge(period - 7 * DAY_MS, 3 * DAY_MS)).toBe(10 * DAY_MS)
+      expect(Truncate.identifierTimestampAge(1 * DAY_MS, period - 2 * DAY_MS)).toBe(-3 * DAY_MS)
+    })
+
     it.live("deletes files older than 7 days and preserves recent files", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service

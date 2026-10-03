@@ -1,0 +1,35 @@
+Command: bun test test/session/prompt.test.ts --test-name-pattern "user-attached MCP resources" --timeout 30000
+Working directory: E:/Arforge-Agent/packages/arforge
+Exit: 0
+2 pass
+0 fail
+13 expect() calls
+
+Command: bun x oxlint --disable-nested-config src/session/prompt.ts test/session/prompt.test.ts --quiet
+Working directory: E:/Arforge-Agent/packages/arforge
+Exit: 0
+0 errors
+6 warnings (pre-existing prompt/test helper warnings)
+
+Command: git diff --check -- packages/arforge/src/session/prompt.ts packages/arforge/test/session/prompt.test.ts
+Working directory: E:/Arforge-Agent
+Exit: 0
+
+Command: bun run typecheck
+Working directory: E:/Arforge-Agent/packages/arforge
+Exit: non-zero due existing packages/tui JSX/BaseRenderable diagnostics; no new prompt.ts diagnostics observed.
+
+Command: bun run script/arforge-ts-composition-ledger.ts generate-ts-composition-ledger --root . --write
+Command: bun run script/arforge-python-ledger.ts generate-python-ledger --root . --write
+Command: bun run script/arforge-python-tests-ledger.ts generate-python-tests-ledger --root . --write
+Command: bun run script/arforge-python-dependencies-ledger.ts generate-python-dependencies-ledger --root . --write
+Command: bun run script/arforge-migration-freshness.ts generate-source-snapshot --write --root .
+Command: bun run audit:migration-freshness
+Working directory: E:/Arforge-Agent
+Exit: 0
+valid: true
+TS composition: 1763 source files, 3 roots, 5 bindings
+Python capabilities: 480 files, 5080 leaves
+Python tests: 365 files, 3394 leaves
+Python dependencies: 7309 scanned, 7500 leaves, 6 assets
+Source snapshot: 7599 inputs

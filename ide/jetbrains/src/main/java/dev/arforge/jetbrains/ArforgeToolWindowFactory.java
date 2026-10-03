@@ -68,6 +68,7 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
                 new JComboBox<>(new String[]{"requestApproval", "autoApprove", "fullAccess"});
         private volatile String sessionId = "";
         private volatile String operationId = "";
+        private volatile boolean awaitingOperation;
 
         private Panel(Project project) {
             this.project = project;
@@ -134,15 +135,14 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
             ).toAbsolutePath().normalize();
             Map<String, String> environment = new HashMap<>();
             environment.put("ARFORGE_WORKSPACE", workspace.toString());
-            environment.put("PYTHONUTF8", "1");
             String profile = System.getProperty("arforge.bridge.profile", "").trim();
             if (!profile.isEmpty()) {
                 environment.put("ARFORGE_HOME", profile);
             }
-            String command = System.getProperty("arforge.bridge.command", "python");
+            String command = System.getProperty("arforge.bridge.command", "arforge");
             client.start(
                     command,
-                    new String[]{"-m", "arforge.bridge"},
+                    new String[]{"bridge"},
                     workspace,
                     environment
             ).thenCompose(ignored -> resumeOrCreateSession())
@@ -179,6 +179,7 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
                 return;
             }
             PropertiesComponent.getInstance(project).unsetValue(SESSION_KEY);
+            awaitingOperation = false;
             client.request("session.create", new JsonObject(), Duration.ofSeconds(30))
                     .whenComplete((session, error) -> {
                         if (error != null) {
@@ -214,15 +215,18 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
             params.addProperty("permission_mode", String.valueOf(permission.getSelectedItem()));
             params.add("context", context);
             status.setText("运行中…");
+            awaitingOperation = true;
             client.request("chat.start", params, Duration.ofMinutes(2))
                     .whenComplete((operation, error) -> {
                         if (error != null) {
+                            awaitingOperation = false;
                             ui(() -> {
                                 status.setText("失败");
                                 append(error.getMessage() + "\n");
                             });
                         } else {
                             operationId = operation.get("operation_id").getAsString();
+                            awaitingOperation = false;
                         }
                     });
         }
@@ -392,8 +396,22 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
         }
 
         private void onBridgeEvent(JsonObject event) {
-            if (!event.has("operation_id")
-                    || !event.get("operation_id").getAsString().equals(operationId)) {
+            if (!event.has("operation_id")) {
+                return;
+            }
+            String eventOperationId = event.get("operation_id").getAsString();
+            if (operationId.isEmpty()) {
+                if (awaitingOperation
+                        && "operation.started".equals(event.get("type").getAsString())
+                        && event.has("session_id")
+                        && event.get("session_id").getAsString().equals(sessionId)) {
+                    operationId = eventOperationId;
+                    awaitingOperation = false;
+                } else {
+                    return;
+                }
+            }
+            if (!eventOperationId.equals(operationId)) {
                 return;
             }
             String type = event.get("type").getAsString();
@@ -408,10 +426,26 @@ public final class ArforgeToolWindowFactory implements ToolWindowFactory, DumbAw
                 ui(() -> append("\n[回答已根据验证结果更新]\n"));
             } else if ("operation.completed".equals(type)) {
                 operationId = "";
+                awaitingOperation = false;
                 ui(() -> status.setText("已连接"));
                 reviewChanges(false);
-            } else if ("operation.failed".equals(type) || "operation.cancelled".equals(type)) {
+            } else if ("operation.cancelled".equals(type)) {
                 operationId = "";
+                awaitingOperation = false;
+                ui(() -> {
+                    status.setText("已停止");
+                    append("任务已停止。\n");
+                });
+            } else if ("operation.timed_out".equals(type)) {
+                operationId = "";
+                awaitingOperation = false;
+                ui(() -> {
+                    status.setText("超时");
+                    append("任务超时，请重试。\n");
+                });
+            } else if ("operation.failed".equals(type)) {
+                operationId = "";
+                awaitingOperation = false;
                 ui(() -> {
                     status.setText("失败");
                     append(data + "\n");

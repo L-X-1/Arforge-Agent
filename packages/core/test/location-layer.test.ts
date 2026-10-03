@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { Context, DateTime, Effect, Equal, Hash, Option, Schema } from "effect"
 import { Tool } from "@arforge-ai/core/tool/tool"
 import { define } from "@arforge-ai/plugin/v2/effect"
 import { AgentV2 } from "@arforge-ai/core/agent"
@@ -10,6 +10,7 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { LocationServiceMap } from "@arforge-ai/core/location-services"
 import { Location } from "@arforge-ai/core/location"
+import { PermissionV2 } from "@arforge-ai/core/permission"
 import { PluginV2 } from "@arforge-ai/core/plugin"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ProjectV2 } from "@arforge-ai/core/project"
@@ -17,6 +18,7 @@ import { ProviderV2 } from "@arforge-ai/core/provider"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionRunnerModel } from "@arforge-ai/core/session/runner/model"
+import { WorkspaceV2 } from "@arforge-ai/core/workspace"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions } from "./lib/tool"
@@ -48,9 +50,72 @@ describe("LocationServiceMap", () => {
             expect(decoded).toEqual(constructed)
             expect(Equal.equals(constructed, decoded)).toBe(true)
             expect(Hash.hash(constructed)).toBe(Hash.hash(decoded))
-            expect(yield* locations.contextEffect(constructed)).toBe(yield* locations.contextEffect(decoded))
+            const context = yield* locations.contextEffect(constructed)
+            expect(context).toBe(yield* locations.contextEffect(decoded))
+            expect(Option.isSome(Context.getOption(context, Database.Service))).toBe(true)
+            const clientRef = Location.Ref.make({
+              directory: AbsolutePath.make(process.platform === "win32" ? dir.path.replaceAll("\\", "/") : dir.path),
+            })
+            expect(context).toBe(yield* locations.contextEffect(clientRef))
+            expect(Context.get(context, Location.Service).directory).toBe(directory)
+            const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(clientRef)))
+            expect(permission).toBe(Context.get(context, PermissionV2.Service))
           }),
         ),
+      ),
+    ),
+  )
+
+  it.live("invalidates the same cached location through either separator spelling", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          const native = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const client = Location.Ref.make({
+            directory: AbsolutePath.make(process.platform === "win32" ? dir.path.replaceAll("\\", "/") : dir.path),
+          })
+          const before = yield* locations.contextEffect(native)
+          yield* locations.invalidate(client)
+          const after = yield* locations.contextEffect(native)
+          expect(after).not.toBe(before)
+          expect(after).toBe(yield* locations.contextEffect(client))
+          const beforeDatabase = Context.getOption(before, Database.Service)
+          const afterDatabase = Context.getOption(after, Database.Service)
+          expect(Option.isSome(beforeDatabase)).toBe(true)
+          expect(Option.isSome(afterDatabase)).toBe(true)
+          expect(Option.getOrUndefined(afterDatabase)).toBe(Option.getOrUndefined(beforeDatabase))
+        }),
+      ),
+    ),
+  )
+
+  it.live("preserves separate directories and workspace IDs when normalizing location refs", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap(([first, second]) =>
+        Effect.gen(function* () {
+          const locations = yield* LocationServiceMap.Service
+          const firstRef = Location.Ref.make({ directory: AbsolutePath.make(first.path) })
+          const secondRef = Location.Ref.make({ directory: AbsolutePath.make(second.path) })
+          const workspaceRef = Location.Ref.make({
+            directory: AbsolutePath.make(process.platform === "win32" ? first.path.replaceAll("\\", "/") : first.path),
+            workspaceID: WorkspaceV2.ID.make("wrk_location_isolation"),
+          })
+          const firstContext = yield* locations.contextEffect(firstRef)
+          const secondContext = yield* locations.contextEffect(secondRef)
+          const workspaceContext = yield* locations.contextEffect(workspaceRef)
+          expect(secondContext).not.toBe(firstContext)
+          expect(workspaceContext).not.toBe(firstContext)
+          expect(Context.get(secondContext, PermissionV2.Service)).not.toBe(Context.get(firstContext, PermissionV2.Service))
+          expect(Context.get(workspaceContext, PermissionV2.Service)).not.toBe(Context.get(firstContext, PermissionV2.Service))
+          expect(Context.get(workspaceContext, Location.Service).workspaceID).toBe(workspaceRef.workspaceID)
+        }),
       ),
     ),
   )

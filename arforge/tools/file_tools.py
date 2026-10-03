@@ -15,6 +15,7 @@ from arforge.core.file_state import get_file_state_tracker, snapshot_file
 from arforge.security.file_ops import backup_file, request_confirmation, safe_delete, safe_read, safe_write, write_log
 from arforge.tool_registry import (
     ParamSchema,
+    REGISTRY,
     adapt_docx_request,
     adapt_filename,
     adapt_filename_content,
@@ -171,9 +172,9 @@ def _resolve(filename: str, *, purpose: str = "read") -> Path:
     if not path.is_absolute():
         path = workspace / path
     resolved = path.resolve()
-    from arforge.workspace_roots import path_is_authorized
+    from arforge.ts_workspace import typescript_path_is_authorized
 
-    if not path_is_authorized(resolved, primary=workspace):
+    if not typescript_path_is_authorized(resolved, primary=workspace):
         raise ValueError(f"path escapes workspace and all authorized workspaces: {filename}")
     return resolved
 
@@ -597,24 +598,6 @@ def _docx_bytes(
     return buffer.getvalue()
 
 
-@register_tool(
-    "write_docx",
-    "Create an A4 Microsoft Word .docx document at a workspace or authorized local path. "
-    "Markdown headings, lists, page-break markers, a TOC field, paragraph styles, margins, "
-    "and page-number footer are converted into portable OOXML.",
-    keywords=["word", "docx", "word 文档", "文档", "写word", "生成word"],
-    params=[
-        ParamSchema("filename", "path", "target .docx filename; .docx is appended when no suffix is provided"),
-        ParamSchema("content", "string", "full text or Markdown content to put into the Word document"),
-        ParamSchema("font_name", "string", "optional font name, for example 宋体", required=False, default=None),
-        ParamSchema("font_size_pt", "float", "optional font size in points; 小四 is 12", required=False, default=None),
-    ],
-    input_adapter=adapt_docx_request,
-    risk="medium",
-    requires_confirmation=True,
-    category="workspace_write",
-    source=__name__,
-)
 def write_docx(
     filename: str,
     content: str,
@@ -644,6 +627,37 @@ def write_docx(
     if result.get("success"):
         return f"wrote {path}"
     raise PermissionError(f"Error writing {raw}: {result.get('error', 'unknown')}")
+
+
+def register_legacy_write_docx() -> None:
+    """Register the legacy DOCX wrapper only from the explicit Office seam.
+
+    The product boot path is TypeScript/Core and owns the canonical ``write``
+    tool.  Keeping this registration behind ``arforge.tools.office_tools``
+    preserves old Python callers without exposing a second default Office
+    owner from the general file-tools module.
+    """
+
+    if REGISTRY.get("write_docx") is not None:
+        return
+    register_tool(
+        "write_docx",
+        "Create an A4 Microsoft Word .docx document at a workspace or authorized local path. "
+        "Markdown headings, lists, page-break markers, a TOC field, paragraph styles, margins, "
+        "and page-number footer are converted into portable OOXML.",
+        keywords=["word", "docx", "word 文档", "文档", "写word", "生成word"],
+        params=[
+            ParamSchema("filename", "path", "target .docx filename; .docx is appended when no suffix is provided"),
+            ParamSchema("content", "string", "full text or Markdown content to put into the Word document"),
+            ParamSchema("font_name", "string", "optional font name, for example 宋体", required=False, default=None),
+            ParamSchema("font_size_pt", "float", "optional font size in points; 小四 is 12", required=False, default=None),
+        ],
+        input_adapter=adapt_docx_request,
+        risk="medium",
+        requires_confirmation=True,
+        category="workspace_write",
+        source=__name__,
+    )(write_docx)
 
 
 @register_tool(

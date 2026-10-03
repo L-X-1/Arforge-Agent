@@ -1,4 +1,12 @@
-"""Read-only agent tools for explicitly configured MCP client connections."""
+"""Explicit Python compatibility wrappers for legacy MCP client tools.
+
+The TypeScript/Core MCP service is the product owner for connected-server
+health, capability catalogs, resource reads, and generation-bound ToolRegistry
+projection. These wrappers remain importable for old Python fixtures and
+embedding callers, but are intentionally excluded from the default Python
+registry so they cannot become a second MCP client/tool owner. New product
+code must use the TypeScript/Core MCP service and its native projections.
+"""
 
 from __future__ import annotations
 

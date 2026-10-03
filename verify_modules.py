@@ -23,8 +23,13 @@ class CheckResult:
 
 
 MODULES = (
-    "arforge.cli",
-    "arforge.bridge",
+    # The user-facing launcher is the TypeScript CLI.  Keep the legacy Python
+    # parser out of the default import smoke; compatibility tests exercise it
+    # explicitly where needed.
+    "arforge.cli_bridge",
+    # The Python capability bridge was retired; direct_dispatch is the
+    # remaining compatibility/runtime seam for legacy CLI-only modules.
+    "arforge.product.direct_dispatch",
     "arforge.core.agent_core",
     "arforge.core.agent_loop_v2",
     "arforge.core.release_gates",

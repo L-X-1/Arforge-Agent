@@ -1,5 +1,7 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
+export * from "./session/request-envelope"
+export * from "./session/checkpoint"
 
 import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
 import { ListAnchor } from "@arforge-ai/schema/session"
@@ -39,6 +41,7 @@ import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@arforge-ai/schema/durable-event-manifest"
 import { SessionOrganization as SessionOrganizationContract } from "@arforge-ai/schema/session-organization"
 import { SessionOrganization } from "./session/organization"
+import { parentPrefix as parentTitlePrefix } from "./session/title"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -159,9 +162,7 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
   readonly promptQueue: {
-    readonly list: (
-      sessionID: SessionSchema.ID,
-    ) => Effect.Effect<ReadonlyArray<SessionInput.Admitted>, NotFoundError>
+    readonly list: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<SessionInput.Admitted>, NotFoundError>
     readonly update: (input: {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
@@ -190,6 +191,16 @@ export interface Interface {
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+  readonly resumeWithCredentials: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly credentialIDs: SessionExecution.RunOptions["credentialIDs"]
+    readonly billing?: SessionExecution.RunOptions["billing"]
+    readonly personalJob?: SessionExecution.RunOptions["personalJob"]
+    /** Trusted metadata-only hook invoked after the committed terminal history gate. */
+    readonly onSettled?: SessionExecution.RunOptions["onSettled"]
+    /** Trusted parity/replay hook over the committed terminal rows. */
+    readonly settlementCollector?: SessionExecution.RunOptions["settlementCollector"]
+  }) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly updateTags: (input: {
     sessionID: SessionSchema.ID
@@ -223,9 +234,16 @@ export interface Interface {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       files?: boolean
-    }) => Effect.Effect<Revert.State, NotFoundError | MessageNotFoundError | Snapshot.Error>
-    readonly clear: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | Snapshot.Error>
-    readonly commit: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+    }) => Effect.Effect<
+      Revert.State,
+      NotFoundError | MessageNotFoundError | Snapshot.Error | SessionRevert.MutationUnavailableError
+    >
+    readonly clear: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<void, NotFoundError | Snapshot.Error | SessionRevert.MutationUnavailableError>
+    readonly commit: (
+      sessionID: SessionSchema.ID,
+    ) => Effect.Effect<void, NotFoundError | SessionRevert.MutationUnavailableError>
   }
 }
 
@@ -275,7 +293,7 @@ const layer = Layer.effect(
           directory: input.location.directory,
           path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
           workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
-      title: `新会话 - ${new Date(now).toISOString()}`,
+          title: `${parentTitlePrefix}${new Date(now).toISOString()}`,
           agent: input.agent,
           model: input.model
             ? {
@@ -547,13 +565,26 @@ const layer = Layer.effect(
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution
-          .resume(sessionID)
+          .wakeAndWait(sessionID)
           .pipe(Effect.mapError(() => new OperationUnavailableError({ operation: "wait" })))
       }),
       active: execution.active,
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.resume(sessionID)
+      }),
+      resumeWithCredentials: Effect.fn("V2Session.resumeWithCredentials")(function* (input) {
+        yield* result.get(input.sessionID)
+        yield* execution.resumeWith({
+          sessionID: input.sessionID,
+          options: {
+            credentialIDs: input.credentialIDs,
+            billing: input.billing,
+            personalJob: input.personalJob,
+            onSettled: input.onSettled,
+            settlementCollector: input.settlementCollector,
+          },
+        })
       }),
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(execution.interrupt(sessionID)),
@@ -594,23 +625,16 @@ const layer = Layer.effect(
       },
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {
-          const session = yield* result.get(input.sessionID)
-          return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.provideService(EventV2.Service, events),
-            Effect.provide(locations.get(session.location)),
-          )
+          yield* result.get(input.sessionID)
+          return yield* new SessionRevert.MutationUnavailableError({ operation: "stage" })
         }),
         clear: Effect.fn("V2Session.revert.clear")(function* (sessionID) {
-          const session = yield* result.get(sessionID)
-          yield* SessionRevert.clear(session).pipe(
-            Effect.provideService(EventV2.Service, events),
-            Effect.provide(locations.get(session.location)),
-          )
+          yield* result.get(sessionID)
+          return yield* new SessionRevert.MutationUnavailableError({ operation: "clear" })
         }),
         commit: Effect.fn("V2Session.revert.commit")(function* (sessionID) {
-          const session = yield* result.get(sessionID)
-          yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+          yield* result.get(sessionID)
+          return yield* new SessionRevert.MutationUnavailableError({ operation: "commit" })
         }),
       },
     })
@@ -623,8 +647,11 @@ const resolvePrompt = (input: PromptInput.Prompt) =>
   Prompt.make({
     text: input.text,
     agents: input.agents,
+    scheduledTasks: input.scheduledTasks,
+    system: input.system,
     route: input.route,
     command: input.command,
+    format: input.format,
     files: input.files?.map((file) => {
       const dataMime = file.uri.match(/^data:([^;,]+)[;,]/i)?.[1]
       const target = URL.canParse(file.uri) ? new URL(file.uri).pathname : (file.name ?? file.uri)

@@ -14,6 +14,47 @@ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
 
 describe("toLLMMessages", () => {
+  test("projects local tool errors as stable model-readable text", () => {
+    const messages = toLLMMessages(
+      [
+        SessionMessage.Assistant.make({
+          id: id("assistant-local-error"),
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "local-error",
+              name: "write",
+              state: SessionMessage.ToolStateError.make({
+                status: "error",
+                input: { path: "README.md" },
+                error: { type: "unknown", message: "Tool execution interrupted" },
+                content: [],
+                structured: {},
+              }),
+              time: { created, completed: created },
+            }),
+          ],
+          finish: "error",
+          error: { type: "unknown", message: "Tool execution interrupted" },
+          time: { created, completed: created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "local-error",
+        name: "write",
+        result: { type: "error", value: "Tool execution interrupted" },
+      },
+    ])
+  })
+
   test("omits empty assistant turns", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({

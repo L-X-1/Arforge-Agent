@@ -12,6 +12,7 @@ import { Vcs } from "../../src/project/vcs"
 import { Session } from "../../src/session/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { SessionExecution } from "@arforge-ai/core/session/execution"
 
 export const workspaceLayerWithRuntimeFlags = (overrides: Partial<RuntimeFlags.Info>) =>
   AppNodeBuilder.build(
@@ -29,6 +30,7 @@ export const workspaceLayerWithRuntimeFlags = (overrides: Partial<RuntimeFlags.I
     ]),
     [
       [InstanceStore.bootstrapNode, InstanceBootstrap.node],
+      [SessionExecution.node, SessionExecution.noopLayer],
       [RuntimeFlags.node, RuntimeFlags.layer(overrides)],
     ],
   )

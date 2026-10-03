@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "decision_values": ["EXIT", "DO_NOT_EXIT"],
+  "required_checks": [
+    "baseline_and_multi_agent_gain",
+    "child_remote_capability_revocation",
+    "background_task_visibility_stop_audit",
+    "tenant_rls_backup_delete_drill",
+    "signed_release_rollback"
+  ],
+  "pass_requirements": [
+    "status=pass",
+    "evidence_path_exists_inside_repository",
+    "sha256_matches_evidence_file",
+    "evidence_type_specific_contract_passes",
+    "checkpoint.commit_is_git_object",
+    "checkpoint.tree_is_git_object"
+  ],
+  "default_missing_status": "DO_NOT_EXIT"
+}

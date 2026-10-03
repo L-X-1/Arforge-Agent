@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { Catalog } from "@arforge-ai/core/catalog"
 import { Config } from "@arforge-ai/core/config"
+import { Billing } from "@arforge-ai/schema/billing"
 import { ConfigProviderPlugin } from "@arforge-ai/core/config/plugin/provider"
 import { Integration } from "@arforge-ai/core/integration"
 import { ModelV2 } from "@arforge-ai/core/model"
@@ -55,6 +56,114 @@ function request(headers: Record<string, string>, variant?: string) {
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect("preserves the canonical price catalog through the existing JSON plugin boundary", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const price = Billing.PriceCatalog.make({
+        revision: "configured-price-v1",
+        currency: "USD",
+        minorUnit: 6,
+        unit: "token",
+        effectiveFrom: DateTime.makeUnsafe(0),
+        source: "fixture:configured-price",
+        rates: { unknownInput: { amountMinor: 1 }, textOutput: { amountMinor: 2 } },
+      })
+      yield* addPlugin(
+        Config.Service.of({
+          entries: () =>
+            Effect.succeed([
+              new Config.Document({
+                type: "document",
+                info: decode({
+                  providers: {
+                    "priced-provider": {
+                      models: {
+                        "priced-model": {
+                          priceCatalog: Schema.encodeSync(Billing.PriceCatalog)(price),
+                        },
+                      },
+                    },
+                  },
+                }),
+              }),
+            ]),
+        }),
+      )
+      const model = required(
+        yield* catalog.model.get(ProviderV2.ID.make("priced-provider"), ModelV2.ID.make("priced-model")),
+      )
+      expect(model.priceCatalog).toEqual(price)
+    }),
+  )
+
+  it.effect("projects a configured model profile through the JSON plugin boundary", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const providerID = ProviderV2.ID.make("profile-provider")
+      const modelID = ModelV2.ID.make("profile-model")
+      const observedAt = DateTime.makeUnsafe("2026-08-12T00:00:00.000Z")
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({
+                providers: {
+                  "profile-provider": {
+                    models: {
+                      "profile-model": {
+                        profile: {
+                          version: "v1",
+                          providerID: "profile-provider",
+                          modelID: "profile-model",
+                          modality: { input: ["text"], output: ["text"] },
+                          limits: { context: 16_000, output: 2_000 },
+                          capabilities: {
+                            tools: "supported",
+                            structured: "native",
+                            reasoning: "unknown",
+                            cache: "provider_defined",
+                          },
+                          tokenizer: "provider:tokenizer-v1",
+                          estimator: "provider:estimator-v1",
+                          priceCatalogRevision: "catalog-2026-08-12",
+                          observations: [
+                            {
+                              kind: "capability",
+                              status: "pass",
+                              source: "recorded",
+                              sourceID: "fixture:profile",
+                              observedAt: DateTime.toEpochMillis(observedAt),
+                              value: { capability: "tools" },
+                            },
+                          ],
+                          policy: {
+                            region: { mode: "provider_default", regions: [] },
+                            egress: { mode: "provider", origins: [] },
+                            data: { retention: "provider_defined", training: "provider_defined" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              }),
+            }),
+          ]),
+      })
+
+      yield* addPlugin(config)
+
+      const model = required(yield* catalog.model.get(providerID, modelID))
+      expect(model.profile?.providerID).toBe(providerID)
+      expect(model.profile?.modelID).toBe(modelID)
+      expect(model.profile?.limits).toEqual({ context: 16_000, input: undefined, output: 2_000 })
+      expect(model.profile?.capabilities.tools).toBe("supported")
+      expect(model.profile?.policy.egress.mode).toBe("provider")
+      expect(model.profile?.observations[0]?.observedAt).toEqual(observedAt)
+    }),
+  )
+
   it.effect("keeps configured model variant bodies unchanged", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

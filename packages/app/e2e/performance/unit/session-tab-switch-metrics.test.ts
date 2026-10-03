@@ -1,5 +1,19 @@
 import { expect, test } from "bun:test"
-import { classifySessionSwitch } from "../timeline/session-tab-switch-metrics"
+import { classifySessionSwitch, isStableDestination } from "../timeline/session-tab-switch-metrics"
+
+test("requires three consecutive visible samples within the original one-pixel tolerance", () => {
+  const stable = { last: true, bottomErrorPx: 0 }
+
+  expect(isStableDestination([stable, stable])).toBe(false)
+  expect(isStableDestination([stable, stable, stable])).toBe(true)
+  for (const bottomErrorPx of [-1, 1]) {
+    expect(isStableDestination([stable, { last: true, bottomErrorPx }, stable])).toBe(true)
+  }
+  for (const bottomErrorPx of [-8, -1.01, 1.01, 8, undefined, NaN, Infinity]) {
+    expect(isStableDestination([stable, { last: true, bottomErrorPx }, stable])).toBe(false)
+  }
+  expect(isStableDestination([stable, { last: false, bottomErrorPx: 0 }, stable])).toBe(false)
+})
 
 test("counts source and blank samples before the destination is observed", () => {
   const result = classifySessionSwitch([

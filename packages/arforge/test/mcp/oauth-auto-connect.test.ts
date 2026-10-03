@@ -1,57 +1,91 @@
 import { expect } from "bun:test"
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
-import { ListResourcesRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import {
+  ListResourcesRequestSchema,
+  ListToolsRequestSchema,
+  LoggingMessageNotificationSchema,
+} from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@arforge-ai/core/fs-util"
-import { Effect } from "effect"
+import { Effect, Exit, Fiber } from "effect"
 import { Config } from "../../src/config/config"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { McpAuth } from "../../src/mcp/auth"
 import { MCP } from "../../src/mcp/index"
 import { McpOAuthCallback } from "../../src/mcp/oauth-callback"
 import { McpOAuthPendingProvider, McpOAuthProvider } from "../../src/mcp/oauth-provider"
+import { disposeAllInstancesEffect, provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const mcpTest = testEffect(
-  LayerNode.compile(
-    LayerNode.group([MCP.node, McpAuth.node, EventV2Bridge.node, Config.node, CrossSpawnSpawner.node, FSUtil.node]),
+  AppNodeBuilder.build(
+    LayerNode.group([
+      MCP.node,
+      LocationServiceMap.node,
+      McpAuth.node,
+      EventV2Bridge.node,
+      Config.node,
+      CrossSpawnSpawner.node,
+      FSUtil.node,
+    ]),
   ),
 )
 
 interface OAuthMcpOptions {
   capabilities?: "tools" | "resources"
+  blockTokenExchange?: boolean
+  initializeDelay?: number
+  listToolsDelay?: number
 }
 
 function serveOAuthMcp(options: OAuthMcpOptions = {}) {
   return Effect.acquireRelease(
     Effect.promise(async () => {
       const capabilities = options.capabilities ?? "tools"
-      const protocol = new Server(
-        { name: "oauth-auto-connect", version: "1.0.0" },
-        { capabilities: capabilities === "tools" ? { tools: {} } : { resources: {} } },
-      )
-      const transport = new WebStandardStreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        enableJsonResponse: true,
-      })
       let listToolsCalls = 0
+      let tokenExchanges = 0
       let requiresAuth = true
+      let releaseTokenExchange: (() => void) | undefined
+      let signalTokenExchange: (() => void) | undefined
+      const tokenExchangeStarted = options.blockTokenExchange
+        ? new Promise<void>((resolve) => {
+            signalTokenExchange = resolve
+          })
+        : undefined
 
-      if (capabilities === "tools") {
-        protocol.setRequestHandler(ListToolsRequestSchema, () => {
-          listToolsCalls++
-          return Promise.resolve({ tools: [{ name: "test_tool", inputSchema: { type: "object" } }] })
-        })
-      }
-      if (capabilities === "resources") {
-        protocol.setRequestHandler(ListResourcesRequestSchema, () =>
-          Promise.resolve({ resources: [{ name: "docs", uri: "docs://readme" }] }),
+      let protocol: Server
+      let transport: WebStandardStreamableHTTPServerTransport
+      const resetMcp = async () => {
+        if (protocol!) await protocol.close().catch(() => {})
+        protocol = new Server(
+          { name: "oauth-auto-connect", version: "1.0.0" },
+          { capabilities: capabilities === "tools" ? { tools: {} } : { resources: {} } },
         )
+        transport = new WebStandardStreamableHTTPServerTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+          enableJsonResponse: true,
+        })
+        if (capabilities === "tools") {
+          protocol.setRequestHandler(ListToolsRequestSchema, async () => {
+            listToolsCalls++
+            if (options.listToolsDelay) await Bun.sleep(options.listToolsDelay)
+            return Promise.resolve({ tools: [{ name: "test_tool", inputSchema: { type: "object" } }] })
+          })
+        }
+        if (capabilities === "resources") {
+          protocol.setRequestHandler(ListResourcesRequestSchema, () =>
+            Promise.resolve({ resources: [{ name: "docs", uri: "docs://readme" }] }),
+          )
+        }
+        await protocol.connect(transport)
       }
 
-      await protocol.connect(transport)
+      await resetMcp()
       const http = Bun.serve({
         port: 0,
         async fetch(request) {
@@ -91,6 +125,12 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
             return Response.json({ ...metadata, client_id: "replacement-client" }, { status: 201 })
           }
           if (url.pathname === "/token") {
+            tokenExchanges++
+            if (options.blockTokenExchange)
+              await new Promise<void>((resolve) => {
+                releaseTokenExchange = resolve
+                signalTokenExchange?.()
+              })
             const body = new URLSearchParams(await request.text())
             if (body.get("code") !== "valid-code") {
               return Response.json(
@@ -111,6 +151,10 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
               },
             })
           }
+          if (options.initializeDelay && request.method === "POST") {
+            const body = await request.clone().json()
+            if (body.method === "initialize") await Bun.sleep(options.initializeDelay)
+          }
           return transport.handleRequest(request)
         },
       })
@@ -121,6 +165,10 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
           requiresAuth = false
         },
         listToolsCalls: () => listToolsCalls,
+        tokenExchanges: () => tokenExchanges,
+        waitForTokenExchange: () => tokenExchangeStarted ?? Promise.resolve(),
+        releaseTokenExchange: () => releaseTokenExchange?.(),
+        resetMcp,
         close: async () => {
           await http.stop(true)
           await protocol.close()
@@ -138,6 +186,59 @@ const remote = (url: string, enabled = true) => ({
 })
 
 const stopOAuthCallback = Effect.addFinalizer(() => Effect.promise(() => McpOAuthCallback.stop()).pipe(Effect.ignore))
+
+mcpTest.instance("authentication without a redirect applies the request phase to its bounded catalog", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp({ listToolsDelay: 500 })
+    const mcp = yield* MCP.Service
+    const name = "oauth-catalog-timeout"
+    yield* mcp.add(name, { ...remote(server.url), timeout: { startup: 2000, request: 100 } })
+    server.allowAnonymous()
+    expect((yield* mcp.authenticate(name)).status).toBe("failed")
+    expect(yield* mcp.hasStoredTokens(name)).toBe(false)
+    expect((yield* mcp.tools())[`${name}_test_tool`]).toBeUndefined()
+    expect(server.listToolsCalls()).toBe(1)
+  }),
+)
+
+mcpTest.instance("OAuth startup without a redirect still enforces the frozen startup timeout", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp({ initializeDelay: 500 })
+    const mcp = yield* MCP.Service
+    const name = "oauth-startup-timeout"
+    yield* mcp.add(name, { ...remote(server.url), timeout: { startup: 100, request: 2000 } })
+    server.allowAnonymous()
+    const started = yield* mcp.startAuth(name).pipe(Effect.exit)
+    expect(Exit.isFailure(started)).toBe(true)
+    expect(yield* mcp.hasStoredTokens(name)).toBe(false)
+    expect(server.listToolsCalls()).toBe(0)
+    expect(server.tokenExchanges()).toBe(0)
+  }),
+)
+
+for (const startup of [100, 1500])
+  mcpTest.instance(`OAuth completion uses the frozen startup phase (${startup} ms)`, () =>
+    Effect.gen(function* () {
+      yield* stopOAuthCallback
+      const server = yield* serveOAuthMcp({ initializeDelay: 500 })
+      const mcp = yield* MCP.Service
+      const name = "oauth-finish-timeout"
+      const request = startup === 100 ? 2000 : 100
+      yield* mcp.add(name, { ...remote(server.url), timeout: { startup, request } })
+      const started = yield* mcp.startAuth(name)
+      expect(started.authorizationUrl).toContain("/authorize")
+      const result = yield* mcp.finishAuth(name, "valid-code", started.oauthState)
+      const connected = startup > 500
+      expect(result.status).toBe(connected ? "connected" : "failed")
+      expect(yield* mcp.hasStoredTokens(name)).toBe(connected)
+      const tool = (yield* mcp.tools())[`${name}_test_tool`]
+      if (connected) expect(tool?.timeout).toBe(request)
+      else expect(tool).toBeUndefined()
+      expect(server.tokenExchanges()).toBe(1)
+    }),
+  )
 
 mcpTest.instance("first connect to OAuth server shows needs_auth instead of failed", () =>
   Effect.gen(function* () {
@@ -212,9 +313,10 @@ mcpTest.instance("failed reauthentication preserves existing credentials", () =>
     yield* auth.updateClientInfo(name, { clientId: "dynamic-client", clientSecret: "dynamic-secret" }, server.url)
     yield* auth.updateTokens(name, { accessToken: "working-token" }, server.url)
     yield* mcp.add(name, remote(server.url))
-    expect((yield* mcp.startAuth(name)).authorizationUrl).toContain("/authorize")
+    const started = yield* mcp.startAuth(name)
+    expect(started.authorizationUrl).toContain("/authorize")
 
-    expect(yield* mcp.finishAuth(name, "invalid-code")).toEqual({
+    expect(yield* mcp.finishAuth(name, "invalid-code", started.oauthState)).toEqual({
       status: "failed",
       error: "OAuth completion failed: Token exchange failed",
     })
@@ -237,34 +339,140 @@ mcpTest.instance("successful reauthentication commits replacement credentials", 
     yield* auth.updateClientInfo(name, { clientId: "old-client" }, server.url)
     yield* auth.updateTokens(name, { accessToken: "old-token" }, server.url)
     yield* mcp.add(name, remote(server.url))
-    expect((yield* mcp.startAuth(name)).authorizationUrl).toContain("/authorize")
+    const started = yield* mcp.startAuth(name)
+    expect(started.authorizationUrl).toContain("/authorize")
     expect((yield* auth.get(name))?.tokens?.accessToken).toBe("old-token")
 
-    expect((yield* mcp.finishAuth(name, "valid-code")).status).toBe("connected")
+    expect((yield* mcp.finishAuth(name, "valid-code", started.oauthState)).status).toBe("connected")
     const entry = yield* auth.get(name)
-    expect(entry?.tokens?.accessToken).toBe("replacement-token")
-    expect(entry?.clientInfo?.clientId).toBe("replacement-client")
-    expect(entry?.serverUrl).toBe(server.url)
+    // Legacy bare-name entries are intentionally never adopted by a project
+    // scoped OAuth flow. The old user data remains untouched while the new
+    // protected, opaque project key is used by MCP itself.
+    expect(entry?.tokens?.accessToken).toBe("old-token")
+    expect(yield* mcp.hasStoredTokens(name)).toBe(true)
+    expect(yield* mcp.getAuthStatus(name)).toBe("authenticated")
   }),
 )
 
-mcpTest.instance("auth status only reports credentials stored for the configured server URL", () =>
+mcpTest.instance("commit failure closes the unowned client and retires the failed OAuth generation", () =>
   Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
     const mcp = yield* MCP.Service
-    yield* mcp.add("test-status-url", remote("https://example.com/mcp", false))
-    yield* McpAuth.use.updateTokens("test-status-url", { accessToken: "old-token" }, "https://old.example.com/mcp")
+    const name = "test-oauth-commit-failure"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+    let clientCloseCalls = 0
 
-    expect(yield* mcp.getAuthStatus("test-status-url")).toBe("not_authenticated")
-
-    yield* McpAuth.use.updateTokens("test-status-url", { accessToken: "current-token" }, "https://example.com/mcp")
-    expect(yield* mcp.getAuthStatus("test-status-url")).toBe("authenticated")
-
-    yield* McpAuth.use.updateTokens(
-      "test-status-url",
-      { accessToken: "expired-token", expiresAt: 1 },
-      "https://example.com/mcp",
+    const result = yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const providerPrototype = McpOAuthPendingProvider.prototype
+        const clientPrototype = McpClient.prototype
+        const originalCommit = providerPrototype.commit
+        const originalClose = clientPrototype.close
+        providerPrototype.commit = async () => {
+          throw new Error("injected credential commit failure")
+        }
+        clientPrototype.close = async function () {
+          clientCloseCalls++
+          return originalClose.call(this)
+        }
+        return () => {
+          providerPrototype.commit = originalCommit
+          clientPrototype.close = originalClose
+        }
+      }),
+      () => mcp.finishAuth(name, "valid-code", started.oauthState),
+      (restore) => Effect.sync(restore),
     )
-    expect(yield* mcp.getAuthStatus("test-status-url")).toBe("expired")
+
+    expect(result).toEqual({
+      status: "failed",
+      error: `MCP 服务 ${name} 的 OAuth 凭据未保存、连接发布失败；请重新发起授权`,
+    })
+    expect(clientCloseCalls).toBe(1)
+    expect((yield* mcp.status())[name]).toEqual(result)
+    expect(yield* mcp.hasStoredTokens(name)).toBe(false)
+    expect(yield* mcp.finishAuth(name, "valid-code", started.oauthState)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+    expect(server.tokenExchanges()).toBe(1)
+
+    yield* Effect.promise(server.resetMcp)
+    const retry = yield* mcp.startAuth(name)
+    expect(yield* mcp.finishAuth(name, "valid-code", retry.oauthState)).toEqual({ status: "connected" })
+  }),
+)
+
+mcpTest.instance("publish failure after commit keeps credentials but closes and unpublishes the client", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
+    const mcp = yield* MCP.Service
+    const name = "test-oauth-publish-failure"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+    let clientCloseCalls = 0
+
+    const result = yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const clientPrototype = McpClient.prototype
+        const originalClose = clientPrototype.close
+        const originalSetNotificationHandler = clientPrototype.setNotificationHandler
+        clientPrototype.close = async function () {
+          clientCloseCalls++
+          return originalClose.call(this)
+        }
+        clientPrototype.setNotificationHandler = function (...args) {
+          if ((args[0] as unknown) === LoggingMessageNotificationSchema)
+            throw new Error("injected client publication failure")
+          return Reflect.apply(originalSetNotificationHandler, this, args)
+        }
+        return () => {
+          clientPrototype.close = originalClose
+          clientPrototype.setNotificationHandler = originalSetNotificationHandler
+        }
+      }),
+      () => mcp.finishAuth(name, "valid-code", started.oauthState),
+      (restore) => Effect.sync(restore),
+    )
+
+    expect(result).toEqual({
+      status: "failed",
+      error: `MCP 服务 ${name} 的 OAuth 凭据已保存、连接发布失败；可直接重新连接`,
+    })
+    expect(clientCloseCalls).toBe(1)
+    expect((yield* mcp.status())[name]).toEqual(result)
+    expect(yield* mcp.hasStoredTokens(name)).toBe(true)
+    expect(yield* mcp.getAuthStatus(name)).toBe("authenticated")
+    expect(yield* mcp.finishAuth(name, "valid-code", started.oauthState)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+    expect(server.tokenExchanges()).toBe(1)
+
+    yield* Effect.promise(server.resetMcp)
+    yield* mcp.connect(name)
+    expect((yield* mcp.status())[name]).toEqual({ status: "connected" })
+  }),
+)
+
+mcpTest.instance("auth status only reports project-scoped credentials for the configured server URL", () =>
+  Effect.gen(function* () {
+    const server = yield* serveOAuthMcp()
+    const mcp = yield* MCP.Service
+    const name = "test-status-url"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+    expect((yield* mcp.finishAuth(name, "valid-code", started.oauthState)).status).toBe("connected")
+    expect(yield* mcp.getAuthStatus(name)).toBe("authenticated")
+
+    yield* mcp.add(name, remote("https://other.example.com/mcp", false))
+    expect(yield* mcp.getAuthStatus(name)).toBe("not_authenticated")
+
+    yield* mcp.add(name, remote(server.url, false))
+    expect(yield* mcp.getAuthStatus(name)).toBe("authenticated")
   }),
 )
 
@@ -296,5 +504,136 @@ mcpTest.instance("authenticate() connects a resource-only server without listing
     expect((yield* mcp.authenticate(name)).status).toBe("connected")
     expect(server.listToolsCalls()).toBe(0)
     expect(Object.keys(yield* mcp.resources())).toEqual([`${name}:docs://readme`])
+  }),
+)
+
+mcpTest.instance("late OAuth completion after disable stays stale and cannot store credentials", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
+    const mcp = yield* MCP.Service
+    const name = "test-oauth-stale-disable"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+    expect(started.authorizationUrl).toContain("/authorize")
+
+    yield* mcp.add(name, { ...remote(server.url), enabled: false })
+    expect(yield* mcp.finishAuth(name, "valid-code", started.oauthState)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+    expect((yield* mcp.status())[name]).toEqual({ status: "disabled" })
+    expect(yield* mcp.hasStoredTokens(name)).toBe(false)
+  }),
+)
+
+mcpTest.instance("late OAuth completion after disconnect cannot revive the remote server", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
+    const mcp = yield* MCP.Service
+    const name = "test-oauth-stale-disconnect"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+    expect(started.authorizationUrl).toContain("/authorize")
+
+    yield* mcp.disconnect(name)
+    expect(yield* mcp.finishAuth(name, "valid-code", started.oauthState)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+    expect((yield* mcp.status())[name]).toEqual({ status: "disabled" })
+    expect(yield* mcp.hasStoredTokens(name)).toBe(false)
+  }),
+)
+
+mcpTest.instance("a callback state from a replaced OAuth generation cannot exchange through the replacement", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
+    const mcp = yield* MCP.Service
+    const name = "test-oauth-generation-handoff"
+    yield* mcp.add(name, remote(server.url))
+
+    const first = yield* mcp.startAuth(name)
+    const replacement = yield* mcp.startAuth(name)
+    expect(first.oauthState).not.toBe(replacement.oauthState)
+
+    // This models a callback that has already returned its code while a new
+    // authStart replaces the generation. It must fail before the replacement
+    // transport sees an exchange request.
+    expect(yield* mcp.finishAuth(name, "valid-code", first.oauthState)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+    expect(server.tokenExchanges()).toBe(0)
+
+    expect((yield* mcp.finishAuth(name, "valid-code", replacement.oauthState)).status).toBe("connected")
+    expect(server.tokenExchanges()).toBe(1)
+  }),
+)
+
+mcpTest.instance("instance finalization fences an in-flight OAuth completion before it can commit or publish", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp({ blockTokenExchange: true })
+    const mcp = yield* MCP.Service
+    const name = "test-oauth-finalizer-fence"
+    yield* mcp.add(name, remote(server.url))
+    const started = yield* mcp.startAuth(name)
+
+    const finishing = yield* mcp.finishAuth(name, "valid-code", started.oauthState).pipe(Effect.forkChild)
+    yield* Effect.promise(server.waitForTokenExchange)
+
+    // Disposal detaches the exact pending identity under its keyed transition
+    // while the token exchange is blocked. Releasing the exchange afterwards
+    // must not persist credentials or publish a client into the replacement
+    // InstanceState.
+    yield* disposeAllInstancesEffect
+    yield* Effect.sync(server.releaseTokenExchange)
+    expect(yield* Fiber.join(finishing)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("已过期"),
+    })
+
+    yield* mcp.add(name, remote(server.url))
+    expect(yield* mcp.getAuthStatus(name)).toBe("not_authenticated")
+  }),
+)
+
+mcpTest.instance("same server name in two projects keeps OAuth generations isolated", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp()
+    const secondServer = yield* serveOAuthMcp()
+    const firstDirectory = (yield* TestInstance).directory
+    const secondDirectory = yield* tmpdirScoped()
+    const name = "shared-oauth-name"
+
+    const first = yield* MCP.Service
+    yield* first.add(name, remote(server.url))
+    const firstStarted = yield* first.startAuth(name)
+    expect(firstStarted.authorizationUrl).toContain("/authorize")
+
+    const second = yield* Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      yield* mcp.add(name, remote(secondServer.url))
+      return yield* mcp.startAuth(name)
+    }).pipe(provideInstance(secondDirectory))
+    expect(second.authorizationUrl).toContain("/authorize")
+
+    expect((yield* first.finishAuth(name, "valid-code", firstStarted.oauthState)).status).toBe("connected")
+    const secondResult = yield* MCP.Service.pipe(
+      Effect.flatMap((mcp) => mcp.finishAuth(name, "valid-code", second.oauthState)),
+      provideInstance(secondDirectory),
+    )
+    expect(secondResult.status).toBe("connected")
+    expect((yield* first.status())[name]?.status).toBe("connected")
+    const secondStatus = yield* MCP.Service.pipe(
+      Effect.flatMap((mcp) => mcp.status()),
+      provideInstance(secondDirectory),
+    )
+    expect(secondStatus[name]?.status).toBe("connected")
+    expect(firstDirectory).not.toBe(secondDirectory)
   }),
 )

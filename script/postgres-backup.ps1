@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$DatabaseUrl,
+  [string]$AdminDatabaseUrl,
   [string]$BackupDirectory = (Join-Path $env:LOCALAPPDATA "Arforge\backups\postgresql"),
   [ValidateRange(1, 3650)]
   [int]$RetentionDays = 30,
@@ -83,6 +84,21 @@ $configuredUrl = if ([string]::IsNullOrWhiteSpace($DatabaseUrl)) {
   $DatabaseUrl
 }
 $connection = Get-DatabaseConnection $configuredUrl
+$adminConfiguredUrl = if ([string]::IsNullOrWhiteSpace($AdminDatabaseUrl)) {
+  $processAdminUrl = [Environment]::GetEnvironmentVariable("ARFORGE_DB_ADMIN_URL", "Process")
+  if ([string]::IsNullOrWhiteSpace($processAdminUrl)) {
+    [Environment]::GetEnvironmentVariable("ARFORGE_DB_ADMIN_URL", "User")
+  } else {
+    $processAdminUrl
+  }
+} else {
+  $AdminDatabaseUrl
+}
+$backupConnection = if ([string]::IsNullOrWhiteSpace($adminConfiguredUrl)) {
+  $connection
+} else {
+  Get-DatabaseConnection $adminConfiguredUrl
+}
 $backupRoot = [IO.Path]::GetFullPath($BackupDirectory)
 $rootOnly = [IO.Path]::GetPathRoot($backupRoot).TrimEnd("\", "/")
 if ($backupRoot.TrimEnd("\", "/") -eq $rootOnly) {
@@ -105,10 +121,10 @@ $manifestPath = Join-Path $backupRoot "$stem.manifest.json"
 $checksumPath = Join-Path $backupRoot "$stem.sha256"
 
 try {
-  $null = Invoke-PostgresTool $pgDump $connection @(
-    "--host", $connection.Host,
-    "--port", "$($connection.Port)",
-    "--username", $connection.Username,
+  $null = Invoke-PostgresTool $pgDump $backupConnection @(
+    "--host", $backupConnection.Host,
+    "--port", "$($backupConnection.Port)",
+    "--username", $backupConnection.Username,
     "--dbname", $connection.Database,
     "--format", "custom",
     "--compress", "9",
@@ -131,7 +147,7 @@ try {
     database = $connection.Database
     host = $connection.Host
     port = $connection.Port
-    backupRole = $connection.Username
+    backupRole = $backupConnection.Username
     backupFile = [IO.Path]::GetFileName($encryptedDump)
     encrypted = [ordered]@{
       bytes = (Get-Item -LiteralPath $encryptedDump).Length

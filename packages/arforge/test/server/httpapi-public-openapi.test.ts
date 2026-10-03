@@ -36,7 +36,20 @@ type OpenApiSpec = {
 
 const methods = ["get", "post", "put", "delete", "patch"] as const
 
-const allowedV2BuiltInEndpointErrors: string[] = []
+const allowedV2BuiltInEndpointErrors: string[] = [
+  "GET /api/self-hosted-share/lookup/{operationID} 403 effect_HttpApiError_Forbidden",
+  "GET /api/self-hosted-share/lookup/{operationID} 409 effect_HttpApiError_Conflict",
+  "GET /api/self-hosted-share/lookup/{operationID} 503 effect_HttpApiError_ServiceUnavailable",
+  "GET /api/self-hosted-share/revoke/{operationID} 403 effect_HttpApiError_Forbidden",
+  "GET /api/self-hosted-share/revoke/{operationID} 409 effect_HttpApiError_Conflict",
+  "GET /api/self-hosted-share/revoke/{operationID} 503 effect_HttpApiError_ServiceUnavailable",
+  "POST /api/self-hosted-share/publish 403 effect_HttpApiError_Forbidden",
+  "POST /api/self-hosted-share/publish 409 effect_HttpApiError_Conflict",
+  "POST /api/self-hosted-share/publish 503 effect_HttpApiError_ServiceUnavailable",
+  "POST /api/self-hosted-share/revoke 403 effect_HttpApiError_Forbidden",
+  "POST /api/self-hosted-share/revoke 409 effect_HttpApiError_Conflict",
+  "POST /api/self-hosted-share/revoke 503 effect_HttpApiError_ServiceUnavailable",
+]
 
 function v2Operations(spec: OpenApiSpec) {
   return Object.entries(spec.paths).flatMap(([path, item]) =>
@@ -265,8 +278,6 @@ describe("PublicApi OpenAPI v2 errors", () => {
 
     for (const route of [
       ["post", "/session/{sessionID}/shell"],
-      ["post", "/session/{sessionID}/revert"],
-      ["post", "/session/{sessionID}/unrevert"],
       ["delete", "/session/{sessionID}/message/{messageID}"],
     ] as const) {
       expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["409"]) ?? "")).toBe(

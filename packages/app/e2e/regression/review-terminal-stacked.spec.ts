@@ -240,9 +240,23 @@ test("keeps the review tree and terminal sized when both panels are open", async
 
 async function selectMode(page: Page, current: string, next: string) {
   await page.getByRole("button", { name: current }).click()
-  const option = page.getByRole("option", { name: next })
-  await expect(option).toBeVisible()
-  await option.click()
+  let lastError: unknown
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const option = page.getByRole("option", { name: next })
+    await expect(option).toBeVisible()
+    try {
+      await option.click({ timeout: 5_000 })
+      return
+    } catch (error) {
+      lastError = error
+      // The large virtualized review tree can repaint the menu between the
+      // visibility check and click. Re-open the same user-facing menu so the
+      // next attempt targets a fresh option node instead of a detached one.
+      await page.keyboard.press("Escape").catch(() => undefined)
+      await page.getByRole("button", { name: current }).click().catch(() => undefined)
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Unable to select review mode: ${next}`)
 }
 
 async function expectTree(page: Page, total: number, file: string) {

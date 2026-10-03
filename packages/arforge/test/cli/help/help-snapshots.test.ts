@@ -41,10 +41,7 @@ function normalize(text: string): string {
   // terminal measurements. On Windows, otherwise identical child processes
   // can differ by one padding cell even with a fixed COLUMNS value. Preserve
   // every semantic token while collapsing only that presentation padding.
-  return normalized.replace(
-    /[ \t]{2,}(?=\[(?:aliases|boolean|string|number|array|choices|default)\b)/g,
-    " ",
-  )
+  return normalized.replace(/[ \t]{2,}(?=\[(?:aliases|boolean|string|number|array|choices|default)\b)/g, " ")
 }
 
 // Top-level commands. Order matches what `arforge --help` prints today;
@@ -56,7 +53,11 @@ const TOP_LEVEL = [
   "mcp",
   "attach",
   "run",
+  "ask",
+  "print",
+  "chat",
   "debug",
+  "config",
   "providers", // aliased to `auth`
   "agent",
   "upgrade",
@@ -68,12 +69,23 @@ const TOP_LEVEL = [
   "quality",
   "repo-scale",
   "run-history",
+  "replay", // historical Python spelling; same TypeScript/Core owner
   "goal",
   "task",
+  "subagent-control",
   "prompt-queue",
   "workflow",
+  "memory",
+  "learning",
+  "feedback",
+  "agent-metrics",
+  "multimodal-diagnose",
+  "features",
+  "permissions",
   "skill",
+  "skills", // historical Python plural spelling; same TS command owner
   "plugin-manager",
+  "plugins", // historical Python plural spelling; same TS command owner
   "stats",
   "export",
   "import",
@@ -87,6 +99,8 @@ const TOP_LEVEL = [
 // gains user-visible flags that we want to lock in.
 const SUBCOMMANDS = [
   ["mcp", "list"],
+  ["mcp", "health"],
+  ["mcp", "capabilities"],
   ["mcp", "add"],
   ["mcp", "auth"],
   ["mcp", "logout"],
@@ -97,7 +111,30 @@ const SUBCOMMANDS = [
   ["agent", "list"],
   ["session", "list"],
   ["session", "delete"],
+  ["capabilities", "test"],
+  ["capabilities", "evaluate"],
+  ["memory", "status"],
+  ["memory", "list"],
+  ["memory", "search"],
+  ["memory", "write-stats"],
+  ["memory", "recovery"],
+  ["memory", "feedback"],
+  ["memory", "create"],
+  ["learning", "status"],
+  ["learning", "record"],
+  ["learning", "undo"],
+  ["learning", "sync-dogfood"],
+  ["feedback", "summary"],
+  ["feedback", "list"],
+  ["feedback", "submit"],
+  ["feedback", "delete"],
+  ["agent-metrics", "history"],
+  ["agent-metrics", "record"],
+  ["skill", "route"],
+  ["skills", "route"],
+  ["plugins", "install"],
   ["db", "path"],
+  ["db", "current"],
 ] as const
 
 // Fixed wrap width so a developer's terminal doesn't affect snapshots.
@@ -152,6 +189,24 @@ describe("arforge CLI help-text snapshots", () => {
         if (failures.length > 0) {
           throw new Error(`Help text failed for:\n  ${failures.join("\n  ")}`)
         }
+
+        // A common legacy invocation must fail before TTY probing so users get
+        // the actionable argument error instead of a generic interactive error.
+        const invalidChat = yield* arforge.spawn(["chat", "--no-replay"], { env: SNAPSHOT_ENV })
+        expect(invalidChat.exitCode).toBe(1)
+        expect(invalidChat.stderr).toContain("--no-replay requires --mini")
+
+        // Python-era print spellings now resolve to the same TS run owner;
+        // they must expose the real print contract instead of a second parser.
+        const legacyPrint = yield* arforge.spawn(["print", "--help"], { env: SNAPSHOT_ENV })
+        expect(legacyPrint.exitCode).toBe(0)
+        expect(legacyPrint.stderr).toContain("--input-format")
+        expect(legacyPrint.stderr).not.toContain("Python")
+
+        const legacyPrintFlag = yield* arforge.spawn(["--print", "--help"], { env: SNAPSHOT_ENV })
+        expect(legacyPrintFlag.exitCode).toBe(0)
+        expect(legacyPrintFlag.stderr).toContain("--final-message-only")
+        expect(legacyPrintFlag.stderr).not.toContain("Python")
       }),
     180_000,
   )

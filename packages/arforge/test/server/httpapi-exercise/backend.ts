@@ -44,7 +44,10 @@ export function callAuthProbe(scenario: ActiveScenario, credentials: "missing" |
           toAuthProbeRequest(scenario, credentials, controller.signal),
         ),
       ).then((response) => capture(response, scenario.capture)),
-      Bun.sleep(1_000).then(() => {
+      // The first auth probe can include a cold Effect runtime and database
+      // bootstrap on Windows. Keep a bounded timeout, but do not turn normal
+      // cold-start latency into a false auth failure.
+      Bun.sleep(5_000).then(() => {
         controller.abort("auth probe timed out")
         return {
           status: 0,

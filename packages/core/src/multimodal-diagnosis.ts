@@ -1,4 +1,5 @@
 export * as MultimodalDiagnosisV2 from "./multimodal-diagnosis"
+export { extractOfficeText } from "./office-document"
 
 import { MultimodalDiagnosis } from "@arforge-ai/schema/multimodal-diagnosis"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -8,18 +9,41 @@ import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Location } from "./location"
 import { LocationMutation } from "./location-mutation"
+import { extractOfficeText } from "./office-document"
 import { Ripgrep } from "./ripgrep"
+import * as FrontendDiagnosisV2 from "./frontend-diagnosis"
 
 const MAX_TEXT_CHARS = 250_000
 const MAX_COMMAND_BYTES = 2 * 1024 * 1024
 const CODE_GLOB = "*.{py,js,jsx,ts,tsx,go,rs}"
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff"])
-const TEXT_EXTENSIONS = new Set([".txt", ".md", ".rst", ".log", ".json", ".yaml", ".yml"])
+const TEXT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".rst",
+  ".log",
+  ".csv",
+  ".tsv",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".html",
+  ".htm",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".vue",
+])
+const OFFICE_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx"])
 
 export const Input = Schema.Struct({
   filename: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(4_096)),
   extractedText: Schema.String.check(Schema.isMaxLength(500_000)).pipe(Schema.optional),
   limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })).pipe(Schema.optional),
+  mode: Schema.Literals(["error", "frontend", "javascript"]).pipe(Schema.optional).annotate({
+    description: "Diagnosis mode. Defaults to error; frontend and javascript replace the legacy Python validators.",
+  }),
 })
 export type Input = typeof Input.Type
 
@@ -91,14 +115,27 @@ const layer = Layer.effect(
         })
       }
 
-      if (extension === ".docx") {
+      if (OFFICE_EXTENSIONS.has(extension)) {
+        const bytes = yield* fs.readFile(canonical).pipe(Effect.orElseSucceed(() => undefined))
+        if (bytes === undefined)
+          return MultimodalDiagnosis.Source.make({
+            success: false,
+            type: "document",
+            path: resource,
+            text: "",
+            truncated: false,
+            error: "The Office document could not be read",
+          })
+        const extracted = extractOfficeText(bytes, extension)
+        if (extracted.ok) return sourceText("document", resource, extracted.text, extracted.engine)
         return MultimodalDiagnosis.Source.make({
           success: false,
           type: "document",
           path: resource,
           text: "",
           truncated: false,
-          error: "Local DOCX extraction is unavailable. Export as text/Markdown or provide extractedText.",
+          engine: "ooxml",
+          error: extracted.error,
         })
       }
 
@@ -151,8 +188,9 @@ const layer = Layer.effect(
         return yield* new PathError({ filename: input.filename, reason: "path escapes the active location" })
 
       const source = yield* extract(target.canonical, target.resource, input.extractedText)
-      const signals = extractErrorSignals(source.text)
-      const searchTerms = searchTermsFor(signals, source.text)
+      const mode = input.mode ?? "error"
+      const signals = mode === "error" ? extractErrorSignals(source.text) : []
+      const searchTerms = mode === "error" ? searchTermsFor(signals, source.text) : []
       const limit = input.limit ?? 8
       const searched =
         searchTerms.length === 0
@@ -185,12 +223,17 @@ const layer = Layer.effect(
                   }),
                 ),
               )
-      const suggestions = buildRepairSuggestions(signals, searched.matches, source)
+      const frontend =
+        mode === "error" ? undefined : FrontendDiagnosisV2.analyze({ source: source.text, path: target.resource, mode })
+      const suggestions = frontend
+        ? FrontendDiagnosisV2.suggestions(frontend)
+        : buildRepairSuggestions(signals, searched.matches, source)
       return MultimodalDiagnosis.Result.make({
         schemaVersion: 1,
         localOnly: true,
         modelCalls: 0,
-        success: source.success && source.text.trim().length > 0,
+        mode,
+        success: source.success && source.text.trim().length > 0 && (frontend?.success ?? true),
         path: target.resource,
         source,
         signals,
@@ -198,6 +241,7 @@ const layer = Layer.effect(
         matches: searched.matches,
         suggestions,
         warnings: searched.warning ? [searched.warning] : [],
+        ...(frontend ? { frontend } : {}),
         summary: {
           textChars: source.text.length,
           signals: signals.length,
@@ -298,12 +342,14 @@ export const format = (result: MultimodalDiagnosis.Result) => {
     "Multimodal diagnosis",
     `- local_only: ${result.localOnly}`,
     `- model_calls: ${result.modelCalls}`,
+    `- mode: ${result.mode}`,
     `- source_type: ${result.source.type}`,
     `- extraction_success: ${result.source.success}`,
     `- text_chars: ${result.summary.textChars}`,
     `- signals: ${result.summary.signals}`,
     `- matches: ${result.summary.matches}`,
   ]
+  if (result.source.engine) lines.splice(5, 0, `- extraction_engine: ${result.source.engine}`)
   if (result.source.error) lines.push(`- extraction_error: ${result.source.error}`)
   if (result.signals.length > 0) {
     lines.push("", "Signals:")
@@ -316,6 +362,7 @@ export const format = (result: MultimodalDiagnosis.Result) => {
       lines.push(`- ${match.file}:${match.line} [${match.terms.join(", ")}] ${match.preview}`)
   }
   if (result.warnings.length > 0) lines.push("", "Warnings:", ...result.warnings.map((warning) => `- ${warning}`))
+  if (result.frontend) lines.push("", FrontendDiagnosisV2.format(result.frontend))
   lines.push("", "Suggestions:", ...result.suggestions.map((suggestion) => `- ${suggestion}`))
   return lines.join("\n")
 }
@@ -324,6 +371,7 @@ const sourceText = (
   type: "provided_text" | "document" | "image_ocr",
   resource: string,
   input: string,
+  engine?: string,
 ): MultimodalDiagnosis.Source => {
   const normalized = input.replaceAll("\u0000", "")
   const truncated = normalized.length > MAX_TEXT_CHARS
@@ -334,6 +382,7 @@ const sourceText = (
     path: resource,
     text,
     truncated,
+    ...(engine ? { engine } : {}),
     ...(!text.trim() ? { error: "No text was extracted" } : {}),
   })
 }

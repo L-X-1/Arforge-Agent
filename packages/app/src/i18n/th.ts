@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "แนะนำ",
   "command.category.view": "มุมมอง",
   "command.category.project": "โปรเจกต์",
@@ -318,6 +321,8 @@ export const dict = {
   "mcp.status.connected": "เชื่อมต่อแล้ว",
   "mcp.status.failed": "ล้มเหลว",
   "mcp.status.needs_auth": "ต้องการการตรวจสอบสิทธิ์",
+  "mcp.status.needs_client_registration": "ต้องลงทะเบียนไคลเอนต์",
+  "mcp.status.needs_approval": "ต้องได้รับอนุมัติ",
   "mcp.auth.clickToAuthenticate": "คลิกเพื่อยืนยันตัวตน",
   "mcp.status.disabled": "ปิดใช้งาน",
 
@@ -1287,7 +1292,7 @@ export const dict = {
   "controlCenter.m174": "คืนค่า",
   "controlCenter.m175": "ประวัติการทำงานอย่างต่อเนื่อง",
   "controlCenter.m176":
-    "อ่านธุรกรรม Python Core การติดตาม และสิ่งประดิษฐ์ข้อความผ่านประเภทที่ใช้ร่วมกัน Server API รายงานเป็นแบบอ่านอย่างเดียวและยังคงเป็นของแหล่งที่มีอยู่แหล่งเดียว",
+    "อ่านธุรกรรม Arforge Core การติดตาม และสิ่งประดิษฐ์ข้อความผ่านประเภทที่ใช้ร่วมกัน Server API รายงานเป็นแบบอ่านอย่างเดียวและยังคงเป็นของแหล่งที่มีอยู่แหล่งเดียว",
   "controlCenter.m177": "ขีดจำกัด",
   "controlCenter.m178": "รีเฟรช",
   "controlCenter.m179": "ไฟล์ ·",
@@ -1339,6 +1344,19 @@ export const dict = {
   "controlCenter.m222": "ข้อผิดพลาดการวินิจฉัยเชิงลึกที่ไม่รู้จัก",
   "controlCenter.m223": "วิวัฒนาการที่มีการกำกับดูแล",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "ตรวจสอบนโยบายที่เสนอจากหลักฐานการเรียนรู้ และกำกับการเปลี่ยนแปลงความสามารถด้วยการประเมินแบบแยกส่วน การอนุมัติโดยมนุษย์ การทยอยเปิดใช้ และการย้อนกลับ",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "ตรวจสอบนโยบายที่เสนอจากหลักฐานการเรียนรู้ และกำกับการเปลี่ยนแปลงความสามารถด้วยการประเมินแบบแยกส่วน การอนุมัติโดยมนุษย์ การทยอยเปิดใช้ และการย้อนกลับ",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

@@ -6,6 +6,8 @@ import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigProviderOptionsV1 } from "./provider-options"
+import { Schema } from "effect"
+import { Billing } from "@arforge-ai/schema/billing"
 
 const keys = new Set([
   "logLevel",
@@ -99,8 +101,15 @@ function agents(info: typeof ConfigV1.Info.Type) {
     ...Object.entries(info.agent ?? {}),
     ...Object.entries(info.mode ?? {}).map(([name, agent]) => [name, { ...agent, mode: "primary" as const }] as const),
   ]
-  if (!entries.length) return undefined
-  return Object.fromEntries(entries.flatMap(([name, agent]) => (agent ? [[name, migrateAgent(agent)]] : [])))
+  if (!entries.length && !info.small_model) return undefined
+  const migrated = Object.fromEntries(entries.flatMap(([name, agent]) => (agent ? [[name, migrateAgent(agent)]] : [])))
+  if (info.small_model) {
+    // Normalize the legacy title fallback into the existing TS agent config.
+    // Explicit title model/disabled/system settings retain their meaning;
+    // the normal document-priority pipeline remains the only config owner.
+    migrated.title = { ...migrateAgent({}), ...migrated.title, model: migrated.title?.model ?? info.small_model }
+  }
+  return migrated
 }
 
 export function migrateAgent(info: ConfigAgentV1.Info) {
@@ -126,13 +135,14 @@ export function migrateAgent(info: ConfigAgentV1.Info) {
 
 function mcp(info: typeof ConfigV1.Info.Type) {
   const servers = Object.fromEntries(
-    Object.entries(info.mcp ?? {}).flatMap(([name, server]) =>
-      "type" in server ? [[name, migrateMcp(server)] as const] : [],
-    ),
+    Object.entries(info.mcp ?? {}).map(([name, server]) => [
+      name,
+      server.type !== undefined ? migrateMcp(server) : { disabled: !server.enabled },
+    ]),
   )
   const timeout = info.experimental?.mcp_timeout
   if (!timeout && !Object.keys(servers).length) return undefined
-  return { timeout: timeout === undefined ? undefined : { request: timeout }, servers }
+  return { timeout: ConfigMCPV1.canonicalTimeout(timeout, "defaults"), servers }
 }
 
 function migrateMcp(info: ConfigMCPV1.Info) {
@@ -142,9 +152,10 @@ function migrateMcp(info: ConfigMCPV1.Info) {
       type: info.type,
       command: info.command,
       cwd: info.cwd,
+      read_only_paths: info.read_only_paths,
       environment: info.environment,
       disabled,
-      timeout: info.timeout === undefined ? undefined : { request: info.timeout },
+      timeout: ConfigMCPV1.canonicalTimeout(info.timeout, "server"),
     }
   return {
     type: info.type,
@@ -158,7 +169,7 @@ function migrateMcp(info: ConfigMCPV1.Info) {
       redirect_uri: info.oauth.redirectUri,
     },
     disabled,
-    timeout: info.timeout === undefined ? undefined : { request: info.timeout },
+    timeout: ConfigMCPV1.canonicalTimeout(info.timeout, "server"),
   }
 }
 
@@ -240,7 +251,9 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
         body: lowerer.request(options),
       })),
     cost: costs,
-    disabled: info.status === "deprecated" ? true : undefined,
+    priceCatalog:
+      info.priceCatalog === undefined ? undefined : Schema.encodeSync(Billing.PriceCatalog)(info.priceCatalog),
+    disabled: info.status === undefined ? undefined : info.status === "deprecated",
     limit: info.limit && {
       context: int(info.limit.context),
       input: info.limit.input === undefined ? undefined : int(info.limit.input),

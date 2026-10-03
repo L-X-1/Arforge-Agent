@@ -21,7 +21,6 @@ _DEFERRED_SOURCE_MODULES = frozenset(
         "arforge.tools.frontend_tools",
         "arforge.tools.infra_tools",
         "arforge.tools.js_tools",
-        "arforge.tools.lsp_tools",
         "arforge.tools.notebook_tools",
         "arforge.tools.perception_tools",
         "arforge.tools.regression_tools",

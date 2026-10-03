@@ -1,5 +1,13 @@
 # V2 Schema Changelog
 
+## 2026-09-13: Preserve Canonical Price Catalogs in TS Config Compatibility Responses
+
+- Add optional `provider.*.models.*.priceCatalog` to the remaining V1-shaped TS config DTO using the existing `Billing.PriceCatalog` schema. There is no new pricing contract, billing owner, or database migration.
+- User-authored `providers.*.models.*.priceCatalog` remains the canonical spelling. The product loader projects the representable provider fields read-only for existing consumers; Core reads the original canonical document directly. This is transitional integration, not completion of config consumer/writer retirement.
+- Within a mixed document, canonical providers apply after migrated legacy providers in the existing ordered Core config/plugin pipeline. Entire price catalogs replace previous revisions; rates from different revisions must not be combined.
+- Schema-invalid explicit provider configurations are rejected instead of silently selecting another price. Valid prices retain their wire-format numeric `effectiveFrom` in config HTTP responses and plugin JSON boundaries.
+- Regenerate the original OpenAPI/JavaScript SDK from the source contract. Config saving, hot reload, other canonical config groups, and complete removal of legacy DTO consumers remain separate unfinished acceptance work.
+
 ## 2026-06-26: Add Finite Session History
 
 - Add `GET /api/session/:sessionID/history` and generated Promise, Effect, and legacy JavaScript client methods.

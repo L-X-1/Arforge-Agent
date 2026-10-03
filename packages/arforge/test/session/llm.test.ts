@@ -24,6 +24,8 @@ import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
+import { RuntimeInsight } from "@arforge-ai/core/runtime/insight"
+import { GlobalBus } from "@/bus/global"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@arforge-ai/core/effect/app-node-platform"
@@ -502,8 +504,7 @@ describe("session.llm.ai-sdk adapter", () => {
     expect(result.tokens.cache.write).toBe(300)
     expect(result.tokens.cache.read).toBe(200)
   })
-
-  })
+})
 
 type Capture = {
   url: URL
@@ -1187,7 +1188,9 @@ describe("session.llm.stream", () => {
         expect((body.reasoning as { mode?: string } | undefined)?.mode).toBe("pro")
 
         const maxTokens = body.max_output_tokens as number | undefined
-        expect(maxTokens).toBe(undefined) // match codex cli behavior
+        expect(maxTokens).toBe(ProviderTransform.maxOutputTokens(resolved))
+        expect(capture.headers.get("originator")).toBeNull()
+        expect(capture.headers.get("session-id")).toBeNull()
       }),
     { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
   )
@@ -1249,6 +1252,7 @@ describe("session.llm.stream", () => {
           LLMClient.Service,
           LLMClient.Service.of({
             prepare: () => Effect.die(new Error("native LLM client should not be used when the flag is off")),
+            streamPrepared: () => Stream.die(new Error("native LLM client should not be used when the flag is off")),
             stream: () => Stream.die(new Error("native LLM client should not be used when the flag is off")),
             generate: () => Effect.die(new Error("native LLM client should not be used when the flag is off")),
           }),
@@ -1330,22 +1334,33 @@ describe("session.llm.stream", () => {
           temperature: 0.2,
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor({ flags: { experimentalNativeLlm: true } }), {
-          user: {
-            id: MessageID.make("msg_user-native"),
+        const bindingEvents: Array<Record<string, unknown>> = []
+        const onGlobalEvent = (event: { payload?: { type?: string; properties?: Record<string, unknown> } }) => {
+          if (event.payload?.type === "session.next.request.binding.prepared" && event.payload.properties)
+            bindingEvents.push(event.payload.properties)
+        }
+        GlobalBus.on("event", onGlobalEvent)
+        try {
+          yield* drainWith(llmLayerWithExecutor({ flags: { experimentalNativeLlm: true } }), {
+            user: {
+              id: MessageID.make("msg_user-native"),
+              sessionID,
+              role: "user",
+              time: { created: Date.now() },
+              agent: agent.name,
+              model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
+            } satisfies SessionV1.User,
             sessionID,
-            role: "user",
-            time: { created: Date.now() },
-            agent: agent.name,
-            model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id, variant: "high" },
-          } satisfies SessionV1.User,
-          sessionID,
-          model: resolved,
-          agent,
-          system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
-          tools: {},
-        })
+            model: resolved,
+            agent,
+            system: ["You are a helpful assistant."],
+            messages: [{ role: "user", content: "Hello" }],
+            tools: {},
+            requestBinding: { runID: "run_llm_native_binding", turnStep: 1, attempt: 1 },
+          })
+        } finally {
+          GlobalBus.off("event", onGlobalEvent)
+        }
 
         const capture = yield* Effect.promise(() => request)
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
@@ -1356,6 +1371,28 @@ describe("session.llm.stream", () => {
         expect(capture.body.include).toEqual(["reasoning.encrypted_content"])
         expect(JSON.stringify(capture.body.input)).toContain("You are a helpful assistant.")
         expect(capture.body.input).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
+        const bindingAudit = RuntimeInsight.auditList().entries.find(
+          (entry) =>
+            entry.action === "mature.request.binding.prepared" && entry.resource === "run:run_llm_native_binding",
+        )
+        expect(bindingAudit?.metadata).toMatchObject({
+          runtime: "native",
+          mode: "native-envelope",
+          runID: "run_llm_native_binding",
+          turnStep: 1,
+          attempt: 1,
+        })
+        expect(JSON.stringify(bindingAudit)).not.toContain("Hello")
+        expect(bindingEvents).toHaveLength(1)
+        expect(bindingEvents[0]).toMatchObject({
+          runID: "run_llm_native_binding",
+          turnStep: 1,
+          attempt: 1,
+          schemaVersion: 1,
+          runtime: "native",
+          mode: "native-envelope",
+        })
+        expect(JSON.stringify(bindingEvents[0])).not.toContain("Hello")
       }),
     { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
   )

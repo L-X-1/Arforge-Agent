@@ -8,6 +8,7 @@ import arforgeDefaultThemeJson from "./themes/arforge-default.json"
 import { resolveThemeVariant, themeToCss } from "./resolve"
 import { resolveThemeVariantV2, themeV2ToCss } from "./v2/resolve"
 import type { DesktopTheme } from "./types"
+import { normalizeColorScheme, themeCanvasColor } from "./preferences"
 
 export type ColorScheme = "light" | "dark" | "system"
 
@@ -135,7 +136,9 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   const variant = isDark ? theme.dark : theme.light
   const tokens = resolveThemeVariant(variant, isDark)
   const css = themeToCss(tokens)
-  const v2 = themeV2ToCss(resolveThemeVariantV2(variant, isDark))
+  const v2Tokens = resolveThemeVariantV2(variant, isDark)
+  const v2 = themeV2ToCss(v2Tokens)
+  const canvas = themeCanvasColor({ ...tokens, ...v2Tokens }, isDark)
 
   if (themeId !== "arforge-default") {
     write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
@@ -153,11 +156,11 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   document.documentElement.dataset.theme = themeId
   document.documentElement.dataset.colorScheme = mode
   const nativeGlass = document.documentElement.dataset.runtime === "desktop"
-  document.documentElement.style.backgroundColor = nativeGlass ? "transparent" : isDark ? "#121419" : "#f7f8fa"
+  document.documentElement.style.backgroundColor = nativeGlass ? "transparent" : canvas
 
   // Update theme-color meta tag to match light/dark mode
   const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute("content", isDark ? "#121419" : "#f7f8fa")
+  if (meta) meta.setAttribute("content", canvas)
 }
 
 function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
@@ -179,7 +182,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     onThemeApplied?: (theme: DesktopTheme, mode: "light" | "dark", scheme: ColorScheme) => void
   }) => {
     const themeId = normalize(read(STORAGE_KEYS.THEME_ID) ?? props.defaultTheme) ?? "arforge-default"
-    const colorScheme = (read(STORAGE_KEYS.COLOR_SCHEME) as ColorScheme | null) ?? "system"
+    const colorScheme = normalizeColorScheme(read(STORAGE_KEYS.COLOR_SCHEME))
     const mode = colorScheme === "system" ? getSystemMode() : colorScheme
     const [store, setStore] = createStore({
       themes: {
@@ -233,8 +236,8 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const loadThemes = () => Promise.all(themeIDs().map(load)).then(() => store.themes)
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEYS.THEME_ID && e.newValue) {
-        const next = normalize(e.newValue)
+      if (e.key === STORAGE_KEYS.THEME_ID || e.key === null) {
+        const next = normalize(e.key === null ? read(STORAGE_KEYS.THEME_ID) : e.newValue) ?? "arforge-default"
         if (!next) return
         if (next !== "arforge-default" && !knownThemes().has(next) && !store.themes[next]) return
         setStore("themeId", next)
@@ -247,9 +250,10 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
           cacheThemeVariants(theme, next)
         })
       }
-      if (e.key === STORAGE_KEYS.COLOR_SCHEME && e.newValue) {
-        setStore("colorScheme", e.newValue as ColorScheme)
-        setStore("mode", e.newValue === "system" ? getSystemMode() : (e.newValue as "light" | "dark"))
+      if (e.key === STORAGE_KEYS.COLOR_SCHEME || e.key === null) {
+        const scheme = normalizeColorScheme(e.key === null ? read(STORAGE_KEYS.COLOR_SCHEME) : e.newValue)
+        setStore("colorScheme", scheme)
+        setStore("mode", scheme === "system" ? getSystemMode() : scheme)
       }
     }
 
@@ -265,7 +269,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
 
       const rawTheme = read(STORAGE_KEYS.THEME_ID)
       const savedTheme = normalize(rawTheme ?? props.defaultTheme) ?? "arforge-default"
-      const savedScheme = (read(STORAGE_KEYS.COLOR_SCHEME) as ColorScheme | null) ?? "system"
+      const savedScheme = normalizeColorScheme(read(STORAGE_KEYS.COLOR_SCHEME))
       if (rawTheme && rawTheme !== savedTheme) {
         write(STORAGE_KEYS.THEME_ID, savedTheme)
         clear()

@@ -1,5 +1,5 @@
 import path from "path"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Layer, Schedule, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -32,7 +32,10 @@ export namespace RipgrepBinary {
     Service,
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
-      const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
+      // GitHub release assets redirect to the CDN before returning the archive.
+      // Follow only a bounded number of redirects, then keep the existing
+      // non-2xx guard so unexpected responses still fail closed.
+      const http = (yield* HttpClient.HttpClient).pipe(HttpClient.followRedirects(5), HttpClient.filterStatusOk)
       const spawner = yield* ChildProcessSpawner
 
       const run = Effect.fnUntraced(function* (command: string, args: string[]) {
@@ -125,6 +128,9 @@ export namespace RipgrepBinary {
               http.execute,
               Effect.flatMap((response) => response.arrayBuffer),
               Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+              // CDN connections can reset while the archive is being read.
+              // Retry a bounded number of times before surfacing the failure.
+              Effect.retry(Schedule.exponential("250 millis").pipe(Schedule.take(2))),
             )
             if (bytes.byteLength === 0) throw new Error(`failed to download ripgrep from ${url}`)
 

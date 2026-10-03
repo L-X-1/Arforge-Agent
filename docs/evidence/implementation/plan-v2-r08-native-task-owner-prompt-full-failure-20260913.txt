@@ -1,0 +1,254 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent/packages/arforge
+Command: bun test --timeout 60000 test/session/prompt.test.ts
+SOURCE BOUNDARY: started after native-owner retirement, BEFORE final Gateway receipt fixes and cancellation diagnostic race; not final-source all-green evidence.
+Exit code: 1
+Raw captured output:
+
+bun test v1.3.14 (0d9b296a)
+
+test\session\prompt.test.ts:
+(pass) Formal external tool root approval uses the request snapshot and Gateway [8762.92ms]
+(pass) Formal external tool root rejection uses the request snapshot and Gateway [6845.69ms]
+(pass) Formal external tool child approval uses the request snapshot and Gateway [8057.46ms]
+(pass) Formal external tool child rejection uses the request snapshot and Gateway [7512.24ms]
+(pass) Formal external tool child capability denial uses the request snapshot and Gateway [7301.10ms]
+(pass) Formal PersonalJob loads verified pricing from the actual configuration file: canonical [3514.44ms]
+(pass) Formal PersonalJob loads verified pricing from the actual configuration file: legacy [3198.39ms]
+(pass) Formal PersonalJob loads verified pricing from the actual configuration file: mixed [2721.19ms]
+(pass) Formal PersonalJob loads verified pricing from the actual configuration file: saved [4719.83ms]
+(pass) Formal PersonalJob refuses unverified pricing before admission: execute/missing [10034.01ms]
+(pass) Formal PersonalJob refuses unverified pricing before admission: execute/future [9911.89ms]
+(pass) Formal PersonalJob refuses unverified pricing before admission: launch/missing [10159.63ms]
+(pass) Formal PersonalJob refuses unverified pricing before admission: launch/future [11377.20ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 0/none [6899.14ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/none [6213.19ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/missing-price [9676.21ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/changed-price [9649.77ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/credential-removed [5785.25ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/receipt-drift [6027.36ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/receipt-missing [6608.13ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/receipt-unsettled [6969.76ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/summary [6915.03ms]
+(pass) Formal PersonalJob uses the original catalog and persisted billing receipt: rate 1/summary-missing-final [6494.33ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: original [2604.43ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: later-result [2880.04ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: missing-binding [2642.98ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: attempt-limit [2690.29ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: queued-reconcile [2613.72ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: user-pause [2578.13ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: user-cancel [2676.64ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: concurrent-reconcile [2709.85ms]
+(pass) Formal PersonalJob recovers an already completed run without another model call: commit-drift [2709.34ms]
+(pass) Formal PersonalJob leaves unrelated queue and steer inputs for ordinary execution [6471.93ms]
+(pass) Formal PersonalJob keeps one input per occurrence and starts the next recurring occurrence [8974.46ms]
+(pass) Formal scoped execution does not pass credentials billing or observers to queued ordinary work [5513.22ms]
+(pass) Formal stored credential version fences HTTP: primary/unchanged [4576.04ms]
+(pass) Formal stored credential version fences HTTP: primary/replace [5120.98ms]
+(pass) Formal stored credential version fences HTTP: primary/remove [4757.18ms]
+(pass) Formal stored credential version fences HTTP: summary/unchanged [4825.52ms]
+(pass) Formal stored credential version fences HTTP: summary/replace [3970.89ms]
+(pass) Formal stored credential version fences HTTP: summary/remove [4113.34ms]
+(pass) Formal credential billing boundary: primary/before-reservation/replace [3921.32ms]
+(pass) Formal credential billing boundary: primary/before-reservation/remove [4269.30ms]
+(pass) Formal credential billing boundary: primary/after-reservation/replace [4228.63ms]
+(pass) Formal credential billing boundary: primary/after-reservation/remove [4281.81ms]
+(pass) Formal credential billing boundary: summary/before-reservation/replace [4634.81ms]
+(pass) Formal credential billing boundary: summary/before-reservation/remove [7361.14ms]
+(pass) Formal credential billing boundary: summary/after-reservation/replace [5608.08ms]
+(pass) Formal credential billing boundary: summary/after-reservation/remove [6206.06ms]
+(pass) Formal stored title credential version fences HTTP: unchanged [4873.65ms]
+(pass) Formal stored title credential version fences HTTP: replace [3329.62ms]
+(pass) Formal stored title credential version fences HTTP: remove [3339.18ms]
+(pass) Formal request dispatch recovery preserves HTTP identity: prepared [5431.12ms]
+(pass) Formal request dispatch recovery preserves HTTP identity: dispatching [2813.82ms]
+(pass) Formal HTTP transmission matches the committed request envelope: success [2855.20ms]
+(pass) Formal HTTP transmission matches the committed request envelope: defaults-mutation [4451.27ms]
+(pass) Formal HTTP transmission matches the committed request envelope: publish-failure [2498.83ms]
+(pass) Formal HTTP transmission matches the committed request envelope: changed-row [2567.37ms]
+(pass) Formal first user turn preserves a user-defined session title [2515.17ms]
+(pass) Formal first user turn generates a title for a default-title session [2540.48ms]
+(pass) Formal idle wake handles lost title projection without a new run or provider call [2685.07ms]
+(pass) Formal idle wake handles renamed title projection without a new run or provider call [2471.10ms]
+(pass) Formal idle wake handles different-default title projection without a new run or provider call [2488.76ms]
+(pass) Formal idle wake handles fresh-process title projection without a new run or provider call [5442.51ms]
+(pass) Formal idle wake handles updated title projection without a new run or provider call [2599.22ms]
+(pass) Formal idle wake handles rename-back title projection without a new run or provider call [2615.14ms]
+(pass) Formal idle wake handles fresh-process-rename-back title projection without a new run or provider call [4693.32ms]
+(pass) Formal idle wake handles fresh-process-estimated title projection without a new run or provider call [4478.99ms]
+(pass) Formal title agent configuration is used for model and prompt [2576.20ms]
+(pass) Formal title agent configuration is migrated from small_model [2726.42ms]
+(pass) Formal title agent configuration is selected by the shared small-model resolver [2938.90ms]
+(pass) Formal title agent configuration is disabled [2678.68ms]
+(pass) Formal title empty-output does not fail the primary answer or retry the model [2658.22ms]
+(pass) Formal title missing-usage does not fail the primary answer or retry the model [2732.01ms]
+(pass) Formal title empty-output-without-usage does not fail the primary answer or retry the model [2537.19ms]
+(pass) Formal title request persistence failure prevents HTTP: publish-failure [2411.83ms]
+(pass) Formal title request persistence failure prevents HTTP: changed-row [2719.18ms]
+(pass) Formal title generation honors rename while the provider is running [2459.02ms]
+(pass) Formal title generation honors rename-back while the provider is running [2481.18ms]
+(pass) Formal title generation honors cancel while the provider is running [2628.64ms]
+(pass) Formal completed stop turn ignores repeated wakes without another provider request [2445.49ms]
+(pass) Formal drain executes an admission-only prompt once [2471.92ms]
+(pass) admit persists a user turn without starting the provider loop [480.21ms]
+(pass) Formal freezes request-scoped system prompts into canonical admission and applies them exactly once [2705.30ms]
+(pass) freezes slash-command admission with the resolved text and original command identity [509.21ms]
+(pass) freezes automatic subtask commands as one canonical scheduled-task identity [428.14ms]
+(pass) public prompt rejects a missing canonical owner before admission [434.99ms]
+(pass) public command rejects a missing canonical owner before admission [544.65ms]
+(pass) Formal public prompt must use the canonical executor rather than the legacy loop [2369.24ms]
+(pass) Formal public command must use the canonical executor rather than the legacy loop [2379.64ms]
+(pass) Formal model task cannot delegate to a denied subagent [2592.40ms]
+(pass) Formal model task delegates and follows up in the same child session without a legacy processor [5424.25ms]
+(pass) Formal scanner resumes an orphaned draft child through its original task owner [10701.27ms]
+(pass) Formal scanner resumes an orphaned preflight child through its original task owner [8402.39ms]
+(pass) Formal scanner resumes an orphaned queued child through its original task owner [8645.37ms]
+(pass) Formal scanner resumes an orphaned running child through its original task owner [8569.98ms]
+(pass) Formal scanner resumes an orphaned completed child through its original task owner [6447.49ms]
+(pass) Formal scanner resumes an orphaned failed child through its original task owner [8492.61ms]
+(pass) Formal model task queues a running child followup then complete [5719.68ms]
+(pass) Formal model task queues a running child followup then cancel [5046.89ms]
+(pass) Formal background completion wakes the idle parent without a legacy processor [4820.99ms]
+(pass) Formal background completion wakes the busy parent without a legacy processor [4830.67ms]
+(pass) Formal background completion wakes the child-error parent without a legacy processor [5150.96ms]
+(pass) Formal scheduled cancellation of parent settles the child without a legacy processor [4719.63ms]
+(pass) Formal scheduled cancellation of child settles the child without a legacy processor [5239.41ms]
+(pass) Formal subtask-only first turn generates one parent title through Core [5049.32ms]
+(pass) Formal text-attachment-only first turn generates a title from admitted content [2695.15ms]
+(pass) Formal image-attachment-only first turn generates a title from admitted content [2555.32ms]
+R05 scheduled child execution recording {"parentCoreAssistants":2,"parentLegacyAssistants":0,"childCoreAssistants":1,"childLegacyAssistants":0,"providerCalls":2,"childRunCount":1,"childAttempts":1,"childTokens":7}
+(pass) integrated Formal drain executes an admitted automatic subtask once before the parent request [4641.51ms]
+(pass) Formal drain consumes a queued routed prompt after a completed turn [2559.42ms]
+(pass) Formal drain consumes a durable steer once without legacy promotion [2442.27ms]
+(pass) Formal drain absorbs a durable steer admitted during an active provider turn [2809.88ms]
+(pass) Formal includes MCP instructions in model system context [2461.85ms]
+(pass) Formal MCP instructions follow current session permissions and semantic removal [2942.81ms]
+(pass) Formal child receives MCP instructions only when delegated=false [4693.75ms]
+(pass) Formal child receives MCP instructions only when delegated=true [4826.17ms]
+(pass) legacy prompt emits message events plus one canonical admission per user turn [267.01ms]
+(pass) Formal surfaces content-filter finishes as session errors structured=false [2593.56ms]
+(pass) Formal surfaces content-filter finishes as session errors structured=true [2463.38ms]
+(pass) Formal compaction HTTP matches its committed preparation: stop [2691.86ms]
+(pass) Formal compaction HTTP matches its committed preparation: content-filter [2566.04ms]
+(pass) Formal stops provider overflow instead of auto-compacting when disabled [2386.89ms]
+(skip) prompt emits v2 prompted and synthetic events (v2 projector disabled)
+(pass) Formal returns assistant text through local provider [2356.10ms]
+(pass) Formal consumes queued replies across turns [2713.44ms]
+(pass) Formal rejects an unknown tool and continues without a legacy invalid action [2415.57ms]
+(pass) Formal settles one Core StructuredOutput after a bounded semantic correction [2610.65ms]
+(pass) Formal stops after the exact StructuredOutput retry budget is exhausted [2668.73ms]
+(pass) Formal write tool settles a scoped durable action before the run continues [2724.73ms]
+(pass) Formal L2 write waits for the gateway preflight before the tool execution body starts [4566.22ms]
+(pass) Formal L3 shell waits for the gateway preflight before spawning a command [4504.36ms]
+(pass) Formal approved L2 preflight satisfies the same exact leaf scope without prompting twice [4550.66ms]
+(pass) Formal preserves a completed write across provider EOF and explicit continuation [2959.20ms]
+(pass) Formal glob tool keeps the active workspace context [3421.30ms]
+(pass) Formal continues after a stop finish containing a real tool call [3353.15ms]
+(pass) Formal failed subtask preserves metadata on error tool state [4927.23ms]
+(pass) Formal subtask child does not inherit parent external_directory allow without an explicit capability [4657.67ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=false [4354.45ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=true [4584.10ms]
+(pass) Formal scheduled subtask recovery reuses the persisted assistant, call identity, and action [4337.51ms]
+(pass) prompt tools replace previous prompt tool rules [276.56ms]
+(pass) Formal running task preserves metadata and settles on cancellation scheduled=false [4786.16ms]
+(pass) Formal running task preserves metadata and settles on cancellation scheduled=true [4722.22ms]
+(pass) Formal projects busy then idle around public cancellation [2407.21ms]
+(pass) Formal public cancellation persists interruption on the first turn [2465.69ms]
+(pass) Formal public cancellation persists interruption without changing prior history [2827.45ms]
+[00:52:23.886] ERROR (#3291293): 173 |   duration: Duration.Input = "2 seconds",
+174 | ) =>
+175 |   self.pipe(
+176 |     Effect.timeoutOrElse({
+177 |       duration,
+178 |       orElse: () => Effect.fail(new Error(message)),
+                                          ^
+error: provider request did not start
+      at orElse (%ARFORGE_REPO%\packages\arforge\test\lib\effect.ts:178:37)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:734:14
+
+173 |   duration: Duration.Input = "2 seconds",
+174 | ) =>
+175 |   self.pipe(
+176 |     Effect.timeoutOrElse({
+177 |       duration,
+178 |       orElse: () => Effect.fail(new Error(message)),
+                                          ^
+error: provider request did not start
+      at orElse (%ARFORGE_REPO%\packages\arforge\test\lib\effect.ts:178:37)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:734:14
+(fail) Formal cancellation before response content leaves a resumable run without phantom output [12323.25ms]
+(pass) Formal cancellation during model preparation sends no request and permits the next turn [2613.79ms]
+(pass) Formal public cancellation propagates from slash command to its child and allows a new turn [4832.88ms]
+(pass) Formal cancellation via execution settles concurrent callers and permits a new user turn [2791.98ms]
+(pass) Formal cancellation via prompt settles concurrent callers and permits a new user turn [2757.87ms]
+(pass) Formal concurrent wake callers observe the same completed result [2632.17ms]
+(pass) Formal concurrent resume callers receive and persist the same invalid response failure [2680.00ms]
+(pass) Formal concurrent resume callers receive and persist the same empty EOF response failure [2600.22ms]
+(pass) Formal concurrent resume callers receive and persist the same partial EOF response failure [2529.42ms]
+(pass) Formal concurrent resume callers receive and persist the same connection reset response failure [3154.45ms]
+(pass) prompt submitted during an active run is included in the next LLM input [3186.39ms]
+(pass) Formal session mutations reject while busy and succeed after cancellation [2667.02ms]
+(pass) direct Shell requires a fresh L3 approval before it can start [2232.38ms]
+(pass) direct Shell executes once after explicit approval and replays the settled result [2831.31ms]
+(pass) cancelling a pending direct Shell leaves zero spawn and a terminal cancelled action [3852.34ms]
+(pass) direct Shell bounds high-volume live output [2768.08ms]
+(pass) direct Shell gives its child a minimal environment without ambient Arforge or provider secrets [2854.19ms]
+(pass) Formal direct Shell rejects with BusyError while a model request is running [2449.27ms]
+(pass) Formal shell captures stdout and stderr in completed tool output [2666.80ms]
+(pass) Formal shell completes a fast command on the preferred shell [2819.50ms]
+(skip) shell uses configured shell over env shell
+(pass) Formal shell lists files from the project directory [2933.06ms]
+(pass) Formal shell captures stderr from a failing command [2849.93ms]
+(skip) shell updates running metadata before process exit
+(pass) Formal prompt receives a direct Shell denial or cancellation outcome=reject [4272.09ms]
+(pass) Formal prompt receives a direct Shell denial or cancellation outcome=cancel-before [4160.16ms]
+(pass) Formal prompt receives a direct Shell denial or cancellation outcome=cancel-after [5161.85ms]
+(pass) Formal shell changes directory after startup shell=powershell.exe [3283.32ms]
+(pass) Formal direct Shell records a nonzero exit as failure with its output shell=powershell.exe [5295.12ms]
+(pass) Formal shell changes directory after startup shell=cmd.exe [2374.55ms]
+(pass) Formal direct Shell records a nonzero exit as failure with its output shell=cmd.exe [4503.08ms]
+(pass) Formal prompt after direct Shell receives the completed command output [12035.10ms]
+(pass) Formal direct Shell owns the execution slot and releases queued requests after its output phase=approval [4938.79ms]
+(pass) Formal direct Shell owns the execution slot and releases queued requests after its output phase=running [5061.74ms]
+(skip) command ! expansion uses configured shell over env shell
+(pass) Formal shell cancellation resolves cleanly and releases the Core owner [4740.33ms]
+(skip) cancel persists aborted shell result when shell ignores TERM
+(pass) Formal instant tool execution retains pre-tool snapshot and changed files [15704.13ms]
+(pass) Formal interrupted bash retains captured output through the unified output pipeline bytes=400000 [5125.75ms]
+(pass) Formal interrupted bash retains captured output through the unified output pipeline bytes=1200000 [5590.88ms]
+(pass) Formal cancellation settles requests queued behind a running direct Shell [4886.71ms]
+(skip) shell rejects when another shell is already running
+(pass) reads an external user attachment through one exact automatic carrier without another approval [2237.15ms]
+(pass) interrupt propagates abort signal to read tool via file part (text/plain) [2146.09ms]
+(pass) interrupt propagates abort signal to read tool via file part (directory) [1903.90ms]
+(pass) does not fail the prompt when a file part is missing [2276.97ms]
+(pass) keeps stored part order stable when file resolution is async [2138.53ms]
+(pass) handles filenames with # character [4571.17ms]
+(pass) does not loop empty assistant turns for a simple reply [2432.42ms]
+(pass) records aborted errors when prompt is cancelled mid-stream [2433.68ms]
+(pass) applies agent variant only when using agent model [431.22ms]
+(pass) unknown agent throws typed error [221.67ms]
+(pass) unknown agent error includes available agent names [182.34ms]
+(pass) unknown command throws typed error with available names [334.77ms]
+
+6 tests skipped:
+(skip) prompt emits v2 prompted and synthetic events (v2 projector disabled)
+(skip) shell uses configured shell over env shell
+(skip) shell updates running metadata before process exit
+(skip) command ! expansion uses configured shell over env shell
+(skip) cancel persists aborted shell result when shell ignores TERM
+(skip) shell rejects when another shell is already running
+
+
+1 tests failed:
+(fail) Formal cancellation before response content leaves a resumable run without phantom output [12323.25ms]
+
+ 193 pass
+ 6 skip
+ 1 fail
+ 2273 expect() calls
+Ran 200 tests across 1 file. [800.21s]

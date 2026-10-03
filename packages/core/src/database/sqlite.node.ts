@@ -156,6 +156,9 @@ const nativeLayer = (config: Config) =>
         open: true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      // Configure the native connection before any WAL negotiation so
+      // independent workers wait for a transient profile lock.
+      if (config.readonly !== true) native.exec("PRAGMA busy_timeout = 5000;")
       if (config.disableWAL !== true && config.readonly !== true) native.exec("PRAGMA journal_mode = WAL;")
       return native
     }),

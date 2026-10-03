@@ -43,7 +43,7 @@ import {
   normalizeProjectInfo,
   normalizeProviderList,
 } from "./utils"
-import { formatServerError } from "@/utils/server-errors"
+import { formatServerError, isClientClosedRequestError } from "@/utils/server-errors"
 import { QueryClient, queryOptions } from "@tanstack/solid-query"
 import { loadMcpQuery, loadMcpResourcesQuery } from "../server-sync"
 import { NormalizedProviderListResponse } from "@arforge-ai/session-ui/context"
@@ -510,6 +510,7 @@ export async function bootstrapDirectory(input: {
         input.queryClient
           .fetchQuery(loadProvidersQuery(input.scope, input.directory, input.api, input.sdk, input.protocol))
           .catch((err) => {
+            if (isClientClosedRequestError(err)) return
             const project = getFilename(input.directory)
             showToast({
               variant: "error",
@@ -521,16 +522,17 @@ export async function bootstrapDirectory(input: {
 
     await waitForPaint()
     const slowErrs = errors(await runAll(slow))
-    if (slowErrs.length > 0) {
-      console.error("Failed to finish bootstrap instance", slowErrs[0])
+    const actionableSlowErrs = slowErrs.filter((error) => !isClientClosedRequestError(error))
+    if (actionableSlowErrs.length > 0) {
+      console.error("Failed to finish bootstrap instance", actionableSlowErrs[0])
       const project = getFilename(input.directory)
       showToast({
         variant: "error",
         title: input.translate("toast.project.reloadFailed.title", { project }),
-        description: formatServerError(slowErrs[0], input.translate),
+        description: formatServerError(actionableSlowErrs[0], input.translate),
       })
     }
 
-    if (loading && slowErrs.length === 0) input.setStore("status", "complete")
+    if (loading && actionableSlowErrs.length === 0) input.setStore("status", "complete")
   })()
 }

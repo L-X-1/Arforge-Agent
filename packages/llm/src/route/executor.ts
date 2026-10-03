@@ -65,14 +65,32 @@ const redactHeaders = (headers: Headers.Headers, redactedNames: ReadonlyArray<st
     ]),
   )
 
-const redactUrl = (value: string) => {
-  if (!URL.canParse(value)) return REDACTED
+export const describeEndpoint = (value: string): { readonly url: string; readonly exact: boolean } => {
+  if (!URL.canParse(value)) return { url: REDACTED, exact: false }
   const url = new URL(value)
+  let exact = true
+  if (url.username) {
+    url.username = REDACTED
+    exact = false
+  }
+  if (url.password) {
+    url.password = REDACTED
+    exact = false
+  }
+  if (url.hash) {
+    url.hash = ""
+    exact = false
+  }
   url.searchParams.forEach((_, key) => {
-    if (isSensitiveQueryName(key)) url.searchParams.set(key, REDACTED)
+    if (isSensitiveQueryName(key)) {
+      url.searchParams.set(key, REDACTED)
+      exact = false
+    }
   })
-  return url.toString()
+  return { url: url.toString(), exact }
 }
+
+const redactUrl = (value: string) => describeEndpoint(value).url
 
 const normalizedHeaders = (headers: Headers.Headers) =>
   Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]))
@@ -179,7 +197,16 @@ const secretValues = (request: HttpClientRequest.HttpClientRequest) => {
   })
 
   if (!URL.canParse(request.url)) return values
-  new URL(request.url).searchParams.forEach((value, key) => {
+  const url = new URL(request.url)
+  for (const value of [url.username, url.password, url.hash.slice(1)]) {
+    add(value)
+    try {
+      add(decodeURIComponent(value))
+    } catch {
+      // Invalid percent escapes retain the literal value added above.
+    }
+  }
+  url.searchParams.forEach((value, key) => {
     if (isSensitiveQueryName(key)) add(value)
   })
   return values

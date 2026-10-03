@@ -44,14 +44,16 @@ final class BridgeClientIntegrationTest {
                 "ARFORGE_MULTIAGENT_DB_URL",
                 "sqlite:///" + profile.resolve("multi.db").toString().replace('\\', '/')
         );
-        environment.put("PYTHONUTF8", "1");
-        environment.put("PYTHONPATH", repository.toString());
 
         BridgeClient bridge = new BridgeClient();
         try {
             JsonObject health = bridge.start(
-                    "python",
-                    new String[]{"-m", "arforge.bridge"},
+                    "bun",
+                    new String[]{
+                            "--conditions=browser",
+                            repository.resolve("packages/arforge/src/index.ts").toString(),
+                            "bridge"
+                    },
                     workspace,
                     environment
             ).join();
@@ -70,6 +72,7 @@ final class BridgeClientIntegrationTest {
             ).join();
 
             assertEquals("ok", health.get("status").getAsString());
+            assertEquals("typescript", health.get("runtime").getAsString());
             assertFalse(session.get("session_id").getAsString().isBlank());
             assertEquals(
                     session.get("session_id").getAsString(),

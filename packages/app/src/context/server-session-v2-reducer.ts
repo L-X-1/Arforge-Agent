@@ -1,10 +1,7 @@
 import type { ArforgeEvent, SessionMessageInfo, SessionPendingMessage } from "@arforge-ai/client/promise"
-import {
-  type AssistantWithPrimaryDelivery,
-  type PrimaryDeliveredEvent,
-} from "@/utils/primary-delivery"
+import { type AssistantWithPrimaryDelivery, type PrimaryDeliveredEvent } from "@/utils/primary-delivery"
 
-type Assistant = Extract<SessionMessageInfo, { type: "assistant" }>
+type Assistant = Extract<SessionMessageInfo, { type: "assistant" }> & { structured?: Record<string, unknown> }
 type Compaction = Extract<SessionMessageInfo, { type: "compaction" }>
 type Shell = Extract<SessionMessageInfo, { type: "shell" }>
 
@@ -198,6 +195,8 @@ export function createV2SessionReducer() {
           finish: event.data.finish,
           cost: event.data.cost,
           tokens: event.data.tokens,
+          structured:
+            "structured" in event.data && record(event.data.structured) ? event.data.structured : item.structured,
           snapshot:
             event.data.snapshot || event.data.files
               ? { ...item.snapshot, end: event.data.snapshot, files: event.data.files }
@@ -446,6 +445,10 @@ function key(sessionID: string, inputID: string) {
 
 function messageID(eventID: string) {
   return eventID.replace(/^evt_/, "msg_")
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
 function update(

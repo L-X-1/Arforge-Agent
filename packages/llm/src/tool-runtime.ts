@@ -29,7 +29,11 @@ export const dispatch = (tools: Tools, call: ToolCallPart): Effect.Effect<Dispat
   return decodeAndExecute(tool, call).pipe(
     Effect.map((value) => result(call, value)),
     Effect.catchTag("LLM.ToolFailure", (failure) =>
-      Effect.succeed(result(call, { type: "error", value: failure.message }, failure.error)),
+      // Keep the stable model-facing error text, but carry the tool's
+      // structured metadata through the canonical tool-error event so the
+      // UI/audit layer can distinguish conflicts, authorization, and other
+      // recoverable states without parsing prose.
+      Effect.succeed(result(call, { type: "error", value: failure.message }, failure.error ?? failure.metadata)),
     ),
   )
 }

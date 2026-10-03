@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveBrowserExecutable } from "../playwright-browser"
+import { browserLaunchOptionsFromResolution, resolveBrowserExecutable } from "../playwright-browser"
 
 describe("Playwright browser executable", () => {
   test("prefers the matching managed browser", () => {
@@ -25,6 +25,22 @@ describe("Playwright browser executable", () => {
   test("rejects a missing explicit override", () => {
     expect(() => resolveBrowserExecutable("managed", "missing", [], () => false)).toThrow(
       "PLAYWRIGHT_BROWSER_EXECUTABLE does not exist",
+    )
+  })
+
+  test("maps a managed browser to default Playwright launch options", () => {
+    expect(browserLaunchOptionsFromResolution({ source: "managed" })).toEqual({})
+  })
+
+  test("maps a system browser to an explicit executable", () => {
+    expect(browserLaunchOptionsFromResolution({ source: "system", executablePath: "edge" })).toEqual({
+      launchOptions: { executablePath: "edge" },
+    })
+  })
+
+  test("fails early with an actionable install hint when no browser exists", () => {
+    expect(() => browserLaunchOptionsFromResolution({ source: "missing" })).toThrow(
+      "Install Playwright Chromium",
     )
   })
 })

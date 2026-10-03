@@ -77,6 +77,8 @@ const it = testEffect(
           all: () => Effect.succeed(skills),
           dirs: () => Effect.succeed([]),
           available: () => Effect.succeed(skills),
+          reload: () => Effect.die("unused skill.reload"),
+          snapshot: () => Effect.die("unused skill.snapshot"),
         }),
       ),
     ],
@@ -121,18 +123,12 @@ describe("session.system", () => {
       const prompt = yield* SystemPrompt.Service
       const output = yield* prompt.mcp(build)
 
-      expect(output).toBe(
-        [
-          "<mcp_instructions>",
-          '  <server name="guide-server">',
-          "    Use lookup before mutate.",
-          "  </server>",
-          '  <server name="tool-server">',
-          "    Prefer search before update.",
-          "  </server>",
-          "</mcp_instructions>",
-        ].join("\n"),
-      )
+      expect(output).toContain('source="remote_instruction"')
+      expect(output).toContain('trust="untrusted"')
+      expect(output).toContain('instruction_allowed="false"')
+      expect(output).toContain("Use lookup before mutate.")
+      expect(output).toContain("Prefer search before update.")
+      expect(output).toContain("<![CDATA[")
     }),
   )
 
@@ -141,15 +137,10 @@ describe("session.system", () => {
       const prompt = yield* SystemPrompt.Service
       const output = yield* prompt.mcp(build, Permission.fromConfig({ "tool-server_*": "deny" }))
 
-      expect(output).toBe(
-        [
-          "<mcp_instructions>",
-          '  <server name="guide-server">',
-          "    Use lookup before mutate.",
-          "  </server>",
-          "</mcp_instructions>",
-        ].join("\n"),
-      )
+      expect(output).toContain('source="remote_instruction"')
+      expect(output).toContain('instruction_allowed="false"')
+      expect(output).toContain("Use lookup before mutate.")
+      expect(output).not.toContain("Prefer search before update.")
     }),
   )
 })

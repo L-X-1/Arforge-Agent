@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test"
 const STREAM_MARKER_PATTERN = "stream-(\\d+)"
 const STREAM_FRAGMENT_COUNT = 18
 
-type TimelineProbeState = {
+export type TimelineProbeState = {
   started: number
   ended: number
   profileVisual: boolean
@@ -54,6 +54,7 @@ type TimelineProbeState = {
     lastCallFrame: number
     frame: number
   }
+  root: HTMLElement
   row: HTMLElement
   markdown: HTMLElement
   running: boolean
@@ -114,6 +115,7 @@ export async function installTimelineStreamProbe(
           lastCallFrame: -1,
           frame: 0,
         },
+        root,
         row,
         markdown,
         running: false,

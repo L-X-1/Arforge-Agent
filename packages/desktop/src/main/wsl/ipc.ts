@@ -1,10 +1,12 @@
 import { app, ipcMain } from "electron"
 import type { IpcMainInvokeEvent } from "electron"
+import { NativeActionKind } from "@arforge-ai/core/runtime/native-action"
 import type { WslServersController } from "./servers"
 import { requireWslIpcString, requireWslIpcStrings } from "./policy"
 import type { WslServersState } from "../../preload/types"
+import { executeNative, type NativeActionRuntime } from "../native-action-bridge"
 
-export function registerWslIpcHandlers(controller: WslServersController) {
+export function registerWslIpcHandlers(controller: WslServersController, nativeActions: NativeActionRuntime) {
   if (process.platform !== "win32") {
     registerUnavailableWslIpcHandlers()
     return
@@ -42,28 +44,48 @@ export function registerWslIpcHandlers(controller: WslServersController) {
   ipcMain.handle("wsl-servers-get-state", () => controller.getState())
   ipcMain.handle("wsl-servers-probe-runtime", () => controller.probeRuntime())
   ipcMain.handle("wsl-servers-refresh-distros", () => controller.refreshDistros())
-  ipcMain.handle("wsl-servers-install-wsl", () => controller.installWsl())
-  ipcMain.handle("wsl-servers-install-distro", (_event: IpcMainInvokeEvent, name: string) =>
-    controller.installDistro(requireWslIpcString("distro", name)),
+  ipcMain.handle("wsl-servers-install-wsl", (event: IpcMainInvokeEvent) =>
+    executeNative(nativeActions, event, NativeActionKind.process, "wsl-install", {}, () => controller.installWsl()),
   )
+  ipcMain.handle("wsl-servers-install-distro", (event: IpcMainInvokeEvent, name: string) => {
+    const distro = requireWslIpcString("distro", name)
+    return executeNative(nativeActions, event, NativeActionKind.process, "wsl-install-distro", { distro }, () =>
+      controller.installDistro(distro),
+    )
+  })
   ipcMain.handle("wsl-servers-probe-addable", (_event: IpcMainInvokeEvent, distros: string[]) =>
     controller.probeAddable(requireWslIpcStrings("distro", distros)),
   )
-  ipcMain.handle("wsl-servers-install-arforge", (_event: IpcMainInvokeEvent, name: string) =>
-    controller.installArforge(requireWslIpcString("distro", name)),
-  )
-  ipcMain.handle("wsl-servers-open-terminal", (_event: IpcMainInvokeEvent, name: string) =>
-    controller.openTerminal(requireWslIpcString("distro", name)),
-  )
-  ipcMain.handle("wsl-servers-add", (_event: IpcMainInvokeEvent, distro: string) =>
-    controller.addServer(requireWslIpcString("distro", distro)),
-  )
-  ipcMain.handle("wsl-servers-remove", (_event: IpcMainInvokeEvent, id: string) =>
-    controller.removeServer(requireWslIpcString("server id", id)),
-  )
-  ipcMain.handle("wsl-servers-start", (_event: IpcMainInvokeEvent, id: string) =>
-    controller.startServer(requireWslIpcString("server id", id)),
-  )
+  ipcMain.handle("wsl-servers-install-arforge", (event: IpcMainInvokeEvent, name: string) => {
+    const distro = requireWslIpcString("distro", name)
+    return executeNative(nativeActions, event, NativeActionKind.process, "wsl-install-arforge", { distro }, () =>
+      controller.installArforge(distro),
+    )
+  })
+  ipcMain.handle("wsl-servers-open-terminal", (event: IpcMainInvokeEvent, name: string) => {
+    const distro = requireWslIpcString("distro", name)
+    return executeNative(nativeActions, event, NativeActionKind.process, "wsl-open-terminal", { distro }, () =>
+      controller.openTerminal(distro),
+    )
+  })
+  ipcMain.handle("wsl-servers-add", (event: IpcMainInvokeEvent, distro: string) => {
+    const checked = requireWslIpcString("distro", distro)
+    return executeNative(nativeActions, event, NativeActionKind.filesystem, "wsl-add-server", { distro: checked }, () =>
+      controller.addServer(checked),
+    )
+  })
+  ipcMain.handle("wsl-servers-remove", (event: IpcMainInvokeEvent, id: string) => {
+    const checked = requireWslIpcString("server id", id)
+    return executeNative(nativeActions, event, NativeActionKind.filesystem, "wsl-remove-server", { id: checked }, () =>
+      controller.removeServer(checked),
+    )
+  })
+  ipcMain.handle("wsl-servers-start", (event: IpcMainInvokeEvent, id: string) => {
+    const checked = requireWslIpcString("server id", id)
+    return executeNative(nativeActions, event, NativeActionKind.process, "wsl-start-server", { id: checked }, () =>
+      controller.startServer(checked),
+    )
+  })
 }
 
 function registerUnavailableWslIpcHandlers() {

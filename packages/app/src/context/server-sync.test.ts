@@ -34,14 +34,19 @@ describe("MCP queries", () => {
             data: [
               { name: "docs", status: { status: "connected" } },
               { name: "search", status: { status: "pending" } },
+              { name: "local", status: { status: "needs_approval", reason: "Confirm the local MCP server" } },
             ],
           }
         },
-      } as unknown as McpApi),
+      }),
     )
 
     expect(calls).toEqual([{ location: { directory: "/project" } }])
-    expect(result).toEqual({ docs: { status: "connected" }, search: { status: "pending" } })
+    expect(result).toEqual({
+      docs: { status: "connected" },
+      search: { status: "pending" },
+      local: { status: "needs_approval", reason: "Confirm the local MCP server" },
+    })
   })
 
   test("loads and keys the current resource catalog", async () => {

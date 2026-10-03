@@ -223,7 +223,10 @@ describe("arforge run (non-interactive subprocess)", () => {
           }),
         )
         yield* llm.fail("provider failed")
-        const result = yield* arforge.run("fail after output", { format: "json" })
+        const result = yield* arforge.run("fail after output", {
+          format: "json",
+          extraArgs: ["--dangerously-skip-permissions"],
+        })
 
         const events = arforge.parseJsonEvents(result.stdout)
         expect(result.exitCode).toBe(0)

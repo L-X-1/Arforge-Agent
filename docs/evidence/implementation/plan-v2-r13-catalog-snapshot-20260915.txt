@@ -1,0 +1,27 @@
+R13 user-facing MCP catalog snapshot fusion (2026-09-15)
+
+Changed:
+  - Added MCP.Interface.catalog() and one CatalogSnapshot owner.
+  - HTTP v2 capabilities/resource catalog and CLI mcp capabilities now use that snapshot.
+  - The service refreshes prompts/resources/resourceTemplates together, then returns the generation-scoped projection.
+  - Supervisor, McpCatalog budgets, generation registry and semaphore remain the only discovery owners.
+
+Tests:
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/mcp/lifecycle.test.ts -t "coherent projection" --rerun-every
+  result: 1 pass / 0 fail / 7 assertions / exit 0
+
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/mcp/lifecycle.test.ts -t "catalog|capabilit" --rerun-every
+  result: 8 pass / 0 fail / 32 assertions / exit 0
+
+Background full lifecycle:
+  result: 38 pass / 2 fail / 120 assertions / exit 1
+  failures: Windows/Bun local stdio startup-directory and child-process fixture boundaries already tracked by the plan; not attributed to this snapshot change
+
+Quality:
+  - package typecheck retains only pre-existing packages/tui JSX/BaseRenderable diagnostics
+  - Prettier passed; no user data changed
+  - migration freshness valid=true after regenerating ledgers/snapshot (source inputs=7666, TS source files=1792)
+
+Open:
+  - explicit control Action/Gateway identity, authorization and durable receipt for HTTP/CLI reads
+  - remaining MCP lifecycle, Artifact, external-service and post-R30 sandbox gates

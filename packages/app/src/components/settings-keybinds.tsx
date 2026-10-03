@@ -15,6 +15,7 @@ import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
 import { SettingsList } from "./settings-list"
 import { SettingsListV2 } from "./settings-v2/parts/list"
+import { managementCopy } from "./settings-v2/management-state"
 
 const IconV2 = lazy(() => import("@arforge-ai/ui/v2/icon").then((module) => ({ default: module.Icon })))
 
@@ -295,6 +296,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
   const hasOverrides = createMemo(() => Object.values(map()).some((x) => typeof x === "string"))
 
   const resetAll = () => {
+    if (!window.confirm(managementCopy(language.locale()).resetShortcuts)) return
     stop()
     settings.keybinds.resetAll()
     showToast({
@@ -445,6 +447,8 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
                       <button
                         type="button"
                         data-keybind-id={id}
+                        aria-label={`${title(id)}: ${command.keybind(id) || language.t("settings.shortcuts.unassigned")}`}
+                        aria-pressed={store.active === id}
                         classList={{
                           "settings-v2-keybind-button": props.v2,
                           "settings-v2-keybind-button--active": props.v2 && store.active === id,
@@ -540,6 +544,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
                 variant="ghost-muted"
                 size="small"
                 class="settings-v2-tab-search-clear"
+                aria-label={managementCopy(language.locale()).clearSearch}
                 icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
                 onClick={() => setStore("filter", "")}
               />

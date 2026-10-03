@@ -2,6 +2,7 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  ...en,
   "command.category.suggested": "Foreslått",
   "command.category.view": "Visning",
   "command.category.project": "Prosjekt",
@@ -309,6 +310,8 @@ export const dict = {
   "mcp.status.connected": "tilkoblet",
   "mcp.status.failed": "mislyktes",
   "mcp.status.needs_auth": "trenger autentisering",
+  "mcp.status.needs_client_registration": "klientregistrering kreves",
+  "mcp.status.needs_approval": "godkjenning kreves",
   "mcp.auth.clickToAuthenticate": "Klikk for å autentisere",
   "mcp.status.disabled": "deaktivert",
 
@@ -1316,7 +1319,7 @@ export const dict = {
   "controlCenter.m174": "Gjenopprett",
   "controlCenter.m175": "Vedvarende løpshistorikk",
   "controlCenter.m176":
-    "Les Python Core-transaksjonen, sporingen og meldingsartefaktene gjennom den delte Server API. Rapporter er skrivebeskyttet og forblir eid av én vedvarende kilde.",
+    "Les Arforge Core-transaksjonen, sporingen og meldingsartefaktene gjennom den delte Server API. Rapporter er skrivebeskyttet og forblir eid av én vedvarende kilde.",
   "controlCenter.m177": "Begrens",
   "controlCenter.m178": "Oppdater",
   "controlCenter.m179": "filer ·",
@@ -1370,6 +1373,19 @@ export const dict = {
   "controlCenter.m222": "Ukjent dypdiagnostisk feil",
   "controlCenter.m223": "Styrt evolusjon",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Gjennomgå policykandidater foreslått fra læringsbevis, og styr kapabilitetsendringer med isolert evaluering, menneskelig godkjenning, gradvis utrulling og tilbakeføring.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Gjennomgå policykandidater foreslått fra læringsbevis, og styr kapabilitetsendringer med isolert evaluering, menneskelig godkjenning, gradvis utrulling og tilbakeføring.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 } satisfies Partial<Record<Keys, string>>

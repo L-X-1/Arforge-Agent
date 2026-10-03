@@ -1,0 +1,31 @@
+Command: bun test test/runtime/embedding.test.ts
+Exit: 0
+11 pass
+0 fail
+35 expect() calls
+
+Covered:
+- API-mode denied requests write one embedding.egress audit record without sending HTTP;
+- URL query values, input text, and resolved credentials are absent from the audit record;
+- authorized loopback transport records sent/transportStarted=true and preserves a valid audit hash chain;
+- remote failure fallback remains egress=sent and localOnly=false.
+- in-flight AbortSignal cancellation records egress=unknown after transport starts.
+
+Command: bun test test/memory.test.ts test/code-retrieval.test.ts
+Exit: 0
+14 pass
+0 fail
+89 expect() calls
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun x oxlint --disable-nested-config src/runtime/embedding.ts test/runtime/embedding.test.ts --quiet
+Exit: 0
+Found 0 warnings and 0 errors.
+
+Command: git diff --check -- packages/core/src/runtime/embedding.ts packages/core/test/runtime/embedding.test.ts
+Exit: 0
+
+No real user database, credential, or external service was modified. The only HTTP servers were isolated loopback fixtures.

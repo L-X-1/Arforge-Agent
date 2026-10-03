@@ -230,6 +230,86 @@ describe("server session", () => {
     expect(ctx.store.data.message.root).toEqual([])
   })
 
+  test("refreshes an empty V2 session with a full page and displays its completed reply", async () => {
+    const requests: unknown[] = []
+    const user = { id: "msg_1_user", type: "user", text: "edit the heading", time: { created: 1 } }
+    const assistant = {
+      id: "msg_2_assistant",
+      type: "assistant",
+      agent: "build",
+      model: { id: "model", providerID: "provider" },
+      content: [{ type: "text", text: "saved" }],
+      time: { created: 2, completed: 3 },
+    }
+    const pages = [[], [assistant, user]]
+    const messageApi = {
+      list: async (input: { limit: number }) => {
+        requests.push(input)
+        expect(input.limit).toBeGreaterThan(0)
+        return { data: (pages.shift() ?? []).slice(0, input.limit), cursor: { previous: null, next: null } }
+      },
+    } as unknown as MessageApi
+    const sessionApi = {
+      get: async () => ({
+        ...session("root"),
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        location: { directory: "/repo" },
+      }),
+    } as unknown as SessionApi
+    const store = createServerSession({} as ArforgeClient, sessionApi, messageApi)
+    store.remember(session("root"))
+
+    await store.sync("root")
+    expect(store.data.message.root).toEqual([])
+    await store.sync("root", { force: true })
+
+    expect(requests).toEqual([
+      { sessionID: "root", limit: 20, order: "desc" },
+      { sessionID: "root", limit: 20, order: "desc" },
+    ])
+    expect(store.data.session_message.root.map((message) => message.id)).toEqual([user.id, assistant.id])
+    expect(store.data.part[assistant.id]).toMatchObject([{ type: "text", text: "saved" }])
+  })
+
+  test.each([0, 1, 25])("refreshes a cached %s-message window without requesting a smaller page", async (count) => {
+    const items = Array.from({ length: count }, (_, index) => ({
+      info: userMessage(`message-${String(index).padStart(3, "0")}`, { time: { created: index + 1 } }),
+      parts: [],
+    }))
+    const fresh = userMessage("message-fresh", { time: { created: count + 1 } })
+    const client = messageClient(response(items), response([...items, { info: fresh, parts: [] }]))
+    const store = createServerSession(client)
+
+    await store.sync("child", { messageLimit: Math.max(20, count) })
+    await store.sync("child", { force: true })
+
+    expect(client.requests[1]).toEqual({ sessionID: "child", limit: Math.max(20, count), before: undefined })
+    expect(store.data.message.child).toHaveLength(count + 1)
+    expect(store.data.message.child.at(-1)?.id).toBe(fresh.id)
+  })
+
+  test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "uses the appropriate default page size for invalid input %s at every loading entry point",
+    async (limit) => {
+      for (const entry of ["sync", "prefetch", "history"] as const) {
+        const client = messageClient(response([], entry === "history" ? "older" : undefined), response())
+        const store = createServerSession(client)
+        if (entry === "sync") await store.sync("child", { messageLimit: limit })
+        if (entry === "prefetch") await store.prefetch("child", limit)
+        if (entry === "history") {
+          await store.sync("child")
+          await store.history.loadMore("child", limit)
+        }
+        expect(client.requests.at(-1)).toEqual({
+          sessionID: "child",
+          limit: entry === "history" ? 200 : 20,
+          before: entry === "history" ? "older" : undefined,
+        })
+      }
+    },
+  )
+
   test("loads current session content through the current message API", async () => {
     const requests: unknown[] = []
     const user = { id: "msg_z_user", type: "user", text: "hello", time: { created: 1 } }

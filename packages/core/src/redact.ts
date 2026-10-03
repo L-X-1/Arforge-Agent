@@ -18,3 +18,10 @@ export function redact(value: string) {
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/gi, "Bearer [REDACTED_SECRET]")
 }
+
+/** Remove runtime-resolved secret values before a result crosses an output boundary. */
+export function redactSecrets(value: string, secrets: ReadonlyArray<string>) {
+  return secrets
+    .filter((secret) => secret.length > 0)
+    .reduce((current, secret) => current.replaceAll(secret, "[REDACTED_SECRET]"), redact(value))
+}

@@ -34,7 +34,7 @@ export function SessionComposerRegion(props: {
       <div
         classList={{
           "w-full px-4 pointer-events-auto": true,
-          "md:max-w-[820px] md:mx-auto 2xl:max-w-[1040px]": controller.centered(),
+          "md:max-w-[calc(var(--arforge-review-reading-width,760px)+32px)] md:mx-auto 2xl:max-w-[832px]": controller.centered(),
         }}
       >
         <Show when={controller.state.questionRequest()} keyed>

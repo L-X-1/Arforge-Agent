@@ -3,6 +3,7 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "会话变更",
   "ui.sessionReview.title.git": "Git 变更",
   "ui.sessionReview.title.branch": "分支变更",
@@ -159,6 +160,25 @@ export const dict = {
   "ui.permission.deny": "拒绝",
   "ui.permission.allowAlways": "始终允许",
   "ui.permission.allowOnce": "允许一次",
+  "ui.permission.humanConfirmation": "此操作必须由你本次手动确认，系统不会记住为“始终允许”。",
+  "ui.permission.opaqueShell.summary":
+    "这是用户直接输入的精确 Shell 命令。执行前无法完整静态判定文件、网络与子进程影响。",
+  "ui.permission.opaqueShell.cwd": "工作目录：{{cwd}}",
+  "ui.permission.opaqueShell.shell": "Shell：{{shell}}",
+  "ui.permission.opaqueShell.environment": "子进程仅获得最小运行环境，不会继承 Arforge 的环境凭据。",
+  "ui.permission.taskCapabilities.title": "子智能体访问范围",
+  "ui.permission.taskCapabilities.defaultReadOnly": "此任务默认只有只读权限。",
+  "ui.permission.taskCapabilities.readOnly": "此任务只请求了读取类权限。",
+  "ui.permission.taskCapabilities.writeWarning": "此任务请求写入能力。允许前请逐项核对操作和范围。",
+  "ui.permission.taskCapabilities.access.read": "读取",
+  "ui.permission.taskCapabilities.access.write": "写入",
+  "ui.permission.taskCapabilities.resources": "范围：{{resources}}",
+  "ui.permission.taskBudget.title": "执行上限",
+  "ui.permission.taskBudget.summary":
+    "最多 {{attempts}} 次尝试 · {{duration}} 分钟 · 成本上限 {{cost}} · {{tokens}} Token",
+  "ui.permission.taskBudget.enforced": "执行期间限制时长与模型输出；结束后结算实际成本和总 Token 用量。",
+  "ui.permission.taskBudget.legacyWarning":
+    "此旧式任务没有持久化的时间、成本或 Token 上限。仅在你信任其范围时允许。",
 
   "ui.message.expand": "展开消息",
   "ui.message.collapse": "收起消息",
@@ -193,6 +213,12 @@ export const dict = {
   "ui.basicTool.called": "调用了 `{{tool}}`",
   "ui.toolErrorCard.failed": "失败",
   "ui.toolErrorCard.copyError": "复制错误",
+  "ui.toolErrorCard.fileConflict.changed": "文件在授权后发生变化",
+  "ui.toolErrorCard.fileConflict.targetExists": "授权后文件已出现",
+  "ui.toolErrorCard.fileConflict.instruction": "请重新读取文件，确认当前内容后再重试。",
+  "ui.toolErrorCard.fileConflict.targetExistsInstruction": "授权后发现同名文件。请先读取并确认内容，再重试。",
+  "ui.toolErrorCard.fileConflict.path": "文件",
+  "ui.toolErrorCard.fileConflict.versions": "授权版本 {{observed}} · 当前版本 {{current}}",
   "ui.message.duration.seconds": "{{count}}秒",
   "ui.message.duration.minutesSeconds": "{{minutes}}分 {{seconds}}秒",
 } satisfies Partial<Record<Keys, string>>

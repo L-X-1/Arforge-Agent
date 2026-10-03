@@ -7,8 +7,8 @@ curated evidence, local state, and rebuildable output.
 
 | Path | Purpose |
 | --- | --- |
-| `packages/` | TypeScript application, CLI, desktop shell, SDKs, and shared packages |
-| `arforge/` | Preserved Python capability and harness implementation |
+| `packages/` | TypeScript product runtime, interfaces, adapters, user interfaces, and repository tooling |
+| `arforge/` | Python compatibility/migration surface and test helpers; not the product CLI or session-state owner |
 | `bin/` | Command entry points |
 | `ide/` | Source for supported IDE integrations |
 | `script/` | Bun/TypeScript repository tooling and release operations inherited from the application stack |
@@ -23,6 +23,23 @@ The two script directories are intentional: `script/` is part of the Bun
 application toolchain, while `scripts/` contains Arforge operations and
 cross-stack entry points. Do not merge them without updating every package and CI
 reference.
+
+### TypeScript package map
+
+| Package group | Ownership |
+| --- | --- |
+| `packages/core/` | Shared typed contracts, session/runtime owners, persistence, and capability execution |
+| `packages/arforge/` | Bun/TypeScript CLI, providers, tools, and application runtime |
+| `packages/server/` | HTTP service and API routes over shared Core owners |
+| `packages/app/`, `packages/desktop/` | Shared Solid app and Electron host |
+| `packages/schema/`, `protocol/`, `identity/` | Data, wire-protocol, and identity boundaries |
+| `packages/client/`, `sdk/`, `sdk-next/` | Programmatic client and SDK surfaces |
+| `packages/session-ui/`, `ui/`, `tui/` | Shared interface components and terminal UI |
+| Provider, plugin, and integration packages | Optional model, plugin, and external-service adapters |
+
+The root `arforge/` tree remains for Python compatibility, migration-retained
+capabilities, and test support. Product CLI, session execution, and business
+state writes belong to the TypeScript packages.
 
 ## Evidence
 
@@ -45,6 +62,14 @@ removed by routine cleanup:
 - `workspace/`
 - database files, exports, and backups
 
+## Local-only scratch and analysis data
+
+`tmp/` can contain runtime logs, database snapshots, and test output.
+`.codex-analysis/` can contain generated frames or other material derived from
+local media. Both paths are ignored by Git and must be reviewed before any
+manual force-add; preserve their contents unless the owner explicitly asks to
+remove them.
+
 ## Rebuildable local state
 
 The following paths are caches or outputs and may be removed when the associated
@@ -52,7 +77,8 @@ process is stopped:
 
 - `node_modules/`, package-local `node_modules/`, `.bun/`, and `.venv/`
 - `build/`, `dist/`, `out/`, `.turbo/`, `.pytest_cache/`, and `__pycache__/`
-- `packages/app/e2e/.playwright-temp/`, Playwright reports, and test results
+- `packages/app/e2e/.playwright-temp/`, `packages/app/test-results/`, Playwright
+  reports, and test results
 - `ide/jetbrains/.gradle/` and `ide/jetbrains/.intellijPlatform/`
 - `.codex-runtime/` and `.codex-tmp/`
 

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { readFile, rm } from "node:fs/promises"
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import {
   parsePlaywrightServerManifest,
@@ -16,6 +16,9 @@ const appDir = resolve(performanceDir, "../..")
 const runID = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`
 const readyFile = playwrightReadinessFile(appDir, runID)
 const { outDir } = playwrightTemporaryOutputDir(appDir, runID)
+const profileArchiveDir = process.env.TIMELINE_CPU_PROFILE === "1"
+  ? resolve(appDir, "../../artifacts/timeline-cpu", runID)
+  : undefined
 const bun = resolvePlaywrightBunExecutable(performanceDir)
 const temporaryServer = join(performanceDir, "playwright-temp-server.ts")
 const playwrightCLI = resolvePlaywrightCLIExecutable(appDir)
@@ -38,6 +41,32 @@ function waitForExit(child: ChildProcess) {
       else resolveExit(signal ? 128 : 1)
     })
   })
+}
+
+async function retainProfileAssets() {
+  if (!profileArchiveDir) return
+  const source = join(outDir, "assets")
+  const destination = join(profileArchiveDir, "assets")
+  const entries = await readdir(source, { withFileTypes: true })
+  await mkdir(destination, { recursive: true })
+  const retained: string[] = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !/\.js(?:\.map)?$/.test(entry.name)) continue
+    await copyFile(join(source, entry.name), join(destination, entry.name))
+    retained.push(entry.name)
+  }
+  await writeFile(join(profileArchiveDir, "manifest.json"), JSON.stringify({
+    runID,
+    capturedAt: new Date().toISOString(),
+    testExitCode: exitCode,
+    sourceBuildDir: outDir,
+    assets: retained,
+  }, null, 2), "utf8")
+  console.log("TIMELINE_PROFILE_ASSETS_SAVED", JSON.stringify({
+    directory: profileArchiveDir,
+    files: retained.length,
+    sourceMaps: retained.filter((name) => name.endsWith(".map")).length,
+  }))
 }
 
 async function waitForServerManifest(child: ChildProcess): Promise<PlaywrightServerManifest> {
@@ -112,6 +141,7 @@ try {
   const testEnvironment = { ...process.env }
   setPlaywrightPortEnvironment(manifest.port, runID, testEnvironment)
   testEnvironment.ARFORGE_PLAYWRIGHT_EXTERNAL_SERVER = "1"
+  testEnvironment.ARFORGE_TIMELINE_PROFILE_DIR = profileArchiveDir ?? ""
 
   testProcess = spawn(playwrightCLI, ["test", ...playwrightArgs], {
     cwd: appDir,
@@ -124,6 +154,10 @@ try {
   console.error("[Arforge Playwright] isolated runner failed", error)
   exitCode = 1
 } finally {
+  // The temporary server also removes its build during shutdown. Archive first.
+  await retainProfileAssets().catch((error) => {
+    console.warn("TIMELINE_PROFILE_ASSETS_ERROR", error instanceof Error ? error.message : String(error))
+  })
   await stopServer(serverProcess)
   await rm(readyFile, { force: true }).catch(() => undefined)
   await rm(outDir, { recursive: true, force: true }).catch(() => undefined)

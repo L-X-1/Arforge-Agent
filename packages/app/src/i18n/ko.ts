@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "추천",
   "command.category.view": "보기",
   "command.category.project": "프로젝트",
@@ -282,6 +285,8 @@ export const dict = {
   "mcp.status.connected": "연결됨",
   "mcp.status.failed": "실패",
   "mcp.status.needs_auth": "인증 필요",
+  "mcp.status.needs_client_registration": "클라이언트 등록 필요",
+  "mcp.status.needs_approval": "승인 필요",
   "mcp.auth.clickToAuthenticate": "클릭하여 인증",
   "mcp.status.disabled": "비활성화됨",
   "dialog.fork.empty": "분기할 메시지 없음",
@@ -1217,7 +1222,7 @@ export const dict = {
   "controlCenter.m174": "복원",
   "controlCenter.m175": "지속적인 실행 기록",
   "controlCenter.m176":
-    "공유 유형 Server API을 통해 Python Core 트랜잭션, 추적 및 메시지 아티팩트를 읽습니다. 보고서는 읽기 전용이며 하나의 지속성 소스에 의해 소유됩니다.",
+    "공유 유형 Server API을 통해 Arforge Core 트랜잭션, 추적 및 메시지 아티팩트를 읽습니다. 보고서는 읽기 전용이며 하나의 지속성 소스에 의해 소유됩니다.",
   "controlCenter.m177": "한도",
   "controlCenter.m178": "새로고침",
   "controlCenter.m179": "파일 ·",
@@ -1269,6 +1274,19 @@ export const dict = {
   "controlCenter.m222": "알 수 없는 심층 진단 오류",
   "controlCenter.m223": "통제된 진화",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "학습 근거가 제안한 정책 후보를 검토하고 격리 평가, 사용자 승인, 점진적 배포 및 롤백으로 기능 변경을 통제합니다.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "학습 근거가 제안한 정책 후보를 검토하고 격리 평가, 사용자 승인, 점진적 배포 및 롤백으로 기능 변경을 통제합니다.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

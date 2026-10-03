@@ -6,16 +6,25 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { PermissionV2 } from "@arforge-ai/core/permission"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Location } from "@arforge-ai/core/location"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SkillV2 } from "@arforge-ai/core/skill"
 import { SkillTool } from "@arforge-ai/core/tool/skill"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
+import { location } from "./fixture/location"
 import { it } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
 
 const sessionID = SessionV2.ID.make("ses_skill_tool_test")
+
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const activeLocation = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 describe("SkillTool", () => {
   it.live("lists available skills, authorizes the selected name, and loads model-facing content", () =>
@@ -63,6 +72,7 @@ describe("SkillTool", () => {
               reload: () => Effect.die("unused"),
               sources: () => Effect.die("unused"),
               list: () => Effect.succeed(current),
+              snapshot: () => Effect.die("unused"),
             }),
           )
           const skillToolLayer = AppNodeBuilder.build(
@@ -71,6 +81,7 @@ describe("SkillTool", () => {
               [PermissionV2.node, permission],
               [SkillV2.node, skills],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+              [Location.node, activeLocation],
             ],
           )
 
@@ -102,14 +113,14 @@ describe("SkillTool", () => {
               output: { structured: { name: "effect" } },
             })
             expect(assertions).toMatchObject([
-              { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
-              { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
+              { sessionID, agent: "build", action: "skill", resources: ["effect"], forceAsk: true },
+              { sessionID, agent: "build", action: "skill", resources: ["effect"], forceAsk: true },
             ])
             expect(
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-missing-skill", name: "skill", input: { name: "missing" } },
+                call: { type: "tool-call", id: "call-skill-missing", name: "skill", input: { name: "missing" } },
               }),
             ).toEqual({ type: "error", value: "Unable to load skill missing" })
             deny = true
@@ -119,7 +130,7 @@ describe("SkillTool", () => {
                 ...toolIdentity,
                 call: { type: "tool-call", id: "call-denied-skill", name: "skill", input: { name: "effect" } },
               }),
-            ).toEqual({ type: "error", value: "Unable to load skill effect" })
+            ).toEqual({ type: "error", value: "Permission denied for skill: effect" })
             deny = false
             const flat = SkillV2.Info.make({
               name: "public",

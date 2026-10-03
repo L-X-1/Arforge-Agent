@@ -1,4 +1,7 @@
 import type { Page } from "@playwright/test"
+import { createHash } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { benchmark, benchmarkDiagnostics, expect } from "../benchmark"
 import {
   buildInitialStreamEvent,
@@ -7,11 +10,13 @@ import {
   textPartID,
 } from "./session-timeline-benchmark.fixture"
 import { startTimelineProfile } from "./session-timeline-profile"
+import { withTimelineDeadline } from "./session-timeline-deadline"
 import { createReviewDiffs } from "./timeline-test-helpers"
 import {
   collectTimelineStreamMetrics,
   installTimelineStreamProbe,
   startTimelineStreamProbe,
+  type TimelineProbeState,
 } from "./session-timeline-stream-probe"
 
 type TimelineStreamOptions = {
@@ -100,6 +105,7 @@ benchmark.describe("performance: review pane", () => {
 })
 
 async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOptions) {
+  const setupStarted = performance.now()
   const completionTimeoutMs = Number(process.env.TIMELINE_COMPLETION_TIMEOUT_MS ?? 420_000)
   const cpuThrottle = Number(process.env.TIMELINE_CPU_THROTTLE ?? 30)
   const deltaCount = Number(process.env.TIMELINE_DELTA_COUNT ?? 160)
@@ -130,36 +136,191 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
   const reviewPane = options.reviewPane && diffs ? await measureReviewPaneLoad(page, diffs[0]!.file) : undefined
   if (reviewPane) await fixture.waitForStableGeometry()
 
-  const profile = await startTimelineProfile(page, { cpuThrottle, profileCPU })
-  await installTimelineStreamProbe(page, { textPartID, finalIndex: deltaCount, profileVisual, minimal })
+  const profile = await startTimelineProfile(page, { cpuThrottle, profileCPU, deferThrottle: true })
   const deltas = buildStreamDeltaEvents(deltaCount)
-  await startTimelineStreamProbe(page)
-  fixture.transport.enqueue(deltas)
-
-  await page.waitForFunction(
-    (finalIndex) =>
-      (
-        window as Window & {
-          __timelineStreamBenchmark?: { applied: { index: number }[] }
-        }
-      ).__timelineStreamBenchmark?.applied.some((value) => value.index === finalIndex),
-    deltaCount,
-    { timeout: completionTimeoutMs },
-  )
-  await expect(fixture.text).toContainText("benchmark-complete")
-  await expect(fixture.text).toContainText("Streaming")
-  await fixture.waitForStableGeometry()
+  let setupElapsedMs = 0
+  let throttleActivationMs = 0
+  let streamStartedAt: number | undefined
+  let streamCompletedAt: number | undefined
+  let phase = "probe-installation"
+  try {
+    // Install and arm all renderer instrumentation before enabling CPU throttling.
+    await withTimelineDeadline(
+      installTimelineStreamProbe(page, { textPartID, finalIndex: deltaCount, profileVisual, minimal }),
+      "Stream probe installation",
+      15_000,
+    )
+    phase = "probe-start"
+    await withTimelineDeadline(startTimelineStreamProbe(page), "Stream probe start", 15_000)
+    setupElapsedMs = Math.ceil(performance.now() - setupStarted)
+    // The renderer probe includes activation; report the host stream interval separately.
+    const testTimeoutMs = setupElapsedMs + 15_000 + completionTimeoutMs + 60_000
+    benchmark.setTimeout(testTimeoutMs)
+    console.log("TIMELINE_PREPARATION_READY", JSON.stringify({ setupElapsedMs, cpuThrottle, profileCPU, profileVisual, minimal }))
+    phase = "cpu-throttle"
+    const throttleStartedAt = performance.now()
+    await withTimelineDeadline(profile.applyThrottle(), "CPU throttle activation", 15_000)
+    throttleActivationMs = performance.now() - throttleStartedAt
+    console.log("TIMELINE_STREAM_WAIT", JSON.stringify({ setupElapsedMs, throttleActivationMs, completionTimeoutMs, testTimeoutMs }))
+    phase = "stream-completion"
+    streamStartedAt = performance.now()
+    fixture.transport.enqueue(deltas)
+    await withTimelineDeadline(
+      page.waitForFunction(
+        (finalIndex) =>
+          (
+            window as Window & {
+              __timelineStreamBenchmark?: { applied: { index: number }[] }
+            }
+          ).__timelineStreamBenchmark?.applied.some((value) => value.index === finalIndex),
+        deltaCount,
+        // Node owns the deadline; the renderer only polls for completion.
+        { timeout: 0 },
+      ),
+      "Stream completion",
+      completionTimeoutMs,
+    )
+    streamCompletedAt = performance.now()
+    phase = "final-text"
+    await expect(fixture.text).toContainText("benchmark-complete")
+    await expect(fixture.text).toContainText("Streaming")
+    phase = "stable-geometry"
+    await fixture.waitForStableGeometry()
+  } catch (error) {
+    const failureObservedAt = performance.now()
+    const pendingDeltas = fixture.transport.pendingCount()
+    const transportAtFailure = fixture.transport.stats()
+    let cpuRestoreError: string | undefined
+    // The outcome is already failed. Restore responsiveness only for diagnostics,
+    // keeping the debugger attached until the raw profile has been collected.
+    try {
+      await withTimelineDeadline(profile.restoreCPU(), "CPU restore before diagnostics", 5000)
+    } catch (restoreError) {
+      cpuRestoreError = restoreError instanceof Error ? restoreError.message : String(restoreError)
+      console.warn("TIMELINE_CPU_RESTORE_ERROR", cpuRestoreError)
+    }
+    let cpuCaptureError: string | undefined
+    try {
+      await attachTimelineCpuProfile(profile, "failed")
+    } catch (captureError) {
+      cpuCaptureError = captureError instanceof Error ? captureError.message : String(captureError)
+      console.warn("TIMELINE_CPU_PROFILE_ERROR", cpuCaptureError)
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const snapshot = await Promise.race([
+        page.evaluate(({ textPartID, finalIndex }) => {
+          const state = (window as Window & { __timelineStreamBenchmark?: TimelineProbeState }).__timelineStreamBenchmark
+          const selector = `[data-timeline-part-id="${CSS.escape(textPartID)}"]`
+          const parts = [...document.querySelectorAll<HTMLElement>(selector)]
+          const samplePart = (part: HTMLElement | null) => {
+            if (!part) return null
+            const content = part.textContent ?? ""
+            const rect = part.getBoundingClientRect()
+            const style = getComputedStyle(part)
+            const markdown = part.querySelector<HTMLElement>('[data-component="markdown"]')
+            return {
+              connected: part.isConnected,
+              characters: content.length,
+              hasCompletionText: content.includes("benchmark-complete"),
+              lastStreamMarker: content.match(/stream-\d+/g)?.at(-1) ?? null,
+              tail: content.slice(-1000),
+              bounds: { top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height },
+              display: style.display,
+              visibility: style.visibility,
+              opacity: style.opacity,
+              rowMatchesOriginal: part.closest("[data-timeline-row]") === state?.row,
+              markdownMatchesOriginal: markdown === state?.markdown,
+              markdown: markdown ? {
+                projectionLength: markdown.dataset.markdownProjectionLength,
+                projectionBlocks: markdown.dataset.markdownProjectionBlocks,
+                resultLength: markdown.dataset.markdownResultLength,
+                resultBlocks: markdown.dataset.markdownResultBlocks,
+                appliedBlocks: markdown.dataset.markdownAppliedBlocks,
+                children: markdown.children.length,
+              } : null,
+            }
+          }
+          const now = performance.now()
+          return {
+            capturedAt: new Date().toISOString(),
+            path: location.pathname,
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
+            readyState: document.readyState,
+            matchingParts: parts.length,
+            documentParts: parts.slice(0, 4).map(samplePart),
+            probe: state ? {
+              running: state.running,
+              elapsedMs: now - state.started,
+              frames: state.frames.length,
+              lastFrameAgeMs: state.frameAt.length ? now - state.frameAt[state.frameAt.length - 1]! : null,
+              appliedCount: state.applied.length,
+              lastApplied: state.applied.slice(-8).map((value) => ({ index: value.index, elapsedMs: value.at - state.started })),
+              sawFinalIndex: state.applied.some((value) => value.index === finalIndex),
+              lastGeometry: state.geometry.at(-1) ?? null,
+              blankSamples: state.blanks,
+              longTaskCount: state.longTasks.length,
+              rootConnected: state.root.isConnected,
+              rowConnected: state.row.isConnected,
+              markdownConnected: state.markdown.isConnected,
+              rootStillOwnsOriginalRow: state.root.contains(state.row),
+              currentRootMatchesOriginal: parts[0]?.closest(".scroll-view__viewport") === state.root,
+              observedRootPart: samplePart(state.root.querySelector<HTMLElement>(selector)),
+              originalRowPart: samplePart(state.row.querySelector<HTMLElement>(selector)),
+            } : null,
+          }
+        }, { textPartID, finalIndex: deltaCount }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Failure snapshot did not respond within 15 seconds")), 15_000)
+        }),
+      ]).catch((captureError) => ({ captureError: captureError instanceof Error ? captureError.message : String(captureError) }))
+      const diagnostics = {
+        phase,
+        cpuRestoreError,
+        cpuCaptureError,
+        snapshotAfterThrottleRestore: cpuRestoreError === undefined,
+        diagnosticElapsedMs: performance.now() - failureObservedAt,
+        preparationElapsedMs: setupElapsedMs || failureObservedAt - setupStarted,
+        throttleActivationMs,
+        streamObservedMs: streamStartedAt === undefined ? null : failureObservedAt - streamStartedAt,
+        error: error instanceof Error ? error.message : String(error),
+        context: { cpuThrottle, historyTurns, deltaCount, eventBatch, completionTimeoutMs, profileCPU, profileVisual, minimal, ...options },
+        transport: { queuedDeltas: deltas.length, pendingDeltas, deliveredDeltas: deltas.length - pendingDeltas, ...transportAtFailure },
+        navigations: benchmarkDiagnostics(page).navigations,
+        snapshot,
+      }
+      console.log("TIMELINE_FAILURE_DIAGNOSTICS", JSON.stringify(diagnostics))
+      await benchmark.info().attach("timeline-failure-diagnostics", {
+        body: Buffer.from(JSON.stringify(diagnostics, null, 2)),
+        contentType: "application/json",
+      })
+    } catch (captureError) {
+      console.warn("TIMELINE_FAILURE_DIAGNOSTICS_ERROR", captureError instanceof Error ? captureError.message : String(captureError))
+    } finally {
+      if (timer) clearTimeout(timer)
+      await withTimelineDeadline(profile.reset(), "CPU throttle reset", 5000).catch((resetError) => {
+        console.warn("TIMELINE_PROFILE_RESET_ERROR", resetError instanceof Error ? resetError.message : String(resetError))
+      })
+    }
+    throw error
+  }
   const metrics = await collectTimelineStreamMetrics(page, {
     textPartID,
     finalIndex: deltaCount,
     navigations: benchmarkDiagnostics(page).navigations,
   })
   const delivered = deltas.length - fixture.transport.pendingCount()
-  await profile.stop()
+  await attachTimelineCpuProfile(profile, "passed")
 
   const result = {
     metrics: {
       endToEndInitialContentObservedMs: initialContentObservedMs,
+      preparationElapsedMs: setupElapsedMs,
+      throttleActivationMs,
+      hostStreamCompletionMs: streamStartedAt === undefined || streamCompletedAt === undefined
+        ? null
+        : streamCompletedAt - streamStartedAt,
       ...metrics,
       deliveredDeltas: delivered,
       pendingDeltas: fixture.transport.pendingCount(),
@@ -167,10 +328,12 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
     },
     context: {
       cpuThrottle,
+      probeTimingIncludesThrottleActivation: true,
       profileCPU,
       profileVisual,
       minimal,
       queuedDeltas: deltas.length,
+      transport: fixture.transport.stats(),
       historyTurns,
       eventBatch,
       newLayoutDesigns: options.newLayoutDesigns === true,
@@ -181,6 +344,33 @@ async function runTimelineStreamBenchmark(page: Page, options: TimelineStreamOpt
 
   await profile.reset()
   return result
+}
+
+async function attachTimelineCpuProfile(profile: Awaited<ReturnType<typeof startTimelineProfile>>, outcome: string) {
+  const captured = await withTimelineDeadline(profile.stop(), "CPU profile capture", 10_000)
+  if (!captured) return
+  const name = `timeline-${outcome}.cpuprofile`
+  const body = Buffer.from(JSON.stringify(captured))
+  let archivePath: string | undefined
+  const archiveDir = process.env.ARFORGE_TIMELINE_PROFILE_DIR
+  if (archiveDir) {
+    try {
+      const info = benchmark.info()
+      const key = createHash("sha256").update(info.testId).digest("hex").slice(0, 16)
+      const profilesDir = join(archiveDir, "profiles")
+      await mkdir(profilesDir, { recursive: true })
+      const destination = join(profilesDir, `${key}-${info.repeatEachIndex}-${info.retry}-${name}`)
+      await writeFile(destination, body)
+      archivePath = destination
+    } catch (archiveError) {
+      console.warn("TIMELINE_CPU_ARCHIVE_ERROR", archiveError instanceof Error ? archiveError.message : String(archiveError))
+    }
+  }
+  await benchmark.info().attach(name, {
+    body,
+    contentType: "application/json",
+  })
+  console.log("TIMELINE_CPU_PROFILE_SAVED", JSON.stringify({ name, archivePath, nodes: captured.nodes.length, samples: captured.samples?.length ?? 0 }))
 }
 
 async function measureReviewPaneLoad(page: Page, file: string) {

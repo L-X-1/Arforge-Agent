@@ -16,6 +16,7 @@ export type DesktopMenuAction =
   | "view.zoomOut"
   | "view.toggleFullscreen"
   | "window.new"
+  | "window.browser"
   | "window.close"
   | "window.minimize"
   | "window.toggleMaximize"
@@ -97,6 +98,7 @@ export const DESKTOP_MENU: DesktopMenu[] = [
         accelerator: { macos: "Shift+Cmd+S" },
       },
       { type: "item", label: "打开项目…", command: "project.open", accelerator: { macos: "Cmd+O" } },
+      { type: "item", label: "隔离浏览器…", action: "window.browser" },
       {
         type: "item",
         label: "设置",

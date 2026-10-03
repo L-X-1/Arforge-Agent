@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "Predloženo",
   "command.category.view": "Prikaz",
   "command.category.project": "Projekat",
@@ -319,6 +322,8 @@ export const dict = {
   "mcp.status.connected": "povezano",
   "mcp.status.failed": "neuspjelo",
   "mcp.status.needs_auth": "potrebna autentifikacija",
+  "mcp.status.needs_client_registration": "potrebna registracija klijenta",
+  "mcp.status.needs_approval": "potrebno odobrenje",
   "mcp.auth.clickToAuthenticate": "Kliknite za autentifikaciju",
   "mcp.status.disabled": "onemogućeno",
 
@@ -1305,7 +1310,7 @@ export const dict = {
   "controlCenter.m174": "Vrati",
   "controlCenter.m175": "Stalna istorija pokretanja",
   "controlCenter.m176":
-    "Pročitajte Python Core transakcije, tragove i artefakte poruke putem dijeljenog upisanog Server API. Izvještaji su samo za čitanje i ostaju u vlasništvu jednog izvora postojanosti.",
+    "Pročitajte Arforge Core transakcije, tragove i artefakte poruke putem dijeljenog upisanog Server API. Izvještaji su samo za čitanje i ostaju u vlasništvu jednog izvora postojanosti.",
   "controlCenter.m177": "Limit",
   "controlCenter.m178": "Osvježi",
   "controlCenter.m179": "fajlovi ·",
@@ -1357,6 +1362,19 @@ export const dict = {
   "controlCenter.m222": "Nepoznata greška dubinske dijagnostike",
   "controlCenter.m223": "Upravljana evolucija",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Pregledajte kandidate politika predložene na osnovu dokaza učenja i upravljajte promjenama sposobnosti kroz izolovanu evaluaciju, ljudsko odobrenje, postepeno uvođenje i vraćanje.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Pregledajte kandidate politika predložene na osnovu dokaza učenja i upravljajte promjenama sposobnosti kroz izolovanu evaluaciju, ljudsko odobrenje, postepeno uvođenje i vraćanje.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

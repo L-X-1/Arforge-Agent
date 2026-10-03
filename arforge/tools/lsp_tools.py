@@ -1,4 +1,10 @@
-"""Read-only language-service code intelligence tools."""
+"""Legacy read-only language-service compatibility tools.
+
+The product runtime is now the TypeScript ``lsp`` tool.  This module remains
+importable for explicit Python integrations and migration fixtures, but is
+intentionally excluded from ``BUILTIN_TOOL_MODULES`` and the deferred default
+registry so it cannot become a second default tool owner.
+"""
 
 from __future__ import annotations
 

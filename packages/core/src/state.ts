@@ -88,6 +88,13 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
     get: () => state,
     transform: Effect.fn("State.transform")(function* (update) {
       const scope = yield* Scope.Scope
+      // Scope.addFinalizer stores the effect function as-is. A transform can
+      // be registered from a narrower request/instance fiber, so preserve the
+      // registration context for its later removal and state rebuild. The
+      // batch marker is intentionally omitted: it is a transient execution
+      // context and must be resolved from the fiber closing the scope, not
+      // from the batch that happened to register the transform.
+      const context = Context.omit(CurrentBatch)(yield* Effect.context())
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
           const transform = { run: update }
@@ -114,7 +121,10 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
               transforms = [...transforms, transform]
             }),
           )
-          yield* Scope.addFinalizer(scope, dispose)
+          yield* Scope.addFinalizer(
+            scope,
+            Effect.contextWith((runtime) => Effect.provideContext(dispose, Context.merge(runtime, context))),
+          )
           const batch = yield* CurrentBatch
           if (batch) batch.add(reload)
           else yield* reload()

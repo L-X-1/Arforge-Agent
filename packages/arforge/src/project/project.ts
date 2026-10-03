@@ -76,6 +76,11 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Pro
   projectID: ProjectV2.ID,
 }) {}
 
+function sandboxKey(directory: string) {
+  const resolved = FSUtil.resolve(directory)
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
+
 // ---------------------------------------------------------------------------
 // Effect service
 // ---------------------------------------------------------------------------
@@ -419,7 +424,7 @@ const layer = Layer.effect(
       if (!row) throw new Error(`Project not found: ${id}`)
       const sandbox = AbsolutePath.make(directory)
       const sboxes = [...row.sandboxes]
-      if (!sboxes.includes(sandbox)) sboxes.push(sandbox)
+      if (!sboxes.some((item) => sandboxKey(item) === sandboxKey(sandbox))) sboxes.push(sandbox)
       const result = yield* db
         .update(ProjectTable)
         .set({ sandboxes: sboxes, time_updated: Date.now() })
@@ -434,8 +439,8 @@ const layer = Layer.effect(
     const removeSandbox = Effect.fn("Project.removeSandbox")(function* (id: ProjectV2.ID, directory: string) {
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
       if (!row) throw new Error(`Project not found: ${id}`)
-      const sandbox = AbsolutePath.make(directory)
-      const sboxes = row.sandboxes.filter((s) => s !== sandbox)
+      const sandbox = sandboxKey(directory)
+      const sboxes = row.sandboxes.filter((item) => sandboxKey(item) !== sandbox)
       const result = yield* db
         .update(ProjectTable)
         .set({ sandboxes: sboxes, time_updated: Date.now() })

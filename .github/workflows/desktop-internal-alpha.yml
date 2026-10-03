@@ -34,6 +34,10 @@ jobs:
       - name: Build installer and fail-closed Alpha evidence
         shell: pwsh
         run: ./scripts/build_internal_alpha.ps1
+      - name: Run packaged crash recovery acceptance
+        run: bun packages/app/e2e/desktop-crash-recovery.acceptance.ts
+      - name: Run packaged crash-boundary acceptance
+        run: bun packages/app/e2e/desktop-crash-boundaries.acceptance.ts
       - name: Upload internal-only Alpha bundle
         uses: actions/upload-artifact@v4
         with:
@@ -42,5 +46,7 @@ jobs:
             packages/desktop/dist/arforge-desktop-win-x64.exe
             packages/desktop/dist/internal-alpha-manifest.json
             packages/desktop/dist/SHA256SUMS.internal-alpha
+            artifacts/desktop-real-crash-recovery-audit.json
+            artifacts/desktop-step-2-12-crash-boundaries-audit.json
           if-no-files-found: error
           retention-days: 14

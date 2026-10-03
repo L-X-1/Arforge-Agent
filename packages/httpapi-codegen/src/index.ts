@@ -255,7 +255,28 @@ export function emitPromise(
       },
       {
         path: "client.ts",
-        content: renderPromiseClient(groups).replace("let next: ReadableStreamReadResult<Uint8Array>", "let next"),
+        content: renderPromiseClient(groups)
+          .replace("let next: ReadableStreamReadResult<Uint8Array>", "let next")
+          .replace(
+            `  readonly empty: boolean
+}`,
+            `  readonly empty: boolean
+  readonly binary: boolean
+}`,
+          )
+          .replace(
+            `    return await json(response) as A
+  }`,
+            `    if (descriptor.binary) {
+      try {
+        return new Uint8Array(await response.arrayBuffer()) as A
+      } catch (cause) {
+        throw new ClientError("Transport", { cause })
+      }
+    }
+    return await json(response) as A
+  }`,
+          ),
       },
       {
         path: "index.ts",
@@ -287,7 +308,7 @@ function assertPromiseEndpoint(endpoint: Endpoint) {
     }
   } else if (
     !HttpApiSchema.isNoContent(success.ast) &&
-    (resolveHttpApiEncoding(success.ast)?._tag ?? "Json") !== "Json"
+    !["Json", "Uint8Array"].includes(resolveHttpApiEncoding(success.ast)?._tag ?? "Json")
   ) {
     throw new GenerationError({ reason: `Unsupported Promise success encoding: ${name}` })
   }
@@ -518,7 +539,8 @@ function renderPromiseClient(groups: ReadonlyArray<Group>) {
         endpoint.payloads.length === 0 ? undefined : `body: ${part("payload")}`,
       ].filter((value): value is string => value !== undefined)
       const declaredStatuses = [...new Set(endpoint.errors.map((error) => error.status))]
-      const descriptor = `{ method: ${JSON.stringify(endpoint.endpoint.method)}, path: ${path}${parts.length === 0 ? "" : `, ${parts.join(", ")}`}, successStatus: ${resolveHttpApiStatus(endpoint.successes[0].ast) ?? 200}, declaredStatuses: [${declaredStatuses.join(", ")}], empty: ${endpoint.operation.success === "void"} }`
+      const binary = resolveHttpApiEncoding(endpoint.successes[0].ast)?._tag === "Uint8Array"
+      const descriptor = `{ method: ${JSON.stringify(endpoint.endpoint.method)}, path: ${path}${parts.length === 0 ? "" : `, ${parts.join(", ")}`}, successStatus: ${resolveHttpApiStatus(endpoint.successes[0].ast) ?? 200}, declaredStatuses: [${declaredStatuses.join(", ")}], empty: ${endpoint.operation.success === "void"}, binary: ${binary} }`
       if (endpoint.operation.success === "stream") {
         const success = endpoint.successes[0]
         if (!isStreamSchema(success) || success._tag !== "StreamSse" || success.sseMode !== "data") {
@@ -749,7 +771,12 @@ export function write(
               : Effect.void,
           ),
         ),
-      { concurrency: 8, discard: true },
+      // Keep generation deterministic on Windows and on networked workspaces.
+      // Formatting and replacing several generated files concurrently can
+      // surface transient open/rename failures even though each path is
+      // unique.  Generation is a build-time operation, so serialized writes
+      // are a safer and still inexpensive tradeoff.
+      { concurrency: 1, discard: true },
     )
     yield* Effect.forEach(
       output.files,
@@ -757,8 +784,19 @@ export function write(
         Effect.tryPromise({
           try: () => format(file.content, { filepath: file.path, parser: "typescript", semi: false, printWidth: 120 }),
           catch: (error) => new GenerationError({ reason: `Failed to format ${file.path}: ${String(error)}` }),
-        }).pipe(Effect.flatMap((content) => fs.writeFileString(join(directory, file.path), content))),
-      { concurrency: 8, discard: true },
+        }).pipe(
+          Effect.flatMap((content) =>
+            fs.writeFileString(join(directory, file.path), content).pipe(
+              // Editors, indexers, and antivirus scanners can briefly hold a
+              // generated file open on Windows. A bounded retry keeps the
+              // build deterministic without hiding a persistent write error.
+              Effect.retry({ times: 3 }),
+            ),
+          ),
+        ),
+      // Serialize formatter and file replacement operations on Windows to
+      // avoid transient open/rename failures in generated trees.
+      { concurrency: 1, discard: true },
     )
     yield* fs.writeFileString(manifest, JSON.stringify(output.files.map((file) => file.path).sort(), null, 2) + "\n")
   })

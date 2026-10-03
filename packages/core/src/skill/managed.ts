@@ -104,6 +104,10 @@ const PHASES = {
 } as const
 const RELATIONSHIP = "grill-me → OpenSpec → Trellis → Superpowers"
 
+// V1 contract adapter keeps the legacy filesystem registry readable while
+// allowing a caller with verified provenance to produce a versioned candidate.
+export { fromManagedSkill } from "../skill-v1"
+
 export function defaultSkillRoots(options: { home?: string; cwd?: string } = {}): string[] {
   const roots: string[] = []
   const envRoots = process.env.ARFORGE_SKILL_PATHS?.trim() ?? ""
@@ -201,8 +205,13 @@ export class ManagedSkillRegistry {
   }
 
   setEnabled(skillId: string, enabled: boolean): ManagedSkillMutation {
-    const cleanId = validateSkillId(skillId)
+    const cleanId = validateSkillId(skillId).toLowerCase()
     this.loadState()
+    const current = this.list(false).items.find((item) => item.id.toLowerCase() === cleanId)
+    if (!current) throw new Error(`managed skill was not found: ${cleanId}`)
+    if (enabled && current.problems.length > 0) {
+      throw new Error(`managed skill is invalid and cannot be enabled: ${current.id}`)
+    }
     const before = this.disabled.has(cleanId)
     const nowDisabled = !enabled
     if (nowDisabled) this.disabled.add(cleanId)
@@ -210,7 +219,7 @@ export class ManagedSkillRegistry {
     const changed = before !== nowDisabled
     if (changed) this.saveState()
     return {
-      skill_id: cleanId,
+      skill_id: current.id,
       enabled,
       changed,
       skills: this.list(false),
@@ -241,7 +250,7 @@ export class ManagedSkillRegistry {
       const data = JSON.parse(readFileSync(this.statePath, "utf8")) as { disabled?: unknown }
       if (Array.isArray(data.disabled)) {
         for (const value of data.disabled) {
-          if (typeof value === "string" && SAFE_ID.test(value)) this.disabled.add(value)
+          if (typeof value === "string" && SAFE_ID.test(value)) this.disabled.add(value.toLowerCase())
         }
       }
     } catch {
@@ -475,7 +484,7 @@ function dedupeSkills(items: ManagedSkill[], disabled: Set<string>): ManagedSkil
     const key = item.id.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    result.push({ ...item, enabled: !disabled.has(item.id) })
+    result.push({ ...item, enabled: item.problems.length === 0 && !disabled.has(key) })
   }
   return result
 }

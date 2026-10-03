@@ -3,11 +3,13 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
 import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
 import { MCP } from "../../src/mcp/index"
 
-const it = testEffect(LayerNode.compile(MCP.node))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([MCP.node, LocationServiceMap.node])))
 
 const serve = Effect.acquireRelease(
   Effect.promise(async () => {

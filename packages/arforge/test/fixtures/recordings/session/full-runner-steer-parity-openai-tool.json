@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "session/full-runner-steer-parity-openai-tool",
+    "recordedAt": "2026-08-29T19:32:35.790Z",
+    "provider": "openai",
+    "protocol": "openai-compatible-chat",
+    "runtime": "mature-prompt-steer"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\"},{\"role\":\"user\",\"content\":\"Start the deterministic steer scenario.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"inject_steer\",\"description\":\"Admit one deterministic durable steer for this session.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}}}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inject_steer\",\"arguments\":\"\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+      }
+    },
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\"},{\"role\":\"user\",\"content\":\"Start the deterministic steer scenario.\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"inject_steer\",\"arguments\":\"{}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"durable steer admitted\"},{\"role\":\"user\",\"content\":\"Change direction using the durable steer.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"inject_steer\",\"description\":\"Admit one deterministic durable steer for this session.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}}}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"steer absorbed\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\ndata: [DONE]\n\n"
+      }
+    }
+  ]
+}

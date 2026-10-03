@@ -74,9 +74,12 @@ def test_context_handler_returns_validated_answers_and_redacts_metadata():
 def test_question_tool_exports_nested_schema_and_executes_through_handler():
     from arforge.tool_executor import execute_tool_by_name
     from arforge.tool_registry import REGISTRY
-    from arforge.tools import load_builtin_tools
+    from arforge.tools import load_builtin_tools, question_tools
 
     load_builtin_tools()
+    # The legacy Python wrapper is explicit compatibility; TS/Core ``question``
+    # owns the default product registration.
+    assert question_tools.ask_user_tool is not None
     schema = next(
         item for item in REGISTRY.to_openai_tools()
         if item["function"]["name"] == "ask_user"
@@ -93,6 +96,14 @@ def test_question_tool_exports_nested_schema_and_executes_through_handler():
         result = execute_tool_by_name("ask_user", {"questions": QUESTIONS})
     assert result.success
     assert json.loads(result.output)["answers"]["Which storage should be used?"] == "Postgres"
+
+
+def test_python_builtin_registry_excludes_legacy_question_wrapper():
+    """TS/Core ``question`` is canonical; Python ``ask_user`` stays opt-in."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.question_tools" not in BUILTIN_TOOL_MODULES
 
 
 def test_bridge_question_response_resumes_same_agentic_operation(monkeypatch):

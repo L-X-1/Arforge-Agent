@@ -100,6 +100,29 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
+  it.effect("fails closed when the file drifts between read observations", () =>
+    Effect.gen(function* () {
+      const { fs, files, directory } = yield* fixture
+      const file = path.join(directory, "drifting.txt")
+      yield* files.writeFileString(file, "before")
+      let stats = 0
+      const drifting = {
+        ...fs,
+        stat: (target: string) =>
+          Effect.gen(function* () {
+            stats++
+            if (stats === 2) yield* files.writeFileString(file, "changed").pipe(Effect.orDie)
+            return yield* fs.stat(target)
+          }),
+      }
+
+      const error = yield* ReadToolFileSystem.read(drifting, file, "drifting.txt").pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(ReadToolFileSystem.ExternalDriftError)
+      expect(error.message).toBe("File changed while it was being read: drifting.txt")
+    }),
+  )
+
   it.effect("preserves the media ingestion limit message", () =>
     Effect.gen(function* () {
       const { fs, files, directory } = yield* fixture

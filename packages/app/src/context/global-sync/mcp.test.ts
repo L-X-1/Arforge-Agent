@@ -4,7 +4,7 @@ import { toggleMcp } from "./mcp"
 describe("toggleMcp", () => {
   test("runs the status action before refreshing the owning query", async () => {
     const calls: string[] = []
-    const input = (status: "connected" | "needs_auth" | "disabled") => ({
+    const input = (status: "connected" | "needs_auth" | "disabled" | "needs_approval") => ({
       status,
       connect: async () => {
         calls.push("connect")
@@ -29,6 +29,10 @@ describe("toggleMcp", () => {
 
     calls.length = 0
     await toggleMcp(input("disabled"))
+    expect(calls).toEqual(["connect", "refresh"])
+
+    calls.length = 0
+    await toggleMcp(input("needs_approval"))
     expect(calls).toEqual(["connect", "refresh"])
   })
 

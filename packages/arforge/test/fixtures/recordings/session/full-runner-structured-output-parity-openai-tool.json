@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "session/full-runner-structured-output-parity-openai-tool",
+    "recordedAt": "2026-08-29T22:16:27.136Z",
+    "provider": "openai",
+    "protocol": "openai-compatible-chat",
+    "runtime": "mature-prompt-structured-output"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\\nThe user requested structured output. Complete any research or actions first, then call StructuredOutput exactly once as the only tool call in the final step. The tool input is the final answer and must exactly satisfy its JSON Schema; a prose-only answer is not completion. There is 1 structured-output retry remaining after this attempt.\"},{\"role\":\"user\",\"content\":\"Return the deterministic company record.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"StructuredOutput\",\"description\":\"Submit the final answer in the requested structured format as one JSON object that exactly matches the requested schema. Call this only after all other work is complete.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"company\":{\"type\":\"string\"},\"founded\":{\"type\":\"number\"}},\"required\":[\"company\",\"founded\"],\"additionalProperties\":false}}}],\"tool_choice\":\"required\",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"StructuredOutput\",\"arguments\":\"\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"company\\\":\\\"Arforge\\\"}\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+      }
+    },
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\\nThe user requested structured output. Complete any research or actions first, then call StructuredOutput exactly once as the only tool call in the final step. The tool input is the final answer and must exactly satisfy its JSON Schema; a prose-only answer is not completion. There are 0 structured-output retries remaining after this attempt.\"},{\"role\":\"user\",\"content\":\"Return the deterministic company record.\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"StructuredOutput\",\"arguments\":\"{\\\"company\\\":\\\"Arforge\\\"}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"Invalid tool input: $.founded: is required\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"StructuredOutput\",\"description\":\"Submit the final answer in the requested structured format as one JSON object that exactly matches the requested schema. Call this only after all other work is complete.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"company\":{\"type\":\"string\"},\"founded\":{\"type\":\"number\"}},\"required\":[\"company\",\"founded\"],\"additionalProperties\":false}}}],\"tool_choice\":\"required\",\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"StructuredOutput\",\"arguments\":\"\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"company\\\":\\\"Arforge\\\",\\\"founded\\\":2026}\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+      }
+    }
+  ]
+}

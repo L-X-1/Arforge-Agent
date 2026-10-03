@@ -24,6 +24,20 @@ describe("isLocalWorkspaceRoute", () => {
     expect(isLocalWorkspaceRoute("POST", "/session/status")).toBe(false)
   })
 
+  test("trust-kernel worktree and approval routes always stay on the local control plane", () => {
+    for (const path of [
+      "/experimental/worktree",
+      "/experimental/worktree/reset",
+      "/experimental/control-approval",
+      "/experimental/control-approval/perm_123/reply",
+      "/experimental/control-operation/cpr_123",
+    ]) {
+      expect(isLocalWorkspaceRoute("GET", path), path).toBe(true)
+      expect(isLocalWorkspaceRoute("POST", path), path).toBe(true)
+      expect(isLocalWorkspaceRoute("DELETE", path), path).toBe(true)
+    }
+  })
+
   test("unrecognized paths are not local", () => {
     expect(isLocalWorkspaceRoute("GET", "/config")).toBe(false)
     expect(isLocalWorkspaceRoute("POST", "/session/ses_abc/message")).toBe(false)

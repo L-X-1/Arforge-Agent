@@ -1,4 +1,5 @@
 import { afterEach, expect } from "bun:test"
+import { mkdir, writeFile } from "node:fs/promises"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
@@ -206,6 +207,112 @@ it.instance(
         },
       },
     },
+  },
+)
+
+it.instance(
+  "admitted project profile is a bounded subagent in the existing Agent pool",
+  () =>
+    Effect.gen(function* () {
+      const previousOptIn = process.env.ARFORGE_ENABLE_CUSTOM_AGENTS
+      const previousTrust = process.env.ARFORGE_TRUST_WORKSPACE
+      process.env.ARFORGE_ENABLE_CUSTOM_AGENTS = "1"
+      process.env.ARFORGE_TRUST_WORKSPACE = "1"
+      try {
+        const custom = yield* load((svc) => svc.get("CustomAgent.reviewer"))
+        expect(custom).toBeDefined()
+        expect(custom?.mode).toBe("subagent")
+        expect(custom?.native).toBe(false)
+        expect(custom?.prompt).toContain("Review the supplied change")
+        expect(custom?.steps).toBe(4)
+        expect(custom?.options.custom_profile).toMatchObject({
+          provider: "in-process",
+          role: "CustomAgent.reviewer",
+          descriptor_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          canonical_tools: ["read", "grep"],
+          max_steps: 4,
+          max_tokens: 1_024,
+          timeout_seconds: 30,
+        })
+        expect(Permission.evaluate("read", "src/index.ts", custom!.permission).action).toBe("allow")
+        expect(Permission.evaluate("grep", "src/index.ts", custom!.permission).action).toBe("allow")
+        expect(Permission.evaluate("edit", "src/index.ts", custom!.permission).action).toBe("deny")
+        expect(Permission.evaluate("bash", "git status", custom!.permission).action).toBe("deny")
+        expect(Permission.evaluate("external_directory", "C:/outside", custom!.permission).action).toBe("deny")
+      } finally {
+        if (previousOptIn === undefined) delete process.env.ARFORGE_ENABLE_CUSTOM_AGENTS
+        else process.env.ARFORGE_ENABLE_CUSTOM_AGENTS = previousOptIn
+        if (previousTrust === undefined) delete process.env.ARFORGE_TRUST_WORKSPACE
+        else process.env.ARFORGE_TRUST_WORKSPACE = previousTrust
+      }
+    }),
+  {
+    init: (directory) =>
+      Effect.promise(async () => {
+        const profileDirectory = path.join(directory, ".arforge", "agents")
+        await mkdir(profileDirectory, { recursive: true })
+        await writeFile(
+          path.join(profileDirectory, "reviewer.json"),
+          JSON.stringify({
+            schema_version: 1,
+            name: "reviewer",
+            description: "Reviews the project change without mutating files.",
+            system_prompt:
+              "Review the supplied change carefully. Report concrete issues with evidence and never mutate the workspace.",
+            tools: ["read_file", "grep"],
+            capabilities: ["code_review"],
+            max_steps: 4,
+            max_tokens: 1_024,
+            timeout_seconds: 30,
+          }),
+          "utf8",
+        )
+      }),
+    config: {
+      permission: {
+        edit: "allow",
+        bash: "allow",
+      },
+    },
+  },
+)
+
+it.instance(
+  "does not admit a project profile whose tools have no canonical TS owner",
+  () =>
+    Effect.gen(function* () {
+      const previousOptIn = process.env.ARFORGE_ENABLE_CUSTOM_AGENTS
+      const previousTrust = process.env.ARFORGE_TRUST_WORKSPACE
+      process.env.ARFORGE_ENABLE_CUSTOM_AGENTS = "1"
+      process.env.ARFORGE_TRUST_WORKSPACE = "1"
+      try {
+        const agents = yield* load((svc) => svc.list())
+        expect(agents.some((agent) => agent.name === "CustomAgent.legacy-clock")).toBe(false)
+      } finally {
+        if (previousOptIn === undefined) delete process.env.ARFORGE_ENABLE_CUSTOM_AGENTS
+        else process.env.ARFORGE_ENABLE_CUSTOM_AGENTS = previousOptIn
+        if (previousTrust === undefined) delete process.env.ARFORGE_TRUST_WORKSPACE
+        else process.env.ARFORGE_TRUST_WORKSPACE = previousTrust
+      }
+    }),
+  {
+    init: (directory) =>
+      Effect.promise(async () => {
+        const profileDirectory = path.join(directory, ".arforge", "agents")
+        await mkdir(profileDirectory, { recursive: true })
+        await writeFile(
+          path.join(profileDirectory, "legacy-clock.json"),
+          JSON.stringify({
+            schema_version: 1,
+            name: "legacy-clock",
+            description: "A legacy profile that must remain inactive until its tool is owned.",
+            system_prompt: "Inspect the project only after the runtime has a safe clock tool owner.",
+            tools: ["time"],
+            capabilities: ["data_analysis"],
+          }),
+          "utf8",
+        )
+      }),
   },
 )
 

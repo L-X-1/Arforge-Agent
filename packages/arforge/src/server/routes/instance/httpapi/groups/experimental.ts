@@ -2,11 +2,13 @@ import { AccountID, OrgID } from "@/account/schema"
 import { MCP } from "@/mcp"
 
 import { Session } from "@/session/session"
-import { SessionID } from "@/session/schema"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Worktree } from "@/worktree"
 import { NonNegativeInt } from "@arforge-ai/core/schema"
+import { PermissionV2 } from "@arforge-ai/core/permission"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { Schema } from "effect"
-import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
@@ -18,6 +20,10 @@ import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
+import { ClaimIndexStatus } from "@/control-plane/claim-index-status"
+import { ControlRunCoordinator } from "@/control-plane/run-coordinator"
+import { ServiceUnavailableError } from "../errors"
+import { ControlPlaneMutationPayload } from "@arforge-ai/protocol/control-principal"
 
 const ConsoleStateResponse = Schema.Struct({
   consoleManagedProviders: Schema.mutable(Schema.Array(Schema.String)),
@@ -61,6 +67,50 @@ export const ToolListQuery = Schema.Struct({
 })
 
 const WorktreeList = Schema.Array(Schema.String)
+/**
+ * The desktop mints this before it sends a destructive request. It binds one
+ * user gesture to exactly one durable control-plane action; retrying that
+ * request reuses the action, while a new gesture must mint a new ID.
+ */
+export const WorktreeCreatePayload = Schema.Struct({
+  ...Worktree.CreateInput.fields,
+  ...ControlPlaneMutationPayload.fields,
+}).annotate({ identifier: "WorktreeCreateControlInput" })
+export const WorktreeRemovePayload = Schema.Struct({
+  ...Worktree.RemoveInput.fields,
+  ...ControlPlaneMutationPayload.fields,
+}).annotate({ identifier: "WorktreeRemoveControlInput" })
+export const WorktreeResetPayload = Schema.Struct({
+  ...Worktree.ResetInput.fields,
+  ...ControlPlaneMutationPayload.fields,
+}).annotate({ identifier: "WorktreeResetControlInput" })
+export const SessionRevertControlPayload = Schema.Struct({
+  ...ControlPlaneMutationPayload.fields,
+  messageID: MessageID,
+  partID: Schema.optional(PartID),
+}).annotate({ identifier: "SessionRevertControlInput" })
+export const SessionUnrevertControlPayload = Schema.Struct({
+  ...ControlPlaneMutationPayload.fields,
+}).annotate({ identifier: "SessionUnrevertControlInput" })
+export const SessionShareControlPayload = Schema.Struct({
+  ...ControlPlaneMutationPayload.fields,
+  baseURL: Schema.String,
+  organizationID: Schema.NullOr(Schema.String),
+  visibility: Schema.Literals(["private", "organization", "public"]),
+}).annotate({ identifier: "SessionShareControlInput" })
+
+export const ControlApprovalQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  requestID: Schema.optional(AgentRuntime.ControlPlaneRequestID),
+})
+export const ControlApprovalReply = Schema.Struct({
+  reply: PermissionV2.Reply,
+  message: Schema.optional(Schema.String),
+})
+export const ControlOperationStatusQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  operation: Schema.Literals([...ControlRunCoordinator.OperationKind]),
+})
 const WorktreeErrorName = Schema.Union([
   Schema.Literal("WorktreeNotGitError"),
   Schema.Literal("WorktreeNameGenerationFailedError"),
@@ -69,6 +119,11 @@ const WorktreeErrorName = Schema.Union([
   Schema.Literal("WorktreeRemoveFailedError"),
   Schema.Literal("WorktreeResetFailedError"),
   Schema.Literal("WorktreeListFailedError"),
+  Schema.Literal("WorktreeOwnershipFailedError"),
+  Schema.Literal("WorktreeControlExecutionDeniedError"),
+  Schema.Literal("ActionGateway.BlockedError"),
+  Schema.Literal("ActionGateway.RecoveryRequiredError"),
+  Schema.Literal("ActionGateway.ActionInProgressError"),
 ])
 export class WorktreeApiError extends Schema.ErrorClass<WorktreeApiError>("WorktreeError")(
   {
@@ -96,6 +151,13 @@ export const ExperimentalPaths = {
   toolIDs: "/experimental/tool/ids",
   worktree: "/experimental/worktree",
   worktreeReset: "/experimental/worktree/reset",
+  sessionRevert: "/experimental/session/:sessionID/revert",
+  sessionUnrevert: "/experimental/session/:sessionID/unrevert",
+  sessionShare: "/experimental/session/:sessionID/share",
+  sessionUnshare: "/experimental/session/:sessionID/unshare",
+  controlApproval: "/experimental/control-approval",
+  controlApprovalReply: "/experimental/control-approval/:requestID/reply",
+  controlOperationStatus: "/experimental/control-operation/:requestID",
   session: "/experimental/session",
   sessionBackground: "/experimental/session/:sessionID/background",
   resource: "/experimental/resource",
@@ -185,40 +247,134 @@ export const ExperimentalApi = HttpApi.make("experimental")
           }),
         ),
         HttpApiEndpoint.post("worktreeCreate", ExperimentalPaths.worktree, {
-          disableCodecs: true,
           query: WorkspaceRoutingQuery,
-          payload: [HttpApiSchema.NoContent, Worktree.CreateInput],
-          success: described(Worktree.Info, "Worktree created"),
+          payload: WorktreeCreatePayload,
+          success: described(ClaimIndexStatus.Status, "Durable worktree operation accepted"),
           error: WorktreeApiError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "worktree.create",
             summary: "Create worktree",
-            description: "Create a new git worktree for the current project and run any configured startup scripts.",
+            description:
+              "Accept a durable worktree create operation and return its current status without tying execution to the HTTP request. Poll control-operation status for completion.",
           }),
         ),
         HttpApiEndpoint.delete("worktreeRemove", ExperimentalPaths.worktree, {
           query: WorkspaceRoutingQuery,
-          payload: Worktree.RemoveInput,
-          success: described(Schema.Boolean, "Worktree removed"),
+          payload: WorktreeRemovePayload,
+          success: described(ClaimIndexStatus.Status, "Durable worktree operation accepted"),
           error: WorktreeApiError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "worktree.remove",
             summary: "Remove worktree",
-            description: "Remove a git worktree and delete its branch.",
+            description:
+              "Accept a durable worktree removal and return its current status. The detached worker owns execution after this response.",
           }),
         ),
         HttpApiEndpoint.post("worktreeReset", ExperimentalPaths.worktreeReset, {
           query: WorkspaceRoutingQuery,
-          payload: Worktree.ResetInput,
-          success: described(Schema.Boolean, "Worktree reset"),
+          payload: WorktreeResetPayload,
+          success: described(ClaimIndexStatus.Status, "Durable worktree operation accepted"),
           error: WorktreeApiError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "worktree.reset",
             summary: "Reset worktree",
-            description: "Reset a worktree branch to the primary default branch.",
+            description:
+              "Accept a durable worktree reset to the immutable preflight commit and return its current status without waiting for execution.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionRevert", ExperimentalPaths.sessionRevert, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionRevertControlPayload,
+          success: described(ClaimIndexStatus.Status, "Durable session revert operation accepted"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.revert.control",
+            summary: "Accept controlled session revert",
+            description:
+              "Capture an immutable read-only revert snapshot and schedule it as an L3 fresh-human ControlRun.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionUnrevert", ExperimentalPaths.sessionUnrevert, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionUnrevertControlPayload,
+          success: described(ClaimIndexStatus.Status, "Durable session unrevert operation accepted"),
+          error: WorktreeApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.unrevert.control",
+            summary: "Accept controlled session unrevert",
+            description:
+              "Accept an unrevert request only when its first-revert preimage receipt is available to the controlled worker.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionShare", ExperimentalPaths.sessionShare, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionShareControlPayload,
+          success: described(ClaimIndexStatus.Status, "Durable session share operation accepted"),
+          error: [ServiceUnavailableError, WorktreeApiError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.share.control",
+            summary: "Accept controlled session share",
+            description:
+              "Capture a consistent static Session export and schedule publication as an L3 fresh-human ControlRun.",
+          }),
+        ),
+        HttpApiEndpoint.post("sessionUnshare", ExperimentalPaths.sessionUnshare, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionShareControlPayload,
+          success: described(ClaimIndexStatus.Status, "Durable session unshare operation accepted"),
+          error: [ServiceUnavailableError, WorktreeApiError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.unshare.control",
+            summary: "Accept controlled session unshare",
+            description:
+              "Capture the immutable original publication identity and schedule revocation as an L3 fresh-human ControlRun.",
+          }),
+        ),
+        HttpApiEndpoint.get("controlApprovalList", ExperimentalPaths.controlApproval, {
+          query: ControlApprovalQuery,
+          success: described(Schema.Array(AgentRuntime.ControlRequest), "Pending control-plane approvals"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.controlApproval.list",
+            summary: "List pending control-plane approvals",
+            description: "List fresh human confirmations for the current desktop project.",
+          }),
+        ),
+        HttpApiEndpoint.post("controlApprovalReply", ExperimentalPaths.controlApprovalReply, {
+          params: { requestID: PermissionV2.ID },
+          query: WorkspaceRoutingQuery,
+          payload: ControlApprovalReply,
+          success: described(Schema.Boolean, "Control-plane approval processed"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.controlApproval.reply",
+            summary: "Reply to a control-plane approval",
+            description: "Explicitly approve or reject one fresh control-plane action.",
+          }),
+        ),
+        HttpApiEndpoint.get("controlOperationStatus", ExperimentalPaths.controlOperationStatus, {
+          params: { requestID: AgentRuntime.ControlPlaneRequestID },
+          query: ControlOperationStatusQuery,
+          success: described(ClaimIndexStatus.Status, "Control operation status"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.controlOperation.status",
+            summary: "Get control operation status",
+            description:
+              "Resolve one request alias through the server-side durable claim index. The response contains no operation payload or checkpoint.",
           }),
         ),
         HttpApiEndpoint.get("session", ExperimentalPaths.session, {

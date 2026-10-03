@@ -9,13 +9,13 @@ Use it for provider integrations, retries, polling, multi-step flows, and any te
 ## Install
 
 ```sh
-bun add effect@4.0.0-beta.74
+bun add effect@4.0.0-beta.83
 bun add -d @arforge-ai/http-recorder@beta @effect/vitest vitest
 ```
 
 The package supports Node.js 22+ and Bun. It is not intended for browsers, workers, or Deno.
 
-Effect `4.0.0-beta.74` has a known declaration error (`SchemaErrorTypeId` is missing). Until that upstream declaration is fixed, TypeScript consumers need:
+Effect `4.0.0-beta.83` has a known declaration error (`SchemaErrorTypeId` is missing). Until that upstream declaration is fixed, TypeScript consumers need:
 
 ```json
 {
@@ -67,6 +67,8 @@ test/fixtures/recordings/users/get-one.json
 ```
 
 Later runs replay that cassette without contacting the upstream server. When `CI=true`, missing cassettes fail instead of recording.
+
+Recording is transactional: the target file is promoted only after the complete Effect scope succeeds. A failed or interrupted scope leaves an existing cassette unchanged and never exposes a partial replacement.
 
 ```mermaid
 flowchart TD
@@ -177,6 +179,8 @@ This strict ordering correctly models repeated identical requests whose response
 
 Concurrent requests are recorded in request-start order even when their responses complete out of order.
 
+One-shot and streaming request bodies are read once, bounded in memory, then reconstructed from the exact captured bytes before the upstream call. Multipart requests use a canonical field/file representation for matching, so a runtime-generated boundary does not make replay flaky. Repeated field order, file names, media types, and file bytes remain significant; common sensitive field names are redacted.
+
 Supply a custom equivalence rule when a request contains intentionally volatile data:
 
 ```ts
@@ -194,18 +198,34 @@ interface RecorderOptions {
   readonly metadata?: Record<string, unknown>
   readonly redact?: RedactOptions
   readonly match?: RequestMatcher
+  readonly maxRequestBodyBytes?: number
 }
 ```
 
 `directory` defaults to `<cwd>/test/fixtures/recordings`.
 
+`maxRequestBodyBytes` defaults to 16 MiB and must be a positive safe integer. Oversized bodies and mismatched `content-length` declarations fail before contacting the upstream service. Increase the limit only for a known, bounded fixture.
+
+## Failure Messages
+
+| Message                                    | Meaning and action                                                                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Fixture "…" not found`                    | CI cannot record. Record the cassette locally and commit it.                                                                                                  |
+| `invalid JSON`                             | The cassette file is truncated or not JSON. Re-record or repair the file.                                                                                     |
+| `schema validation failed`                 | The JSON exists but violates the cassette/body invariant. Re-record it with the current package.                                                              |
+| `does not match the current request`       | The request differs from the next recorded interaction. Read the redacted field diff; a failed match does not consume the interaction.                        |
+| `Unused recorded interactions …`           | The successful test scope did not exercise the complete cassette, including the strict `0 of N` case. Remove stale interactions or restore the missing calls. |
+| `request body exceeds maxRequestBodyBytes` | Raise the explicit bounded option or use a smaller fixture. The upstream was not contacted.                                                                   |
+
+Diagnostics never echo invalid cassette contents, request credentials, raw transport causes, or binary payloads.
+
 ## Cassettes
 
-Cassettes are readable JSON files intended to be committed with your tests. HTTP interactions are stored in request order. WebSocket cassettes preserve the observed order of client and server frames. Text stays readable; binary bodies and frames are stored losslessly as base64.
+Cassettes are readable JSON files intended to be committed with your tests. HTTP interactions are stored in request order. WebSocket cassettes preserve the observed order of client and server frames. Text stays readable; binary bodies and frames are stored losslessly as base64. Base64 bodies are decoded for the pre-write credential scan, so recognizable secrets cannot bypass the safety gate merely by being binary-encoded.
 
 ## Current Limits
 
-- Responses are buffered while recording and replaying, so this beta is not suitable for tests that assert streaming timing, cancellation, or backpressure.
+- Requests and responses are buffered while recording and replaying, so this beta is not suitable for tests that assert streaming timing or backpressure. Interrupted request capture cancels its underlying reader and is not persisted as a synthetic transport failure.
 - WebSocket replay preserves frame chronology and content, not real network timing or backpressure.
 - WebSocket V1 cassettes do not reproduce terminal close codes, close reasons, or transport failures. Failed and interrupted live runs are not recorded.
 - WebSocket transcripts are retained in memory until the connection finishes; avoid using this beta for unbounded sessions.

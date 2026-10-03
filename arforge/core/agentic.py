@@ -122,11 +122,20 @@ def _browser_evidence_excerpt(output: str) -> str:
         "Viewport:",
         "Document:",
         "Actions completed:",
+        "Action policy:",
+        "Credential scope:",
+        "Redirect policy:",
+        "Page content trust:",
+        "Prompt injection indicators:",
+        "Screenshot observation:",
         "Runtime issues:",
         "Console errors:",
         "Page errors:",
         "Network failures:",
         "HTTP errors:",
+        "Downloads:",
+        "Final state verification:",
+        "Final state verification failures:",
     )
     for line in text.splitlines():
         if line.startswith(prefixes):
@@ -1502,7 +1511,15 @@ def _is_successful_verification(call: dict) -> bool:
         return True
     if tool in {"test_browser", "interact_browser"}:
         output = str(call.get("output", "") or "")
-        return "Runtime issues: 0" in output
+        if "Runtime issues: 0" not in output:
+            return False
+        # The browser can prove that it observed a page, but an interaction
+        # proves completion only when an independent final-state check passed.
+        # Keep old synthetic test fixtures compatible when they predate this
+        # line; real browser output explicitly marks observation-only results.
+        if "Final state verification: FAILED" in output:
+            return False
+        return True
     if tool == "read_office_document":
         # A successful round trip proves that the generated OOXML container is
         # readable and its user-visible text survived serialization.
@@ -1576,9 +1593,8 @@ def _has_written_web_artifact(tool_calls_log: list[dict]) -> bool:
 
 def _has_successful_browser_runtime(tool_calls_log: list[dict]) -> bool:
     return any(
-        call.get("success")
-        and call.get("tool") in {"test_browser", "interact_browser"}
-        and "Runtime issues: 0" in str(call.get("output", "") or "")
+        call.get("tool") in {"test_browser", "interact_browser"}
+        and _is_successful_verification(call)
         for call in tool_calls_log
     )
 

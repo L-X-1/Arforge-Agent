@@ -6,12 +6,12 @@ import { makeLocationNode } from "../effect/app-node"
 import { FileSystem } from "../filesystem"
 import { Image } from "../image"
 import { LocationMutation } from "../location-mutation"
-import { PermissionV2 } from "../permission"
 import { AbsolutePath } from "../schema"
 import { ReadToolFileSystem } from "./read-filesystem"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead } from "./effect-semantics"
 
 export const name = "read"
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -29,17 +29,21 @@ const Output = Schema.Union([FileSystem.Content, ReadToolFileSystem.TextPage, Re
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const reader = yield* ReadToolFileSystem.Service
     const mutation = yield* LocationMutation.Service
     const image = yield* Image.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description:
             "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page. Relative paths resolve from the current location; absolute paths inside it are accepted, while external absolute paths require external_directory approval.",
+          effects: (input) =>
+            automaticRead({
+              filesystemScope: [input.path],
+              successCriteria: ["requested content is decoded and bounded"],
+            }),
           input: Input,
           output: Output,
           toModelOutput: ({ input, output }) => {
@@ -60,7 +64,7 @@ const layer = Layer.effectDiscard(
               const target = yield* mutation.resolve({ path: input.path, kind: "directory" })
               const external = target.externalDirectory
               if (external)
-                yield* permission.assert({
+                yield* context.permission.assert({
                   ...LocationMutation.externalDirectoryPermission(external),
                   sessionID: context.sessionID,
                   agent: context.agent,
@@ -69,7 +73,7 @@ const layer = Layer.effectDiscard(
               const resource = target.resource
               const absolute = AbsolutePath.make(target.canonical)
               const type = yield* reader.inspect(absolute)
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [resource],
                 save: ["*"],
@@ -96,11 +100,12 @@ const layer = Layer.effectDiscard(
                 const message =
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
+                  error instanceof ReadToolFileSystem.ExternalDriftError ||
                   error instanceof Image.DecodeError ||
                   error instanceof Image.SizeError
                     ? error.message
                     : `Unable to read ${input.path}`
-                return new ToolFailure({ message })
+                return Tool.toToolFailure(error) ?? new ToolFailure({ message })
               }),
             )
           },
@@ -113,5 +118,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/read",
   layer,
-  deps: [ToolRegistry.node, ReadToolFileSystem.node, LocationMutation.node, Image.node, PermissionV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, ReadToolFileSystem.node, LocationMutation.node, Image.node],
 })

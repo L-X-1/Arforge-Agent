@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { CODE_MODE_TOOL, CodeModeTool, Parameters, describeCatalog } from "@/tool/code-mode"
+import { CODE_MODE_EXECUTION_LIMITS, CODE_MODE_TOOL, CodeModeTool, Parameters, describeCatalog } from "@/tool/code-mode"
 import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 import type { PermissionV1 } from "@arforge-ai/core/v1/permission"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { ActionGateway } from "@arforge-ai/core/action-gateway"
 import { Agent } from "@/agent/agent"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
@@ -12,6 +14,28 @@ import * as Truncate from "@/tool/truncate"
 import { MessageID, SessionID } from "@/session/schema"
 import { Cause, Effect, Exit, Layer, Schema } from "effect"
 
+const gatewayCalls: Array<{ name: string; invocation: string }> = []
+const fakeGateway = ActionGateway.Service.of({
+  validateDelegationParent: () => Effect.die("delegation is outside this isolated harness"),
+  execute: (input, operation) =>
+    Effect.gen(function* () {
+      gatewayCalls.push({
+        name: input.name,
+        invocation: "toolCallID" in input ? input.toolCallID : input.controlPlane.requestID,
+      })
+      if (input.name === "denied_tool") return yield* Effect.fail(new Error("permission denied by user") as never)
+      const result = yield* operation.execute({} as never)
+      // This unit harness models hook ordering only; durable success/replay
+      // is exercised with the real Gateway in mcp/gateway-adapter.test.ts.
+      if (operation.afterSuccess) yield* operation.afterSuccess(structuredClone(result)).pipe(Effect.orDie)
+      return result
+    }),
+  reconcile: () => Effect.die(new Error("reconciliation is unavailable in this isolated tool harness")),
+  settleSupersededAction: () => Effect.void,
+  cancelPendingAction: () => Effect.void,
+  blockAuthorizedHandoff: () => Effect.void,
+})
+
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_code-mode"),
   messageID: MessageID.make("msg_code-mode"),
@@ -21,6 +45,8 @@ const ctx: Tool.Context = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  gateway: fakeGateway,
+  parentAction: { actionID: AgentRuntime.ActionID.make("act_code_mode_parent") },
 }
 
 function mcpTool(
@@ -59,6 +85,8 @@ function harness(input: {
     Layer.mock(MCP.Service, {
       tools: () => Effect.succeed(input.mcpTools),
       clients: () => Effect.succeed(Object.fromEntries(input.servers.map((name) => [name, {} as any]))),
+      declaredScope: () =>
+        Effect.succeed({ endpoint: "exec:test", networkScope: [], secretScope: [], externalServices: [] }),
     }),
   )
 }
@@ -336,6 +364,37 @@ describe("code mode execute", () => {
     expect(output.metadata.toolCalls.every((c) => c.status === "completed")).toBe(true)
   })
 
+  test("bounds nested calls with the host-owned CodeMode execution budget", async () => {
+    const calls: number[] = []
+    const tool = await build({
+      echo_tool: mcpTool("tool", () => {
+        calls.push(calls.length)
+        return { content: [{ type: "text", text: "ok" }] }
+      }),
+    })
+    gatewayCalls.length = 0
+
+    const error = await failure(
+      tool.execute(
+        {
+          code: `
+            let index = 0
+            while (index < ${CODE_MODE_EXECUTION_LIMITS.maxToolCalls + 1}) {
+              await tools.echo.tool({})
+              index += 1
+            }
+            return index
+          `,
+        },
+        ctx,
+      ),
+    )
+
+    expect(error.message).toContain(`tool-call limit of ${CODE_MODE_EXECUTION_LIMITS.maxToolCalls}`)
+    expect(calls).toHaveLength(CODE_MODE_EXECUTION_LIMITS.maxToolCalls)
+    expect(gatewayCalls).toHaveLength(CODE_MODE_EXECUTION_LIMITS.maxToolCalls)
+  })
+
   test("a program failure fails the tool with a readable error", async () => {
     const tool = await build({})
     const error = await failure(tool.execute({ code: "throw new Error('boom')" }, ctx))
@@ -358,37 +417,38 @@ describe("code mode execute", () => {
     expect(output.output).toBe("caught: server exploded")
   })
 
-  test("asks permission before each child tool call", async () => {
-    const asked: unknown[] = []
-    const permissionCtx: Tool.Context = { ...ctx, ask: (req) => Effect.sync(() => void asked.push(req)) }
+  test("routes every child tool call through the shared gateway adapter with a deterministic invocation", async () => {
+    gatewayCalls.length = 0
     const ok = () => ({ content: [{ type: "text", text: "ok" }] })
     const tool = await build({ a_tool: mcpTool("a", ok), b_tool: mcpTool("b", ok) })
 
     await Effect.runPromise(
-      tool.execute({ code: "await tools.a.tool({}); await tools.b.tool({}); return 'done'" }, permissionCtx),
+      tool.execute({ code: "await tools.a.tool({}); await tools.b.tool({}); return 'done'" }, ctx),
     )
 
-    expect(asked.map((req: any) => req.permission)).toEqual(["a_tool", "b_tool"])
+    expect(gatewayCalls).toEqual([
+      { name: "a_tool", invocation: "call_code_mode/1" },
+      { name: "b_tool", invocation: "call_code_mode/2" },
+    ])
   })
 
   test("a denied permission fails the child call with a catchable message, not the whole execute", async () => {
-    const denyCtx: Tool.Context = { ...ctx, ask: () => Effect.die(new Error("permission denied by user")) }
     const called: string[] = []
     const tool = await build({
-      a_tool: mcpTool("a", () => {
-        called.push("a")
+      denied_tool: mcpTool("tool", () => {
+        called.push("denied")
         return { content: [{ type: "text", text: "ok" }] }
       }),
     })
 
     const output = await Effect.runPromise(
-      tool.execute({ code: "try { await tools.a.tool({}) } catch (e) { return 'denied: ' + e.message }" }, denyCtx),
+      tool.execute({ code: "try { await tools.denied.tool({}) } catch (e) { return 'denied: ' + e.message }" }, ctx),
     )
 
     expect(output.output).toBe("denied: permission denied by user")
     expect(output.metadata.error).toBeUndefined()
     expect(called).toEqual([])
-    expect(output.metadata.toolCalls).toEqual([{ tool: "a.tool", status: "error" }])
+    expect(output.metadata.toolCalls).toEqual([{ tool: "denied.tool", status: "error" }])
   })
 
   test("child calls fire plugin tool.execute hooks with the MCP key and synthetic parent/N call ids", async () => {
@@ -424,6 +484,47 @@ describe("code mode execute", () => {
     expect(before!.output).toEqual({ args: { x: 1 } })
     expect(after!.input.args).toEqual({ x: 1 })
     expect(after!.output).toEqual({ content: [{ type: "text", text: "one" }] })
+  })
+
+  test("permission is settled before a child hook runs", async () => {
+    const hooks: string[] = []
+    const trigger = ((name: unknown, _input: unknown, output: unknown) =>
+      Effect.sync(() => {
+        hooks.push(String(name))
+        return output
+      })) as Plugin.Interface["trigger"]
+    const tool = await build({ denied_tool: mcpTool("tool", () => ({ content: [] })) }, undefined, undefined, trigger)
+
+    const output = await Effect.runPromise(
+      tool.execute({ code: "try { await tools.denied.tool({}) } catch (e) { return e.message }" }, ctx),
+    )
+
+    expect(output.output).toBe("permission denied by user")
+    expect(hooks).toEqual([])
+  })
+
+  test("before hooks receive a detached argument copy and cannot expand the executed scope", async () => {
+    let received: Record<string, unknown> | undefined
+    const trigger = ((name: unknown, _input: unknown, output: any) =>
+      Effect.sync(() => {
+        if (name === "tool.execute.before") output.args.path = "outside.txt"
+        return output
+      })) as Plugin.Interface["trigger"]
+    const tool = await build(
+      {
+        a_tool: mcpTool("a", (args) => {
+          received = args
+          return { content: [{ type: "text", text: "ok" }] }
+        }),
+      },
+      undefined,
+      undefined,
+      trigger,
+    )
+
+    await Effect.runPromise(tool.execute({ code: "return await tools.a.tool({ path: 'inside.txt' })" }, ctx))
+
+    expect(received).toEqual({ path: "inside.txt" })
   })
 
   test("a failing before hook fails only that child call as a catchable in-program error", async () => {
@@ -705,17 +806,17 @@ describe("code mode permission visibility", () => {
     expect(allowed.output).toBe("ok")
   })
 
-  test("an ask-level tool remains callable and still prompts via ctx.ask", async () => {
-    const asked: string[] = []
-    const askCtx: Tool.Context = { ...ctx, ask: (req) => Effect.sync(() => void asked.push(req.permission)) }
+  test("an ask-level tool remains callable and still reaches the shared gateway preflight", async () => {
+    gatewayCalls.length = 0
+    const ok = () => ({ content: [{ type: "text", text: "ok" }] })
     const tool = await build(
       { github_list_issues: mcpTool("list_issues", ok) },
       ["github"],
       [askRule("github_list_issues")],
     )
-    const out = await Effect.runPromise(tool.execute({ code: "return await tools.github.list_issues({})" }, askCtx))
+    const out = await Effect.runPromise(tool.execute({ code: "return await tools.github.list_issues({})" }, ctx))
     expect(out.output).toBe("ok")
-    expect(asked).toEqual(["github_list_issues"])
+    expect(gatewayCalls).toEqual([{ name: "github_list_issues", invocation: "call_code_mode/1" }])
   })
 
   test("Permission.visibleTools hides only hard denies, matching Permission.disabled", () => {

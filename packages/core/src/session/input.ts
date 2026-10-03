@@ -67,6 +67,37 @@ export const listQueued = Effect.fn("SessionInput.listQueued")(function* (
   return rows.map(fromRow)
 })
 
+/**
+ * Returns pending inbox rows without changing their durable lifecycle.
+ * Mature runtime adapters use this to materialize the legacy-compatible
+ * message projection before publishing the V2 promotion event. A retry can
+ * therefore detect the same stable message id instead of losing a steer in
+ * the gap between the two TypeScript projections.
+ */
+export const listPending = Effect.fn("SessionInput.listPending")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  delivery: Delivery,
+  cutoff = Number.MAX_SAFE_INTEGER,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, delivery),
+        lte(SessionInputTable.admitted_seq, cutoff),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .limit(100)
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -434,6 +465,7 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
   db: DatabaseService,
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
+  messageID?: SessionMessage.ID,
 ) {
   const row = yield* db
     .select()
@@ -443,6 +475,7 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
         eq(SessionInputTable.session_id, sessionID),
         isNull(SessionInputTable.promoted_seq),
         eq(SessionInputTable.delivery, "queue"),
+        messageID === undefined ? undefined : eq(SessionInputTable.id, messageID),
       ),
     )
     .orderBy(asc(SessionInputTable.admitted_seq))

@@ -1,8 +1,28 @@
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
+import { ActionGateway } from "@arforge-ai/core/action-gateway"
+import { AgentV2 } from "@arforge-ai/core/agent"
+import { Authorizer } from "@arforge-ai/core/authorizer"
+import { Database } from "@arforge-ai/core/database/database"
+import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { EventV2 } from "@arforge-ai/core/event"
+import { Location } from "@arforge-ai/core/location"
+import { LocationServiceMap } from "@arforge-ai/core/location-services"
+import { AbsolutePath } from "@arforge-ai/core/schema"
+import { DurableAction } from "@arforge-ai/core/runtime/durable-action"
+import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
+import { SecretProvider } from "@arforge-ai/core/secret-provider"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { SessionMessage } from "@arforge-ai/core/session/message"
+import { SessionSchema } from "@arforge-ai/core/session/schema"
+import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
+import { AppRuntime } from "../../src/effect/app-runtime"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { McpPaths } from "../../src/server/routes/instance/httpapi/groups/mcp"
 import { Server } from "../../src/server/server"
+import { Plugin } from "../../src/plugin"
+import { mcpCallViaGateway } from "../../src/mcp/gateway-adapter"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -100,6 +120,280 @@ describe("mcp HttpApi", () => {
           location: { directory: tmp.directory },
           data: { resources: [], templates: [] },
         })
+
+        const capabilitiesResponse = yield* request(handler, "/api/mcp/capabilities", tmp.directory)
+        expect(capabilitiesResponse.status).toBe(200)
+        expect(yield* json(capabilitiesResponse)).toMatchObject({
+          location: { directory: tmp.directory },
+          data: [],
+        })
+      }),
+    {
+      config: {
+        mcp: {
+          demo: {
+            type: "local",
+            command: ["echo", "demo"],
+            enabled: false,
+          },
+        },
+      },
+    },
+  )
+
+  it.instance(
+    "records an explicitly confirmed fresh MCP reconciliation without replaying transport",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const seeded = (yield* Effect.promise(() =>
+          AppRuntime.runPromise(
+            Effect.scoped(
+              Effect.provide(
+                Effect.gen(function* () {
+                  const locations = yield* LocationServiceMap.Service
+                  const locationContext = yield* locations.contextEffect(
+                    Location.Ref.make({ directory: AbsolutePath.make(tmp.directory) }),
+                  )
+                  const database = yield* Database.Service
+                  const authorizerLayer = Layer.succeed(
+                    Authorizer.Service,
+                    Authorizer.Service.of({
+                      assert: () => Effect.void,
+                      reply: () => Effect.void,
+                      get: () => Effect.succeed(undefined),
+                      list: () => Effect.succeed([]),
+                    }),
+                  )
+                  const secretLayer = Layer.succeed(
+                    SecretProvider.Service,
+                    SecretProvider.makeAes256Gcm(new Uint8Array(32).fill(17), "http-mcp-reconciliation-test"),
+                  )
+                  const pluginLayer = Layer.succeed(
+                    Plugin.Service,
+                    Plugin.Service.of({
+                      init: () => Effect.void,
+                      trigger: ((_name: unknown, _input: unknown, output: unknown) =>
+                        Effect.succeed(output)) as Plugin.Interface["trigger"],
+                      list: () => Effect.succeed([]),
+                    }),
+                  )
+                  const runtimeLayer = AppNodeBuilder.build(
+                    LayerNode.group([
+                      Database.node,
+                      EventV2.node,
+                      DurableAction.node,
+                      DurableRun.node,
+                      ActionGateway.node,
+                    ]),
+                    [
+                      [Database.node, Layer.succeed(Database.Service, database)],
+                      [Authorizer.node, authorizerLayer],
+                      [SecretProvider.node, secretLayer],
+                    ],
+                  ).pipe(Layer.merge(pluginLayer))
+                  return yield* Effect.provide(
+                    Effect.gen(function* () {
+                      const gateway = yield* ActionGateway.Service
+                      const actions = yield* DurableAction.Service
+                      const plugin = yield* Plugin.Service
+                      const parentContext = {
+                        sessionID: SessionSchema.ID.create(),
+                        assistantMessageID: SessionMessage.ID.create(),
+                        toolCallID: "call-http-mcp-parent",
+                      }
+                      const parent = {
+                        ...parentContext,
+                        actionID: ActionGateway.stableActionID(parentContext),
+                        agent: AgentV2.ID.make("build"),
+                        name: "http-mcp-parent",
+                        resources: ["http_mcp_call"],
+                        semantics: AgentRuntime.EffectSemantics.make({
+                          riskTier: "L2",
+                          authority: "scoped_grant",
+                          idempotency: "idempotent",
+                          retryability: "safe",
+                          reversibility: "not_applicable",
+                          filesystemScope: [],
+                          networkScope: [],
+                          secretScope: [],
+                          externalServices: [],
+                          expectedArtifacts: [],
+                          successCriteria: ["parent is ready"],
+                        }),
+                        reasonSummary: "HTTP MCP reconciliation fixture parent",
+                        inputDigest: "http-mcp-parent-input",
+                      } as const
+                      yield* gateway.execute(parent, {
+                        authorization: { requests: [{ action: "http_mcp_call", resources: ["*"] }] },
+                        execute: () => Effect.succeed("parent-ready"),
+                      })
+
+                      const args = { operation: "publish", value: "http-fixture" }
+                      const invocation = "http/1"
+                      const argsDigest = canonicalHash(args)
+                      if (!argsDigest) throw new Error("HTTP MCP fixture arguments were not canonicalizable")
+                      const childActionID = ActionGateway.stableChildActionID({
+                        parentActionID: parent.actionID,
+                        server: "http-mcp",
+                        tool: "publish",
+                        argsDigest,
+                        invocation,
+                      })
+                      let transportCalls = 0
+                      const failed = yield* mcpCallViaGateway({
+                        gateway,
+                        plugin,
+                        ...parentContext,
+                        agent: parent.agent,
+                        invocation,
+                        parentActionID: parent.actionID,
+                        server: "http-mcp",
+                        key: "http_mcp_publish",
+                        toolName: "publish",
+                        client: {
+                          callTool: async () => {
+                            transportCalls += 1
+                            throw new Error("simulated HTTP MCP disconnect after dispatch")
+                          },
+                        } as never,
+                        args,
+                        abort: new AbortController().signal,
+                        declaredScopes: {
+                          endpoint: "https://http-mcp.example.test",
+                          networkScope: ["https://http-mcp.example.test"],
+                          secretScope: ["HTTP_MCP_TOKEN"],
+                          externalServices: ["http-mcp"],
+                        },
+                      }).pipe(Effect.exit)
+                      if (failed._tag === "Success")
+                        throw new Error("HTTP MCP fixture transport unexpectedly succeeded")
+                      const snapshot = yield* actions.load(childActionID)
+                      if (!snapshot.action.intentDigest) throw new Error("HTTP MCP child action has no intent digest")
+                      return {
+                        childActionID,
+                        intentDigest: snapshot.action.intentDigest,
+                        idempotencyKey: snapshot.action.idempotencyKey,
+                        transportCalls: () => transportCalls,
+                      }
+                    }).pipe(Effect.provide(runtimeLayer)),
+                    locationContext,
+                  )
+                }),
+                HttpApiApp.locationServiceMapV2,
+              ),
+            ) as never,
+          ),
+        )) as {
+          readonly childActionID: string
+          readonly intentDigest: string
+          readonly idempotencyKey: string
+          readonly transportCalls: () => number
+        }
+        const handler = HttpApiApp.webHandler()
+        const query = `intentDigest=${seeded.intentDigest}&idempotencyKey=${encodeURIComponent(seeded.idempotencyKey)}`
+        const inspectedResponse = yield* request(
+          handler,
+          `/api/mcp/actions/${seeded.childActionID}/reconciliation?${query}`,
+          tmp.directory,
+        )
+        expect(inspectedResponse.status).toBe(200)
+        const inspected = (yield* json(inspectedResponse)) as {
+          readonly data: { readonly evidence: { readonly evidenceDigest: string } }
+        }
+        const evidenceDigest = inspected.data.evidence.evidenceDigest
+        expect(evidenceDigest).toMatch(/^[a-f0-9]{64}$/)
+
+        const stale = yield* request(
+          handler,
+          `/api/mcp/actions/${seeded.childActionID}/reconciliation/record?${query}`,
+          tmp.directory,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ expectedEvidenceDigest: "f".repeat(64), approval: "record_evidence" }),
+          },
+        )
+        expect(stale.status).toBe(400)
+
+        const recorded = yield* request(
+          handler,
+          `/api/mcp/actions/${seeded.childActionID}/reconciliation/record?${query}`,
+          tmp.directory,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ expectedEvidenceDigest: evidenceDigest, approval: "record_evidence" }),
+          },
+        )
+        expect(recorded.status).toBe(200)
+        expect(yield* json(recorded)).toMatchObject({
+          data: {
+            actionID: seeded.childActionID,
+            kind: "manual_review",
+            state: "unknown",
+            automaticRetryAllowed: false,
+            evidence: { evidenceDigest },
+          },
+        })
+        const duplicate = yield* request(
+          handler,
+          `/api/mcp/actions/${seeded.childActionID}/reconciliation/record?${query}`,
+          tmp.directory,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ expectedEvidenceDigest: evidenceDigest, approval: "record_evidence" }),
+          },
+        )
+        expect(duplicate.status).toBe(200)
+        expect(yield* json(duplicate)).toMatchObject({
+          data: {
+            actionID: seeded.childActionID,
+            state: "unknown",
+            evidence: { evidenceDigest },
+          },
+        })
+        expect(seeded.transportCalls()).toBe(1)
+      }),
+    {
+      config: {
+        mcp: {
+          demo: {
+            type: "local",
+            command: ["echo", "demo"],
+            enabled: false,
+          },
+        },
+      },
+    },
+  )
+
+  it.instance(
+    "serves identity-bound read-only MCP reconciliation without contacting transport",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const handler = HttpApiApp.webHandler()
+        const intentDigest = "a".repeat(64)
+        const response = yield* request(
+          handler,
+          `/api/mcp/actions/act_missing/reconciliation?intentDigest=${intentDigest}&idempotencyKey=idem_mcp_missing`,
+          tmp.directory,
+        )
+        expect(response.status).toBe(200)
+        const body = yield* json(response)
+        expect(body).toMatchObject({
+          location: { directory: tmp.directory },
+          data: {
+            actionID: "act_missing",
+            kind: "manual_review",
+            state: "unknown",
+            automaticRetryAllowed: false,
+            evidence: { state: "unknown", source: "mcp-durable-action" },
+          },
+        })
+        expect(JSON.stringify(body)).not.toContain("secret")
       }),
     {
       config: {
@@ -233,7 +527,11 @@ describe("mcp HttpApi", () => {
         for (const input of [
           { method: "POST", route: "/mcp/missing/auth" },
           { method: "POST", route: "/mcp/missing/auth/authenticate" },
-          { method: "POST", route: "/mcp/missing/auth/callback", body: JSON.stringify({ code: "code" }) },
+          {
+            method: "POST",
+            route: "/mcp/missing/auth/callback",
+            body: JSON.stringify({ code: "code", oauthState: "state" }),
+          },
           { method: "DELETE", route: "/mcp/missing/auth" },
           { method: "POST", route: "/mcp/missing/connect" },
           { method: "POST", route: "/mcp/missing/disconnect" },

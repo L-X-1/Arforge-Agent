@@ -1,3 +1,5 @@
+import { textDocumentCloseGuard } from "@/components/preview/text-document-close-guard"
+import { useLanguage as useTextDraftLanguage } from "./language"
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { type Accessor, batch, createMemo } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
@@ -282,15 +284,19 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     const [state, setState] = createStore({
       active: props.defaultServer,
     })
+    const textDraftLanguage = useTextDraftLanguage()
+    const confirmServerChange = () => textDocumentCloseGuard.confirm(undefined, textDraftLanguage.locale().startsWith("zh"), true)
 
     function setActive(input: ServerConnection.Key) {
-      if (state.active !== input) setState("active", input)
+      if (state.active === input || !confirmServerChange()) return
+      setState("active", input)
     }
 
     function add(input: ServerConnection.Http) {
       const url_ = normalizeServerUrl(input.http.url)
       if (!url_) return
       const conn: ServerConnection.Http = { ...input, authToken: undefined, http: { ...input.http, url: url_ } }
+      if (state.active !== ServerConnection.key(conn) && !confirmServerChange()) return
       return batch(() => {
         const existing = store.list.findIndex((x) => url(x) === url_)
         if (existing !== -1) {
@@ -304,6 +310,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     }
 
     function remove(key: ServerConnection.Key) {
+      if (!textDocumentCloseGuard.confirm(state.active === key ? undefined : { scope: scope(key) }, textDraftLanguage.locale().startsWith("zh"), true)) return
       const next = nextServerAfterRemoval(allServers(), key, props.defaultServer)
       const list = store.list.filter((x) => url(x) !== key)
       batch(() => {

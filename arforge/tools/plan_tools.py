@@ -1,9 +1,13 @@
-"""G4：自驱任务清单工具 ``update_plan``（TodoWrite 式）。
+"""Explicit Python compatibility wrapper for the legacy ``update_plan`` tool.
 
-注册一个 read 类工具，让 agentic 循环中的模型维护结构化执行计划。
-与 ``task_tools.py``（用户级、写 tasks.json 的持久化待办）互不相干：本工具只
-操作内存中的会话级 ledger（``core.task_ledger``），不落盘，供 agent 自我编排
-长任务用。category=read → 无文件副作用，三模式权限下均放行（plan 模式也可规划）。
+The product owner is the TypeScript/Core ``todowrite`` session todo tool.  This
+module remains importable for legacy Python loops and migration fixtures, but is
+excluded from the default Python registry so it cannot compete with the
+canonical session todo schema, persistence, or permission contract.
+
+The compatibility implementation keeps the old in-memory ``TaskLedger``
+behavior until all Python callers have migrated.  It must not be treated as a
+second product planning state machine.
 """
 
 from __future__ import annotations

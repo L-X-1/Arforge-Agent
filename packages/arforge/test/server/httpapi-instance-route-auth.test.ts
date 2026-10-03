@@ -3,6 +3,7 @@ import { ConfigProvider, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { EventPaths } from "../../src/server/routes/instance/httpapi/groups/event"
 import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
+import { ExperimentalPaths } from "../../src/server/routes/instance/httpapi/groups/experimental"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { ServerAuth } from "../../src/server/auth"
 import { PtyID } from "@arforge-ai/core/pty/schema"
@@ -181,4 +182,71 @@ describe("HttpApi instance route authorization", () => {
     await cancelBody(authed)
     expect(authed.status).toBe(404)
   })
+
+  test("rejects user-auth mutations before detached dispatch can orphan an RLS-scoped run", async () => {
+    await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
+    const server = app({ userMode: true })
+    const signIn = async (email: string) => {
+      const registration = await server.request("/auth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password: "correct horse battery staple" }),
+      })
+      const registered = (await registration.json()) as { developmentToken?: string }
+      if (!registered.developmentToken) throw new Error(`Missing verification token for ${email}`)
+      const verification = await server.request("/auth/verify-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: registered.developmentToken }),
+      })
+      expect(verification.status).toBe(200)
+      const login = await server.request("/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password: "correct horse battery staple" }),
+      })
+      expect(login.status).toBe(200)
+      return login.headers.get("set-cookie")?.split(";", 1)[0] ?? ""
+    }
+    const [firstCookie, secondCookie] = await Promise.all([
+      signIn("first-principal@example.com"),
+      signIn("second-principal@example.com"),
+    ])
+    const requestID = "cpr_same_principal_isolation"
+    const mutation = (cookie: string) =>
+      server.request(ExperimentalPaths.worktree, {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: "http://localhost",
+          "content-type": "application/json",
+          "x-arforge-directory": tmp.path,
+        },
+        body: JSON.stringify({ name: "principal-isolation", requestID }),
+      })
+    const [firstRejected, secondRejected] = await Promise.all([mutation(firstCookie), mutation(secondCookie)])
+    expect(firstRejected.status).toBe(400)
+    expect(secondRejected.status).toBe(400)
+    expect(await firstRejected.json()).toMatchObject({ name: "WorktreeControlExecutionDeniedError" })
+    expect(await secondRejected.json()).toMatchObject({ name: "WorktreeControlExecutionDeniedError" })
+
+    const approvals = async (cookie: string) => {
+      const response = await server.request(
+        `${ExperimentalPaths.controlApproval}?${new URLSearchParams({ requestID })}`,
+        { headers: { cookie, "x-arforge-directory": tmp.path } },
+      )
+      expect(response.status).toBe(200)
+      return (await response.json()) as unknown[]
+    }
+    expect(await approvals(firstCookie)).toEqual([])
+    expect(await approvals(secondCookie)).toEqual([])
+
+    const statusPath = `${ExperimentalPaths.controlOperationStatus.replace(":requestID", requestID)}?operation=worktree.create`
+    const [firstStatus, secondStatus] = await Promise.all([
+      server.request(statusPath, { headers: { cookie: firstCookie, "x-arforge-directory": tmp.path } }),
+      server.request(statusPath, { headers: { cookie: secondCookie, "x-arforge-directory": tmp.path } }),
+    ])
+    expect(firstStatus.status).toBe(400)
+    expect(secondStatus.status).toBe(400)
+  }, 30_000)
 })

@@ -7,7 +7,7 @@ describe("publicErrorMessage", () => {
       publicErrorMessage({
         _tag: "ServiceUnavailableError",
         message: "Arforge Agent capability service is unavailable.",
-        service: "arforge-agent-python",
+        service: "arforge-agent-capability",
       }),
     ).toBe("Arforge Agent capability service is unavailable.")
   })

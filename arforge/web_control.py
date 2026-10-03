@@ -146,9 +146,9 @@ class WebControlBundle:
         self.logs = LogRuntime(data_path("logs", "arforge.log"))
         if not os.environ.get("ARFORGE_WORKSPACE"):
             try:
-                from arforge.trust_screen import _auto_trust_enabled, is_workspace_trusted
+                from arforge.custom_agent_profiles import typescript_workspace_trusted
 
-                if _auto_trust_enabled() or is_workspace_trusted():
+                if typescript_workspace_trusted(self.workspace):
                     os.environ["ARFORGE_WORKSPACE"] = "trust-cwd"
             except Exception:  # noqa: BLE001 - trust probing must not block startup
                 pass

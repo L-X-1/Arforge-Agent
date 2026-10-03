@@ -1,0 +1,14 @@
+Command: bun run typecheck
+Working directory: E:/Arforge-Agent/packages/core
+Exit: 0
+Runtime: Bun 1.3.14 / tsgo
+
+$ tsgo --noEmit
+
+Command: bun run typecheck
+Working directory: E:/Arforge-Agent/packages/arforge
+Exit: 2
+The changed Core/CLI/fixture files have no remaining diagnostics. The package command is
+blocked by pre-existing packages/tui JSX/BaseRenderable diagnostics (for example
+packages/tui/src/app.tsx, packages/tui/src/config/index.tsx, packages/tui/src/ui/dialog.tsx,
+and related TUI tests); those are outside this R07 change and remain open.

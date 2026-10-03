@@ -22,10 +22,13 @@ const active = new Set<SessionV2.ID>()
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
+    exclusive: () => Effect.die(new Error("Exclusive execution is not part of this fixture")),
     active: Effect.sync(() => new Set(active)),
     resume: () => Effect.void,
+    resumeWith: () => Effect.void,
     interrupt: () => Effect.void,
     wake: () => Effect.void,
+    wakeAndWait: () => Effect.void,
   }),
 )
 const it = testEffect(

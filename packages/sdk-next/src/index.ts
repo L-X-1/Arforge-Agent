@@ -14,6 +14,8 @@ export {
   Session,
   SessionOrganization,
   ScheduledPrompt,
+  PersonalJob,
+  PersonalWorkspace,
   TaskGraph,
   Team,
   CooperativeWait,

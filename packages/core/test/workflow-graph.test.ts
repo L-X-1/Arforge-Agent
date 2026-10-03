@@ -10,6 +10,7 @@ import {
   discoverWorkflows,
   loadWorkflow,
   previewWorkflow,
+  validateDefinition,
   type WorkflowDatabase,
   type WorkflowDefinition,
 } from "@arforge-ai/core/analysis/workflow-graph"
@@ -55,6 +56,29 @@ const DEFINITION: WorkflowDefinition = {
 }
 
 describe("WorkflowGraph", () => {
+  test("defaults omitted or unknown child access to read-only", () => {
+    const workspace = tempWorkspace()
+    const sourcePath = join(workspace, ".arforge", "workflows", "safe-default.json")
+    const definition = validateDefinition(
+      {
+        name: "safe-default",
+        steps: [
+          { id: "omitted", prompt: "inspect" },
+          { id: "unknown", prompt: "inspect", access: "owner" },
+          { id: "explicit-write", prompt: "edit", access: "write" },
+        ],
+      },
+      sourcePath,
+      workspace,
+    )
+
+    expect(definition.steps.map((step) => ({ id: step.id, access: step.access }))).toEqual([
+      { id: "omitted", access: "read" },
+      { id: "unknown", access: "read" },
+      { id: "explicit-write", access: "write" },
+    ])
+  })
+
   test("executes a linear graph through an approval gate", async () => {
     const db = new Database(":memory:")
     const runtime = makeRuntime(db)
@@ -103,6 +127,41 @@ describe("WorkflowGraph", () => {
     const nodes = await db.prepare("SELECT node_id, status FROM workflow_graph_nodes ORDER BY position").all()
     expect(nodes[0]).toMatchObject({ node_id: "a", status: "failed" })
     expect(nodes[1]).toMatchObject({ node_id: "b", status: "completed" })
+  })
+
+  test("hard-blocks command nodes before they can spawn a process", async () => {
+    const db = new Database(":memory:")
+    const runtime = makeRuntime(db)
+    await runtime.ensureSchema()
+
+    const created = await runtime.createRun({
+      definition: {
+        ...DEFINITION,
+        steps: [
+          {
+            id: "command",
+            title: "Command",
+            prompt: "node\n-e\nprocess.exit(0)",
+            depends_on: [],
+            continue_on_error: false,
+            kind: "command",
+            max_attempts: 1,
+            when_step: "",
+            when_statuses: [],
+            access: "write",
+          },
+        ],
+      },
+      sessionId: "ses_wf",
+      workspace: tempWorkspace(),
+    })
+
+    await runtime.start(created.run_id)
+    const run = await runtime.wait(created.run_id, 5_000)
+    const node = (await runtime.nodesFor(created.run_id)).get("command")
+
+    expect(run.status).toBe("failed")
+    expect(node?.error).toContain("hard-blocked until execution is bound to ActionGateway")
   })
 
   test("skips steps whose when condition is not met", async () => {

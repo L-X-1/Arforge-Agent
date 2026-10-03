@@ -393,14 +393,15 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ messageID: SessionMessage.ID, files: Schema.Boolean.pipe(Schema.optional) }),
         success: Schema.Struct({ data: Revert.State }),
-        error: [MessageNotFoundError, SessionNotFoundError, UnknownError],
+        error: [MessageNotFoundError, SessionNotFoundError, ServiceUnavailableError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.revert.stage",
             summary: "Stage session revert",
-            description: "Stage or move a reversible session boundary and optionally apply its file changes.",
+            description:
+              "Disabled until session restore executes through the sealed control-plane worker; no file changes are applied.",
           }),
         ),
     )
@@ -408,20 +409,31 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       HttpApiEndpoint.post("session.revert.clear", "/api/session/:sessionID/revert/clear", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, UnknownError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
-        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.revert.clear", summary: "Clear staged revert" })),
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.revert.clear",
+            summary: "Clear staged revert",
+            description:
+              "Disabled until session restore executes through the sealed control-plane worker; no file changes are applied.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.post("session.revert.commit", "/api/session/:sessionID/revert/commit", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
-          OpenApi.annotations({ identifier: "v2.session.revert.commit", summary: "Commit staged revert" }),
+          OpenApi.annotations({
+            identifier: "v2.session.revert.commit",
+            summary: "Commit staged revert",
+            description: "Disabled until session restore executes through the sealed control-plane worker.",
+          }),
         ),
     )
     .add(

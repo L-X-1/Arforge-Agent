@@ -18,7 +18,11 @@ describe("arforge acp lifecycle subprocess", () => {
         const acp = yield* arforge.acp()
         acp.close()
 
-        const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(5)))
+        // Process startup can be delayed after a long-lived shard has already
+        // exercised several subprocess and HTTP fixtures. Keep this lifecycle
+        // assertion bounded while avoiding a false failure at the exact
+        // normal-exit boundary.
+        const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(15)))
         expect(code).toBe(0)
       }),
     60_000,

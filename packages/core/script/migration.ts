@@ -200,10 +200,10 @@ async function formatTypescript(input: string) {
 function renderRegistry(names: string[]) {
   return `import type { DatabaseMigration } from "./migration"
 
-export const migrations = (
-  await Promise.all([
-${names.map((name) => `    import("./migration/${name}"),`).join("\n")}
-  ])
-).map((module) => module.default) satisfies DatabaseMigration.Migration[]
+${names.map((name, index) => `import migration${index} from "./migration/${name}"`).join("\n")}
+
+export const migrations = [
+${names.map((_, index) => `  migration${index},`).join("\n")}
+] satisfies DatabaseMigration.Migration[]
 `
 }

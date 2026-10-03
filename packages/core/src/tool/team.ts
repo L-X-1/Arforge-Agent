@@ -4,12 +4,12 @@ import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
 import { NonNegativeInt, PositiveInt } from "../schema"
 import { TeamV2 } from "../team"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead, scopedChange } from "./effect-semantics"
 
 const TeamOutput = Schema.Struct({ team: TeamV2.Info })
 const MemberOutput = Schema.Struct({ member: TeamV2.Member })
@@ -20,10 +20,9 @@ const DeletedOutput = Schema.Struct({ deleted: TeamV2.ID })
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const teams = yield* TeamV2.Service
     const agents = yield* AgentV2.Service
-    const permission = yield* PermissionV2.Service
 
     const actor = (context: Tool.Context) =>
       teams.resolveActor({ sessionID: context.sessionID, agentID: context.agent }).pipe(toolError)
@@ -41,7 +40,7 @@ const layer = Layer.effectDiscard(
       })
 
     const authorize = (action: string, resources: ReadonlyArray<string>, context: Tool.Context) =>
-      permission.assert({
+      context.permission.assert({
         action,
         resources: [...resources],
         save: [...resources],
@@ -60,6 +59,11 @@ const layer = Layer.effectDiscard(
             description: TeamV2.Description.pipe(Schema.optional),
           }),
           output: TeamOutput,
+          effects: scopedChange({
+            externalServices: ["durable-team-store"],
+            expectedArtifacts: ["session-owned team"],
+            successCriteria: ["the current primary session owns exactly one durable team"],
+          }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -72,6 +76,11 @@ const layer = Layer.effectDiscard(
           description: "Show the current session-owned team, bounded members, lifecycle states, and mailbox counts.",
           input: Schema.Struct({}),
           output: TeamOutput,
+          effects: automaticRead({
+            externalServices: ["durable-team-store"],
+            expectedArtifacts: ["team state and mailbox counts"],
+            successCriteria: ["the current session-owned team is returned without mutation"],
+          }),
           toModelOutput: json,
           execute: (_, context) =>
             Effect.gen(function* () {
@@ -88,6 +97,12 @@ const layer = Layer.effectDiscard(
             agentID: AgentV2.ID,
           }),
           output: MemberOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["durable-team-store"],
+              expectedArtifacts: [`team member:${input.memberName}`],
+              successCriteria: [`member ${input.memberName} is bound to the requested subagent agent`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -114,6 +129,15 @@ const layer = Layer.effectDiscard(
             kind: Schema.Literals(["info", "request", "result", "alert"]).pipe(Schema.optional),
           }),
           output: MessageOutput,
+          effects: (input) =>
+            scopedChange({
+              idempotency: "non_idempotent",
+              retryability: "never",
+              reversibility: "not_applicable",
+              externalServices: ["durable-team-mailbox"],
+              expectedArtifacts: [`team message:${input.recipient}`],
+              successCriteria: [`one bounded message is persisted for ${input.recipient}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -135,12 +159,18 @@ const layer = Layer.effectDiscard(
             limit: PositiveInt.check(Schema.isLessThanOrEqualTo(100)).pipe(Schema.optional),
           }),
           output: InboxOutput,
+          effects: automaticRead({
+            externalServices: ["durable-team-mailbox"],
+            expectedArtifacts: ["bounded team inbox"],
+            successCriteria: ["only messages visible to the current team actor are returned"],
+          }),
           toModelOutput: json,
-          execute: (input, context) =>
-            Effect.gen(function* () {
-              const member = yield* actor(context)
-              return {
-                inbox: yield* teams.listMessages({
+        execute: (input, context) =>
+          Effect.gen(function* () {
+            const member = yield* actor(context)
+            yield* authorize("team_message_list", [member], context)
+            return {
+              inbox: yield* teams.listMessages({
                   ...input,
                   sessionID: context.sessionID,
                   actor: member,
@@ -155,6 +185,12 @@ const layer = Layer.effectDiscard(
             reason: TeamV2.ShutdownReason.pipe(Schema.optional),
           }),
           output: ShutdownOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["durable-team-store"],
+              expectedArtifacts: [`shutdown request:${input.memberName}`],
+              successCriteria: [`a shutdown request is persisted for ${input.memberName}`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -180,6 +216,12 @@ const layer = Layer.effectDiscard(
             reason: TeamV2.ShutdownReason.pipe(Schema.optional),
           }),
           output: ShutdownOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["durable-team-store"],
+              expectedArtifacts: [`shutdown response:${input.requestID}`],
+              successCriteria: [`shutdown request ${input.requestID} is resolved with the requested decision`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -199,6 +241,12 @@ const layer = Layer.effectDiscard(
           description: "Remove a collaborator only after that same member explicitly approved shutdown.",
           input: Schema.Struct({ memberName: TeamV2.CollaboratorName }),
           output: MemberOutput,
+          effects: (input) =>
+            scopedChange({
+              externalServices: ["durable-team-store"],
+              expectedArtifacts: [`team member:${input.memberName}`],
+              successCriteria: [`member ${input.memberName} is removed only after approved shutdown`],
+            }),
           toModelOutput: json,
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -219,6 +267,11 @@ const layer = Layer.effectDiscard(
             "Delete the complete session-owned team, mailbox, and shutdown metadata only after all collaborators stopped.",
           input: Schema.Struct({}),
           output: DeletedOutput,
+          effects: scopedChange({
+            externalServices: ["durable-team-store", "durable-team-mailbox"],
+            expectedArtifacts: ["deleted session-owned team"],
+            successCriteria: ["team, mailbox, and shutdown metadata are deleted after all members stop"],
+          }),
           toModelOutput: json,
           execute: (_, context) =>
             Effect.gen(function* () {
@@ -236,14 +289,16 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/team",
   layer,
-  deps: [AgentV2.node, PermissionV2.node, TeamV2.node, ToolRegistry.node],
+  deps: [AgentV2.node, TeamV2.node, ToolRegistry.node, ToolRegistry.builtInsNode],
 })
 
 function json({ output }: { output: unknown }) {
   return [{ type: "text" as const, text: JSON.stringify(output, null, 2) }]
 }
 
-const toolError = Effect.mapError((error: unknown) => new ToolFailure({ message: describe(error) }))
+const toolError = Effect.mapError(
+  (error: unknown) => Tool.toToolFailure(error) ?? new ToolFailure({ message: describe(error) }),
+)
 
 function describe(error: unknown) {
   if (error instanceof ToolFailure) return error.message

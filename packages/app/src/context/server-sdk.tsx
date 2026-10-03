@@ -33,6 +33,7 @@ type CurrentDelta = Extract<
 
 export function adaptServerEvent(event: ArforgeEvent): ServerEvent {
   if (event.type === "permission.v2.asked") {
+    const data = event.data as typeof event.data & { readonly requiresHumanConfirmation?: unknown }
     return {
       id: event.id,
       type: "permission.asked",
@@ -43,6 +44,7 @@ export function adaptServerEvent(event: ArforgeEvent): ServerEvent {
         patterns: event.data.resources,
         always: event.data.save ?? [],
         metadata: event.data.metadata ?? {},
+        requiresHumanConfirmation: data.requiresHumanConfirmation === true,
         tool:
           event.data.source?.type === "tool"
             ? { messageID: event.data.source.messageID, callID: event.data.source.callID }
@@ -60,6 +62,24 @@ export function adaptServerEvent(event: ArforgeEvent): ServerEvent {
   if (event.type === "question.v2.rejected")
     return { id: event.id, type: "question.rejected", properties: event.data, current: event } as ServerEvent
   return { id: event.id, type: event.type, properties: event.data, current: event } as ServerEvent
+}
+
+/**
+ * Dual-protocol servers publish current events through the legacy global
+ * stream as `{ type, properties }`. Normalize those V2 event names before
+ * the legacy reducers see them, just as the current stream does.
+ */
+export function adaptLegacyServerEvent(event: Event): ServerEvent {
+  const raw = event as Event & { id: string; type: string; properties: unknown }
+  if (
+    raw.type !== "permission.v2.asked" &&
+    raw.type !== "permission.v2.replied" &&
+    raw.type !== "question.v2.asked" &&
+    raw.type !== "question.v2.replied" &&
+    raw.type !== "question.v2.rejected"
+  )
+    return event as ServerEvent
+  return adaptServerEvent({ id: raw.id, created: Date.now(), type: raw.type, data: raw.properties } as ArforgeEvent)
 }
 
 const coalescedKey = (event: QueuedServerEvent) => {
@@ -290,7 +310,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
             const directory = legacy ? (event.directory ?? "global") : (event.location?.directory ?? "global")
-            const payload = legacy ? (event.payload as Event) : adaptServerEvent(event)
+            const payload = legacy ? adaptLegacyServerEvent(event.payload as Event) : adaptServerEvent(event)
             if (enqueueServerEvent(queue, { directory, payload })) schedule()
 
             if (Date.now() - yielded < STREAM_YIELD_MS) continue

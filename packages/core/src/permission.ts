@@ -10,6 +10,7 @@ import { SessionV2 } from "./session"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSaved } from "./permission/saved"
+import { PermissionV1 } from "./v1/permission"
 
 export { Effect, Rule, Ruleset } from "@arforge-ai/schema/permission"
 const missingAgentPermissions: Permission.Ruleset = [{ action: "*", resource: "*", effect: "deny" }]
@@ -20,7 +21,10 @@ export type ID = typeof ID.Type
 export const Source = Permission.Source
 export type Source = typeof Source.Type
 
-const RequestFields = {
+// Fields a caller may present to PermissionV2. The human-confirmation bit is
+// intentionally absent: it is a trusted presentation fact derived only by
+// this service from `forceAsk`, never caller metadata or input JSON.
+const AssertRequestFields = {
   sessionID: Permission.Request.fields.sessionID,
   action: Permission.Request.fields.action,
   resources: Permission.Request.fields.resources,
@@ -37,8 +41,10 @@ export type Reply = typeof Reply.Type
 
 export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
-  ...RequestFields,
+  ...AssertRequestFields,
   agent: AgentV2.ID.pipe(Schema.optional),
+  /** Ignore configured/saved allow rules while preserving deny rules. Used for L3 actions that require confirmation now. */
+  forceAsk: Schema.Boolean.pipe(Schema.optional),
 }).annotate({ identifier: "PermissionV2.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -71,7 +77,26 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
   requestID: ID,
 }) {}
 
-export type Error = BlockedError | CorrectedError
+/**
+ * Raised by the gateway-backed leaf gate when a tool requests an action or
+ * resource scope outside its verified durable authorization grant. The
+ * request never reaches the interactive permission service.
+ */
+export class ScopeEscalationError extends Error {
+  override readonly name = "PermissionV2.ScopeEscalationError"
+
+  constructor(
+    readonly granted: ReadonlyArray<{ readonly action: string; readonly resources: ReadonlyArray<string> }>,
+    readonly requested: { readonly action: string; readonly resources: ReadonlyArray<string> },
+  ) {
+    super(
+      `Tool execution requested a broader ${requested.action} scope than its durable authorization grant. ` +
+        "The action was stopped before the expanded effect could run.",
+    )
+  }
+}
+
+export type Error = BlockedError | CorrectedError | ScopeEscalationError
 
 export function evaluate(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule {
   return (
@@ -87,6 +112,15 @@ export function evaluate(action: string, resource: string, ...rulesets: Permissi
 
 export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
   return rulesets.flat()
+}
+
+/** Maps persisted V1 session rules into the V2 evaluator without changing their order. */
+export function fromV1Rules(rules: PermissionV1.Ruleset): Permission.Ruleset {
+  return rules.map((rule) => ({
+    action: rule.permission,
+    resource: rule.pattern,
+    effect: rule.action,
+  }))
 }
 
 export interface Interface {
@@ -106,6 +140,27 @@ interface Pending {
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
 }
 
+/**
+ * Location services are intentionally scoped per request, but a pending
+ * human approval must be visible to both the worker waiting in Authorizer and
+ * the HTTP request that lists/replies to it. Share only the in-process waiter
+ * registry for the exact location; durable Action state remains the source of
+ * truth across a process restart.
+ */
+interface PendingRegistry {
+  readonly pending: Map<ID, Pending>
+  refs: number
+}
+
+const pendingRegistries = new Map<string, PendingRegistry>()
+
+const pendingRegistryKey = (location: Location.Interface) =>
+  JSON.stringify({
+    directory: location.directory,
+    workspaceID: location.workspaceID ?? null,
+    projectID: location.project.id,
+  })
+
 const layer = Layer.effect(
   Service,
   EffectRuntime.gen(function* () {
@@ -114,18 +169,26 @@ const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
-    const pending = new Map<ID, Pending>()
+    const registryKey = pendingRegistryKey(location)
+    const registry = pendingRegistries.get(registryKey) ?? { pending: new Map<ID, Pending>(), refs: 0 }
+    registry.refs += 1
+    pendingRegistries.set(registryKey, registry)
+    const pending = registry.pending
 
     yield* EffectRuntime.addFinalizer(() =>
-      EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
-        discard: true,
-      }).pipe(
-        EffectRuntime.ensuring(
-          EffectRuntime.sync(() => {
-            pending.clear()
-          }),
-        ),
-      ),
+      EffectRuntime.gen(function* () {
+        registry.refs -= 1
+        if (registry.refs > 0) return
+        // Detach before yielding so a concurrently-created service cannot
+        // attach to a registry whose finalizer is already closing it.
+        pendingRegistries.delete(registryKey)
+        yield* EffectRuntime.forEach(
+          pending.values(),
+          (item) => Deferred.fail(item.deferred, new DeclinedError()),
+          { discard: true },
+        )
+        pending.clear()
+      }),
     )
 
     const savedRules = EffectRuntime.fnUntraced(function* () {
@@ -141,7 +204,9 @@ const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      return agent?.permissions ?? missingAgentPermissions
+      const agentRules = agent?.permissions ?? missingAgentPermissions
+      const sessionRules = fromV1Rules((yield* sessions.permissions(sessionID)) ?? [])
+      return { agentRules, sessionRules, all: [...agentRules, ...sessionRules] }
     })
 
     function denied(input: AssertInput, rules: Permission.Ruleset) {
@@ -154,8 +219,12 @@ const layer = Layer.effect(
 
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const all = [...rules, ...(yield* savedRules())]
+      // Session rules intentionally come after agent rules for allow/ask overrides.
+      // A deny effective within either source remains a hard boundary.
+      if (denied(input, rules.agentRules) || denied(input, rules.sessionRules))
+        return { effect: "deny" as const, rules: rules.all }
+      const all = [...rules.all, ...(yield* savedRules())]
+      if (input.forceAsk) return { effect: "ask" as const, rules: all }
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
       const effect: Permission.Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
       return { effect, rules: all }
@@ -170,6 +239,11 @@ const layer = Layer.effect(
         save: input.save,
         metadata: input.metadata,
         source: input.source,
+        // This is deliberately derived inside the trusted permission service,
+        // rather than inferred by a desktop client from tool name, metadata,
+        // or a user-entered command. L3 gateway requests use forceAsk and
+        // must remain visible even when a session is in full-access mode.
+        ...(input.forceAsk ? { requiresHumanConfirmation: true } : {}),
       }
     }
 
@@ -179,9 +253,9 @@ const layer = Layer.effect(
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
           const item = { request, agent, deferred }
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
-          pending.set(request.id, item)
-          yield* events
-            .publish(Event.Asked, request)
+           pending.set(request.id, item)
+           yield* events
+             .publish(Event.Asked, request, { location })
             .pipe(EffectRuntime.onError(() => EffectRuntime.sync(() => pending.delete(request.id))))
           return item
         }),
@@ -203,9 +277,11 @@ const layer = Layer.effect(
               rules: relevant(input, result.rules),
             })
           }
-          if (result.effect === "allow") return
+          if (result.effect === "allow") {
+            return
+          }
           const item = yield* create(request(input), input.agent)
-          return yield* restore(Deferred.await(item.deferred)).pipe(
+          yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.catchTag("PermissionV2.DeclinedError", (error) => EffectRuntime.die(error)),
             EffectRuntime.ensuring(
               EffectRuntime.sync(() => {
@@ -222,32 +298,36 @@ const layer = Layer.effect(
         EffectRuntime.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
-          yield* events.publish(Event.Replied, {
-            sessionID: existing.request.sessionID,
-            requestID: existing.request.id,
-            reply: input.reply,
-          })
+          // A forceAsk/L3 request is a one-time human decision. Normalize an
+          // API client's forged `always` reply before publishing it, saving a
+          // rule, or resolving other pending requests. The trusted bit only
+          // originates from assert(forceAsk), never request metadata.
+          const reply: Reply =
+            existing.request.requiresHumanConfirmation && input.reply === "always" ? "once" : input.reply
+           yield* events.publish(
+             Event.Replied,
+             {
+               sessionID: existing.request.sessionID,
+               requestID: existing.request.id,
+               reply,
+             },
+             { location },
+           )
 
-          if (input.reply === "reject") {
+          if (reply === "reject") {
             yield* Deferred.fail(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
             )
             pending.delete(input.requestID)
-            for (const [id, item] of pending) {
-              if (item.request.sessionID !== existing.request.sessionID) continue
-              yield* events.publish(Event.Replied, {
-                sessionID: item.request.sessionID,
-                requestID: item.request.id,
-                reply: "reject",
-              })
-              yield* Deferred.fail(item.deferred, new DeclinedError())
-              pending.delete(id)
-            }
+            // A reply decides one exact permission request. Rejecting a
+            // direct-shell confirmation must not silently cancel unrelated
+            // work in the same session; explicit session cancellation owns
+            // that broader business operation.
             return
           }
 
-          if (input.reply === "always" && existing.request.save?.length) {
+          if (reply === "always" && existing.request.save?.length) {
             yield* saved.add({
               projectID: location.project.id,
               action: existing.request.action,
@@ -256,28 +336,37 @@ const layer = Layer.effect(
           }
           yield* Deferred.succeed(existing.deferred, undefined)
           pending.delete(input.requestID)
-          if (input.reply !== "always" || !existing.request.save?.length) return
+          if (reply !== "always" || !existing.request.save?.length) return
 
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
+            // A remembered L2 allow never unlocks an L3 `forceAsk` request.
+            // The trusted bit is held on the pending request, not inferred
+            // from presentation metadata, so a concurrent direct shell stays
+            // visible until its own explicit human decision.
+            if (item.request.requiresHumanConfirmation) continue
             const input = { ...item.request }
             const rules = yield* configured(item.request.sessionID, item.agent).pipe(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
             if (!rules) continue
-            if (denied(input, rules)) continue
-            const effective = [...rules, ...rememberedRules]
+            if (denied(input, rules.agentRules) || denied(input, rules.sessionRules)) continue
+            const effective = [...rules.all, ...rememberedRules]
             if (
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",
               )
             )
               continue
-            yield* events.publish(Event.Replied, {
-              sessionID: item.request.sessionID,
-              requestID: item.request.id,
-              reply: "always",
-            })
+             yield* events.publish(
+               Event.Replied,
+               {
+                 sessionID: item.request.sessionID,
+                 requestID: item.request.id,
+                 reply: "always",
+               },
+               { location },
+             )
             yield* Deferred.succeed(item.deferred, undefined)
             pending.delete(id)
           }

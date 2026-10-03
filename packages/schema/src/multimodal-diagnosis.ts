@@ -1,6 +1,7 @@
 export * as MultimodalDiagnosis from "./multimodal-diagnosis"
 
 import { Schema } from "effect"
+import { FrontendDiagnosis } from "./frontend-diagnosis"
 import { NonNegativeInt, PositiveInt, optional } from "./schema"
 
 export const SignalKind = Schema.Literals([
@@ -72,6 +73,9 @@ export const Result = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   localOnly: Schema.Literal(true),
   modelCalls: Schema.Literal(0),
+  /** `error` is the historical default; frontend and javascript fuse the
+   * former Python validators into this same deterministic read-only tool. */
+  mode: Schema.Literals(["error", "frontend", "javascript"]),
   success: Schema.Boolean,
   path: Schema.String,
   source: Source,
@@ -81,5 +85,6 @@ export const Result = Schema.Struct({
   suggestions: Schema.Array(Schema.String),
   warnings: Schema.Array(Schema.String),
   summary: Summary,
+  frontend: FrontendDiagnosis.Report.pipe(optional),
 }).annotate({ identifier: "MultimodalDiagnosis.Result" })
 export interface Result extends Schema.Schema.Type<typeof Result> {}

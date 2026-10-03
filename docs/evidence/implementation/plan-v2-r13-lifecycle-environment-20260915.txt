@@ -1,0 +1,18 @@
+R13 MCP 生命周期环境校准与 prompt scope 回归（2026-09-15）
+
+本轮分别记录默认 Windows native backend 和显式禁用 Windows native backend 的真实生命周期结果。默认结果不能写成产品通过，禁用 native 的 fixture 结果也不代表三平台 full sandbox。
+
+结果：
+- 默认 Windows native：lifecycle 全文件 41 pass / 2 fail / 155 assertions / exit 1 / 29.14s。
+- 默认失败 1：local mcp cwd resolves relative paths...，MCP.LocalStartupError current_directory，本地 MCP 读取启动目录时退出。
+- 默认失败 2：local stdio timeout terminates the real server process，stdio fixture did not publish its pid。
+- ARFORGE_SANDBOX_DISABLE_WINDOWS_NATIVE=1：lifecycle 全文件 43 pass / 0 fail / 156 assertions / exit 0 / 24.05s。
+- ToolRegistry 全文件：17 pass / 0 fail / 34 assertions / exit 0 / 7.84s。
+- prompt scope 定向：3 pass / 0 fail / 21 assertions / exit 0。
+- catalog scope 定向：6 pass / 0 fail / 46 assertions / exit 0。
+
+代码：MCP.getPrompt 的无 generation/lease 兼容入口现在也必须先解析 declaredScope；scope 缺失时 SDK transport 为 0。MCP.capabilities/catalog/instructions 过滤 disconnected、旧 generation 和无 scope registry 条目。generation lease、server/kind/id/name 校验、ToolRegistry/slash command/resource projection 统一 owner 保持不变。
+
+静态：Prettier 与限定 git diff --check 通过；scoped Oxlint 0 errors / 36 warnings（既有规则告警）；arforge 包级 typecheck 仍被既有 packages/tui JSX/BaseRenderable 诊断阻断，无本轮 MCP/tool registry 新诊断。迁移账本重生成后 audit:migration-freshness valid=true：Python 480/5080 capabilities、365/3394 tests、依赖 5094/6709/6、TS composition 1796/3/5/3、source inputs 7697、TS boot 有效。
+
+未关闭：HTTP/CLI MCP catalog/read/template/prompt 的 control Action/Gateway、授权/期限/持久恢复，完整本地生命周期/冷恢复/默认全量矩阵/真实外部服务；三平台 full sandbox 按 R30 后执行。未改用户数据。

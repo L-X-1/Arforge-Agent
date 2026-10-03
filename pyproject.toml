@@ -71,7 +71,7 @@ postgres = [
 migration = []
 
 [project.scripts]
-arforge = "arforge.cli:main"
+arforge = "arforge.cli_bridge:main"
 
 [tool.setuptools]
 py-modules = ["config"]

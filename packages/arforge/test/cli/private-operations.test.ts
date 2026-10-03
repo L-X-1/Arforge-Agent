@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { pruneLogs, scanSensitiveFiles } from "../../src/cli/cmd/private-operations"
+import { privacyAudit, pruneLogs, scanSensitiveFiles } from "../../src/cli/cmd/private-operations"
 
 const roots: string[] = []
 
@@ -17,6 +17,29 @@ afterEach(async () => {
 })
 
 describe("private maintenance operations", () => {
+  test("privacy overview reads metadata only and never follows links", async () => {
+    const root = await temporaryRoot()
+    const outside = await temporaryRoot()
+    await fs.mkdir(path.join(root, "log"), { recursive: true })
+    await fs.mkdir(path.join(root, "backups"), { recursive: true })
+    await fs.writeFile(path.join(root, ".env"), "DEEPSEEK_API_KEY=secret-value\n")
+    await fs.writeFile(path.join(root, "privacy_consent.json"), '{"understands_local_storage":true}\n')
+    await fs.writeFile(path.join(root, "log", "run.log"), "not returned\n")
+    await fs.writeFile(path.join(root, "backups", "one.bak"), "backup\n")
+    await fs.writeFile(path.join(outside, "outside.txt"), "must not be traversed\n")
+    await fs.symlink(outside, path.join(root, "linked-outside"), "junction")
+
+    const result = await privacyAudit(root)
+    expect(result.localFirst).toBe(true)
+    expect(result.inventory.files).toBe(4)
+    expect(result.inventory.credentialsPresent).toBe(true)
+    expect(result.consentRecorded).toBe(true)
+    expect(result.inventory.backups).toBe(1)
+    expect(result.inventory.logsBytes).toBeGreaterThan(0)
+    expect(JSON.stringify(result)).not.toContain("secret-value")
+    expect(JSON.stringify(result)).not.toContain("not returned")
+  })
+
   test("reports secret categories and paths without returning credential values", async () => {
     const root = await temporaryRoot()
     const secret = "sk-" + "A".repeat(30)

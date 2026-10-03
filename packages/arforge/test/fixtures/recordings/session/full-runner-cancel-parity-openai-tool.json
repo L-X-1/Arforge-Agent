@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "metadata": {
+    "name": "session/full-runner-cancel-parity-openai-tool",
+    "recordedAt": "2026-08-29T20:14:45.352Z",
+    "provider": "openai",
+    "protocol": "openai-compatible-chat",
+    "runtime": "mature-prompt-cancel"
+  },
+  "interactions": [
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\"},{\"role\":\"user\",\"content\":\"Start the deterministic cancel scenario.\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"hold_for_cancel\",\"description\":\"Hold one deterministic tool execution until the session is cancelled.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}}}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"hold_for_cancel\",\"arguments\":\"\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+      }
+    },
+    {
+      "transport": "http",
+      "request": {
+        "method": "POST",
+        "url": "http://arforge-queue-parity.invalid/v1/chat/completions",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"system\",\"content\":\"You are the deterministic queue parity agent. Answer the user directly and concisely.\\nArforge orchestration profile: default. Delegate selectively when specialized independent work materially improves correctness; the reasoning mode does not impose a Subagent count quota. The Main Agent owns the user-facing answer.\"},{\"role\":\"user\",\"content\":\"Start the deterministic cancel scenario.\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"hold_for_cancel\",\"arguments\":\"{}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"Tool execution interrupted\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"hold_for_cancel\",\"description\":\"Hold one deterministic tool execution until the session is cancelled.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}}}],\"stream\":true,\"stream_options\":{\"include_usage\":true},\"store\":false,\"max_tokens\":20,\"temperature\":0}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "body": "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"cancel recovered\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\ndata: [DONE]\n\n"
+      }
+    }
+  ]
+}

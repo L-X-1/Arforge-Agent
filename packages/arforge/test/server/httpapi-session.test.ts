@@ -2,9 +2,9 @@ import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
-import { mkdir } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
@@ -26,12 +26,22 @@ import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/se
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@arforge-ai/core/database/database"
+import { EventTable } from "@arforge-ai/core/event/sql"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@arforge-ai/core/session/sql"
 import { SessionMessage } from "@arforge-ai/core/session/message"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
+import { SessionV2 } from "@arforge-ai/core/session"
+import { Snapshot } from "@arforge-ai/core/snapshot"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ProviderV2 } from "@arforge-ai/core/provider"
-import { SessionExecutionMature } from "../../src/session/execution"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { SessionExecutionFormal } from "../../src/session/execution-formal"
+import * as RuntimeInvariants from "@arforge-ai/core/runtime/invariants"
+import * as SessionRunnerEvidence from "@arforge-ai/core/session/runner/evidence"
+import * as SessionRunnerHistory from "@arforge-ai/core/session/runner/history"
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
@@ -46,10 +56,22 @@ const noopBootstrapLayer = Layer.succeed(
   InstanceBootstrapService.Service.of({ run: Effect.void }),
 )
 const appLayer = AppNodeBuilder.build(
-  LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
+  LayerNode.group([
+    InstanceStore.node,
+    Project.node,
+    Session.node,
+    Workspace.node,
+    Database.node,
+    Ripgrep.node,
+    SessionExecution.node,
+    SessionV2.node,
+    RuntimeInvariants.node,
+    LocationServiceMap.node,
+  ]),
   [
     [InstanceStore.bootstrapNode, noopBootstrapLayer],
-    [SessionExecution.node, SessionExecutionMature.node],
+    [SessionExecution.node, SessionExecutionFormal.node],
+    [LocationServiceMap.node, HttpApiApp.locationServiceMapV2Node],
   ],
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
@@ -73,6 +95,19 @@ function pathFor(path: string, params: Record<string, string>) {
 function createSession(input?: Session.CreateInput) {
   return Session.use.create(input)
 }
+
+const sessionEventIDs = (sessionID: string) =>
+  Database.Service.use(({ db }) =>
+    db
+      .select({ id: EventTable.id })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, sessionID))
+      .all()
+      .pipe(
+        Effect.orDie,
+        Effect.map((rows) => rows.map((row) => row.id)),
+      ),
+  )
 
 function createTextMessage(sessionID: SessionIDType, text: string) {
   return Effect.gen(function* () {
@@ -235,12 +270,29 @@ function requestJson<T>(path: string, init?: RequestInit) {
 
 afterEach(async () => {
   Flag.ARFORGE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
+  // End-to-end handlers can fork instance-scoped execution/summary work. Close
+  // those scopes before resetting the process-wide SQLite file so no late
+  // fiber observes a partially torn-down Database service.
   await disposeAllInstances()
   await resetDatabase()
 })
 
-describe("session HttpApi", () => {
-  it.effect("maps busy sessions to public session busy errors", () =>
+// These end-to-end cases intentionally share the process-wide SQLite file and
+// app runtime. Serialise the group so one test's afterEach teardown cannot
+// delete the database while another test is still serving a request.
+describe.serial("session HttpApi", () => {
+  testEffect(Layer.empty).effect("builds the HTTP location map with its declared database dependency", () =>
+    Effect.gen(function* () {
+      const locations = yield* LocationServiceMap.Service
+      expect(typeof locations.get).toBe("function")
+    }).pipe(
+      Effect.provide(
+        AppNodeBuilder.build(LocationServiceMap.node, [[LocationServiceMap.node, HttpApiApp.locationServiceMapV2Node]]),
+      ),
+    ),
+  )
+
+  testEffect(Layer.empty).effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()
       const exit = yield* HttpSessionError.mapBusy(Effect.fail(new Session.BusyError({ sessionID }))).pipe(Effect.exit)
@@ -267,6 +319,10 @@ describe("session HttpApi", () => {
           name: "NotFoundError",
           data: { message: `Session not found: ${missingSession}` },
         }
+
+        const missingDiff = yield* request(pathFor(SessionPaths.diff, { sessionID: missingSession }), { headers })
+        expect(missingDiff.status).toBe(404)
+        expect(yield* responseJson(missingDiff)).toEqual(missingSessionBody)
 
         const get = yield* request(pathFor(SessionPaths.get, { sessionID: missingSession }), { headers })
         expect(get.status).toBe(404)
@@ -319,6 +375,80 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "serves canonical snapshot patches through the diff route without legacy summaries",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-arforge-directory": test.directory }
+        const session = yield* createSession({ title: "Core snapshot HTTP" })
+        const locations = yield* LocationServiceMap.Service
+        const location = locations.get(Location.Ref.make({ directory: AbsolutePath.make(test.directory) }))
+        const snapshots = yield* Snapshot.Service.pipe(Effect.provide(location))
+        const start = yield* snapshots.capture()
+        yield* Effect.promise(() => writeFile(path.join(test.directory, "http-diff.txt"), "http-patch-content\n"))
+        const end = yield* snapshots.capture()
+        expect(start).toBeDefined()
+        expect(end).toBeDefined()
+        // Deliberately seed persisted Core history to test the HTTP reader independently
+        // of execution. The actual tool-to-snapshot flow is covered by prompt.test.ts.
+        const assistant = yield* insertLegacyAssistantMessage(session.id)
+        const encoded = Schema.encodeSync(SessionMessage.Assistant)({ ...assistant, snapshot: { start, end } })
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionMessageTable)
+          .set({
+            data: encoded,
+          })
+          .where(eq(SessionMessageTable.id, assistant.id))
+          .run()
+          .pipe(Effect.orDie)
+        const url = pathFor(SessionPaths.diff, { sessionID: session.id })
+        const diffs = yield* requestJson<Array<{ file: string; patch: string; additions: number }>>(url, { headers })
+        expect(diffs).toHaveLength(1)
+        expect(diffs[0]?.file).toBe("http-diff.txt")
+        expect(diffs[0]?.patch).toContain("http-patch-content")
+        expect(diffs[0]?.additions).toBe(1)
+        const before = yield* sessionEventIDs(session.id)
+        expect(yield* requestJson(url, { headers })).toEqual(diffs)
+        expect(yield* sessionEventIDs(session.id)).toEqual(before)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    20000,
+  )
+
+  it.instance(
+    "rejects message deletion while the canonical execution slot is occupied",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-arforge-directory": test.directory }
+        const session = yield* createSession({ title: "Canonical mutation busy" })
+        const message = yield* createTextMessage(session.id, "Keep this message while busy")
+        const execution = yield* SessionExecution.Service
+        const ready = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const work = yield* execution
+          .exclusive(
+            SessionV2.ID.make(session.id),
+            Deferred.succeed(ready, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+        const before = yield* sessionEventIDs(session.id)
+        const url = pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: message.info.id })
+        const denied = yield* request(url, { headers, method: "DELETE" })
+        expect(denied.status).toBe(409)
+        expect(yield* responseJson(denied)).toMatchObject({ _tag: "SessionBusyError", sessionID: session.id })
+        expect(yield* sessionEventIDs(session.id)).toEqual(before)
+        yield* Deferred.succeed(release, undefined)
+        expect(yield* Fiber.join(work)).toBe(true)
+        expect((yield* request(url, { headers, method: "DELETE" })).status).toBe(200)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    20000,
   )
 
   it.instance(
@@ -393,43 +523,153 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
-  it.live("uses the persisted session directory for prompt requests", () =>
-    Effect.gen(function* () {
-      const llm = yield* TestLLMServer
-      yield* llm.text("ok", { usage: { input: 1, output: 1 } })
+  it.live(
+    "uses the persisted session directory and settles durable execution after verification",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        yield* llm.text("ok", { usage: { input: 1, output: 1 } })
 
-      const config = testProviderConfig(llm.url)
-      const sessionDirectory = yield* tmpdirScoped({ git: true, config })
-      const requestDirectory = yield* tmpdirScoped({ git: true, config })
-      const session = yield* createSession({ title: "directory regression" }).pipe(
-        provideInstanceEffect(sessionDirectory),
-      )
+        const config = testProviderConfig(llm.url)
+        const sessionDirectory = yield* tmpdirScoped({ git: true, config })
+        const requestDirectory = yield* tmpdirScoped({ git: true, config })
+        const session = yield* createSession({ title: "directory regression" }).pipe(
+          provideInstanceEffect(sessionDirectory),
+        )
 
-      const response = yield* request(
-        `${pathFor(SessionPaths.prompt, { sessionID: session.id })}?directory=${encodeURIComponent(requestDirectory)}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            agent: "build",
-            model: { providerID: "test", modelID: "test-model" },
-            parts: [{ type: "text", text: "which directory?" }],
+        const response = yield* request(
+          `${pathFor(SessionPaths.prompt, { sessionID: session.id })}?directory=${encodeURIComponent(requestDirectory)}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              agent: "build",
+              model: { providerID: "test", modelID: "test-model" },
+              parts: [{ type: "text", text: "which directory?" }],
+            }),
+          },
+        )
+
+        expect(response.status).toBe(200)
+        const reply = yield* json<SessionV1.WithParts>(response)
+        expect(reply.info.role === "assistant" ? reply.info.path : undefined).toEqual({
+          cwd: sessionDirectory,
+          root: sessionDirectory,
+        })
+
+        const invariants = yield* RuntimeInvariants.Service
+        expect(invariants.list("session-runner").map((item) => item.key)).toEqual([
+          "execution-input",
+          "checkpoint-cursor",
+          "mature-checkpoint",
+          "request-projection",
+          "terminal",
+        ])
+
+        const messages = yield* Session.use
+          .messages({ sessionID: session.id })
+          .pipe(provideInstanceEffect(sessionDirectory), Effect.orDie)
+        expect(messages.filter((message) => message.info.role === "assistant")).toHaveLength(0)
+        const allEvents = yield* Database.Service.use(({ db }) =>
+          db
+            .select({
+              id: EventTable.id,
+              aggregateID: EventTable.aggregate_id,
+              seq: EventTable.seq,
+              type: EventTable.type,
+              data: EventTable.data,
+            })
+            .from(EventTable)
+            .all()
+            .pipe(Effect.orDie),
+        )
+        const runID = allEvents.find(
+          (event) => event.type === "agent.run.created.1" && event.data.sessionID === session.id,
+        )?.aggregateID
+        expect(runID).toBeDefined()
+        expect(
+          allEvents.filter((event) => event.type === "agent.run.created.1" && event.data.sessionID === session.id),
+        ).toHaveLength(1)
+        if (!runID) throw new Error("formal durable run was not persisted")
+        const typedRunID = AgentRuntime.RunID.make(runID)
+        const historyRows = yield* Database.Service.use(({ db }) =>
+          SessionRunnerHistory.runnerEventRowSourceFromDatabase(db).collect({
+            sessionID: session.id,
+            runID: typedRunID,
           }),
-        },
-      )
-
-      expect(response.status).toBe(200)
-      yield* responseJson(response)
-
-      const messages = yield* Session.use
-        .messages({ sessionID: session.id })
-        .pipe(provideInstanceEffect(sessionDirectory), Effect.orDie)
-      const assistant = messages.find((message) => message.info.role === "assistant")
-      expect(assistant?.info.role === "assistant" ? assistant.info.path : undefined).toEqual({
-        cwd: sessionDirectory,
-        root: sessionDirectory,
-      })
-    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+        )
+        const history = SessionRunnerHistory.fromEventRows(historyRows, { sessionID: session.id, runID: typedRunID })
+        expect(history.runCreated?.runID as string | undefined).toBe(runID)
+        expect(history.checkpoint).toBeDefined()
+        expect(history.formalRequest).toBeDefined()
+        expect(history.matureBinding).toBeUndefined()
+        const terminalHistory = SessionRunnerHistory.assertTerminalHistory(history, {
+          status: "completed",
+          attempt: 1,
+        })
+        expect(terminalHistory).toMatchObject({ status: "completed", attempt: 1, checkpointPresent: true })
+        const runEvents = allEvents.filter((event) => event.aggregateID === runID).toSorted((a, b) => a.seq - b.seq)
+        const checkpointState = history.checkpoint?.checkpoint.state
+        const checkpointForMatch = checkpointState === undefined ? undefined : structuredClone(checkpointState)
+        const checkpointCursorForMatch = checkpointState === undefined ? undefined : structuredClone(checkpointState)
+        expect(checkpointForMatch).toMatchObject({
+          version: 1,
+          kind: "session-agent-loop",
+          phase: "idle",
+          nextStep: 2,
+          needsContinuation: false,
+          lastTurn: {
+            turnStep: 1,
+            requestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+            contextDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+            toolSetRevision: expect.stringMatching(/^[0-9a-f]{64}$/),
+            routeConfigRevision: expect.stringMatching(/^[0-9a-f]{64}$/),
+            compilerRevision: expect.any(String),
+          },
+        })
+        expect(checkpointCursorForMatch).not.toHaveProperty("admittedThroughSequence")
+        const requestData = history.formalRequest
+        const requestDataForMatch = requestData === undefined ? undefined : structuredClone(requestData)
+        expect(requestDataForMatch).toMatchObject({
+          runID,
+          turnStep: 1,
+          attempt: 1,
+          requestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          envelope: expect.any(String),
+        })
+        expect(requestData).toBeDefined()
+        if (!requestData) throw new Error("formal request envelope event was not persisted")
+        const formalProjection = SessionRunnerEvidence.fromFormalEvent(requestData, typedRunID)
+        expect(formalProjection).toMatchObject({
+          runID: typedRunID,
+          turnStep: 1,
+          attempt: 1,
+        })
+        expect(SessionRunnerEvidence.compareRequestProjection(formalProjection, formalProjection)).toEqual([])
+        const initialBudget = history.runCreated?.run.budget
+        expect(initialBudget).toBeDefined()
+        if (!initialBudget || !checkpointState) throw new Error("formal durable evidence inputs were not persisted")
+        const formalEvidence = SessionRunnerHistory.formalEvidenceFromHistory(history)
+        expect(formalEvidence.execution.checkpoint).toMatchObject({
+          phase: "idle",
+          nextStep: 2,
+          needsContinuation: false,
+        })
+        expect(formalEvidence.execution.budget.attemptsUsed).toBe(1)
+        const attemptFinished = runEvents.findIndex((event) => event.type === "agent.run.attempt-finished.1")
+        const verifying = runEvents.findIndex(
+          (event) => event.type === "agent.run.state-changed.1" && event.data.to === "verifying",
+        )
+        const completed = runEvents.findIndex(
+          (event) => event.type === "agent.run.state-changed.1" && event.data.to === "completed",
+        )
+        const leaseReleased = runEvents.findIndex((event) => event.type === "agent.run.lease-released.1")
+        expect(attemptFinished).toBeGreaterThanOrEqual(0)
+        expect(verifying).toBeGreaterThan(attemptFinished)
+        expect(completed).toBeGreaterThan(verifying)
+        expect(leaseReleased).toBeGreaterThan(completed)
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+    30_000,
   )
 
   it.instance(
@@ -661,6 +901,50 @@ describe("session HttpApi", () => {
 
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
         expect(wait.status).toBe(204)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "fails closed every v2 revert mutation before touching the worktree",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-arforge-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({ title: "v2 controlled restore unavailable" })
+        const guardedFile = path.join(test.directory, "v2-revert-guard.txt")
+        yield* Effect.promise(() => writeFile(guardedFile, "unchanged"))
+        const eventsBefore = yield* sessionEventIDs(session.id)
+
+        const requests = [
+          {
+            operation: "revert.stage",
+            path: `/api/session/${session.id}/revert/stage`,
+            body: JSON.stringify({ messageID: MessageID.ascending(), files: true }),
+          },
+          { operation: "revert.clear", path: `/api/session/${session.id}/revert/clear` },
+          { operation: "revert.commit", path: `/api/session/${session.id}/revert/commit` },
+        ] as const
+
+        for (const target of requests) {
+          const response = yield* request(target.path, {
+            method: "POST",
+            headers,
+            body: "body" in target ? target.body : undefined,
+          })
+          expect({ status: response.status, body: yield* responseJson(response) }).toEqual({
+            status: 503,
+            body: {
+              _tag: "ServiceUnavailableError",
+              message: `Session ${target.operation} is disabled until controlled restore runs through a sealed ControlRun worker`,
+              service: `session.${target.operation}`,
+            },
+          })
+        }
+
+        expect(yield* Effect.promise(() => readFile(guardedFile, "utf8"))).toBe("unchanged")
+        expect((yield* Session.use.get(session.id)).revert).toBeUndefined()
+        expect(yield* sessionEventIDs(session.id)).toEqual(eventsBefore)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
@@ -1046,27 +1330,80 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "serves remaining non-LLM session mutation routes",
+    "fails closed legacy share and restore mutations without changing session or files",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-arforge-directory": test.directory, "content-type": "application/json" }
         const session = yield* createSession({ title: "remaining" })
+        const guardedFile = path.join(test.directory, "legacy-guard.txt")
+        yield* Effect.promise(() => writeFile(guardedFile, "unchanged"))
+        const eventsBefore = yield* sessionEventIDs(session.id)
 
-        expect(
-          yield* requestJson<Session.Info>(pathFor(SessionPaths.revert, { sessionID: session.id }), {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ messageID: MessageID.ascending() }),
-          }),
-        ).toMatchObject({ id: session.id })
+        const revert = yield* request(pathFor(SessionPaths.revert, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageID: MessageID.ascending() }),
+        })
+        expect({ status: revert.status, body: yield* responseJson(revert) }).toEqual({
+          status: 503,
+          body: {
+            _tag: "ServiceUnavailableError",
+            message:
+              "Legacy session revert is disabled until controlled restore runs through a sealed ControlRun worker",
+            service: "session.revert",
+          },
+        })
 
-        expect(
-          yield* requestJson<Session.Info>(pathFor(SessionPaths.unrevert, { sessionID: session.id }), {
-            method: "POST",
-            headers,
-          }),
-        ).toMatchObject({ id: session.id })
+        const unrevert = yield* request(pathFor(SessionPaths.unrevert, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+        })
+        expect({ status: unrevert.status, body: yield* responseJson(unrevert) }).toEqual({
+          status: 503,
+          body: {
+            _tag: "ServiceUnavailableError",
+            message:
+              "Legacy session unrevert is disabled until controlled restore runs through a sealed ControlRun worker",
+            service: "session.unrevert",
+          },
+        })
+
+        const share = yield* request(pathFor(SessionPaths.share, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+        })
+        expect({ status: share.status, body: yield* responseJson(share) }).toEqual({
+          status: 503,
+          body: {
+            _tag: "ServiceUnavailableError",
+            message:
+              "Legacy session share is disabled until controlled publishing runs through a sealed ControlRun worker",
+            service: "session.share",
+          },
+        })
+
+        const unshare = yield* request(pathFor(SessionPaths.share, { sessionID: session.id }), {
+          method: "DELETE",
+          headers,
+        })
+        expect({ status: unshare.status, body: yield* responseJson(unshare) }).toEqual({
+          status: 503,
+          body: {
+            _tag: "ServiceUnavailableError",
+            message:
+              "Legacy session unshare is disabled until controlled publishing runs through a sealed ControlRun worker",
+            service: "session.unshare",
+          },
+        })
+
+        expect(yield* Effect.promise(() => readFile(guardedFile, "utf8"))).toBe("unchanged")
+        expect(yield* Session.use.get(session.id)).toMatchObject({
+          id: session.id,
+          share: undefined,
+          revert: undefined,
+        })
+        expect(yield* sessionEventIDs(session.id)).toEqual(eventsBefore)
 
         const permissionID = String(PermissionV1.ID.ascending())
         const permission = yield* request(

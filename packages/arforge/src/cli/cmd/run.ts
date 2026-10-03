@@ -13,6 +13,9 @@ import { FSUtil } from "@arforge-ai/core/fs-util"
 // Also supports `--command` for slash-command execution, `--format json` for
 // raw event streaming, `--continue` / `--session` for session resumption,
 // and `--fork` for forking before continuing.
+// The historical `print`/`--print` entry is an argv alias of this same owner;
+// its text/stream-json renderer, multi-message stdin and final-only behavior
+// are implemented below without a Python subprocess or a second loop.
 import type { Argv } from "yargs"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -25,6 +28,16 @@ import { Filesystem } from "@/util/filesystem"
 import { createArforgeClient, type ArforgeClient, type ToolPart } from "@arforge-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import {
+  PRINT_INPUT_FORMATS,
+  PRINT_OUTPUT_FORMATS,
+  PrintModeInputError,
+  PrintModeRenderer,
+  isPrintRetryableError,
+  resolvePrintMessages,
+  type PrintInputFormat,
+  type PrintOutputFormat,
+} from "./print-mode"
 
 type ModelInput = Parameters<ArforgeClient["session"]["prompt"]>[0]["model"]
 
@@ -87,6 +100,26 @@ function formatRunError(error: unknown) {
   return FormatError(error) ?? FormatUnknownError(error)
 }
 
+export const CLI_AUTO_SHARE_SUPPRESSED =
+  "Automatic session sharing is disabled until controlled publishing runs through a sealed ControlRun worker."
+
+export const CLI_SHARE_MUTATION_UNAVAILABLE =
+  "Session sharing is disabled until controlled publishing runs through a sealed ControlRun worker; --share did not publish anything."
+
+export async function runLegacyCliShare(input: {
+  explicit: boolean
+  automatic: boolean
+  warn: (message: string) => void
+}) {
+  if (input.explicit) {
+    input.warn(CLI_SHARE_MUTATION_UNAVAILABLE)
+    return "blocked" as const
+  }
+  if (!input.automatic) return "idle" as const
+  input.warn(CLI_AUTO_SHARE_SUPPRESSED)
+  return "suppressed" as const
+}
+
 async function tool(part: ToolPart) {
   try {
     const { toolInlineInfo } = await import("./run/tool")
@@ -123,8 +156,55 @@ async function toolError(part: ToolPart) {
   }
 }
 
+type CoreToolCall = {
+  tool: string
+  input: Record<string, unknown>
+  started: number
+  assistantMessageID: string
+}
+
+function coreContentText(content: unknown): string {
+  if (!Array.isArray(content)) return ""
+  return content
+    .filter((item): item is { type: "text"; text: string } => {
+      return Boolean(item && typeof item === "object" && (item as { type?: unknown }).type === "text" && typeof (item as { text?: unknown }).text === "string")
+    })
+    .map((item) => item.text)
+    .join("\n")
+}
+
+function coreValueText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (value === undefined || value === null) return ""
+  try {
+    return JSON.stringify(value) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function coreErrorText(error: unknown): string {
+  if (typeof error === "string") return error
+  if (error && typeof error === "object") {
+    const data = (error as { data?: unknown }).data
+    if (data && typeof data === "object" && typeof (data as { message?: unknown }).message === "string") {
+      return (data as { message: string }).message
+    }
+    if (typeof (error as { message?: unknown }).message === "string") {
+      return (error as { message: string }).message
+    }
+    if (typeof (error as { name?: unknown }).name === "string") {
+      return (error as { name: string }).name
+    }
+  }
+  return String(error)
+}
+
 export const RunCommand = effectCmd({
   command: "run [message..]",
+  // Python's historical `ask` command is a spelling alias only. The TS run
+  // handler remains the single execution/output owner for both names.
+  aliases: ["ask", "print"],
   describe: "run Arforge with a message",
   // --attach connects to a remote server (no local instance needed); the
   // default path runs an in-process server and needs the project instance.
@@ -177,6 +257,35 @@ export const RunCommand = effectCmd({
         default: "default",
         describe: "format: default (formatted) or json (raw JSON events)",
       })
+      .option("print-mode", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+        describe: "compatibility print mode (owned by the TypeScript run handler)",
+      })
+      .option("input-format", {
+        type: "string",
+        choices: PRINT_INPUT_FORMATS,
+        default: "text",
+        describe: "print input format: text or stream-json",
+      })
+      .option("output-format", {
+        type: "string",
+        choices: PRINT_OUTPUT_FORMATS,
+        default: "text",
+        describe: "print output format: text or stream-json",
+      })
+      .option("final-message-only", {
+        type: "boolean",
+        default: false,
+        describe: "print only the final assistant message",
+      })
+      .option("quiet", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+        describe: "alias for --final-message-only",
+      })
       .option("file", {
         alias: ["f"],
         type: "string",
@@ -189,7 +298,7 @@ export const RunCommand = effectCmd({
       })
       .option("attach", {
         type: "string",
-      describe: "attach to a running Arforge server (e.g., http://localhost:4096)",
+        describe: "attach to a running Arforge server (e.g., http://localhost:4096)",
       })
       .option("password", {
         alias: ["p"],
@@ -199,7 +308,7 @@ export const RunCommand = effectCmd({
       .option("username", {
         alias: ["u"],
         type: "string",
-      describe: "basic auth username (defaults to ARFORGE_SERVER_USERNAME or 'arforge')",
+        describe: "basic auth username (defaults to ARFORGE_SERVER_USERNAME or 'arforge')",
       })
       .option("dir", {
         type: "string",
@@ -271,7 +380,11 @@ export const RunCommand = effectCmd({
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const interactive = args.mini
-      const auto = args.auto || args.yolo || args["dangerously-skip-permissions"]
+      const printMode = args["print-mode"] === true || args._?.[0] === "print"
+      const printInputFormat = (args["input-format"] ?? "text") as PrintInputFormat
+      const printOutputFormat = (args["output-format"] ?? "text") as PrintOutputFormat
+      const finalMessageOnly = printMode && (args["final-message-only"] === true || args.quiet === true)
+      const auto = printMode || args.auto || args.yolo || args["dangerously-skip-permissions"]
       const thinking = interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = (message: string): never => {
         UI.error(message)
@@ -285,9 +398,19 @@ export const RunCommand = effectCmd({
         throw error
       }
 
-      let message = [...args.message, ...(args["--"] || [])]
-        .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
-        .join(" ")
+      let message = printMode
+        ? [...args.message, ...(args["--"] || [])].join(" ")
+        : [...args.message, ...(args["--"] || [])]
+            .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
+            .join(" ")
+
+      if (printMode && interactive) {
+        die("print mode cannot be used with --mini or --interactive")
+      }
+
+      if (printMode && args.command) {
+        die("print mode cannot be used with --command")
+      }
 
       if (interactive && args.command) {
         die("--mini cannot be used with --command")
@@ -414,10 +537,21 @@ export const RunCommand = effectCmd({
       }
 
       const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
-      message = resolveRunInput(message, piped) ?? ""
-      const initialInput = resolveRunInput(rawMessage, piped)
+      let printMessages: string[] | undefined
+      if (printMode) {
+        try {
+          printMessages = resolvePrintMessages(printInputFormat, message, piped)
+        } catch (error) {
+          if (error instanceof PrintModeInputError) die(error.message)
+          throw error
+        }
+        message = printMessages[0] ?? ""
+      } else {
+        message = resolveRunInput(message, piped) ?? ""
+      }
+      const initialInput = printMode ? undefined : resolveRunInput(rawMessage, piped)
 
-      if (message.trim().length === 0 && !args.command && !interactive) {
+      if (message.trim().length === 0 && !args.command && !interactive && !printMode) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -427,7 +561,7 @@ export const RunCommand = effectCmd({
         process.exit(1)
       }
 
-      const rules: PermissionV1.Ruleset = interactive
+      const rules: PermissionV1.Ruleset = interactive || printMode
         ? []
         : [
             {
@@ -532,19 +666,14 @@ export const RunCommand = effectCmd({
         }
       }
 
-      async function share(sdk: ArforgeClient, sessionID: string) {
+      async function share(sdk: ArforgeClient, _sessionID: string) {
         const cfg = await sdk.config.get()
         if (!cfg.data) return
-        if (cfg.data.share !== "auto" && !flags.autoShare && !args.share) return
-        const res = await sdk.session.share({ sessionID }).catch((error) => {
-          if (error instanceof Error && error.message.includes("disabled")) {
-            UI.println(UI.Style.TEXT_DANGER_BOLD + "!  " + error.message)
-          }
-          return { error }
+        await runLegacyCliShare({
+          explicit: args.share === true,
+          automatic: cfg.data.share === "auto" || flags.autoShare,
+          warn: (message) => UI.println(UI.Style.TEXT_WARNING_BOLD + "!  " + message),
         })
-        if (!res.error && "data" in res && res.data?.share?.url) {
-          UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + res.data.share.url)
-        }
       }
 
       async function createFreshSession(
@@ -674,6 +803,12 @@ export const RunCommand = effectCmd({
           process.exit(1)
         }
         const sessionID = sess.id
+        const printRenderer = printMode
+          ? new PrintModeRenderer({
+              outputFormat: printOutputFormat,
+              finalMessageOnly,
+            })
+          : undefined
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
@@ -694,15 +829,27 @@ export const RunCommand = effectCmd({
         // to stdout/UI. `client` is passed explicitly because attach mode may
         // rebind the SDK to the session's directory after the subscription is
         // created, and replies issued from inside the loop must use that client.
-        async function loop(client: ArforgeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
+        async function loop(
+          client: ArforgeClient,
+          events: Awaited<ReturnType<typeof sdk.event.subscribe>>,
+          renderer = printRenderer,
+        ) {
           const toggles = new Map<string, boolean>()
+          const coreTextStarted = new Map<string, number>()
+          const coreReasoningStarted = new Map<string, number>()
+          const coreTools = new Map<string, CoreToolCall>()
+          let pendingUnknownStep: { assistantMessageID: string; timestamp: number } | undefined
           let error: string | undefined
+          let retryable = false
+
+          renderer?.beginTurn()
 
           for await (const event of events.stream) {
             if (
               event.type === "message.updated" &&
               event.properties.sessionID === sessionID &&
               event.properties.info.role === "assistant" &&
+              !renderer &&
               args.format !== "json" &&
               toggles.get("start") !== true
             ) {
@@ -712,11 +859,219 @@ export const RunCommand = effectCmd({
               toggles.set("start", true)
             }
 
+            // Core V2 is the canonical session runner. Older CLI consumers
+            // still expect the mature `message.part.updated` projection, so
+            // normalize the replayable Core boundaries here at the TS CLI
+            // output edge instead of introducing another execution owner.
+            if (event.type === "session.next.step.started" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              pendingUnknownStep = undefined
+              const part = {
+                id: `step:${properties.assistantMessageID}`,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "step-start" as const,
+                ...(properties.snapshot ? { snapshot: properties.snapshot } : {}),
+              }
+              if (!renderer) emit("step_start", { part })
+              continue
+            }
+
+            if (event.type === "session.next.step.ended" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              const total = properties.tokens.input + properties.tokens.output + properties.tokens.reasoning
+              const part = {
+                id: `step:${properties.assistantMessageID}`,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "step-finish" as const,
+                reason: properties.finish,
+                ...(properties.snapshot ? { snapshot: properties.snapshot } : {}),
+                cost: properties.cost,
+                tokens: { ...properties.tokens, total },
+              }
+              if (!renderer) emit("step_finish", { part })
+              // The mature stream exposed an empty follow-up step when a
+              // provider ended with an unknown finish (for example an SSE
+              // error after partial output). Preserve that observable
+              // ordering only if Core does not publish a replacement step.
+              pendingUnknownStep =
+                (properties.finish === "unknown" || properties.finish === "tool-calls")
+                  ? { assistantMessageID: properties.assistantMessageID, timestamp: properties.timestamp }
+                  : undefined
+              continue
+            }
+
+            if (event.type === "session.next.text.started" && event.properties.sessionID === sessionID) {
+              coreTextStarted.set(event.properties.textID, event.properties.timestamp)
+              continue
+            }
+
+            if (event.type === "session.next.text.delta" && event.properties.sessionID === sessionID) {
+              if (renderer) renderer.textDelta(event.properties.delta, event.properties.textID)
+              continue
+            }
+
+            if (event.type === "session.next.text.ended" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              const part = {
+                id: properties.textID,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "text" as const,
+                text: properties.text,
+                time: {
+                  start: coreTextStarted.get(properties.textID) ?? properties.timestamp,
+                  end: properties.timestamp,
+                },
+              }
+              coreTextStarted.delete(properties.textID)
+              if (renderer) {
+                renderer.textEnded(part.text, properties.textID)
+                continue
+              }
+              if (emit("text", { part })) continue
+              const text = part.text.trim()
+              if (!text) continue
+              if (!process.stdout.isTTY) {
+                process.stdout.write(text + EOL)
+                continue
+              }
+              UI.empty()
+              UI.println(text)
+              UI.empty()
+              continue
+            }
+
+            if (event.type === "session.next.primary.delivered" && event.properties.sessionID === sessionID) {
+              renderer?.finalAnswer(event.properties.message)
+              continue
+            }
+
+            if (event.type === "session.next.reasoning.started" && event.properties.sessionID === sessionID) {
+              coreReasoningStarted.set(event.properties.reasoningID, event.properties.timestamp)
+              continue
+            }
+
+            if (event.type === "session.next.reasoning.ended" && event.properties.sessionID === sessionID) {
+              if (renderer) continue
+              if (!thinking) continue
+              const properties = event.properties
+              const part = {
+                id: properties.reasoningID,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "reasoning" as const,
+                text: properties.text,
+                time: {
+                  start: coreReasoningStarted.get(properties.reasoningID) ?? properties.timestamp,
+                  end: properties.timestamp,
+                },
+              }
+              coreReasoningStarted.delete(properties.reasoningID)
+              if (emit("reasoning", { part })) continue
+              const text = part.text.trim()
+              if (!text) continue
+              const line = `Thinking: ${text}`
+              if (process.stdout.isTTY) {
+                UI.empty()
+                UI.println(`${UI.Style.TEXT_DIM}\u001b[3m${line}\u001b[0m${UI.Style.TEXT_NORMAL}`)
+                UI.empty()
+                continue
+              }
+              process.stdout.write(line + EOL)
+              continue
+            }
+
+            if (event.type === "session.next.tool.called" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              coreTools.set(properties.callID, {
+                tool: properties.tool,
+                input: properties.input,
+                started: properties.timestamp,
+                assistantMessageID: properties.assistantMessageID,
+              })
+              if (renderer) renderer.toolCalled(properties.callID, properties.tool, properties.input)
+              continue
+            }
+
+            if (event.type === "session.next.tool.success" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              const call = coreTools.get(properties.callID)
+              const output = coreContentText(properties.content) || coreValueText(properties.result)
+              const part = {
+                id: properties.callID,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "tool" as const,
+                callID: properties.callID,
+                tool: call?.tool ?? "tool",
+                state: {
+                  status: "completed" as const,
+                  input: call?.input ?? {},
+                  output,
+                  title: call?.tool ?? "tool",
+                  metadata: properties.structured,
+                  time: {
+                    start: call?.started ?? properties.timestamp,
+                    end: properties.timestamp,
+                  },
+                },
+              } satisfies ToolPart
+              coreTools.delete(properties.callID)
+              if (renderer) {
+                renderer.toolCompleted(properties.callID, output, false)
+                continue
+              }
+              if (emit("tool_use", { part })) continue
+              await tool(part)
+              continue
+            }
+
+            if (event.type === "session.next.tool.failed" && event.properties.sessionID === sessionID) {
+              const properties = event.properties
+              const call = coreTools.get(properties.callID)
+              const part = {
+                id: properties.callID,
+                sessionID,
+                messageID: properties.assistantMessageID,
+                type: "tool" as const,
+                callID: properties.callID,
+                tool: call?.tool ?? "tool",
+                state: {
+                  status: "error" as const,
+                  input: call?.input ?? {},
+                  error: coreErrorText(properties.error),
+                  time: {
+                    start: call?.started ?? properties.timestamp,
+                    end: properties.timestamp,
+                  },
+                },
+              } satisfies ToolPart
+              coreTools.delete(properties.callID)
+              if (renderer) {
+                renderer.toolCompleted(properties.callID, part.state.error, true)
+                continue
+              }
+              if (emit("tool_use", { part })) continue
+              await toolError(part)
+              UI.error(part.state.error)
+              continue
+            }
+
             if (event.type === "message.part.updated") {
               const part = event.properties.part
               if (part.sessionID !== sessionID) continue
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+                if (renderer) {
+                  renderer.toolCompleted(
+                    part.callID,
+                    part.state.status === "completed" ? part.state.output : part.state.error,
+                    part.state.status === "error",
+                  )
+                  continue
+                }
                 if (emit("tool_use", { part })) continue
                 if (part.state.status === "completed") {
                   await tool(part)
@@ -746,6 +1101,10 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "text" && part.time?.end) {
+                if (renderer) {
+                  renderer.text(part.text, part.id)
+                  continue
+                }
                 if (emit("text", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -759,6 +1118,7 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "reasoning" && part.time?.end && thinking) {
+                if (renderer) continue
                 if (emit("reasoning", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -773,6 +1133,14 @@ export const RunCommand = effectCmd({
               }
             }
 
+            if (event.type === "session.next.step.failed" && event.properties.sessionID === sessionID) {
+              const failure = event.properties.error
+              error = error ? error + EOL + coreErrorText(failure) : coreErrorText(failure)
+              retryable = retryable || isPrintRetryableError(failure)
+              if (renderer) renderer.error(failure)
+              if (renderer) continue
+            }
+
             if (event.type === "session.error") {
               const props = event.properties
               if (props.sessionID !== sessionID || !props.error) continue
@@ -781,7 +1149,10 @@ export const RunCommand = effectCmd({
                 err = String(props.error.data.message)
               }
               error = error ? error + EOL + err : err
+              retryable = retryable || isPrintRetryableError(props.error)
+              if (renderer) renderer.error(props.error)
               if (emit("error", { error: props.error })) continue
+              if (renderer) continue
               UI.error(err)
             }
 
@@ -790,6 +1161,36 @@ export const RunCommand = effectCmd({
               event.properties.sessionID === sessionID &&
               event.properties.status.type === "idle"
             ) {
+              if (renderer) renderer.finish()
+              if (pendingUnknownStep) {
+                const id = `step:${pendingUnknownStep.assistantMessageID}:unknown`
+                const start = {
+                  id,
+                  sessionID,
+                  messageID: pendingUnknownStep.assistantMessageID,
+                  type: "step-start" as const,
+                }
+                const finish = {
+                  id,
+                  sessionID,
+                  messageID: pendingUnknownStep.assistantMessageID,
+                  type: "step-finish" as const,
+                  reason: "unknown",
+                  cost: 0,
+                  tokens: {
+                    total: 0,
+                    input: 0,
+                    output: 0,
+                    reasoning: 0,
+                    cache: { read: 0, write: 0 },
+                  },
+                }
+                if (!renderer) {
+                  emit("step_start", { part: start })
+                  emit("step_finish", { part: finish })
+                }
+                pendingUnknownStep = undefined
+              }
               break
             }
 
@@ -812,10 +1213,36 @@ export const RunCommand = effectCmd({
                   requestID: permission.id,
                   reply: "reject",
                 })
+                break
+              }
+            }
+
+            if (event.type === "permission.v2.asked") {
+              const permission = event.properties
+              if (permission.sessionID !== sessionID) continue
+
+              if (auto) {
+                await client.v2.session.permission.reply({
+                  sessionID,
+                  requestID: permission.id,
+                  reply: "once",
+                })
+              } else {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL +
+                    `permission requested: ${permission.action} (${permission.resources.join(", ")}); auto-rejecting`,
+                )
+                await client.v2.session.permission.reply({
+                  sessionID,
+                  requestID: permission.id,
+                  reply: "reject",
+                })
+                break
               }
             }
           }
-          return error
+          return { error, retryable }
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
@@ -826,15 +1253,46 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!interactive) {
+          const model = pick(args.model)
+
+          if (printMode) {
+            const messages = printMessages ?? [message]
+            for (const nextMessage of messages) {
+              const events = await client.event.subscribe()
+              const completed = loop(client, events, printRenderer).catch((error) => {
+                printRenderer?.error(error)
+                return { error: String(error), retryable: isPrintRetryableError(error) }
+              })
+              const result = await client.session.prompt({
+                sessionID,
+                agent,
+                model,
+                variant: args.variant,
+                parts: [...files, { type: "text", text: nextMessage }],
+              })
+              if (result.error) {
+                printRenderer?.error(result.error)
+                process.exitCode = isPrintRetryableError(result.error) ? 75 : 1
+                return
+              }
+              const terminal = await completed
+              if (terminal.error) {
+                process.exitCode = terminal.retryable ? 75 : 1
+                return
+              }
+            }
+            return
+          }
+
           const events = await client.event.subscribe()
-          const completed = loop(client, events).catch((e) => {
-            console.error(e)
-            process.exitCode = 1
+          const completed = loop(client, events).catch((error) => {
+            console.error(error)
+            return { error: String(error), retryable: false }
           })
           async function finish() {
             if (args.attach) return
-            const error = await completed
-            if (error) process.exitCode = 1
+            const terminal = await completed
+            if (terminal.error) process.exitCode = terminal.retryable ? 75 : 1
           }
 
           if (args.command) {
@@ -855,7 +1313,6 @@ export const RunCommand = effectCmd({
             return
           }
 
-          const model = pick(args.model)
           const result = await client.session.prompt({
             sessionID,
             agent,
@@ -949,7 +1406,7 @@ export const RunCommand = effectCmd({
         return Server.Default().app.fetch(new Request(request, { headers }))
       }) as typeof globalThis.fetch
       const sdk = createArforgeClient({
-      baseUrl: "http://arforge.internal",
+        baseUrl: "http://arforge.internal",
         fetch: fetchFn,
         directory,
       })
@@ -977,7 +1434,7 @@ type MiniCommandInput = {
 export async function runMini(input: MiniCommandInput) {
   if (!RunCommand.handler) throw new Error("Mini command handler is unavailable")
   await RunCommand.handler({
-      $0: "arforge",
+    $0: "arforge",
     _: ["mini"],
     message: input.prompt ? [input.prompt] : [],
     command: undefined,
@@ -988,6 +1445,15 @@ export async function runMini(input: MiniCommandInput) {
     model: input.model,
     agent: input.agent,
     format: "default",
+    "print-mode": false,
+    printMode: false,
+    "input-format": "text",
+    inputFormat: "text",
+    "output-format": "text",
+    outputFormat: "text",
+    "final-message-only": false,
+    finalMessageOnly: false,
+    quiet: false,
     file: undefined,
     title: undefined,
     attach: input.attach,

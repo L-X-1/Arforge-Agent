@@ -1,10 +1,19 @@
 import { Duration, Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { HttpClientResponse } from "effect/unstable/http"
+import { Egress } from "@arforge-ai/core/egress"
 
-export const EXA_URL = process.env.EXA_API_KEY
-  ? `https://mcp.exa.ai/mcp?exaApiKey=${encodeURIComponent(process.env.EXA_API_KEY)}`
-  : "https://mcp.exa.ai/mcp"
+export const EXA_URL = "https://mcp.exa.ai/mcp"
 export const PARALLEL_URL = "https://search.parallel.ai/mcp"
+
+/** Resolve the Exa credential only when the inner provider executor runs. */
+export const exaUrl = () => {
+  const apiKey = process.env.EXA_API_KEY
+  if (!apiKey) return EXA_URL
+  const url = new URL(EXA_URL)
+  url.searchParams.set("exaApiKey", apiKey)
+  return url.toString()
+}
 
 const McpResult = Schema.Struct({
   result: Schema.Struct({
@@ -74,23 +83,49 @@ export const call = <F extends Schema.Struct.Fields>(
   value: Schema.Struct.Type<F>,
   timeout: Duration.Input,
   headers?: Record<string, string>,
+  egress: Egress.Authorizer = Egress.make({
+    action: tool,
+    networkScope: [url],
+    secretScope: [],
+    allowedMethods: ["POST"],
+  }),
+  credentialScope: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.accept("application/json, text/event-stream"),
-      HttpClientRequest.setHeaders(headers ?? {}),
-      HttpClientRequest.schemaBodyJson(McpRequest(args))({
-        jsonrpc: "2.0" as const,
-        id: 1 as const,
-        method: "tools/call" as const,
-        params: { name: tool, arguments: value },
-      }),
-    )
-    const response = yield* HttpClient.filterStatusOk(http)
-      .execute(request)
-      .pipe(
+    let target = url
+    let redirectFrom: string | undefined
+    for (let redirects = 0; ; redirects++) {
+      yield* egress.assert({
+        url: target,
+        method: "POST",
+        credentialScope,
+        ...(redirectFrom === undefined ? {} : { redirectFrom }),
+      })
+      const request = HttpClientRequest.post(target).pipe(
+        HttpClientRequest.accept("application/json, text/event-stream"),
+        HttpClientRequest.setHeaders(headers ?? {}),
+        HttpClientRequest.bodyJsonUnsafe({
+          jsonrpc: "2.0" as const,
+          id: 1 as const,
+          method: "tools/call" as const,
+          params: { name: tool, arguments: value },
+        }),
+      )
+      const response = yield* http.execute(request).pipe(
         Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error(`${tool} request timed out`)) }),
       )
-    const body = yield* response.text
-    return yield* parseResponse(body)
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.location
+        if (!location) return yield* Effect.fail(new Error("HTTP redirect did not include a Location header"))
+        if (redirects >= 3) return yield* Effect.fail(new Error("HTTP redirect limit exceeded"))
+        redirectFrom = target
+        target = yield* Effect.try({
+          try: () => new URL(location, target).toString(),
+          catch: (error) => error,
+        })
+        continue
+      }
+      const ok = yield* HttpClientResponse.filterStatusOk(response)
+      return yield* parseResponse(yield* ok.text)
+    }
   })

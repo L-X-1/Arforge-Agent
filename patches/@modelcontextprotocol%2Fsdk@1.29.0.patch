@@ -229,9 +229,17 @@ index a29a7d3a0f14d9cd800ef5b296485237350c666f..c362ae5fe6c62c8c8eae7e2e61de1eed
                  }
                  throw new StreamableHTTPError(response.status, `Error POSTing to endpoint: ${text}`);
 diff --git a/dist/cjs/shared/protocol.js b/dist/cjs/shared/protocol.js
-index 3617e787f0ba70447c99501aee7aa67584d89758..4a96d6a0328fa348b96f3869ab7e0bb77538182b 100644
 --- a/dist/cjs/shared/protocol.js
 +++ b/dist/cjs/shared/protocol.js
+@@ -596,7 +596,7 @@ class Protocol {
+                 }
+                 // Wait before polling again
+                 const pollInterval = task.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1000;
+-                await new Promise(resolve => setTimeout(resolve, pollInterval));
++                await this._waitForTaskPoll(pollInterval, options?.signal);
+                 // Check if cancelled
+                 options?.signal?.throwIfAborted();
+             }
 @@ -744,7 +744,12 @@ class Protocol {
              }
              else {
@@ -246,6 +254,52 @@ index 3617e787f0ba70447c99501aee7aa67584d89758..4a96d6a0328fa348b96f3869ab7e0bb7
                      this._cleanupTimeout(messageId);
                      reject(error);
                  });
+@@ -1002,18 +1007,32 @@ class Protocol {
+         catch {
+             // Use default interval if task lookup fails
+         }
++        return this._waitForTaskPoll(interval, signal);
++    }
++    _waitForTaskPoll(interval, signal) {
+         return new Promise((resolve, reject) => {
+-            if (signal.aborted) {
++            if (signal?.aborted) {
+                 reject(new types_js_1.McpError(types_js_1.ErrorCode.InvalidRequest, 'Request cancelled'));
+                 return;
+             }
+-            // Wait for the poll interval, then resolve so caller can check for updates
+-            const timeoutId = setTimeout(resolve, interval);
+-            // Clean up timeout and reject if aborted
+-            signal.addEventListener('abort', () => {
++            if (!Number.isSafeInteger(interval) || interval < 0 || interval > 2147483647) {
++                reject(new types_js_1.McpError(types_js_1.ErrorCode.InvalidParams, 'Invalid task polling interval'));
++                return;
++            }
++            const cleanup = () => {
+                 clearTimeout(timeoutId);
++                signal?.removeEventListener('abort', abort);
++            };
++            const abort = () => {
++                cleanup();
+                 reject(new types_js_1.McpError(types_js_1.ErrorCode.InvalidRequest, 'Request cancelled'));
+-            }, { once: true });
++            };
++            const timeoutId = setTimeout(() => {
++                cleanup();
++                resolve();
++            }, interval);
++            signal?.addEventListener('abort', abort, { once: true });
++            if (signal?.aborted) abort();
+         });
+     }
+     requestTaskStore(request, sessionId) {
+@@ -1109,4 +1128,4 @@ function mergeCapabilities(base, additional) {
+     }
+     return result;
+ }
+-//# sourceMappingURL=protocol.js.map
+\ No newline at end of file
++//# sourceMappingURL=protocol.js.map
 diff --git a/dist/cjs/client/auth.d.ts b/dist/cjs/client/auth.d.ts
 index f4363ce7c94fbddf0e1d5943b1b26682bdbaa40e..e7dd57096e4f056bcd735d5081433beea1b32f04 100644
 --- a/dist/cjs/client/auth.d.ts
@@ -610,9 +664,17 @@ index 624172aa24ae255a67c083f9c19053343e4a0581..ac75b14545fda44aff7ff4d97cc5da88
                  }
                  throw new StreamableHTTPError(response.status, `Error POSTing to endpoint: ${text}`);
 diff --git a/dist/esm/shared/protocol.js b/dist/esm/shared/protocol.js
-index bfa2b7120a0f50c569364ea5264e6f811076f44f..abd8dfd707c155f71dae7aeeeeaf7547368ac749 100644
 --- a/dist/esm/shared/protocol.js
 +++ b/dist/esm/shared/protocol.js
+@@ -592,7 +592,7 @@ export class Protocol {
+                 }
+                 // Wait before polling again
+                 const pollInterval = task.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1000;
+-                await new Promise(resolve => setTimeout(resolve, pollInterval));
++                await this._waitForTaskPoll(pollInterval, options?.signal);
+                 // Check if cancelled
+                 options?.signal?.throwIfAborted();
+             }
 @@ -740,7 +740,12 @@ export class Protocol {
              }
              else {
@@ -627,3 +689,79 @@ index bfa2b7120a0f50c569364ea5264e6f811076f44f..abd8dfd707c155f71dae7aeeeeaf7547
                      this._cleanupTimeout(messageId);
                      reject(error);
                  });
+@@ -998,18 +1003,32 @@ export class Protocol {
+         catch {
+             // Use default interval if task lookup fails
+         }
++        return this._waitForTaskPoll(interval, signal);
++    }
++    _waitForTaskPoll(interval, signal) {
+         return new Promise((resolve, reject) => {
+-            if (signal.aborted) {
++            if (signal?.aborted) {
+                 reject(new McpError(ErrorCode.InvalidRequest, 'Request cancelled'));
+                 return;
+             }
+-            // Wait for the poll interval, then resolve so caller can check for updates
+-            const timeoutId = setTimeout(resolve, interval);
+-            // Clean up timeout and reject if aborted
+-            signal.addEventListener('abort', () => {
++            if (!Number.isSafeInteger(interval) || interval < 0 || interval > 2147483647) {
++                reject(new McpError(ErrorCode.InvalidParams, 'Invalid task polling interval'));
++                return;
++            }
++            const cleanup = () => {
+                 clearTimeout(timeoutId);
++                signal?.removeEventListener('abort', abort);
++            };
++            const abort = () => {
++                cleanup();
+                 reject(new McpError(ErrorCode.InvalidRequest, 'Request cancelled'));
+-            }, { once: true });
++            };
++            const timeoutId = setTimeout(() => {
++                cleanup();
++                resolve();
++            }, interval);
++            signal?.addEventListener('abort', abort, { once: true });
++            if (signal?.aborted) abort();
+         });
+     }
+     requestTaskStore(request, sessionId) {
+@@ -1104,4 +1123,4 @@ export function mergeCapabilities(base, additional) {
+     }
+     return result;
+ }
+-//# sourceMappingURL=protocol.js.map
+\ No newline at end of file
++//# sourceMappingURL=protocol.js.map
+diff --git a/dist/esm/shared/protocol.d.ts b/dist/esm/shared/protocol.d.ts
+--- a/dist/esm/shared/protocol.d.ts
++++ b/dist/esm/shared/protocol.d.ts
+@@ -436,8 +436,9 @@ export declare abstract class Protocol<SendRequestT extends Request, SendNotific
+      * @returns Promise that resolves when an update occurs or rejects if aborted
+      */
+     private _waitForTaskUpdate;
++    private _waitForTaskPoll;
+     private requestTaskStore;
+ }
+ export declare function mergeCapabilities(base: ServerCapabilities, additional: Partial<ServerCapabilities>): ServerCapabilities;
+ export declare function mergeCapabilities(base: ClientCapabilities, additional: Partial<ClientCapabilities>): ClientCapabilities;
+-//# sourceMappingURL=protocol.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=protocol.d.ts.map
+diff --git a/dist/cjs/shared/protocol.d.ts b/dist/cjs/shared/protocol.d.ts
+--- a/dist/cjs/shared/protocol.d.ts
++++ b/dist/cjs/shared/protocol.d.ts
+@@ -436,8 +436,9 @@ export declare abstract class Protocol<SendRequestT extends Request, SendNotific
+      * @returns Promise that resolves when an update occurs or rejects if aborted
+      */
+     private _waitForTaskUpdate;
++    private _waitForTaskPoll;
+     private requestTaskStore;
+ }
+ export declare function mergeCapabilities(base: ServerCapabilities, additional: Partial<ServerCapabilities>): ServerCapabilities;
+ export declare function mergeCapabilities(base: ClientCapabilities, additional: Partial<ClientCapabilities>): ClientCapabilities;
+-//# sourceMappingURL=protocol.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=protocol.d.ts.map

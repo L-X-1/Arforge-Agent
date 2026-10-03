@@ -20,6 +20,11 @@ def office_workspace(tmp_path):
     previous = file_tools.WORKSPACE
     file_tools.set_workspace(tmp_path)
     assert file_tools.get_workspace() == tmp_path.resolve()
+    # The Python Office wrappers are compatibility-only after the TS/Core
+    # writer migration; tests opt in explicitly instead of exercising the
+    # product default registry.
+    import arforge.tools.office_tools  # noqa: F401
+
     load_builtin_tools()
     try:
         yield tmp_path
@@ -256,10 +261,15 @@ def test_office_inputs_fail_closed(office_workspace, tool_name, arguments, error
     assert error_text.lower() in executed["result"]["error"].lower()
 
 
-def test_office_tools_are_part_of_the_shared_builtin_registry():
+def test_office_tools_are_explicit_compatibility_only():
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.office_tools" not in BUILTIN_TOOL_MODULES
+    import arforge.tools.office_tools as legacy
+
     failures = load_builtin_tools()
 
-    assert "arforge.tools.office_tools" not in failures
+    assert legacy.__name__ not in failures
     for name in ("write_docx", "write_xlsx", "write_pptx", "write_pdf", "read_office_document"):
         assert REGISTRY.get(name) is not None
 

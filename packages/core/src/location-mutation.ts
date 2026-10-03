@@ -23,7 +23,7 @@ export type ResolveInput = typeof ResolveInput.Type
 
 export class PathError extends Schema.TaggedErrorClass<PathError>()("LocationMutation.PathError", {
   path: Schema.String,
-  reason: Schema.Literals(["relative_escape", "location_escape", "non_directory_ancestor"]),
+  reason: Schema.Literals(["relative_escape", "location_escape", "non_directory_ancestor", "symbolic_link"]),
 }) {}
 
 export interface ExternalDirectoryAuthorization {
@@ -122,6 +122,14 @@ const layer = Layer.effect(
       const absolute = path.resolve(location.directory, input.path)
       const lexicallyInternal = FSUtil.contains(location.directory, absolute)
       if (relative && !lexicallyInternal) return yield* new PathError({ path: input.path, reason: "relative_escape" })
+      let component = absolute
+      while (true) {
+        if (yield* fs.isSymbolicLink(component))
+          return yield* new PathError({ path: input.path, reason: "symbolic_link" })
+        const parent = path.dirname(component)
+        if (parent === component) break
+        component = parent
+      }
 
       const resolved = yield* resolvePath(absolute)
       if (lexicallyInternal && !FSUtil.contains(locationRoot, resolved.canonical)) {

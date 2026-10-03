@@ -13,6 +13,7 @@ import { Integration } from "@arforge-ai/core/integration"
 import { Location } from "@arforge-ai/core/location"
 import { Npm } from "@arforge-ai/core/npm"
 import { PluginV2 } from "@arforge-ai/core/plugin"
+import { PluginEvents } from "@arforge-ai/core/plugin/events"
 import { Reference } from "@arforge-ai/core/reference"
 import { SkillV2 } from "@arforge-ai/core/skill"
 import { Effect, Layer } from "effect"
@@ -35,6 +36,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
     Npm.node,
     Credential.node,
     EventV2.node,
+    PluginEvents.node,
     LayerNodePlatform.httpClient,
     PluginV2.node,
     AgentV2.node,

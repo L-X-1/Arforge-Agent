@@ -9,6 +9,7 @@ import { FileAttachment, Prompt } from "./prompt"
 import { DateTimeUtcFromMillis, RelativePath, statics } from "./schema"
 import { SessionID } from "./session-id"
 import { ascending } from "./identifier"
+import { AgentRuntime } from "./agent-runtime"
 
 export const ID = Schema.String.check(Schema.isStartsWith("msg_")).pipe(
   Schema.brand("Session.Message.ID"),
@@ -48,6 +49,11 @@ export const User = Schema.Struct({
   text: Prompt.fields.text,
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
+  scheduledTasks: Prompt.fields.scheduledTasks,
+  system: Prompt.fields.system,
+  route: Prompt.fields.route,
+  command: Prompt.fields.command,
+  format: Prompt.fields.format,
   type: Schema.Literal("user"),
 }).annotate({ identifier: "Session.Message.User" })
 
@@ -99,6 +105,8 @@ export const ToolStateCompleted = Schema.Struct({
   input: Schema.Record(Schema.String, Schema.Unknown),
   attachments: FileAttachment.pipe(Schema.Array, optional),
   content: ToolContent.pipe(Schema.Array),
+  /** Storage-safe managed output receipts; outputPaths is compatibility-only. */
+  artifactRefs: Schema.Array(Schema.suspend(() => AgentRuntime.OpaqueArtifactRef)).pipe(optional),
   outputPaths: Schema.Array(Schema.String).pipe(optional),
   structured: Schema.Record(Schema.String, Schema.Unknown),
   result: Schema.Unknown.pipe(optional),
@@ -111,6 +119,8 @@ export const ToolStateError = Schema.Struct({
   content: ToolContent.pipe(Schema.Array),
   structured: Schema.Record(Schema.String, Schema.Unknown),
   error: UnknownError,
+  artifactRefs: Schema.Array(Schema.suspend(() => AgentRuntime.OpaqueArtifactRef)).pipe(optional),
+  outputPaths: Schema.Array(Schema.String).pipe(optional),
   result: Schema.Unknown.pipe(optional),
 }).annotate({ identifier: "Session.Message.ToolState.Error" })
 
@@ -169,6 +179,8 @@ export const Assistant = Schema.Struct({
   agent: Schema.String,
   model: Model.Ref,
   content: AssistantContent.pipe(Schema.Array),
+  /** Final validated value captured by the canonical StructuredOutput tool. */
+  structured: Schema.Record(Schema.String, Schema.Json).pipe(optional),
   delivery: PrimaryDelivery.Metadata.pipe(optional),
   snapshot: Schema.Struct({
     start: Schema.String.pipe(optional),

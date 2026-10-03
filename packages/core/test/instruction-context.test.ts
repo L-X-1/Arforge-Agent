@@ -11,11 +11,14 @@ import { Location } from "@arforge-ai/core/location"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SystemContext } from "@arforge-ai/core/system-context"
 import { SystemContextRegistry } from "@arforge-ai/core/system-context/registry"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Layer.empty)
+const trusted = (file: string, content: string) =>
+  ContextFirewall.trustedProjectRules(file, `Instructions from: ${file}\n${content}`)
 
 const instructionLayer = (input: {
   config: string
@@ -73,9 +76,9 @@ describe("InstructionContext", () => {
           const initialized = yield* SystemContext.initialize(yield* load)
           expect(initialized.baseline).toBe(
             [
-              `Instructions from: ${globalFile}\nglobal`,
-              `Instructions from: ${packageFile}\npackage`,
-              `Instructions from: ${projectFile}\nproject`,
+              trusted(globalFile, "global"),
+              trusted(packageFile, "package"),
+              trusted(projectFile, "project"),
             ].join("\n\n"),
           )
           expect(initialized.baseline).not.toContain("outside")
@@ -92,8 +95,8 @@ describe("InstructionContext", () => {
             _tag: "Updated",
             text: [
               "These instructions replace all previously loaded ambient instructions.",
-              `Instructions from: ${globalFile}\nglobal`,
-              `Instructions from: ${projectFile}\nproject`,
+              trusted(globalFile, "global"),
+              trusted(projectFile, "project"),
             ].join("\n\n"),
             snapshot: expect.any(Object),
           })
@@ -145,7 +148,7 @@ describe("InstructionContext", () => {
 
           const initialized = yield* SystemContext.initialize(yield* load)
           expect(initialized.baseline).toBe(
-            [`Instructions from: ${arforgeFile}\n# Arforge 行为准则`].join("\n\n"),
+            [trusted(arforgeFile, "# Arforge 行为准则")].join("\n\n"),
           )
 
           yield* Effect.promise(() => fs.writeFile(arforgeFile, "# 更新后的准则"))
@@ -180,7 +183,7 @@ describe("InstructionContext", () => {
             ),
           )
 
-          expect((yield* SystemContext.initialize(context)).baseline).toBe(`Instructions from: ${file}\n`)
+          expect((yield* SystemContext.initialize(context)).baseline).toBe(trusted(file, ""))
         }),
       ),
     ),

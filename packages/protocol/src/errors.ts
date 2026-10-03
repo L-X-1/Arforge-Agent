@@ -25,6 +25,15 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
   { httpApiStatus: 409 },
 ) {}
 
+export class RateLimitedError extends Schema.TaggedErrorClass<RateLimitedError>()(
+  "RateLimitedError",
+  {
+    message: Schema.String,
+    retryAfterSeconds: Schema.Number,
+  },
+  { httpApiStatus: 429 },
+) {}
+
 export class ServiceUnavailableError extends Schema.TaggedErrorClass<ServiceUnavailableError>()(
   "ServiceUnavailableError",
   {
@@ -110,6 +119,16 @@ export class ScheduledPromptNotFoundError extends Schema.TaggedErrorClass<Schedu
   { httpApiStatus: 404 },
 ) {}
 
+export class PersonalJobNotFoundError extends Schema.TaggedErrorClass<PersonalJobNotFoundError>()(
+  "PersonalJobNotFoundError",
+  {
+    sessionID: Schema.String,
+    jobID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
 export class TaskNotFoundError extends Schema.TaggedErrorClass<TaskNotFoundError>()(
   "TaskNotFoundError",
   {
@@ -134,6 +153,17 @@ export class TeamMemberNotFoundError extends Schema.TaggedErrorClass<TeamMemberN
   {
     sessionID: Schema.String,
     member: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 404 },
+) {}
+
+export class SubagentControlNotFoundError extends Schema.TaggedErrorClass<SubagentControlNotFoundError>()(
+  "SubagentControlNotFoundError",
+  {
+    parentRunID: Schema.String,
+    childRunID: Schema.String,
+    requestID: Schema.String,
     message: Schema.String,
   },
   { httpApiStatus: 404 },

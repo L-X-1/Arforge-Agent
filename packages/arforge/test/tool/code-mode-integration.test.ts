@@ -11,6 +11,8 @@ import { MessageID, SessionID } from "@/session/schema"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { ActionGateway } from "@arforge-ai/core/action-gateway"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import {
   CallToolRequestSchema,
   LATEST_PROTOCOL_VERSION,
@@ -23,6 +25,22 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwA
 
 const SERVER = "fixtures"
 
+const childActions: string[] = []
+const gateway = ActionGateway.Service.of({
+  validateDelegationParent: () => Effect.die("delegation is outside this isolated harness"),
+  execute: (input, operation) =>
+    Effect.gen(function* () {
+      childActions.push(input.name)
+      const result = yield* operation.execute({} as never)
+      if (operation.afterSuccess) yield* operation.afterSuccess(structuredClone(result)).pipe(Effect.orDie)
+      return result
+    }),
+  reconcile: () => Effect.die(new Error("reconciliation is unavailable in this isolated tool harness")),
+  settleSupersededAction: () => Effect.void,
+  cancelPendingAction: () => Effect.void,
+  blockAuthorizedHandoff: () => Effect.void,
+})
+
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_code-mode-int"),
   messageID: MessageID.make("msg_code-mode-int"),
@@ -32,6 +50,8 @@ const ctx: Tool.Context = {
   messages: [],
   metadata: () => Effect.void,
   ask: () => Effect.void,
+  gateway,
+  parentAction: { actionID: AgentRuntime.ActionID.make("act_code-mode-int-parent") },
 }
 
 // Avoid the SDK Client here; other MCP tests mock it process-globally.
@@ -151,6 +171,8 @@ async function buildTool() {
     Layer.mock(MCP.Service, {
       tools: () => Effect.succeed(mcpTools),
       clients: () => Effect.succeed({ [SERVER]: {} as any }),
+      declaredScope: () =>
+        Effect.succeed({ endpoint: "exec:test", networkScope: [], secretScope: [], externalServices: [] }),
     }),
   )
   return {
@@ -294,9 +316,8 @@ describe("code mode integration (real MCP server)", () => {
     expect(out.metadata.toolCalls).toEqual([])
   })
 
-  test("asks permission for each MCP call, keyed by the flat catalog name", async () => {
-    const asked: string[] = []
-    const permCtx: Tool.Context = { ...ctx, ask: (req: any) => Effect.sync(() => void asked.push(req.permission)) }
+  test("routes each MCP call through the gateway keyed by the flat catalog name", async () => {
+    childActions.length = 0
     await Effect.runPromise(
       tool.execute(
         {
@@ -306,10 +327,10 @@ describe("code mode integration (real MCP server)", () => {
             return 'done'
           `,
         },
-        permCtx,
+        ctx,
       ),
     )
-    expect(asked).toEqual(["fixtures_add", "fixtures_get_text"])
+    expect(childActions).toEqual(["fixtures_add", "fixtures_get_text"])
   })
 
   test("streams running/completed metadata for child calls over a real transport", async () => {

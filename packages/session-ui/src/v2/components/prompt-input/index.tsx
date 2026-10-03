@@ -21,6 +21,8 @@ import type {
   PromptInputV2Suggestion,
 } from "./types"
 import type { PromptInputV2Interaction, PromptInputV2SelectControl } from "./interaction"
+import { promptInputIsComposing } from "./editor-selection"
+import "./presentation.css"
 
 export type {
   PromptInputV2Attachment,
@@ -68,6 +70,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
   const view = props.controller.view
   let editor: HTMLDivElement | undefined
   let localInput = false
+  let composing = false
   const updateCursor = () => {
     if (!editor || !window.getSelection()?.isCollapsed) return
     props.controller.onCursor(promptInputV2Cursor(editor))
@@ -134,7 +137,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
         }}
         onSubmit={(event) => {
           event.preventDefault()
-          if (!props.disabled) props.controller.submit()
+          if (!props.disabled && !props.readOnly && !composing) props.controller.submit()
         }}
         onDragEnter={props.controller.onDragEnter}
         onDragOver={props.controller.onDragOver}
@@ -168,6 +171,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
               renderPromptInputV2Editor(element, props.controller.parts())
             }}
             data-component="prompt-input"
+            data-slot="prompt-input-editor"
             role="textbox"
             aria-multiline="true"
             aria-label="Prompt"
@@ -186,7 +190,12 @@ export function PromptInputV2(props: PromptInputV2Props) {
               localInput = true
               props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...images], cursor)
             }}
+            onCompositionStart={() => { composing = true }}
+            onCompositionEnd={() => { composing = false }}
+            onBlur={props.controller.captureSelection}
             onKeyDown={(event) => {
+              if (promptInputIsComposing(event, composing)) return
+              if (props.disabled || props.readOnly) return
               if (props.controller.onKeyDown(event)) return
               if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
                 event.preventDefault()
@@ -201,6 +210,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
           />
           <Show when={!props.controller.value()}>
             <div
+              data-slot="prompt-input-placeholder"
               class="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 text-[13px] font-[440] leading-5 text-v2-text-text-faint"
               classList={{ "font-mono!": state.mode === "shell" }}
             >
@@ -290,7 +300,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
           <PromptInputV2SubmitButton
             mode={state.mode}
             stopping={view.submit.stopping()}
-            disabled={!props.controller.canSubmit()}
+            disabled={props.disabled || props.readOnly || !props.controller.canSubmit()}
             sendLabel="Send"
             stopLabel="Stop"
             onSubmit={props.controller.submit}

@@ -1,4 +1,4 @@
-"""Tests for fork_subagent.py — context-inheriting sub-agent spawn."""
+"""Tests for fork_subagent.py — bounded context-aware compatibility helper."""
 from arforge.multiagent.fork_subagent import (
     ForkSubAgentConfig,
     ForkResult,
@@ -13,8 +13,10 @@ class TestForkSubAgentConfig:
     def test_defaults(self):
         cfg = ForkSubAgentConfig(task="Test task")
         assert cfg.task == "Test task"
-        assert cfg.permission_mode == "acceptEdits"
-        assert cfg.inherit_tools is True
+        assert cfg.permission_mode == "plan"
+        assert cfg.inherit_tools is False
+        assert cfg.allowed_tools == ()
+        assert cfg.allowed_capabilities == ()
         assert cfg.agent_type is None
 
     def test_custom_agent_type(self):
@@ -28,6 +30,7 @@ class TestBuildForkSystemPrompt:
         prompt = build_fork_system_prompt(parent, "Fix bug in foo.py")
         assert parent in prompt
         assert "Fix bug in foo.py" in prompt
+        assert "do not infer permissions" in prompt
 
     def test_includes_agent_type_prompt(self):
         parent = "Base system prompt."

@@ -1,9 +1,77 @@
 import { AnalysisQuality } from "@arforge-ai/core/analysis/quality"
 import { Effect } from "effect"
-import { readFile } from "node:fs/promises"
+import { readFile, stat } from "node:fs/promises"
 import { EOL } from "node:os"
 import { resolve } from "node:path"
 import { effectCmd, fail } from "../effect-cmd"
+
+const MAX_PATCH_CHARS = 500_000
+
+class LegacyQualityPatchError extends Error {
+  readonly exitCode = 2
+}
+
+function hasPatchExtension(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return normalized.endsWith(".diff") || normalized.endsWith(".patch")
+}
+
+function looksLikeUnifiedDiff(value: string): boolean {
+  const lines = value.split(/\r?\n/)
+  const hasGitHeader = lines.some((line) => line.startsWith("diff --git "))
+  const hasFileHeaders = lines.some((line) => line.startsWith("--- ")) && lines.some((line) => line.startsWith("+++ "))
+  const hasHunk = lines.some((line) => line.startsWith("@@"))
+  return hasGitHeader || (hasFileHeaders && hasHunk)
+}
+
+type PatchInput = {
+  readonly files: string[]
+  readonly patchText: string | undefined
+}
+
+async function resolvePatchInput(workspace: string, files: string[], explicitPatchFile?: string): Promise<PatchInput> {
+  const explicit = explicitPatchFile?.trim()
+  if (explicit) {
+    const value = await readFile(resolve(workspace, explicit), "utf8")
+    if (value.length > MAX_PATCH_CHARS) throw new Error(`补丁超过 ${MAX_PATCH_CHARS.toLocaleString("en-US")} 字符限制。`)
+    return { files, patchText: value }
+  }
+
+  // The Python CLI historically accepted `quality <patch-file>`.  Keep that
+  // spelling in the same handler only when there is one positional input and
+  // it is unambiguously a patch by extension or by unified-diff structure.
+  // Ordinary `quality module.ts` therefore keeps the canonical file-quality
+  // behavior, while `.diff`/`.patch` files (including missing ones) fail as
+  // patch inputs instead of silently becoming missing source files.
+  if (files.length !== 1) return { files, patchText: undefined }
+  const candidate = files[0].trim()
+  if (!candidate) return { files, patchText: undefined }
+  const candidatePath = resolve(workspace, candidate)
+  const extensionMatch = hasPatchExtension(candidate)
+  let value: string
+  try {
+    const metadata = await stat(candidatePath)
+    if (!metadata.isFile()) {
+      if (extensionMatch) throw new LegacyQualityPatchError("目标不是文件。")
+      return { files, patchText: undefined }
+    }
+    // Avoid reading an arbitrary large source file just to classify it. An
+    // explicitly named patch still gets the normal size guard below.
+    if (!extensionMatch && metadata.size > MAX_PATCH_CHARS) return { files, patchText: undefined }
+    value = await readFile(candidatePath, "utf8")
+  } catch (error) {
+    if (extensionMatch) {
+      throw new LegacyQualityPatchError(error instanceof Error ? error.message : String(error))
+    }
+    return { files, patchText: undefined }
+  }
+
+  if (!extensionMatch && !looksLikeUnifiedDiff(value)) return { files, patchText: undefined }
+  if (value.length > MAX_PATCH_CHARS) {
+    throw new LegacyQualityPatchError(`补丁超过 ${MAX_PATCH_CHARS.toLocaleString("en-US")} 字符限制。`)
+  }
+  return { files: [], patchText: value }
+}
 
 export const QualityCommand = effectCmd({
   command: "quality [files..]",
@@ -12,7 +80,7 @@ export const QualityCommand = effectCmd({
   builder: (yargs) =>
     yargs
       .positional("files", {
-        describe: "要检查的工作区相对文件",
+        describe: "要检查的工作区相对文件；单个 .diff/.patch 位置参数兼容 Python 旧补丁入口",
         type: "string",
         array: true,
       })
@@ -21,7 +89,7 @@ export const QualityCommand = effectCmd({
         type: "string",
       })
       .option("patch-file", {
-        describe: "可选的 unified diff 文件",
+        describe: "可选的 unified diff 文件；也可用单个 .diff/.patch 位置参数",
         type: "string",
       })
       .option("json", {
@@ -31,18 +99,19 @@ export const QualityCommand = effectCmd({
       }),
   handler: Effect.fn("Cli.quality")(function* (args) {
     const workspace = resolve(args.workspace ?? process.cwd())
-    const patchText = yield* Effect.tryPromise({
+    const input = yield* Effect.tryPromise({
       try: async () => {
-        if (!args.patchFile) return undefined
-        const value = await readFile(resolve(workspace, args.patchFile), "utf8")
-        if (value.length > 500_000) throw new Error("补丁超过 500,000 字符限制。")
-        return value
+        return await resolvePatchInput(workspace, [...(args.files ?? [])], args.patchFile)
       },
       catch: (error) => (error instanceof Error ? error : new Error(String(error))),
-    }).pipe(Effect.catch((error) => fail(`无法读取补丁：${error.message}`)))
+    }).pipe(
+      Effect.catch((error) =>
+        fail(`无法读取补丁：${error.message}`, error instanceof LegacyQualityPatchError ? error.exitCode : 1),
+      ),
+    )
 
-    const result = AnalysisQuality.assessQualityChange([...(args.files ?? [])], {
-      patchText,
+    const result = AnalysisQuality.assessQualityChange(input.files, {
+      patchText: input.patchText,
       root: workspace,
     })
 

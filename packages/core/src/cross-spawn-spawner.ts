@@ -22,7 +22,9 @@ import {
   ProcessId,
 } from "effect/unstable/process/ChildProcessSpawner"
 import * as NodeChildProcess from "node:child_process"
+import { win32 } from "node:path"
 import { PassThrough } from "node:stream"
+import { sanitizeChildEnvironment } from "./secret-environment"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node"
 import { filesystem, path } from "./effect/app-node-platform"
@@ -107,7 +109,7 @@ export const make = Effect.gen(function* () {
   })
 
   const env = (opts: ChildProcess.CommandOptions) =>
-    opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env
+    sanitizeChildEnvironment(opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env)
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x
@@ -378,6 +380,10 @@ export const make = Effect.gen(function* () {
               detached: command.options.detached ?? process.platform !== "win32",
               shell: command.options.shell,
               windowsHide: process.platform === "win32",
+              // cmd parses a command string, not CRT-escaped argv. Escaping its
+              // embedded quotes can silently turn a real command into a no-op.
+              windowsVerbatimArguments:
+                process.platform === "win32" && /^cmd(?:\.exe)?$/i.test(win32.basename(command.command)),
             }),
             Effect.fnUntraced(function* ([proc, signal]) {
               const done = yield* Deferred.isDone(signal)

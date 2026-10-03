@@ -1,14 +1,11 @@
 import { NodeHttpServer } from "@effect/platform-node"
-import { Credential } from "@arforge-ai/core/credential"
-import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
-import { LayerNode } from "@arforge-ai/core/effect/layer-node"
-import { PermissionSaved } from "@arforge-ai/core/permission/saved"
 import { Context, Layer, Option } from "effect"
 import * as Effect from "effect/Effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
-import { createRoutes } from "@arforge-ai/server/routes"
+import { applicationServices, createRoutes } from "@arforge-ai/server/routes"
+import { IdentityContext } from "@arforge-ai/server/identity-context"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Daemon } from "../../services/daemon"
@@ -24,7 +21,7 @@ export default Runtime.handler(
         console.log(`server listening on ${HttpServer.formatAddress(address)}`)
         return yield* Effect.never
       }),
-    )
+    ).pipe(Effect.provideService(IdentityContext.Current, IdentityContext.LocalPrincipal))
   }),
 )
 
@@ -41,7 +38,7 @@ function bind(hostname: string, port: number, password: string) {
   return Layer.build(
     HttpRouter.serve(createRoutes(password), { disableListenLog: true, disableLogger: true }).pipe(
       Layer.provideMerge(NodeHttpServer.layer(() => createServer(), { port, host: hostname })),
-      Layer.provide(AppNodeBuilder.build(LayerNode.group([Database.node, Credential.node, PermissionSaved.node]))),
+      Layer.provide(AppNodeBuilder.build(applicationServices)),
     ),
   ).pipe(Effect.map((context) => Context.get(context, HttpServer.HttpServer).address))
 }

@@ -11,6 +11,7 @@ import { Location } from "@arforge-ai/core/location"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ModelsDev } from "@arforge-ai/core/models-dev"
 import { ModelsDevPlugin } from "@arforge-ai/core/plugin/models-dev"
+import { PluginEvents } from "@arforge-ai/core/plugin/events"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { location } from "../fixture/location"
@@ -21,7 +22,7 @@ const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
 )
-const layer = AppNodeBuilder.build(LayerNode.group([Catalog.node, Integration.node, EventV2.node]), [
+const layer = AppNodeBuilder.build(LayerNode.group([Catalog.node, Integration.node, EventV2.node, PluginEvents.node]), [
   [Location.node, locationLayer],
 ])
 const it = testEffect(layer)
@@ -95,6 +96,12 @@ describe("ModelsDevPlugin", () => {
 
       expect(base?.variants).toEqual([])
       expect(base?.request.body).toEqual({})
+      expect(base?.api).toEqual({
+        id: ModelV2.ID.make("gpt-5.4"),
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://api.acme.test/v1",
+      })
       expect(fast).toMatchObject({
         id: "gpt-5.4-fast",
         providerID: "acme",

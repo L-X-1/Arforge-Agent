@@ -1,14 +1,46 @@
-# Arforge Machine Bridge 1.1
+# Arforge Machine Bridge 1.2 (TypeScript)
 
-`arforge-bridge` is the supported backend process for desktop and other non-terminal clients. It reads one UTF-8 JSON request per line from stdin and writes exactly one compact JSON response per line to stdout. Human-readable CLI output and ANSI sequences are never part of this interface.
+`arforge bridge` is the supported TypeScript backend process for desktop and other
+non-terminal clients. It reads one UTF-8 JSON request per line from stdin and
+writes exactly one compact JSON response per line to stdout. Human-readable CLI
+output and ANSI sequences are never part of this interface. The former Python
+`python -m arforge.bridge` entrypoint has been retired; sending its old protocol
+name is rejected with `UNSUPPORTED_PROTOCOL`.
+
+## Current TypeScript implementation boundary
+
+The TypeScript bridge is the single transport adapter over the existing Arforge
+Core/Server session, event and VCS owners. It does not create a second Agent
+Loop, permission engine, MCP registry, database journal or sandbox. At startup,
+clients must call `protocol.describe`, require `runtime: "typescript"`, and enable
+only the methods advertised by that response. The VS Code and JetBrains clients
+also repeat the check in `health` and fail closed if either handshake is not a
+TypeScript runtime. The current implementation advertises:
+
+| Method family | Methods |
+| --- | --- |
+| Protocol and health | `protocol.describe`, `health`, `workspace.get` |
+| Session | `session.create`, `session.get`, `session.resume` |
+| Chat lifecycle | `chat.start`, `chat.cancel` |
+| Working-tree review | `git.diff` |
+
+The later 1.1/1.2 tables in this document are retained as the migration inventory
+for capabilities that still need a TypeScript adapter. They are not implied to
+be callable until they appear in `protocol.describe`; clients must fail closed
+when a method is absent. Permission mode is translated to compatibility metadata
+only (`read-only`, `workspace-write` or `unrestricted`); Core agent permission
+rules remain authoritative. Full OS-level sandbox validation across Linux,
+macOS and Windows is intentionally deferred.
 
 ## Request
 
 ```json
-{"protocol":"arforge.bridge","version":"1.1","id":"request-1","method":"health","params":{}}
+{"protocol":"arforge.bridge","version":"1.2","id":"request-1","method":"health","params":{}}
 ```
 
-- Version 1.0 remains supported for read-only clients. Omitting `version` selects 1.0 for backward compatibility; new clients must send `1.1` explicitly.
+- Versions 1.0 and 1.1 remain supported for read-only/migration clients. Omitting
+  `version` selects 1.0 for backward compatibility; new clients must send the
+  current `1.2` explicitly.
 - `id` is echoed unchanged so clients can correlate responses.
 - `method` is required.
 - Read-only methods use an empty `params` object. Session methods validate an explicit field allowlist.
@@ -19,23 +51,23 @@
 Success:
 
 ```json
-{"protocol":"arforge.bridge","version":"1.1","id":"request-1","ok":true,"data":{"status":"ok"}}
+{"protocol":"arforge.bridge","version":"1.2","id":"request-1","ok":true,"data":{"status":"ok","runtime":"typescript"}}
 ```
 
 Failure:
 
 ```json
-{"protocol":"arforge.bridge","version":"1.1","id":"request-1","ok":false,"error":{"code":"METHOD_NOT_FOUND","message":"unknown method: example"}}
+{"protocol":"arforge.bridge","version":"1.2","id":"request-1","ok":false,"error":{"code":"METHOD_NOT_FOUND","message":"unknown method: example"}}
 ```
 
-Stable client-actionable error codes include `PARSE_ERROR`, `REQUEST_TOO_LARGE`, `INVALID_REQUEST`, `INVALID_PARAMS`, `UNSUPPORTED_PROTOCOL`, `UNSUPPORTED_VERSION`, `METHOD_NOT_FOUND`, `METHOD_NOT_AVAILABLE`, `SESSION_NOT_FOUND`, `SESSION_CLOSED`, `SESSION_BUSY`, `SESSION_LIMIT`, `OPERATION_NOT_FOUND`, `OPERATION_LIMIT`, `TASK_NOT_FOUND`, `TASK_LIMIT`, `INPUT_TOO_LARGE`, `APPROVAL_REQUIRED`, `INVALID_CURSOR`, `CURSOR_EXPIRED`, `SETTING_NOT_ALLOWED`, `SENSITIVE_SETTING`, `INVALID_SETTING_VALUE`, `REVISION_CONFLICT`, `SETTINGS_BUSY`, `SETTINGS_CORRUPT`, `INVALID_FEEDBACK_CATEGORY`, `INVALID_FEEDBACK_RATING`, `INVALID_FEEDBACK_MESSAGE`, `RETRY_UNSAFE`, `RETRY_PAYLOAD_UNAVAILABLE`, `MODEL_ERROR`, and `BACKEND_ERROR`. A malformed request does not stop the bridge; it continues reading the next line.
+Stable client-actionable error codes include `PARSE_ERROR`, `REQUEST_TOO_LARGE`, `INVALID_REQUEST`, `INVALID_PARAMS`, `UNSUPPORTED_PROTOCOL`, `UNSUPPORTED_VERSION`, `METHOD_NOT_FOUND`, `METHOD_NOT_AVAILABLE`, `BRIDGE_RUNTIME_UNSUPPORTED`, `BRIDGE_CAPABILITIES_UNSUPPORTED`, `BRIDGE_METHOD_UNAVAILABLE`, `SESSION_NOT_FOUND`, `SESSION_CLOSED`, `SESSION_BUSY`, `SESSION_LIMIT`, `OPERATION_NOT_FOUND`, `OPERATION_LIMIT`, `TASK_NOT_FOUND`, `TASK_LIMIT`, `INPUT_TOO_LARGE`, `APPROVAL_REQUIRED`, `INVALID_CURSOR`, `CURSOR_EXPIRED`, `SETTING_NOT_ALLOWED`, `SENSITIVE_SETTING`, `INVALID_SETTING_VALUE`, `REVISION_CONFLICT`, `SETTINGS_BUSY`, `SETTINGS_CORRUPT`, `INVALID_FEEDBACK_CATEGORY`, `INVALID_FEEDBACK_RATING`, `INVALID_FEEDBACK_MESSAGE`, `RETRY_UNSAFE`, `RETRY_PAYLOAD_UNAVAILABLE`, `MODEL_ERROR`, and `BACKEND_ERROR`. IDE clients use the `BRIDGE_*` codes to explain a runtime/capability mismatch before sending user work. A malformed request does not stop the bridge; it continues reading the next line.
 
 ## Read-only methods
 
 | Method | Structured result |
 | --- | --- |
 | `protocol.describe` | Protocol version, transport and advertised methods |
-| `health` | Canonical product version and Python runtime support |
+| `health` | Canonical product health and TypeScript runtime support |
 | `status.get` | Memory, token and implementation status from the backend |
 | `tools.list` | Registered tool schemas and risk levels |
 | `agents.list` | Registered multi-agent roles and capabilities |
@@ -48,7 +80,14 @@ Stable client-actionable error codes include `PARSE_ERROR`, `REQUEST_TOO_LARGE`,
 
 Desktop hosts should set `ARFORGE_WORKSPACE` before starting the Bridge and use that directory as the child process working directory. `workspace.get` lets the client display the exact canonical root before it submits any relative diff path. If the configured path does not exist or is not a directory, the host must fail before accepting requests.
 
-`multimodal.diagnose` accepts `filename`, optional `extracted_text` and optional `limit`. `filename` must be a relative path inside the Bridge workspace; absolute paths and traversal outside the workspace are rejected. The method is read-only: it may inspect the source file, extract text, search code and return structured suggestions, but it never edits files or writes release evidence.
+`multimodal.diagnose` accepts `filename`, optional `extracted_text`, `limit` and
+`mode` (`error`, `frontend` or `javascript`). `filename` must be a relative
+path inside the Bridge workspace; absolute paths and traversal outside the
+workspace are rejected. The method is read-only: it may inspect the source
+file, extract text, search code and return structured suggestions, but it never
+edits files or writes release evidence. The CLI
+`arforge multimodal-diagnose <file>` calls this same typed route; the Python
+CLI entry is only a parameter-forwarding compatibility layer.
 
 ## Session methods (1.1)
 
@@ -123,7 +162,7 @@ are recorded as audit events.
 After a successful `chat.start` response, the bridge may emit unsolicited event lines:
 
 ```json
-{"protocol":"arforge.bridge","version":"1.1","event":true,"session_id":"...","operation_id":"...","sequence":1,"timestamp":"2026-06-21T00:00:00Z","type":"operation.started","data":{"kind":"chat"}}
+{"protocol":"arforge.bridge","version":"1.2","event":true,"session_id":"...","operation_id":"...","sequence":1,"timestamp":"2026-06-21T00:00:00Z","type":"operation.started","data":{"kind":"chat"}}
 ```
 
 `sequence` starts at 1 for every operation and increases without gaps. Terminal event types are `operation.completed`, `operation.failed`, `operation.cancelled`, and `operation.timed_out`. Answer chunks use `answer.delta`; routing uses `chat.route`. The acknowledgement is always written before the first event.

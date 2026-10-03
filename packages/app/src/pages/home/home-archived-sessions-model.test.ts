@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test"
 import type { GlobalSession } from "@arforge-ai/sdk/v2/client"
-import { buildHomeArchivedSessionRecords, filterHomeArchivedSessionRecords } from "./home-archived-sessions-model"
+import {
+  buildHomeArchivedSessionRecords,
+  filterHomeArchivedSessionRecords,
+  unarchiveSessionTime,
+} from "./home-archived-sessions-model"
 
 function session(input: {
   id: string
@@ -52,4 +56,8 @@ test("searches archived sessions by title, project, directory, and id", () => {
   expect(filterHomeArchivedSessionRecords(records, "/projects")).toHaveLength(1)
   expect(filterHomeArchivedSessionRecords(records, "ses_alpha")).toHaveLength(1)
   expect(filterHomeArchivedSessionRecords(records, "missing")).toHaveLength(0)
+})
+
+test("uses an explicit null timestamp to restore an archived session", () => {
+  expect(unarchiveSessionTime).toEqual({ archived: null })
 })

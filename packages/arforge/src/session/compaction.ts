@@ -20,8 +20,16 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
-import { buildPrompt } from "@arforge-ai/core/session/compaction"
+import { buildPrompt, CONTINUE_PROMPT, runTransactional } from "@arforge-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@arforge-ai/schema/session-compaction-event"
+import { NamedError } from "@arforge-ai/core/util/error"
+import * as ContextSurface from "@arforge-ai/core/context-surface"
+import * as SessionCompactionCheckpoint from "@arforge-ai/core/session/compaction-checkpoint"
+import * as RuntimeInvariants from "@arforge-ai/core/runtime/invariants"
+import { Database } from "@arforge-ai/core/database/database"
+import { SessionMessage } from "@arforge-ai/core/session/message"
+import { SessionSchema } from "@arforge-ai/core/session/schema"
+import { ContextBudget } from "@arforge-ai/core/context-budget"
 
 export const Event = SessionCompactionEvent
 
@@ -59,6 +67,40 @@ function summaryText(message: SessionV1.WithParts) {
   return text || undefined
 }
 
+function sourceIdentity(messages: SessionV1.WithParts[], ignored: ReadonlySet<MessageID>) {
+  return JSON.stringify(messages.filter((message) => !ignored.has(message.info.id)))
+}
+
+function transactionSurface(input: { head: readonly unknown[]; recent: string }) {
+  const head = JSON.stringify(input.head)
+  const recent = input.recent
+  const nodes: ContextSurface.SurfaceNode[] = [
+    {
+      id: "mature-compaction:head",
+      sourceSeq: 1,
+      role: "context",
+      text: head,
+      // Mature selection already chose the exact summary input. Keep it
+      // atomic so Core cannot invent a second split inside that request.
+      pairID: "mature-compaction-head",
+    },
+  ]
+  if (recent) {
+    nodes.push({
+      id: "mature-compaction:tail",
+      sourceSeq: 2,
+      role: "context",
+      text: recent,
+      pairID: "mature-compaction-tail",
+    })
+  }
+  return {
+    store: new ContextSurface.SurfaceStore(nodes),
+    recent,
+    recentTokenBudget: recent ? ContextBudget.count(recent).tokens : 0,
+  }
+}
+
 function completedCompactions(messages: SessionV1.WithParts[]) {
   const users = new Map<MessageID, number>()
   for (let i = 0; i < messages.length; i++) {
@@ -71,9 +113,11 @@ function completedCompactions(messages: SessionV1.WithParts[]) {
   return messages.flatMap((msg, assistantIndex): CompletedCompaction[] => {
     if (msg.info.role !== "assistant") return []
     if (!msg.info.summary || !msg.info.finish || msg.info.error) return []
+    const summary = summaryText(msg)
+    if (!summary) return []
     const userIndex = users.get(msg.info.parentID)
     if (userIndex === undefined) return []
-    return [{ userIndex, assistantIndex, summary: summaryText(msg) }]
+    return [{ userIndex, assistantIndex, summary }]
   })
 }
 
@@ -164,6 +208,8 @@ const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const db = (yield* Database.Service).db
+    const invariants = yield* RuntimeInvariants.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -334,8 +380,9 @@ const layer = Layer.effect(
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
+      const visibleHistory = history.filter((_, index) => !hidden.has(index))
       const selected = yield* select({
-        messages: history.filter((_, index) => !hidden.has(index)),
+        messages: visibleHistory,
         cfg,
         model,
       })
@@ -345,14 +392,28 @@ const layer = Layer.effect(
         { sessionID: input.sessionID },
         { context: [], prompt: undefined },
       )
-      const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
+      const canonicalContext = MessageV2.serializeCompactionContext(msgs)
+      const nextPrompt =
+        compacting.prompt ??
+        buildPrompt({
+          previousSummary,
+          context: [...compacting.context, canonicalContext].filter(Boolean),
+        })
+      const tailStart = selected.tail_start_id
+        ? visibleHistory.findIndex((message) => message.info.id === selected.tail_start_id)
+        : -1
+      const recent = tailStart < 0 ? "" : MessageV2.serializeCompactionContext(visibleHistory.slice(tailStart))
       const ctx = yield* InstanceState.context
+      // Core's provider callback crosses a Promise boundary. Capture the
+      // request/instance Context here so the production processor retains the
+      // same directory, workspace and scoped services inside that callback.
+      const transactionContext = yield* Effect.context()
       const msg: SessionV1.Assistant = {
         id: MessageID.ascending(),
         role: "assistant",
@@ -385,21 +446,151 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         model,
       })
-      const result = yield* processor.process({
+      const streamInput = {
         user: userMessage,
         agent,
         sessionID: input.sessionID,
         tools: {},
         system: [],
+        // The default path sends one canonical reconstruction request shared
+        // with Formal Core. A plugin-supplied prompt intentionally retains the
+        // legacy message layout because the plugin owns that custom contract.
         messages: [
-          ...modelMessages,
+          ...(compacting.prompt ? modelMessages : []),
           {
             role: "user",
             content: [{ type: "text", text: nextPrompt }],
           },
         ],
         model,
-      })
+      } satisfies Parameters<typeof processor.process>[0]
+
+      let result: SessionProcessor.Result | undefined
+      let committedSummary: string | undefined
+
+      if (processor.transactionalProvider === true) {
+        const ignored = new Set<MessageID>([processor.message.id])
+        const sourceBefore = sourceIdentity(
+          yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie),
+          ignored,
+        )
+        const surface = transactionSurface({ head: streamInput.messages, recent })
+        const store = surface.store
+        const transaction = yield* runTransactional(
+          {
+            events,
+            invariants,
+            checkpoints: {
+              append: (sessionID, checkpoint) =>
+                SessionCompactionCheckpoint.append(db, sessionID, checkpoint, invariants),
+              reconcile: (sessionID, operationID) =>
+                SessionCompactionCheckpoint.reconcile(db, sessionID, operationID, invariants),
+              recoverPublished: (sessionID) =>
+                SessionCompactionCheckpoint.recoverPublished(db, events, sessionID, invariants),
+            },
+          },
+          {
+            sessionID: SessionSchema.ID.make(input.sessionID),
+            messageID: SessionMessage.ID.make(processor.message.id),
+            reason: input.auto ? "auto" : "manual",
+            store,
+            recentTokenBudget: surface.recentTokenBudget,
+            recent: surface.recent,
+            anchors: {
+              objective: "Preserve user intent and exact continuation state.",
+              policy: "Use the fixed SessionCompaction summary template.",
+              protectedFacts: [],
+            },
+            renderSummary: (generated) => generated,
+            // Mature SessionProcessor already projects summary usage through
+            // its V1 message/part ledger. Supplying it again on Core's
+            // Compaction.Ended event would double-settle the same provider call.
+            provider: {
+              revision: `session-compaction:${model.providerID}:${model.id}:v1`,
+              summarize: ({ signal }) =>
+                Effect.runPromise(
+                  Effect.gen(function* () {
+                    result = yield* processor.process(streamInput)
+                    const persisted = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+                    const summary = persisted.find((item) => item.info.id === processor.message.id)
+                    committedSummary = summary ? summaryText(summary) : undefined
+
+                    // Processor writes are confined to its ignored summary
+                    // message. Any other durable source change invalidates the
+                    // prepared visible surface before Core reaches commit.
+                    if (sourceIdentity(persisted, ignored) !== sourceBefore) {
+                      const sourceSeq = (store.snapshot().sourceLog.at(-1)?.sourceSeq ?? 0) + 1
+                      store.append([
+                        {
+                          id: `mature-compaction-stale:${processor.message.id}:${sourceSeq}`,
+                          sourceSeq,
+                          role: "context",
+                          text: "[durable source changed during compaction]",
+                        },
+                      ])
+                    }
+                    if (result !== "continue" || processor.message.error || !committedSummary) return undefined
+                    return committedSummary
+                  }).pipe(Effect.provide(transactionContext)),
+                  { signal },
+                ),
+            },
+          },
+        )
+
+        if (result === "compact") {
+          processor.message.error = new SessionV1.ContextOverflowError({
+            message: replay
+              ? "Conversation history too large to compact - exceeds model context limit"
+              : "Session too large to compact - context exceeds model limit even after stripping media",
+          }).toObject()
+        } else if (transaction.status !== "committed") {
+          const reason = transaction?.reason
+          const message =
+            reason === "stale-surface"
+              ? "Compaction source changed before commit"
+              : reason === "not-smaller"
+                ? "Compaction summary did not reduce the visible context"
+                : reason === "empty-head"
+                  ? "Compaction has no eligible history to summarize"
+                  : reason === "unresolved-evidence"
+                    ? "Compaction is blocked by unresolved durable checkpoint evidence"
+                    : reason === "already-finalized"
+                      ? "Compaction was already finalized for this exact durable source state"
+                      : "Compaction did not produce a complete non-empty summary"
+          processor.message.error ??= new NamedError.Unknown({ message }).toObject()
+        }
+
+        if (transaction.status !== "committed") {
+          processor.message.finish = "error"
+          processor.message.time.completed ??= Date.now()
+          yield* session.updateMessage(processor.message)
+          return "stop"
+        }
+      } else {
+        // Explicit compatibility seam for lightweight processors that do not
+        // execute a real provider stream. Production SessionProcessor handles
+        // always advertise transactionalProvider and cannot take this path.
+        result = yield* processor.process(streamInput)
+        const persistedSummary = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
+          (item) => item.info.id === processor.message.id,
+        )
+        committedSummary = persistedSummary ? summaryText(persistedSummary) : undefined
+      }
+
+      // A compaction becomes provider-visible only after a complete, non-empty
+      // summary has been durably written. Treating an empty/incomplete stream
+      // as success would make filterCompacted hide the original history and
+      // create a lossy half-commit.
+      if (result === "continue" && processor.message.finish && (processor.message.error || !committedSummary)) {
+        processor.message.error = new NamedError.Unknown({
+          message: "Compaction did not produce a complete non-empty summary",
+        }).toObject()
+        processor.message.finish = "error"
+        processor.message.time.completed ??= Date.now()
+        yield* session.updateMessage(processor.message)
+        return "stop"
+      }
 
       if (result === "compact") {
         processor.message.error = new SessionV1.ContextOverflowError({
@@ -481,8 +672,7 @@ const layer = Layer.effect(
             const text =
               (input.overflow
                 ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+                : "") + CONTINUE_PROMPT
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,
@@ -507,7 +697,7 @@ const layer = Layer.effect(
       if (result === "continue") {
         yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
       }
-      return result
+      return result ?? "stop"
     })
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {
@@ -556,6 +746,8 @@ export const node = LayerNode.make({
     Provider.node,
     EventV2Bridge.node,
     RuntimeFlags.node,
+    Database.node,
+    RuntimeInvariants.node,
   ],
 })
 

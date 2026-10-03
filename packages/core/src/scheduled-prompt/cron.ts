@@ -62,12 +62,93 @@ export function next(
   throw invalid(expression, "Cron has no occurrence inside the seven-day schedule lifetime.")
 }
 
+/**
+ * Find the next occurrence in an explicit IANA timezone.
+ *
+ * Cron expressions are wall-clock schedules. The legacy `next` helper keeps
+ * its process-local behavior for existing ScheduledPrompt callers, while
+ * Personal Jobs use this function because their persisted timezone must not
+ * depend on the machine running the scheduler.
+ */
+export function nextInTimeZone(
+  expression: ScheduledPrompt.Cron,
+  after: number,
+  timeZone: string,
+  horizon: number = after + 8 * 24 * 60 * 60 * 1_000,
+) {
+  const parsed = parse(expression)
+  let formatter: Intl.DateTimeFormat
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      calendar: "gregory",
+      numberingSystem: "latn",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+  } catch {
+    throw invalid(expression, "Cron timezone must be a valid IANA timezone.")
+  }
+
+  const minute = 60 * 1_000
+  let cursor = Math.floor(after / minute) * minute + minute
+  while (cursor <= horizon) {
+    const parts = formatter.formatToParts(new Date(cursor))
+    const values = new Map(parts.map((part) => [part.type, Number(part.value)]))
+    const year = values.get("year")
+    const month = values.get("month")
+    const day = values.get("day")
+    const hour = values.get("hour")
+    const localMinute = values.get("minute")
+    if (
+      year !== undefined &&
+      month !== undefined &&
+      day !== undefined &&
+      hour !== undefined &&
+      localMinute !== undefined
+    ) {
+      // Use UTC getters for the projected wall-clock date so the matching
+      // result remains independent of the process's own local timezone.
+      const wallClock = new Date(Date.UTC(year, month - 1, day, hour, localMinute))
+      if (matchesUtc(parsed, wallClock)) return cursor
+    }
+    cursor += minute
+  }
+  throw invalid(expression, "Cron has no occurrence inside the seven-day schedule lifetime.")
+}
+
 export function matches(parsed: Parsed, date: Date) {
-  if (!parsed.minute.values.has(date.getMinutes())) return false
-  if (!parsed.hour.values.has(date.getHours())) return false
-  if (!parsed.month.values.has(date.getMonth() + 1)) return false
-  const dayOfMonth = parsed.dayOfMonth.values.has(date.getDate())
-  const dayOfWeek = parsed.dayOfWeek.values.has(date.getDay())
+  return matchesValues(parsed, date.getMinutes(), date.getHours(), date.getDate(), date.getMonth() + 1, date.getDay())
+}
+
+function matchesUtc(parsed: Parsed, date: Date) {
+  return matchesValues(
+    parsed,
+    date.getUTCMinutes(),
+    date.getUTCHours(),
+    date.getUTCDate(),
+    date.getUTCMonth() + 1,
+    date.getUTCDay(),
+  )
+}
+
+function matchesValues(
+  parsed: Parsed,
+  minute: number,
+  hour: number,
+  dayOfMonthValue: number,
+  month: number,
+  dayOfWeekValue: number,
+) {
+  if (!parsed.minute.values.has(minute)) return false
+  if (!parsed.hour.values.has(hour)) return false
+  if (!parsed.month.values.has(month)) return false
+  const dayOfMonth = parsed.dayOfMonth.values.has(dayOfMonthValue)
+  const dayOfWeek = parsed.dayOfWeek.values.has(dayOfWeekValue)
   if (parsed.dayOfMonth.wildcard && parsed.dayOfWeek.wildcard) return true
   if (parsed.dayOfMonth.wildcard) return dayOfWeek
   if (parsed.dayOfWeek.wildcard) return dayOfMonth

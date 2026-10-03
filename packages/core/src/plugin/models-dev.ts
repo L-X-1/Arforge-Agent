@@ -1,7 +1,7 @@
 import { define } from "./definition"
 import type { ModelV2Info } from "@arforge-ai/sdk/v2/types"
 import { Effect, Stream } from "effect"
-import { EventV2 } from "../event"
+import { PluginEvents } from "./events"
 import { ModelsDev } from "../models-dev"
 import { ProviderV2 } from "../provider"
 
@@ -55,12 +55,15 @@ function mergeCost(base: ModelV2Info["cost"], override: ModelsDev.Model["cost"] 
   const [baseDefault, ...baseTiers] = base
   const [nextDefault, ...nextTiers] = next
   const tierKey = (item: ModelV2Info["cost"][number]) => `${item.tier?.type ?? "base"}:${item.tier?.size ?? 0}`
-  const merge = (left: ModelV2Info["cost"][number], right: ModelV2Info["cost"][number]) => ({
-    ...left,
-    ...right,
-    tier: right.tier ?? left.tier,
-    cache: { ...left.cache, ...right.cache },
-  })
+  const merge = (left: ModelV2Info["cost"][number], right: ModelV2Info["cost"][number]) => {
+    const tier = right.tier ?? left.tier
+    return {
+      ...left,
+      ...right,
+      ...(tier === undefined ? {} : { tier }),
+      cache: { ...left.cache, ...right.cache },
+    }
+  }
   const tiers = new Map(baseTiers.map((item) => [tierKey(item), item]))
   for (const item of nextTiers) {
     const current = tiers.get(tierKey(item))
@@ -83,18 +86,20 @@ function applyModel(
   } = {},
 ) {
   draft.name = input.name ?? model.name
-  draft.family = model.family
+  if (model.family === undefined) delete draft.family
+  else draft.family = model.family
+  const modelApi = model.provider?.api === undefined ? {} : { url: model.provider.api }
   draft.api = model.provider?.npm
     ? {
         id: model.id,
         type: "aisdk",
         package: model.provider.npm,
-        url: model.provider.api,
+        ...modelApi,
       }
     : {
         id: model.id,
         type: "native",
-        url: model.provider?.api,
+        ...modelApi,
         settings: {},
       }
   draft.capabilities = {
@@ -109,8 +114,8 @@ function applyModel(
   draft.enabled = true
   draft.limit = {
     context: model.limit.context,
-    input: model.limit.input,
     output: model.limit.output,
+    ...(model.limit.input === undefined ? {} : { input: model.limit.input }),
   }
   Object.assign(draft.request.headers, input.request?.headers ?? {})
   Object.assign(draft.request.body, input.request?.body ?? {})
@@ -120,7 +125,7 @@ export const ModelsDevPlugin = define({
   id: "models-dev",
   effect: Effect.fn(function* (ctx) {
     const modelsDev = yield* ModelsDev.Service
-    const events = yield* EventV2.Service
+    const events = yield* PluginEvents.Service
     yield* ctx.integration.transform(
       Effect.fn(function* (integrations) {
         const data = yield* modelsDev.get()
@@ -145,16 +150,17 @@ export const ModelsDevPlugin = define({
         for (const item of Object.values(data)) {
           const providerID = ProviderV2.ID.make(item.id)
           catalog.provider.update(providerID, (provider) => {
+            const providerApi = item.api === undefined ? {} : { url: item.api }
             provider.name = item.name
             provider.api = item.npm
               ? {
                   type: "aisdk",
                   package: item.npm,
-                  url: item.api,
+                  ...providerApi,
                 }
               : {
                   type: "native",
-                  url: item.api,
+                  ...providerApi,
                   settings: {},
                 }
           })

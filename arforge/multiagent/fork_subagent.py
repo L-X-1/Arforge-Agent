@@ -1,18 +1,10 @@
-"""
-Fork sub-agent: spawns a child agent that inherits the parent's full
-conversation context and system prompt. Based on industry-standard patterns.
+"""Compatibility helpers for a context-aware sub-agent.
 
-When a complex task benefits from full context visibility, the fork mechanism
-creates a sub-agent that can see everything the parent can see, avoiding the
-context loss that comes with fresh sub-agent spawns.
-
-Key properties:
-- Inherits parent's conversation history (messages)
-- Inherits parent's system prompt + project conventions
-- Shares parent's tool pool
-- Runs with configurable permission mode (default: bubble to parent)
-- Has its own step budget
-- Returns structured result to parent
+The parent may provide context needed to understand a delegated objective, but
+authorization is never inherited from that context.  The active execution
+boundary must apply the child's explicit role, tool, capability, budget, and
+DurableRun binding before any tool is called.  This module only builds the
+bounded prompt/configuration envelope; it is not a second run state machine.
 """
 
 from __future__ import annotations
@@ -29,8 +21,10 @@ class ForkSubAgentConfig:
     task: str
     agent_type: AgentTypeDef | None = None
     max_steps: int | None = None
-    permission_mode: str = "acceptEdits"
-    inherit_tools: bool = True
+    permission_mode: str = "plan"
+    inherit_tools: bool = False
+    allowed_tools: tuple[str, ...] = ()
+    allowed_capabilities: tuple[str, ...] = ()
     extra_system: str = ""
 
 
@@ -52,8 +46,8 @@ def build_fork_system_prompt(
 ) -> str:
     """Build the system prompt for a forked sub-agent.
 
-    The fork inherits the parent's system prompt and adds task-specific
-    instructions based on the agent type definition.
+    The parent prompt is context only.  It does not grant the child the
+    parent's tools, capabilities, credentials, or approval state.
     """
     parts = [parent_system]
 
@@ -65,6 +59,8 @@ def build_fork_system_prompt(
     parts.append(f"\n## Current Task\n{task}")
     parts.append(
         "\n## Instructions\n"
+        "- Parent context is informational; do not infer permissions from it\n"
+        "- Use only the explicitly declared child role/tool/capability allowlist\n"
         "- Complete the task using available tools\n"
         "- Return a clear final answer\n"
         "- Report any errors or blockers\n"

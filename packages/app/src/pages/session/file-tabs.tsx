@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -23,6 +23,7 @@ import { useSettings } from "@/context/settings"
 import { getSessionHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
+import { EditableFilePreview as FilePreview } from "@/components/preview/editable-file-preview"
 
 type SessionFileViewProps = {
   tab: string
@@ -395,6 +396,7 @@ function SessionFileViewV1(props: { tab: string }) {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (activeFileTab() !== props.tab) return
+      if (event.target instanceof Element && event.target.closest('[data-component="text-document-editor"]')) return
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
       if (event.key.toLowerCase() !== "f") return
 
@@ -494,13 +496,13 @@ function SessionFileViewV1(props: { tab: string }) {
   const content = () => (
     <div class="mt-3 relative h-full min-h-0">
       <ScrollView class="h-full" viewportRef={scrollSync.setViewport} onScroll={scrollSync.handleScroll as any}>
-        <Switch>
-          <Match when={state()?.loaded}>{renderFile(contents())}</Match>
-          <Match when={state()?.loading}>
-            <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}...</div>
-          </Match>
-          <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
-        </Switch>
+        <FilePreview
+          path={path() ?? props.tab}
+          version={cacheKey()}
+          state={state()}
+          onRetry={() => file.load(path() ?? "", { force: true })}
+          render={renderFile}
+        />
       </ScrollView>
     </div>
   )
@@ -678,6 +680,7 @@ function SessionFileViewV2(props: { tab: string }) {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (activeFileTab() !== props.tab) return
+      if (event.target instanceof Element && event.target.closest('[data-component="text-document-editor"]')) return
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
       if (event.key.toLowerCase() !== "f") return
 
@@ -785,13 +788,13 @@ function SessionFileViewV2(props: { tab: string }) {
   const content = () => (
     <div class="mt-3 relative h-full min-h-0">
       <ScrollView class="h-full" viewportRef={scrollSync.setViewport} onScroll={scrollSync.handleScroll as any}>
-        <Switch>
-          <Match when={state()?.loaded}>{renderFile(contents())}</Match>
-          <Match when={state()?.loading}>
-            <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}...</div>
-          </Match>
-          <Match when={state()?.error}>{(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}</Match>
-        </Switch>
+        <FilePreview
+          path={path() ?? props.tab}
+          version={cacheKey()}
+          state={state()}
+          onRetry={() => file.load(path() ?? "", { force: true })}
+          render={renderFile}
+        />
       </ScrollView>
     </div>
   )

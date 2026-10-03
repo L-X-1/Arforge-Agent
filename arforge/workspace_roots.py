@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from arforge.custom_agent_profiles import typescript_workspace_trusted
 from arforge.paths import data_path
-from arforge.trust_screen import is_workspace_trusted
 
 
 class WorkspaceRootError(ValueError):
@@ -52,7 +52,7 @@ def configured_workspace_roots() -> list[Path]:
             root = Path(raw_path).expanduser().resolve()
         except OSError:
             continue
-        if root.is_dir() and is_workspace_trusted(root) and root not in roots:
+        if root.is_dir() and typescript_workspace_trusted(root) and root not in roots:
             roots.append(root)
     return roots
 
@@ -73,7 +73,7 @@ def add_workspace_root(path: str | Path, *, primary: str | Path) -> Path:
     primary_root = Path(primary).expanduser().resolve()
     if not root.is_dir():
         raise WorkspaceRootError("additional workspace root must be an existing directory")
-    if not is_workspace_trusted(root):
+    if not typescript_workspace_trusted(root):
         raise WorkspaceRootError("additional workspace root must be trusted before it can be added")
     existing = authorized_workspace_roots(primary_root)
     if any(_inside(root, item) or _inside(item, root) for item in existing):

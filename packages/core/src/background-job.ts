@@ -22,6 +22,12 @@ type Active = {
   info: Info
   done: Deferred.Deferred<Info>
   scope: Scope.Closeable
+  /**
+   * Context captured when the job was admitted. Scope finalization can run
+   * after the request fiber has gone away, so it must not depend on that
+   * caller's (possibly pruned) service context.
+   */
+  context: Context.Context<never>
   token: object
   pending: number
   next: number
@@ -40,6 +46,7 @@ type FinishResult = {
   info?: Info
   done?: Deferred.Deferred<Info>
   scope?: Scope.Closeable
+  context?: Context.Context<never>
 }
 
 type PromoteResult = {
@@ -73,6 +80,8 @@ export type StartInput = {
 export type ExtendInput = {
   id: string
   run: Effect.Effect<string, unknown>
+  /** Release admitted work if the queue closes before its execution starts. */
+  onDiscard?: Effect.Effect<void>
 }
 
 export type WaitInput = {
@@ -94,6 +103,8 @@ export interface Interface {
   readonly waitForPromotion: (id: string) => Effect.Effect<Info>
   readonly promote: (id: string) => Effect.Effect<Info | undefined>
   readonly cancel: (id: string) => Effect.Effect<Info | undefined>
+  /** Cancel the currently registered session subtree, descendants before parents. */
+  readonly cancelSession: (sessionID: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/BackgroundJob") {}
@@ -106,9 +117,83 @@ function snapshot(job: Active): Info {
 }
 
 function errorText(error: unknown) {
-  if (error instanceof Error) return error.message
-  return String(error)
+  const message = error instanceof Error ? error.message : String(error)
+  // Schema errors can carry structured diagnostics but have an empty message.
+  // Keep the failure visible without serializing private fields or stacks.
+  return message.trim() ? message : "Background task failed without an error message."
 }
+
+const cancelSessionJobs = Effect.fn("BackgroundJob.cancelSession")(function* (
+  background: Pick<Interface, "list" | "cancel">,
+  sessionID: string,
+) {
+  const jobs = yield* background.list()
+  const running = jobs.filter((job) => job.status === "running")
+  const identity = (job: Info) =>
+    [job.id, typeof job.metadata?.sessionId === "string" ? job.metadata.sessionId : undefined].filter(
+      (value): value is string => value !== undefined,
+    )
+  const reachable = new Set<string>([sessionID])
+  const selected: Info[] = []
+  const selectedIDs = new Set<string>()
+
+  // Resolve the complete subtree before cancelling anything. This keeps the
+  // selection deterministic even if cancelling one job mutates the live
+  // registry, and it preserves the existing behavior for jobs that identify a
+  // child only through metadata.sessionId.
+  let expanded = true
+  while (expanded) {
+    expanded = false
+    for (const job of running) {
+      if (selectedIDs.has(job.id)) continue
+      const parentSessionID =
+        typeof job.metadata?.parentSessionId === "string" ? job.metadata.parentSessionId : undefined
+      if (!identity(job).some((value) => reachable.has(value)) && !(parentSessionID && reachable.has(parentSessionID)))
+        continue
+      selected.push(job)
+      selectedIDs.add(job.id)
+      for (const value of identity(job)) {
+        if (!reachable.has(value)) {
+          reachable.add(value)
+          expanded = true
+        }
+      }
+    }
+  }
+
+  const byIdentity = new Map<string, Info>()
+  for (const job of selected) for (const value of identity(job)) byIdentity.set(value, job)
+  const isDescendant = (candidate: Info, ancestor: Info) => {
+    const ancestorIDs = new Set(identity(ancestor))
+    let parent =
+      typeof candidate.metadata?.parentSessionId === "string" ? candidate.metadata.parentSessionId : undefined
+    const seen = new Set<string>()
+    while (parent && !seen.has(parent)) {
+      if (ancestorIDs.has(parent)) return true
+      seen.add(parent)
+      const nextParent = byIdentity.get(parent)?.metadata?.parentSessionId
+      if (typeof nextParent !== "string") return false
+      parent = nextParent
+    }
+    return false
+  }
+
+  const remaining = new Set(selected)
+  while (remaining.size > 0) {
+    // Cancel leaves first. Independent leaves may still be interrupted in
+    // parallel; a parent is not touched until every selected descendant has
+    // reached the registry's terminal state.
+    const leaves = [...remaining].filter(
+      (job) => ![...remaining].some((other) => other !== job && isDescendant(other, job)),
+    )
+    const batch = leaves.length > 0 ? leaves : [...remaining]
+    yield* Effect.forEach(batch, (job) => background.cancel(job.id), {
+      concurrency: "unbounded",
+      discard: true,
+    })
+    for (const job of batch) remaining.delete(job)
+  }
+})
 
 /**
  * Makes one scoped, process-local registry. Entries are intentionally not
@@ -161,11 +246,19 @@ export const make = Effect.gen(function* () {
           ...(Exit.isFailure(exit) ? { error: errorText(Cause.squash(exit.cause)) } : {}),
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [
+        { info: snapshot(next), done: job.done, scope: job.scope, context: job.context },
+        new Map(jobs).set(id, next),
+      ]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
     if (result.scope) {
-      yield* Scope.close(result.scope, Exit.void).pipe(Effect.forkIn(state.scope, { startImmediately: true }))
+      // Closing a job scope is deliberately detached from the settling fiber,
+      // but the detached finalizer still needs the services that owned the
+      // job. Re-provide the admission context at this lifecycle boundary.
+      yield* Scope.close(result.scope, Exit.void)
+        .pipe(Effect.provide(result.context ?? Context.empty()))
+        .pipe(Effect.forkIn(state.scope, { startImmediately: true }))
     }
     return result.info
   })
@@ -202,6 +295,7 @@ export const make = Effect.gen(function* () {
   const start: Interface["start"] = Effect.fn("BackgroundJob.start")(function* (input) {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const context = yield* Effect.context()
         const id = input.id ?? Identifier.ascending("job")
         const started_at = yield* Clock.currentTimeMillis
         const done = yield* Deferred.make<Info>()
@@ -227,6 +321,7 @@ export const make = Effect.gen(function* () {
               },
               done,
               scope,
+              context,
               token,
               pending: 1,
               next: 1,
@@ -256,6 +351,7 @@ export const make = Effect.gen(function* () {
   const extend: Interface["extend"] = Effect.fn("BackgroundJob.extend")(function* (input) {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        const context = yield* Effect.context()
         const tail = yield* Deferred.make<void>()
         const result = yield* SynchronizedRef.modify(
           state.jobs,
@@ -266,6 +362,7 @@ export const make = Effect.gen(function* () {
               { extended: true, previous: job.tail, scope: job.scope, tail, token: job.token, sequence: job.next },
               new Map(jobs).set(input.id, {
                 ...job,
+                context: Context.merge(job.context, context),
                 pending: job.pending + 1,
                 next: job.next + 1,
                 tail,
@@ -274,13 +371,24 @@ export const make = Effect.gen(function* () {
           },
         )
         if (!result.extended) return false
+        let started = false
+        if (input.onDiscard)
+          yield* Scope.addFinalizer(
+            result.scope,
+            Effect.suspend(() => (started ? Effect.void : input.onDiscard!)),
+          )
         yield* fork(
           result.scope,
           input.id,
           result.token,
           result.sequence,
           Deferred.await(result.previous).pipe(
-            Effect.andThen(restore(input.run)),
+            Effect.andThen(
+              Effect.suspend(() => {
+                started = true
+                return restore(input.run)
+              }),
+            ),
             Effect.ensuring(Deferred.succeed(result.tail, undefined)),
           ),
         )
@@ -350,14 +458,19 @@ export const make = Effect.gen(function* () {
           completed_at,
         },
       }
-      return [{ info: snapshot(next), done: job.done, scope: job.scope }, new Map(jobs).set(id, next)]
+      return [
+        { info: snapshot(next), done: job.done, scope: job.scope, context: job.context },
+        new Map(jobs).set(id, next),
+      ]
     })
     if (result.info && result.done) yield* Deferred.succeed(result.done, result.info).pipe(Effect.ignore)
-    if (result.scope) yield* Scope.close(result.scope, Exit.void)
+    if (result.scope)
+      yield* Scope.close(result.scope, Exit.void).pipe(Effect.provide(result.context ?? Context.empty()))
     return result.info
   })
 
-  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel })
+  const cancelSession = (sessionID: string) => cancelSessionJobs({ list, cancel }, sessionID)
+  return Service.of({ list, get, start, extend, wait, waitForPromotion, promote, cancel, cancelSession })
 })
 
 const layer = Layer.effect(Service, make)

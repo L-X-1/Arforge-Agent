@@ -4,6 +4,12 @@ type Rule = { method?: string; path: string; exact?: boolean; action: "local" | 
 
 const RULES: Array<Rule> = [
   { path: "/experimental/workspace", action: "local" },
+  // Trust-kernel actions and their approval channel must always terminate on
+  // the local control plane. A selected remote workspace cannot proxy or
+  // reinterpret these L3 requests.
+  { path: "/experimental/worktree", action: "local" },
+  { path: "/experimental/control-approval", action: "local" },
+  { path: "/experimental/control-operation", action: "local" },
   { path: "/session/status", action: "forward" },
   { method: "GET", path: "/session", action: "local" },
 ]

@@ -133,4 +133,42 @@ describe("Learning", () => {
       expect(status.recent[0]?.tags[0]).toMatch(/^dogfood:[0-9a-f]{16}$/)
     }),
   )
+
+  it.effect("rejects verified outcome writes without a durable execution chain", () =>
+    Effect.gen(function* () {
+      const learning = yield* LearningV2.Service
+      const rejected = yield* learning
+        .recordVerified({
+          userInput: "Publish a verified release",
+          runID: "run_learning_verified",
+          actionID: "act_learning_verified",
+          evaluationID: "eva_learning_verified",
+          evidenceIDs: ["evd_learning_verified"],
+          terminal: true,
+          verifierPassed: true,
+          outcome: "success",
+        })
+        .pipe(Effect.flip)
+      expect(rejected.reason).toContain("Run is unavailable")
+    }),
+  )
+
+  it.effect("rejects verified outcome writes without immutable evidence", () =>
+    Effect.gen(function* () {
+      const learning = yield* LearningV2.Service
+      const invalid = yield* learning
+        .recordVerified({
+          userInput: "invalid",
+          runID: "run_invalid",
+          actionID: "act_invalid",
+          evaluationID: "eva_invalid",
+          evidenceIDs: [],
+          terminal: true,
+          verifierPassed: true,
+          outcome: "success",
+        })
+        .pipe(Effect.flip)
+      expect(invalid.reason).toContain("at least one evidence")
+    }),
+  )
 })

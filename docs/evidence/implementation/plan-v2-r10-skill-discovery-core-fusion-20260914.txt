@@ -1,0 +1,10 @@
+Plan v2.0 R10 — Skill Discovery Core 融合与边界证据（2026-09-14）
+
+Core: test/skill-discovery.test.ts — 10 pass / 0 fail / 31 expect calls.
+Arforge adapter: test/skill/discovery.test.ts — 7 pass / 0 fail / 25 expect calls.
+Arforge Skill service: test/skill/skill.test.ts — 17 pass / 0 fail / 48 expect calls.
+Core typecheck — exit 0.
+Scoped Oxlint — 0 errors (one existing warning in the Core test file).
+Prettier and git diff --check — passed.
+
+本批把产品 cfg.skills.urls 入口收敛到 Core SkillDiscovery 单一 owner，并增加索引/文件/总量/时限边界与 staging 原子发布。R10 未关闭：trust/manifest、Egress/SecretProvider、redirect、可见性/撤销和真实外部矩阵仍开放；未修改用户数据，full sandbox 按 R30 后执行。

@@ -2,7 +2,7 @@ export * as PromptInput from "./prompt-input"
 
 import { Schema } from "effect"
 import { Model } from "./model"
-import { AgentAttachment, Source } from "./prompt"
+import { AgentAttachment, OutputFormat, RequestSystem, ScheduledTask, Source } from "./prompt"
 import { optional, statics } from "./schema"
 
 export interface FileAttachment extends Schema.Schema.Type<typeof FileAttachment> {}
@@ -25,6 +25,8 @@ export const Prompt = Schema.Struct({
   text: Schema.String,
   files: Schema.Array(FileAttachment).pipe(optional),
   agents: Schema.Array(AgentAttachment).pipe(optional),
+  scheduledTasks: Schema.Array(ScheduledTask).pipe(optional),
+  system: RequestSystem.pipe(optional),
   route: Schema.Struct({
     agent: Schema.String.pipe(optional),
     model: Model.Ref.pipe(optional),
@@ -33,4 +35,5 @@ export const Prompt = Schema.Struct({
     name: Schema.String,
     arguments: Schema.String,
   }).pipe(optional),
+  format: OutputFormat.pipe(optional),
 }).annotate({ identifier: "PromptInput" })

@@ -17,6 +17,7 @@ import type { Revert } from "@arforge-ai/schema/revert"
 import type { SessionOrganization } from "@arforge-ai/schema/session-organization"
 import type { ScheduledPrompt } from "@arforge-ai/schema/scheduled-prompt"
 import { OwnershipColumns } from "../identity/sql"
+import type * as ContextSurface from "../context-surface"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -187,6 +188,40 @@ export const SessionCheckpointTable = sqliteTable(
   (table) => [
     index("session_checkpoint_session_created_idx").on(table.session_id, table.time_created),
     index("session_checkpoint_session_sequence_idx").on(table.session_id, table.sequence),
+  ],
+)
+
+/**
+ * Append-only evidence for an asynchronous provider-visible compaction.
+ *
+ * The source/session messages remain authoritative. This table only records
+ * the serializable checkpoint chain needed to classify a process loss without
+ * granting an automatic retry.
+ */
+export const SessionCompactionCheckpointTable = sqliteTable(
+  "session_compaction_checkpoint",
+  {
+    ...OwnershipColumns,
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    operation_id: text().notNull(),
+    sequence: integer().notNull(),
+    phase: text().$type<ContextSurface.AsyncCompactionPhase>().notNull(),
+    checkpoint: text({ mode: "json" }).notNull().$type<ContextSurface.AsyncCompactionCheckpoint>(),
+    time_created: integer()
+      .notNull()
+      .$default(() => Date.now()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.operation_id, table.sequence] }),
+    index("session_compaction_checkpoint_session_created_idx").on(table.session_id, table.time_created),
+    index("session_compaction_checkpoint_operation_sequence_idx").on(
+      table.session_id,
+      table.operation_id,
+      table.sequence,
+    ),
   ],
 )
 

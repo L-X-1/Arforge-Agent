@@ -6,6 +6,8 @@ const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mc
 export interface MockServerConfig {
   protocol?: "v1" | "v2"
   provider: unknown
+  models?: unknown[]
+  defaultModel?: unknown
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
@@ -18,6 +20,7 @@ export interface MockServerConfig {
   onMessage?: (input: { sessionID: string; messageID: string }) => void
   events?: () => unknown[]
   eventRetry?: number
+  eventStreamURL?: string
   todos?: (sessionID: string) => unknown[]
   permissions?: unknown[] | (() => unknown[])
   questions?: unknown[] | (() => unknown[])
@@ -60,6 +63,12 @@ export async function mockArforgeServer(page: Page, config: MockServerConfig) {
     }
     if (path === "/auth/session") return json(route, { authenticated: true })
     if (path === "/global/event" || path === "/event" || path === "/api/event") {
+      if (config.eventStreamURL) {
+        const target = new URL(config.eventStreamURL)
+        target.pathname = path
+        target.search = new URL(route.request().url()).search
+        return route.continue({ url: target.toString() })
+      }
       const events = config.events?.()
       return sse(
         route,
@@ -126,10 +135,12 @@ export async function mockArforgeServer(page: Page, config: MockServerConfig) {
       })
     if (path === "/api/provider") {
       const provider = config.provider as { all?: unknown[] } | unknown[]
-      return json(route, { data: Array.isArray(provider) ? provider : (provider.all ?? []) })
+      const data = Array.isArray(provider) ? provider : (provider.all ?? [])
+      return json(route, { location: location(config), data: data.map(withProviderPackage) })
     }
-    if (path === "/api/model") return json(route, { data: [] })
-    if (path === "/api/model/default") return json(route, { data: null })
+    if (path === "/api/model") return json(route, { location: location(config), data: config.models ?? [] })
+    if (path === "/api/model/default")
+      return json(route, { location: location(config), data: config.defaultModel ?? null })
     if (path === "/api/command") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp") return json(route, { location: location(config), data: [] })
     if (path === "/api/mcp/resource")
@@ -319,6 +330,12 @@ function location(config: MockServerConfig) {
   }
 }
 
+function withProviderPackage(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value
+  const provider = value as Record<string, unknown>
+  return { package: String(provider.package ?? provider.id ?? "mock-provider"), ...provider }
+}
+
 function currentPermission(value: unknown) {
   const permission = value as Record<string, unknown>
   if (permission.action) return permission
@@ -433,6 +450,8 @@ function json(route: Route, body: unknown, headers?: Record<string, string>, sta
     body: JSON.stringify(body ?? null),
   })
 }
+
+export { currentEvent }
 
 function sse(route: Route, events?: unknown[], retry?: number) {
   return route.fulfill({

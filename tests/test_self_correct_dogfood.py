@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 from arforge.core.self_correct_dogfood import (
     RunnerResult,
@@ -221,7 +222,7 @@ def test_cli_self_correct_dogfood_requires_api_key(monkeypatch, capsys):
     assert "arforge auth login deepseek" in capsys.readouterr().err
 
 
-def test_default_cli_runner_uses_workspace_environment_not_unknown_cli_flag(
+def test_default_cli_runner_uses_unified_ts_run_and_workspace_environment(
     tmp_path,
     monkeypatch,
 ):
@@ -244,6 +245,12 @@ def test_default_cli_runner_uses_workspace_environment_not_unknown_cli_flag(
 
     assert result.ok is True
     assert "--workspace" not in captured["command"]
-    assert "--json" in captured["command"]
+    assert "arforge.cli" not in captured["command"]
+    assert captured["command"][0:3] == [sys.executable, "-m", "arforge"]
+    assert captured["command"][3:5] == ["run", "--dir"]
+    assert captured["command"][5] == str(tmp_path)
+    assert "--auto" in captured["command"]
+    assert "--format" in captured["command"]
+    assert "json" in captured["command"]
     assert captured["env"]["ARFORGE_WORKSPACE"] == str(tmp_path)
-    assert captured["command"][-2] == "code"
+    assert captured["command"][-1] == task.prompt

@@ -53,7 +53,8 @@ test("does not ship the retired Python capability Sidecar", async () => {
   const config = module.default as Configuration
   const resources = config.extraResources ?? []
   expect(resources.some((entry) => JSON.stringify(entry).includes("agent-python"))).toBe(false)
-  expect(config.files).not.toContain("!resources/agent-python-dist/**/*")
+  expect(config.files).toContain("!resources/agent-python-dist/**/*")
+  expect(config.files).toContain("!resources/.agent-python-build/**/*")
 })
 
 test("does not ship bundled Core TypeScript source inside app.asar", async () => {

@@ -1,17 +1,39 @@
 import { RepoScale } from "@arforge-ai/core/analysis/repo-scale"
 import { Effect } from "effect"
+import { statSync } from "node:fs"
 import { EOL } from "node:os"
-import { join, resolve } from "node:path"
+import { resolve } from "node:path"
 import { effectCmd, fail } from "../effect-cmd"
 
+function isDirectoryTarget(workspace: string, value: string): boolean {
+  try {
+    return statSync(resolve(workspace, value)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function looksLikeLegacyPath(workspace: string, value: string): boolean {
+  const normalized = value.trim()
+  if (!normalized) return false
+  if (normalized === "." || normalized === ".." || isDirectoryTarget(workspace, normalized)) return true
+  // A path-shaped value should not silently become a search query when the
+  // target is missing; the scanner will return its normal bounded empty report.
+  return normalized.includes("/") || normalized.includes("\\") || /^[A-Za-z]:$/.test(normalized)
+}
+
 export const RepoScaleCommand = effectCmd({
-  command: "repo-scale [query]",
+  command: "repo-scale [target]",
   describe: "扫描大型仓库并执行有界本地搜索",
   instance: false,
   builder: (yargs) =>
     yargs
-      .positional("query", {
-        describe: "可选的本地搜索词",
+      .positional("target", {
+        describe: "搜索词；也接受 Python 旧入口的扫描路径",
+        type: "string",
+      })
+      .option("query", {
+        describe: "Python 旧入口兼容的搜索词（与位置扫描路径一起使用）",
         type: "string",
       })
       .option("workspace", {
@@ -26,7 +48,6 @@ export const RepoScaleCommand = effectCmd({
       .option("max-files", {
         describe: "本次扫描的最大代码文件数",
         type: "number",
-        default: 5_000,
       })
       .option("limit", {
         describe: "最大文件与搜索结果条数",
@@ -39,18 +60,39 @@ export const RepoScaleCommand = effectCmd({
         default: false,
       }),
   handler: Effect.fn("Cli.repoScale")(function* (args) {
-    if (!Number.isInteger(args.maxFiles) || args.maxFiles < 1 || args.maxFiles > 100_000) {
+    const workspace = resolve(args.workspace ?? process.cwd())
+    const target = args.target?.trim()
+    const explicitQuery = args.query?.trim()
+    const explicitPath = args.path !== undefined && args.path !== "."
+
+    // Python historically used `repo-scale <path> --query <text>`.  Keep that
+    // argv shape in the same handler while preserving the canonical TS form
+    // `repo-scale [query] --path <relative-dir>`.
+    if (target && explicitQuery !== undefined && explicitPath) {
+      return yield* fail("位置扫描路径、--query 与 --path 不能同时使用；请只保留一种路径写法。")
+    }
+
+    let scanPath = args.path ?? "."
+    let query = explicitQuery ?? target ?? ""
+    if (target && explicitQuery !== undefined) {
+      scanPath = target
+    } else if (target && !explicitPath && looksLikeLegacyPath(workspace, target)) {
+      scanPath = target
+      query = ""
+    }
+
+    const maxFiles = args.maxFiles ?? 5_000
+    if (!Number.isInteger(maxFiles) || maxFiles < 1 || maxFiles > 100_000) {
       return yield* fail("--max-files 必须是 1 到 100000 之间的整数。")
     }
     if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100) {
       return yield* fail("--limit 必须是 1 到 100 之间的整数。")
     }
 
-    const workspace = resolve(args.workspace ?? process.cwd())
-    const root = args.path === "." ? workspace : join(workspace, args.path)
+    const root = scanPath === "." ? workspace : resolve(workspace, scanPath)
     const result = RepoScale.buildRepoScaleReport(root, {
-      query: args.query,
-      maxFiles: args.maxFiles,
+      query,
+      maxFiles,
       limit: args.limit,
     })
 

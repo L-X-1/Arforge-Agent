@@ -16,7 +16,7 @@ test("private lock control does not cover the review control", async ({ page }) 
   await expectSessionTitle(page, fixture.expected.sourceTitle)
 
   const review = page.getByRole("button", { name: "Toggle review" })
-  const lock = page.locator(".arforge-private-app__lock")
+  const lock = page.getByRole("button", { name: "Lock", exact: true })
   await expect(review).toBeVisible()
   await expect(lock).toBeVisible()
 

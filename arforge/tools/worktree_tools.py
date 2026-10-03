@@ -1,4 +1,13 @@
-"""Session-scoped managed worktree tools."""
+"""Explicit Python compatibility wrappers for legacy managed worktree tools.
+
+The TypeScript/Core ``Worktree.Service`` and durable ``ControlOperation``
+pipeline are the product owners for worktree preparation, ownership checks,
+Git mutations, approval, event projection, and Desktop status.  These Python
+wrappers remain importable for old fixtures and embedding callers, but are
+excluded from the default Python registry so they cannot create a second
+worktree state machine.  New product code must use the TypeScript/Core
+worktree service and its Desktop/Bridge projections.
+"""
 
 from __future__ import annotations
 

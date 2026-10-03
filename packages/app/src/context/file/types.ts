@@ -14,10 +14,17 @@ export type SelectedLineRange = {
   endSide?: "additions" | "deletions"
 }
 
+export type FilePreviewMode = "source" | "preview" | "split"
+
+export function normalizeFilePreviewMode(value: unknown): FilePreviewMode {
+  return value === "preview" || value === "split" ? value : "source"
+}
+
 export type FileViewState = {
   scrollTop?: number
   scrollLeft?: number
   selectedLines?: SelectedLineRange | null
+  previewMode?: FilePreviewMode
 }
 
 export type FileState = {

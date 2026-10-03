@@ -4,11 +4,11 @@ import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { GoalV2 } from "../goal"
-import { PermissionV2 } from "../permission"
 import { PositiveInt } from "../schema"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact } from "./effect-semantics"
 
 export const name = "goal_update"
 
@@ -27,9 +27,8 @@ export type Output = typeof Output.Type
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const goals = yield* GoalV2.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
@@ -38,10 +37,16 @@ const layer = Layer.effectDiscard(
             "Mark the current durable autonomous goal completed after verification, or blocked when progress genuinely requires user input or an external state change.",
           input: Input,
           output: Output,
+          effects: (input) =>
+            majorImpact({
+              externalServices: ["goal-store"],
+              expectedArtifacts: [`goal:${input.goalID}`],
+              successCriteria: [`goal:${input.goalID} reaches ${input.status} at revision ${input.expectedRevision + 1}`],
+            }),
           toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
           execute: (input, context) =>
             Effect.gen(function* () {
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [input.goalID],
                 save: [input.goalID],
@@ -70,7 +75,7 @@ const layer = Layer.effectDiscard(
                 next: (yield* goals.list({ sessionID: context.sessionID, includeHistory: false })).active,
               }
             }).pipe(
-              Effect.mapError((error) => new ToolFailure({ message: describe(error) })),
+              Effect.mapError((error) => Tool.toToolFailure(error) ?? new ToolFailure({ message: describe(error) })),
             ),
         }),
       })
@@ -81,14 +86,15 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/goal-update",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, GoalV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, GoalV2.node],
 })
 
 function describe(error: unknown) {
   if (error instanceof Error) return error.message
   if (typeof error === "object" && error !== null && "_tag" in error) {
     if (error._tag === "Goal.NotFoundError") return "The goal does not belong to this session"
-    if (error._tag === "Goal.StaleRevisionError") return "The goal changed; inspect its current revision before retrying"
+    if (error._tag === "Goal.StaleRevisionError")
+      return "The goal changed; inspect its current revision before retrying"
     if (error._tag === "Goal.InvalidStateError") return "The goal cannot be updated from its current state"
   }
   return "Unable to update the autonomous goal"

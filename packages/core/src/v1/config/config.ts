@@ -111,7 +111,17 @@ export const Info = Schema.Struct({
     description: "Custom provider configurations and model overrides",
   }),
   mcp: Schema.optional(
-    Schema.Record(Schema.String, Schema.Union([ConfigMCPV1.Info, Schema.Struct({ enabled: Schema.Boolean })])),
+    Schema.Record(
+      Schema.String,
+      Schema.Union([
+        ConfigMCPV1.Info,
+        Schema.Struct({ enabled: Schema.Boolean, type: Schema.optional(Schema.Never) }).annotate({
+          // Effect cannot derive an arbitrary for optional Never. The only
+          // valid override shape is the boolean toggle, with type absent.
+          toArbitrary: () => (fc) => fc.record({ enabled: fc.boolean() }),
+        }),
+      ]),
+    ),
   ).annotate({ description: "MCP (Model Context Protocol) server configurations" }),
   formatter: Schema.optional(ConfigFormatterV1.Info).annotate({
     description:
@@ -179,8 +189,9 @@ export const Info = Schema.Struct({
       continue_loop_on_deny: Schema.optional(Schema.Boolean).annotate({
         description: "Continue the agent loop when a tool call is denied",
       }),
-      mcp_timeout: Schema.optional(PositiveInt).annotate({
-        description: "Timeout in milliseconds for model context protocol (MCP) requests",
+      mcp_timeout: Schema.optional(ConfigMCPV1.Timeout).annotate({
+        description:
+          "Compatibility projection of canonical MCP startup/request defaults. A legacy number applies only to requests.",
       }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",

@@ -141,17 +141,17 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "character": {
-      "description": "The character offset (1-based, as shown in editors)",
+      "description": "The character offset (1-based, required for position-based operations)",
       "maximum": 9007199254740991,
       "minimum": 1,
       "type": "integer",
     },
     "filePath": {
-      "description": "The absolute or relative path to the file",
+      "description": "The absolute or relative path to the file (required except for status)",
       "type": "string",
     },
     "line": {
-      "description": "The line number (1-based, as shown in editors)",
+      "description": "The line number (1-based, required for position-based operations)",
       "maximum": 9007199254740991,
       "minimum": 1,
       "type": "integer",
@@ -168,6 +168,8 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
         "prepareCallHierarchy",
         "incomingCalls",
         "outgoingCalls",
+        "diagnostics",
+        "status",
       ],
       "type": "string",
     },
@@ -178,9 +180,6 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
   },
   "required": [
     "operation",
-    "filePath",
-    "line",
-    "character",
   ],
   "type": "object",
 }
@@ -304,6 +303,36 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
     "background": {
       "description": "Run the agent in the background. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress",
       "type": "boolean",
+    },
+    "capabilities": {
+      "description": "Explicit child action/resource capabilities; omitted means read-only.",
+      "items": {
+        "properties": {
+          "access": {
+            "enum": [
+              "read",
+              "write",
+            ],
+            "type": "string",
+          },
+          "action": {
+            "type": "string",
+          },
+          "resources": {
+            "items": {
+              "type": "string",
+            },
+            "type": "array",
+          },
+        },
+        "required": [
+          "action",
+          "resources",
+          "access",
+        ],
+        "type": "object",
+      },
+      "type": "array",
     },
     "command": {
       "description": "The command that triggered this task",

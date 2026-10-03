@@ -26,6 +26,7 @@ import { TextReveal } from "@arforge-ai/ui/text-reveal"
 import { createAutoScroll } from "@arforge-ai/ui/hooks"
 import { useI18n } from "@arforge-ai/ui/context/i18n"
 import { normalize } from "./session-diff"
+import { reasoningHeading as extractReasoningHeading } from "./reasoning-heading"
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -112,42 +113,6 @@ function partState(part: PartType, showReasoningSummaries: boolean) {
   }
   if (PART_MAPPING[part.type]) return "visible" as const
   return
-}
-
-function clean(value: string) {
-  return value
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[*_~]+/g, "")
-    .trim()
-}
-
-function heading(text: string) {
-  const markdown = text.replace(/\r\n?/g, "\n")
-
-  const html = markdown.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i)
-  if (html?.[1]) {
-    const value = clean(html[1].replace(/<[^>]+>/g, " "))
-    if (value) return value
-  }
-
-  const atx = markdown.match(/^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/m)
-  if (atx?.[1]) {
-    const value = clean(atx[1])
-    if (value) return value
-  }
-
-  const setext = markdown.match(/^([^\n]+)\n(?:=+|-+)\s*$/m)
-  if (setext?.[1]) {
-    const value = clean(setext[1])
-    if (value) return value
-  }
-
-  const strong = markdown.match(/^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*$/m)
-  if (strong?.[1]) {
-    const value = clean(strong[1])
-    if (value) return value
-  }
 }
 
 export function SessionTurn(
@@ -360,7 +325,7 @@ export function SessionTurn(
           visible++
         }
         if (part.type === "reasoning" && part.text) {
-          const h = heading(part.text)
+          const h = extractReasoningHeading(part.text)
           if (h) reason = h
         }
       }

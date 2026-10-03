@@ -52,17 +52,17 @@ def test_discovery_rejects_duplicate_names_without_executing_project_code(tmp_pa
 
 def test_runtime_profile_loading_requires_explicit_enablement_and_trust(monkeypatch, tmp_path):
     from arforge.custom_agent_profiles import load_enabled_custom_agent_profiles
-    from arforge.trust_screen import trust_workspace
 
     root = tmp_path / ".arforge" / "agents"
     root.mkdir(parents=True)
     (root / "review.json").write_text(json.dumps(_payload()), encoding="utf-8")
+    monkeypatch.setenv("ARFORGE_HOME", str(tmp_path / "profile"))
     monkeypatch.delenv("ARFORGE_ENABLE_CUSTOM_AGENTS", raising=False)
     assert load_enabled_custom_agent_profiles(tmp_path) == ([], [])
 
     monkeypatch.setenv("ARFORGE_ENABLE_CUSTOM_AGENTS", "1")
     assert load_enabled_custom_agent_profiles(tmp_path) == ([], [])
-    trust_workspace(tmp_path)
+    monkeypatch.setenv("ARFORGE_TRUST_WORKSPACE", "1")
     profiles, errors = load_enabled_custom_agent_profiles(tmp_path)
     assert errors == []
     assert [profile.role_name for profile in profiles] == ["CustomAgent.release-reviewer"]
@@ -132,3 +132,54 @@ def test_cli_lists_and_validates_profiles(monkeypatch, tmp_path, capsys):
     assert listed["profiles"][0]["role"] == "CustomAgent.release-reviewer"
     assert main(["custom-agents", "validate", str(profile_path), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["valid"] is True
+
+
+def test_legacy_cli_custom_agents_status_reads_the_typescript_workspace_owner(monkeypatch, tmp_path, capsys):
+    """The migration-era helper must not consult the retired Python trust store."""
+
+    from arforge import cli
+    import arforge.custom_agent_profiles as profiles
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(profiles, "typescript_workspace_trusted", lambda _workspace: True)
+    monkeypatch.setattr(profiles, "custom_agents_enabled", lambda _workspace: False)
+
+    assert cli.main(["custom-agents", "status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["workspace_trusted"] is True
+    assert payload["enabled"] is False
+
+
+def test_direct_dispatch_custom_agent_report_uses_ts_owner(monkeypatch, tmp_path):
+    """The migration-era direct adapter must not rebuild the Python profile report."""
+
+    import arforge.cli_compat as cli_compat
+    import arforge.custom_agent_profiles as profiles
+    from arforge.product import direct_dispatch as bridge
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        profiles,
+        "typescript_custom_agents_status",
+        lambda _workspace: {
+            "directory": str(tmp_path / ".arforge" / "agents"),
+            "workspace_trusted": True,
+            "enabled": True,
+        },
+    )
+    monkeypatch.setattr(
+        cli_compat,
+        "invoke",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"profiles": [{"role": "CustomAgent.review"}], "errors": []}),
+        ),
+    )
+
+    result = bridge._dispatch_product("custom_agents.list", {}, None, None, None, None)
+
+    assert result["workspace"] == str(tmp_path.resolve())
+    assert result["workspace_trusted"] is True
+    assert result["enabled"] is True
+    assert result["profiles"] == [{"role": "CustomAgent.review"}]
+    assert result["errors"] == []

@@ -30,13 +30,13 @@ const make = <R, E>(testLayer: Layer.Layer<R, E>, liveLayer: Layer.Layer<R, E>) 
     test.skip(name, () => run(value, testLayer), opts)
 
   const live = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test(name, () => run(value, liveLayer), opts)
+    test(name, () => run(value, liveLayer), liveOptions(opts))
 
   live.only = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.only(name, () => run(value, liveLayer), opts)
+    test.only(name, () => run(value, liveLayer), liveOptions(opts))
 
   live.skip = <A, E2>(name: string, value: Body<A, E2, R | Scope.Scope>, opts?: number | TestOptions) =>
-    test.skip(name, () => run(value, liveLayer), opts)
+    test.skip(name, () => run(value, liveLayer), liveOptions(opts))
 
   return { effect, live }
 }
@@ -46,6 +46,13 @@ const testEnv = Layer.mergeAll(TestConsole.layer, TestClock.layer())
 
 // Live environment - uses real clock, but keeps TestConsole for output capture
 const liveEnv = TestConsole.layer
+
+// Tests using the live layer exercise real operating-system processes and
+// filesystems. Windows Git operations regularly need a little over Bun's
+// five-second default even when they complete successfully, so keep unit
+// tests fast while giving live integration tests an explicit, repeatable
+// budget. Individual tests can still override this value.
+const liveOptions = (opts?: number | TestOptions): number | TestOptions => opts ?? 15_000
 
 export const it = make(testEnv, liveEnv)
 

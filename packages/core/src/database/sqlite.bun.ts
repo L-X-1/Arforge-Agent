@@ -161,6 +161,10 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      // Configure the native connection before any WAL negotiation.  Worker
+      // processes can open the same profile concurrently; setting the timeout
+      // after `journal_mode` leaves that first writer race unprotected.
+      if (config.readonly !== true) native.run("PRAGMA busy_timeout = 5000;")
       if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
       return native
     }),

@@ -1,6 +1,8 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
+import { withXmlDOMParser } from "./src/test-utils/xml-dom"
 
 GlobalRegistrator.register()
+globalThis.DOMParser = withXmlDOMParser(globalThis.DOMParser)
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext
 // @ts-expect-error - we're overriding with a simplified mock

@@ -1,8 +1,41 @@
 import { MemoryV2 } from "@arforge-ai/core/memory"
+import * as MemoryKernel from "@arforge-ai/core/memory-kernel"
+import * as MemoryCandidate from "@arforge-ai/schema/memory-candidate"
 import { ConflictError, InvalidRequestError, MemoryNotFoundError } from "@arforge-ai/protocol/errors"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { IdentityContext } from "../identity-context"
+
+const projectCandidateReview = (review: MemoryKernel.CandidateReview): MemoryCandidate.Review => {
+  const candidate = review.candidate
+  const blockedReasons = MemoryKernel.candidateApprovalBlocks(candidate)
+  const contentRedacted = candidate.sensitivity === "secret"
+  return MemoryCandidate.Review.make({
+    candidateID: candidate.candidateID,
+    proposedClass: candidate.proposedClass,
+    ...(contentRedacted ? {} : { content: candidate.content }),
+    contentRedacted,
+    sourceEvidenceIDs: candidate.sourceEvidenceIDs,
+    scope: candidate.scope,
+    sensitivity: candidate.sensitivity,
+    confidence: candidate.confidence,
+    dedup: candidate.dedup,
+    retention: candidate.retention,
+    proposer: candidate.proposer,
+    policy: candidate.policy,
+    status: candidate.status,
+    reason: candidate.reason,
+    time: candidate.time,
+    approvalAllowed: blockedReasons.length === 0,
+    activationAllowed: MemoryCandidate.isActivationEligible(candidate),
+    blockedReasons,
+    audit: review.audit,
+  })
+}
+
+const candidateError = (error: MemoryKernel.GateError) =>
+  new InvalidRequestError({ field: "memoryCandidate", message: error.reason })
 
 export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handlers) =>
   handlers
@@ -35,6 +68,10 @@ export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handler
             Effect.catchTag(
               "Memory.InvalidScopeError",
               (error) => new InvalidRequestError({ field: "scope", message: error.message }),
+            ),
+            Effect.catchTag(
+              "Memory.GovernanceError",
+              (error) => new InvalidRequestError({ field: "governance", message: error.message }),
             ),
           ),
         }
@@ -77,6 +114,10 @@ export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handler
               (error) => new InvalidRequestError({ field: "scope", message: error.message }),
             ),
             Effect.catchTag(
+              "Memory.GovernanceError",
+              (error) => new InvalidRequestError({ field: "governance", message: error.message }),
+            ),
+            Effect.catchTag(
               "Memory.NotFoundError",
               (error) =>
                 new MemoryNotFoundError({
@@ -113,6 +154,10 @@ export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handler
             Effect.catchTag(
               "Memory.CorrectionConflictError",
               (error) => new ConflictError({ resource: error.resource, message: error.message }),
+            ),
+            Effect.catchTag(
+              "Memory.GovernanceError",
+              (error) => new InvalidRequestError({ field: "governance", message: error.message }),
             ),
           ),
         }
@@ -218,25 +263,133 @@ export const MemoryHandler = HttpApiBuilder.group(Api, "server.memory", (handler
       }),
     )
     .handle(
-      "memory.delete",
+      "memory.candidateReview",
+      Effect.fn(function* (ctx) {
+        const kernel = yield* MemoryKernel.Service
+        return {
+          data: yield* kernel
+            .reviewCandidate(ctx.params.candidateID)
+            .pipe(Effect.map(projectCandidateReview), Effect.catchTag("MemoryKernel.GateError", candidateError)),
+        }
+      }),
+    )
+    .handle(
+      "memory.candidateApprove",
+      Effect.fn(function* (ctx) {
+        const kernel = yield* MemoryKernel.Service
+        yield* kernel
+          .approve({
+            candidateID: ctx.params.candidateID,
+            actor: { kind: "user" },
+            policyVersion: MemoryKernel.POLICY_VERSION,
+            expectedUpdatedAt: ctx.payload.expectedUpdatedAt,
+            reason: ctx.payload.reason,
+          })
+          .pipe(Effect.catchTag("MemoryKernel.GateError", candidateError))
+        return {
+          data: yield* kernel
+            .reviewCandidate(ctx.params.candidateID)
+            .pipe(Effect.map(projectCandidateReview), Effect.catchTag("MemoryKernel.GateError", candidateError)),
+        }
+      }),
+    )
+    .handle(
+      "memory.candidateReject",
+      Effect.fn(function* (ctx) {
+        const kernel = yield* MemoryKernel.Service
+        yield* kernel
+          .reject({
+            candidateID: ctx.params.candidateID,
+            actor: { kind: "user" },
+            policyVersion: MemoryKernel.POLICY_VERSION,
+            expectedUpdatedAt: ctx.payload.expectedUpdatedAt,
+            reason: ctx.payload.reason,
+          })
+          .pipe(Effect.catchTag("MemoryKernel.GateError", candidateError))
+        return {
+          data: yield* kernel
+            .reviewCandidate(ctx.params.candidateID)
+            .pipe(Effect.map(projectCandidateReview), Effect.catchTag("MemoryKernel.GateError", candidateError)),
+        }
+      }),
+    )
+    .handle(
+      "memory.candidateActivate",
+      Effect.fn(function* (ctx) {
+        const kernel = yield* MemoryKernel.Service
+        yield* kernel
+          .promote({
+            candidateID: ctx.params.candidateID,
+            actor: { kind: "user" },
+            policyVersion: MemoryKernel.POLICY_VERSION,
+            expectedUpdatedAt: ctx.payload.expectedUpdatedAt,
+            reason: ctx.payload.reason,
+            evidenceIDs: [],
+          })
+          .pipe(Effect.catchTag("MemoryKernel.GateError", candidateError))
+        return {
+          data: yield* kernel
+            .reviewCandidate(ctx.params.candidateID)
+            .pipe(Effect.map(projectCandidateReview), Effect.catchTag("MemoryKernel.GateError", candidateError)),
+        }
+      }),
+    )
+    .handle(
+      "memory.maintenanceDelete",
       Effect.fn(function* (ctx) {
         const memory = yield* MemoryV2.Service
-        yield* memory.delete(ctx.params.memoryID)
+        const principal = yield* Effect.serviceOption(IdentityContext.Current)
+        if (Option.isNone(principal) || !["owner", "admin"].includes(principal.value.role))
+          return yield* new InvalidRequestError({
+            field: "maintenanceAuthorization",
+            message: "Memory deletion requires an authenticated owner/admin maintenance authority.",
+          })
+        yield* memory
+          .maintenanceDelete({
+            memoryID: ctx.params.memoryID,
+            ...ctx.payload,
+            actor: "maintenance",
+            maintenanceAuthority: true,
+            explicitDestructive: true,
+          })
+          .pipe(
+            Effect.catchTag(
+              "Memory.GovernanceError",
+              (error) => new InvalidRequestError({ field: "maintenanceAuthorization", message: error.message }),
+            ),
+          )
         return HttpApiSchema.NoContent.make()
       }),
     )
     .handle(
-      "memory.deleteMany",
+      "memory.maintenanceDeleteMany",
       Effect.fn(function* (ctx) {
         const memory = yield* MemoryV2.Service
+        const principal = yield* Effect.serviceOption(IdentityContext.Current)
+        if (Option.isNone(principal) || !["owner", "admin"].includes(principal.value.role))
+          return yield* new InvalidRequestError({
+            field: "maintenanceAuthorization",
+            message: "Memory deletion requires an authenticated owner/admin maintenance authority.",
+          })
         return {
           data: yield* memory
-            .deleteMany(ctx.payload.ids)
+            .maintenanceDeleteMany(
+              ctx.payload.items.map((item) => ({
+                ...item,
+                actor: "maintenance" as const,
+                maintenanceAuthority: true as const,
+                explicitDestructive: true as const,
+              })),
+            )
             .pipe(
               Effect.catchTag(
                 "Memory.DeleteLimitError",
                 (error) =>
                   new InvalidRequestError({ field: "ids", message: `At most ${error.limit} IDs are allowed.` }),
+              ),
+              Effect.catchTag(
+                "Memory.GovernanceError",
+                (error) => new InvalidRequestError({ field: "maintenanceAuthorization", message: error.message }),
               ),
             ),
         }

@@ -1,8 +1,10 @@
 """Self-correction dogfood evals for real agent recovery behavior.
 
 These evals create small broken projects, run an agent runner, and verify the
-workspace state afterwards. The default runner uses the public ``arforge code``
-CLI so the same permissions, hooks, file tools, and model path are exercised.
+workspace state afterwards. The default runner uses the public unified
+TypeScript ``arforge run`` CLI so the same permissions, hooks, file tools, and
+model path are exercised. The Python module is only the compatibility launcher;
+it must never become a second execution owner here.
 Tests can inject a fake runner to keep the suite deterministic and offline.
 """
 
@@ -288,12 +290,13 @@ def default_cli_runner(task: SelfCorrectDogfoodTask, workspace: Path) -> RunnerR
     cmd = [
         sys.executable,
         "-m",
-        "arforge.cli",
-        "--no-stream",
-        "--mode",
-        "fullAccess",
-        "--json",
-        "code",
+        "arforge",
+        "run",
+        "--dir",
+        str(workspace),
+        "--auto",
+        "--format",
+        "json",
         task.prompt,
     ]
     proc = subprocess.run(

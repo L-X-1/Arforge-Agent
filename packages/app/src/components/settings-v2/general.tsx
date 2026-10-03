@@ -1,4 +1,8 @@
-import { Component, Show, createMemo, createResource, onMount } from "solid-js"
+import { ManagementStatus } from "./management-status"
+import { managementCopy, managementErrorText } from "./management-state"
+import { createStore } from "solid-js/store"
+import { Component, Show, createMemo, createResource, onCleanup, onMount } from "solid-js"
+import { useNavigate } from "@solidjs/router"
 import { createMediaQuery } from "@solid-primitives/media"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
 import { SelectV2 } from "@arforge-ai/ui/v2/select-v2"
@@ -29,6 +33,8 @@ import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import { LayoutRetirementNotice, LayoutTransitionToggle } from "./interface-transition"
 import "./settings-v2.css"
+import { useOnboarding } from "@/context/onboarding"
+import { onboardingCopy } from "@/components/onboarding/onboarding-copy"
 
 let demoSoundState = {
   cleanup: undefined as (() => void) | undefined,
@@ -93,8 +99,12 @@ export const SettingsGeneralV2: Component<{
   const serverSync = useServerSync()
   const serverSdk = useServerSDK()
   const mobile = createMediaQuery("(max-width: 767px)")
+  const onboarding = useOnboarding()
+  const navigate = useNavigate()
 
+  const [request, setRequest] = createStore({ savingShell: false, shellError: "" })
   const updater = useUpdaterAction()
+  onCleanup(stopDemoSound)
 
   const dir = createMemo(() => {
     if (!props.sessionID) return undefined
@@ -121,7 +131,7 @@ export const SettingsGeneralV2: Component<{
 
   const themeOptions = createMemo<ThemeOption[]>(() => theme.ids().map((id) => ({ id, name: theme.name(id) })))
 
-  const [shells] = createResource(
+  const [shells, { refetch: refetchShells }] = createResource(
     async () => {
       const sdk = serverSdk()
       if ((await sdk.protocol) === "v1") {
@@ -146,7 +156,7 @@ export const SettingsGeneralV2: Component<{
   const currentShell = createMemo(() => serverSync().data.config.shell ?? "")
 
   const shellOptions = createMemo<ShellSelectOption[]>(() => {
-    const list = shells.latest
+    const list = shells.error ? [] : shells.latest
     const current = serverSync().data.config.shell
 
     const nameCounts = new Map<string, number>()
@@ -261,7 +271,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.row.language.title")}
           description={language.t("settings.general.row.language.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.row.language.title")}
             appearance="inline"
             data-action="settings-language"
             options={languageOptions()}
@@ -279,7 +289,8 @@ export const SettingsGeneralV2: Component<{
           description={language.t("toast.permissions.autoaccept.on.description")}
         >
           <div data-action="settings-auto-accept-permissions">
-            <Switch checked={accepting()} disabled={!dir()} onChange={toggleAccept} />
+            <Switch hideLabel children={language.t("command.permissions.autoaccept.enable")} checked={accepting()} disabled={!dir()} onChange={toggleAccept} />
+            <Show when={!dir()}><span role="status" class="arforge-management-inline-hint">{managementCopy(language.locale()).sessionRequired}</span></Show>
           </div>
         </SettingsRowV2>
 
@@ -287,9 +298,10 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.row.shell.title")}
           description={language.t("settings.general.row.shell.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.row.shell.title")}
             appearance="inline"
             data-action="settings-shell"
+            disabled={shells.loading || request.savingShell}
             options={shellOptions()}
             current={shellOptions().find((o) => o.value === currentShell()) ?? autoOption}
             placement="bottom-end"
@@ -297,19 +309,24 @@ export const SettingsGeneralV2: Component<{
             value={(o) => o.id}
             label={(o) => o.label}
             onSelect={(option) => {
-              if (!option) return
-              if (option.value === currentShell()) return
-              serverSync().updateConfig({ shell: option.value })
+              if (!option || request.savingShell || option.value === currentShell()) return
+              const sync = serverSync()
+              setRequest({ savingShell: true, shellError: "" })
+              void sync.updateConfig({ shell: option.value })
+                .catch((error: unknown) => setRequest("shellError", managementErrorText(error, language.t("common.requestFailed"))))
+                .finally(() => setRequest("savingShell", false))
             }}
           />
         </SettingsRowV2>
+
+        <ManagementStatus loading={shells.loading} saving={request.savingShell} error={request.shellError || shells.error} onRetry={() => { setRequest("shellError", ""); void refetchShells() }} />
 
         <SettingsRowV2
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
         >
           <div data-action="settings-feed-reasoning-summaries">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.reasoningSummaries.title")}
               checked={settings.general.showReasoningSummaries()}
               onChange={(checked) => settings.general.setShowReasoningSummaries(checked)}
             />
@@ -321,7 +338,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.shellToolPartsExpanded.description")}
         >
           <div data-action="settings-feed-shell-tool-parts-expanded">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.shellToolPartsExpanded.title")}
               checked={settings.general.shellToolPartsExpanded()}
               onChange={(checked) => settings.general.setShellToolPartsExpanded(checked)}
             />
@@ -333,7 +350,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.editToolPartsExpanded.description")}
         >
           <div data-action="settings-feed-edit-tool-parts-expanded">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.editToolPartsExpanded.title")}
               checked={settings.general.editToolPartsExpanded()}
               onChange={(checked) => settings.general.setEditToolPartsExpanded(checked)}
             />
@@ -346,7 +363,7 @@ export const SettingsGeneralV2: Component<{
             description={language.t("settings.general.row.mobileTitlebarBottom.description")}
           >
             <div data-action="settings-mobile-titlebar-bottom">
-              <Switch
+              <Switch hideLabel children={language.t("settings.general.row.mobileTitlebarBottom.title")}
                 checked={settings.general.mobileTitlebarPosition() === "bottom"}
                 onChange={(checked) => settings.general.setMobileTitlebarPosition(checked ? "bottom" : "top")}
               />
@@ -356,6 +373,30 @@ export const SettingsGeneralV2: Component<{
       </SettingsListV2>
     </div>
   )
+
+  const OnboardingSection = () => {
+    const copy = () => onboardingCopy(language.locale())
+    return (
+      <div class="settings-v2-section">
+        <SettingsListV2>
+          <SettingsRowV2 title={copy().settingsTitle} description={copy().settingsDescription}>
+            <ButtonV2
+              data-action="settings-reopen-onboarding"
+              size="normal"
+              variant="neutral"
+              onClick={() => {
+                onboarding.restart()
+                dialog.close()
+                navigate("/")
+              }}
+            >
+              {copy().reopen}
+            </ButtonV2>
+          </SettingsRowV2>
+        </SettingsListV2>
+      </div>
+    )
+  }
 
   const AdvancedSection = () => (
     <div class="settings-v2-section">
@@ -367,7 +408,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.showFileTree.description")}
         >
           <div data-action="settings-show-file-tree">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.showFileTree.title")}
               checked={settings.general.showFileTree()}
               onChange={(checked) => settings.general.setShowFileTree(checked)}
             />
@@ -379,7 +420,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.showSearch.description")}
         >
           <div data-action="settings-show-search">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.showSearch.title")}
               checked={settings.general.showSearch()}
               onChange={(checked) => settings.general.setShowSearch(checked)}
             />
@@ -391,7 +432,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.showStatus.description")}
         >
           <div data-action="settings-show-status">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.showStatus.title")}
               checked={settings.general.showStatus()}
               onChange={(checked) => settings.general.setShowStatus(checked)}
             />
@@ -403,7 +444,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.showCustomAgents.description")}
         >
           <div data-action="settings-show-custom-agents">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.showCustomAgents.title")}
               checked={settings.general.showCustomAgents()}
               onChange={(checked) => settings.general.setShowCustomAgents(checked)}
             />
@@ -422,7 +463,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.row.colorScheme.title")}
           description={language.t("settings.general.row.colorScheme.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.row.colorScheme.title")}
             appearance="inline"
             data-action="settings-color-scheme"
             options={colorSchemeOptions()}
@@ -439,7 +480,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.row.theme.title")}
           description={language.t("settings.general.row.theme.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.row.theme.title")}
             appearance="inline"
             data-action="settings-theme"
             options={themeOptions()}
@@ -534,7 +575,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.notifications.agent.description")}
         >
           <div data-action="settings-notifications-agent">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.notifications.agent.title")}
               checked={settings.notifications.agent()}
               onChange={(checked) => settings.notifications.setAgent(checked)}
             />
@@ -546,7 +587,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.notifications.permissions.description")}
         >
           <div data-action="settings-notifications-permissions">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.notifications.permissions.title")}
               checked={settings.notifications.permissions()}
               onChange={(checked) => settings.notifications.setPermissions(checked)}
             />
@@ -558,7 +599,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.notifications.errors.description")}
         >
           <div data-action="settings-notifications-errors">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.notifications.errors.title")}
               checked={settings.notifications.errors()}
               onChange={(checked) => settings.notifications.setErrors(checked)}
             />
@@ -577,7 +618,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.sounds.agent.title")}
           description={language.t("settings.general.sounds.agent.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.sounds.agent.title")}
             appearance="inline"
             data-action="settings-sounds-agent"
             {...soundSelectProps(
@@ -595,7 +636,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.sounds.permissions.title")}
           description={language.t("settings.general.sounds.permissions.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.sounds.permissions.title")}
             appearance="inline"
             data-action="settings-sounds-permissions"
             {...soundSelectProps(
@@ -613,7 +654,7 @@ export const SettingsGeneralV2: Component<{
           title={language.t("settings.general.sounds.errors.title")}
           description={language.t("settings.general.sounds.errors.description")}
         >
-          <SelectV2
+          <SelectV2 aria-label={language.t("settings.general.sounds.errors.title")}
             appearance="inline"
             data-action="settings-sounds-errors"
             {...soundSelectProps(
@@ -640,7 +681,7 @@ export const SettingsGeneralV2: Component<{
           description={language.t("settings.general.row.releaseNotes.description")}
         >
           <div data-action="settings-release-notes">
-            <Switch
+            <Switch hideLabel children={language.t("settings.general.row.releaseNotes.title")}
               checked={settings.general.releaseNotes()}
               onChange={(checked) => settings.general.setReleaseNotes(checked)}
             />
@@ -671,7 +712,7 @@ export const SettingsGeneralV2: Component<{
             description={language.t("settings.general.row.pinchZoom.description")}
           >
             <div data-action="settings-pinch-zoom">
-              <Switch checked={pinchZoom.latest} onChange={onPinchZoomChange} />
+              <Switch hideLabel children={language.t("settings.general.row.pinchZoom.title")} checked={pinchZoom.latest} onChange={onPinchZoomChange} />
             </div>
           </SettingsRowV2>
         </SettingsListV2>
@@ -695,6 +736,8 @@ export const SettingsGeneralV2: Component<{
         </Show>
 
         <GeneralSection />
+
+        <OnboardingSection />
 
         <AppearanceSection />
 

@@ -16,6 +16,7 @@ export type Event =
   | EventMessageRemoved
   | EventMessagePartUpdated
   | EventMessagePartRemoved
+  | EventSessionNextTitleGenerated
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextMoved
@@ -24,6 +25,10 @@ export type Event =
   | EventSessionNextPromptQueueUpdated
   | EventSessionNextPromptQueueRemoved
   | EventSessionNextContextUpdated
+  | EventSessionNextMemoryContextPrepared
+  | EventSessionNextContextFusionPrepared
+  | EventSessionNextRequestEnvelopePrepared
+  | EventSessionNextRequestBindingPrepared
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
@@ -46,6 +51,7 @@ export type Event =
   | EventSessionNextToolFailed
   | EventSessionNextRetried
   | EventSessionNextCompactionStarted
+  | EventSessionNextCompactionRequestPrepared
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
   | EventSessionNextRevertStaged
@@ -56,6 +62,54 @@ export type Event =
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
+  | EventAuthorizerControlAsked
+  | EventAuthorizerControlReplied
+  | EventAgentActionProposed
+  | EventAgentActionPolicyEvaluated
+  | EventAgentActionAuthorizationGranted
+  | EventAgentActionStateChanged
+  | EventAgentActionAttemptStarted
+  | EventAgentActionAttemptFinished
+  | EventAgentActionObserved
+  | EventAgentActionPostprocessingRecorded
+  | EventAgentActionReconciled
+  | EventAgentActionExternalOperationBound
+  | EventAgentActionMutationIntentRecorded
+  | EventAgentActionProgressRecorded
+  | EventAgentActionModelRequestPrepared
+  | EventAgentActionLeaseAcquired
+  | EventAgentActionHeartbeatRecorded
+  | EventAgentActionLeaseReleased
+  | EventAgentRunCreated
+  | EventAgentRunStateChanged
+  | EventAgentRunCheckpointCreated
+  | EventAgentRunAttemptStarted
+  | EventAgentRunAttemptFinished
+  | EventAgentRunLeaseAcquired
+  | EventAgentRunHeartbeatRecorded
+  | EventAgentRunLeaseReleased
+  | EventAgentChildRunCreated
+  | EventAgentChildRunCancelled
+  | EventAgentChildRunResultRecorded
+  | EventAgentChildRunSettlementIntentRecorded
+  | EventAgentChildRunBudgetReserved
+  | EventAgentChildRunBudgetSettled
+  | EventAgentChildRunSettlementObservationRecorded
+  | EventAgentControlRunCreated
+  | EventAgentControlRunStateChanged
+  | EventAgentControlRunCheckpointCreated
+  | EventAgentControlRunAttemptStarted
+  | EventAgentControlRunAttemptFinished
+  | EventAgentControlRunLeaseAcquired
+  | EventAgentControlRunHeartbeatRecorded
+  | EventAgentControlRunLeaseReleased
+  | EventAgentEvolutionProposalCreated
+  | EventAgentEvolutionStatusChanged
+  | EventAgentEvolutionEvaluationRecorded
+  | EventAgentEvolutionExposurePrepared
+  | EventAgentEvolutionExposureOutcomeRecorded
+  | EventAgentEvolutionExposureArchived
+  | EventAgentEvolutionExposureRestored
   | EventFileEdited
   | EventGoalCreated
   | EventGoalUpdated
@@ -80,6 +134,9 @@ export type Event =
   | EventTeamUpdated
   | EventTeamDeleted
   | EventTeamMessageSent
+  | EventMailboxMessageSent
+  | EventMailboxMessageAcknowledged
+  | EventMailboxMessageCancelled
   | EventWaitStarted
   | EventWaitCheckIn
   | EventWaitCompleted
@@ -96,6 +153,8 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
+  | EventMcpSupervisorChanged
+  | EventMcpSupervisorCheckpointed
   | EventCommandExecuted
   | EventProjectUpdated
   | EventSessionStatus
@@ -238,21 +297,7 @@ export type Session = {
   }
 }
 
-export type OutputFormatText = {
-  type: "text"
-}
-
-export type JsonSchema = {
-  [key: string]: unknown
-}
-
-export type OutputFormatJsonSchema = {
-  type: "json_schema"
-  schema: JsonSchema
-  retryCount?: number
-}
-
-export type OutputFormat = OutputFormatText | OutputFormatJsonSchema
+export type OutputFormat = PromptOutputFormatText | PromptOutputFormatJsonSchema
 
 export type UserMessage = {
   id: string
@@ -660,6 +705,8 @@ export type Prompt = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  scheduledTasks?: Array<PromptScheduledTask>
+  system?: PromptRequestSystem
   route?: {
     agent?: string
     model?: ModelRef
@@ -668,7 +715,10 @@ export type Prompt = {
     name: string
     arguments: string
   }
+  format?: PromptOutputFormat
 }
+
+export type PersonalJobDigest = string
 
 export type GoalObjective = string
 
@@ -712,6 +762,26 @@ export type TeamMessageKind = "info" | "request" | "result" | "alert" | "shutdow
 export type TeamMessageSummary = string
 
 export type TeamMessageText = string
+
+export type MailboxIdempotencyKey = string
+
+export type MailboxMessageKind = "request" | "response" | "result" | "event" | "error" | "cancel"
+
+export type MailboxSummary = string
+
+export type MailboxText = string
+
+export type MailboxArtifactRefs = Array<string>
+
+export type MailboxEvidenceRefs = Array<string>
+
+export type MailboxDigest = string
+
+export type MailboxMessageStatus = "queued" | "acknowledged" | "rejected" | "cancelled"
+
+export type MailboxReason = string
+
+export type MailboxAckStatus = "accepted" | "rejected" | "cancelled"
 
 export type CooperativeWaitReason = string
 
@@ -880,6 +950,17 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.title.generated"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          expectedTitle: string
+          title: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.agent.switched"
         properties: {
           timestamp: number
@@ -964,6 +1045,101 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.memory.context.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          userMessageID: string
+          turnStep: number
+          queryDigest: string
+          contextDigest: string
+          injectedBytes: number
+          status: "prepared" | "unavailable"
+          algorithm: "hybrid_bm25_hashing_vector"
+          localOnly: true
+          candidates: Array<{
+            memoryID: string
+            rank: number
+            score: number
+            lexicalScore: number
+            vectorScore: number
+          }>
+        }
+      }
+    | {
+        id: string
+        type: "session.next.context.fusion.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          userMessageID: string
+          turnStep: number
+          queryDigest: string
+          combinedContextDigest: string
+          totalInjectedBytes: number
+          providerCallReady: true
+          degraded: boolean
+          bridgeProtocol?: "arforge.bridge/1.2"
+          assemblyProtocol?: "arforge.context/2"
+          runtimeTopology?: "typescript-single-runtime" | "legacy-dual-runtime"
+          memory: {
+            runtime: "typescript-core"
+            status: "prepared" | "unavailable"
+            contextDigest: string
+            injectedBytes: number
+            candidateCount: number
+          }
+          learning: {
+            runtime: "typescript-core"
+            status: "prepared" | "unavailable"
+            contextDigest: string
+            injectedBytes: number
+          }
+          evolution: {
+            runtime: "typescript-core" | "python-sidecar"
+            status: "prepared" | "unavailable"
+            contextDigest: string
+            injectedBytes: number
+            activeCandidateCount: number
+            injectedCandidateCount: number
+          }
+        }
+      }
+    | {
+        id: string
+        type: "session.next.request.envelope.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          runID: string
+          turnStep: number
+          attempt?: number
+          schemaVersion: "1.0"
+          requestDigest: string
+          envelope: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.request.binding.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          runID: string
+          turnStep: number
+          attempt: number
+          schemaVersion: 1
+          runtime: "native" | "ai-sdk"
+          mode: "native-envelope" | "prepared-projection"
+          requestDigest: string
+          contextDigest: string
+          toolSetRevision: string
+          routeConfigRevision: string
+          compilerRevision: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.synthetic"
         properties: {
           timestamp: number
@@ -1000,6 +1176,8 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           assistantMessageID: string
+          runID?: string
+          requestDigest?: string
           agent: string
           model: ModelRef
           snapshot?: string
@@ -1025,6 +1203,9 @@ export type GlobalEvent = {
           }
           snapshot?: string
           files?: Array<string>
+          structured?: {
+            [key: string]: unknown
+          }
         }
       }
     | {
@@ -1192,6 +1373,7 @@ export type GlobalEvent = {
             [key: string]: unknown
           }
           content: Array<LlmToolContent>
+          artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
           outputPaths?: Array<string>
           result?: unknown
           provider: {
@@ -1209,6 +1391,12 @@ export type GlobalEvent = {
           assistantMessageID: string
           callID: string
           error: SessionErrorUnknown
+          content?: Array<LlmToolContent>
+          structured?: {
+            [key: string]: unknown
+          }
+          artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
+          outputPaths?: Array<string>
           result?: unknown
           provider: {
             executed: boolean
@@ -1238,6 +1426,17 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.compaction.request.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          requestDigest: string
+          envelope: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.compaction.delta"
         properties: {
           timestamp: number
@@ -1256,6 +1455,20 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           text: string
           recent: string
+          usage?: {
+            cost: number
+            tokens: {
+              input: number
+              output: number
+              reasoning: number
+              cache: {
+                read: number
+                write: number
+              }
+            }
+          }
+          operationID?: string
+          candidateDigest?: string
         }
       }
     | {
@@ -1335,6 +1548,568 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "authorizer.control.asked"
+        properties: {
+          id: string
+          subject: AgentRuntimeControlPlaneSubject
+          action: string
+          resources: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+        }
+      }
+    | {
+        id: string
+        type: "authorizer.control.replied"
+        properties: {
+          subject: AgentRuntimeControlPlaneSubject
+          requestID: string
+          reply: "once" | "always" | "reject"
+          message?: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.proposed"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          action: AgentRuntimeAction
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.policy-evaluated"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          decision: AgentRuntimePolicyDecision
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.authorization-granted"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          grant: AgentRuntimeAuthorizationGrant
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.state-changed"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          from: AgentRuntimeActionStatus
+          to: AgentRuntimeActionStatus
+          reason: string
+          changedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.attempt-started"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          attempt: number
+          startedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.attempt-finished"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          attempt: number
+          outcome: "succeeded" | "failed" | "interrupted"
+          durationMs: number
+          costMicros?: number
+          tokens?: number
+          finishedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.observed"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          observation: AgentRuntimeObservation
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.postprocessing-recorded"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          processing: AgentRuntimeActionPostProcessing
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.reconciled"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          reconciliation: AgentRuntimeActionReconciliation
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.external-operation-bound"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          binding: AgentRuntimeActionExternalOperationBinding
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.mutation-intent-recorded"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          intent: AgentRuntimeMutationIntent
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.progress-recorded"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          progress: {
+            phase:
+              | "executing"
+              | "fetching"
+              | "planning"
+              | "prepared"
+              | "committing"
+              | "committed"
+              | "settled"
+              | "failed"
+              | "cancelled"
+              | "outcome_unknown"
+            completed: number
+            total: number
+            sequence: number
+            updatedAt: number
+            detail?: string
+          }
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.model-request-prepared"
+        properties: {
+          actionID: string
+          sessionID?: string
+          subject?: AgentRuntimeSubject
+          attempt: number
+          leaseID: string
+          generation: number
+          envelope: string
+          recordedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.lease-acquired"
+        properties: {
+          actionID: string
+          lease: AgentRuntimeActionLease
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.heartbeat-recorded"
+        properties: {
+          actionID: string
+          leaseID: string
+          ownerID: string
+          generation: number
+          heartbeatAt: number
+          expiresAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.action.lease-released"
+        properties: {
+          actionID: string
+          leaseID: string
+          ownerID: string
+          generation: number
+          releasedAt: number
+          reason: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.created"
+        properties: {
+          runID: string
+          sessionID: string
+          run: AgentRuntimeSessionRun
+          initialLease?: AgentRuntimeRunLease
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.state-changed"
+        properties: {
+          runID: string
+          sessionID: string
+          from: AgentRuntimeRunStatus
+          to: AgentRuntimeRunStatus
+          reason: string
+          changedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.checkpoint-created"
+        properties: {
+          runID: string
+          sessionID: string
+          checkpoint: AgentRuntimeCheckpoint
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.attempt-started"
+        properties: {
+          runID: string
+          sessionID: string
+          attempt: number
+          usageBaseline?: AgentRuntimeRunUsageBaseline
+          startedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.attempt-finished"
+        properties: {
+          runID: string
+          sessionID: string
+          attempt: number
+          outcome: "completed" | "failed" | "interrupted"
+          durationMs: number
+          costMicros: number
+          tokens?: number
+          finishedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.lease-acquired"
+        properties: {
+          runID: string
+          sessionID: string
+          lease: AgentRuntimeRunLease
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.heartbeat-recorded"
+        properties: {
+          runID: string
+          sessionID: string
+          leaseID: string
+          ownerID: string
+          heartbeatAt: number
+          expiresAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.run.lease-released"
+        properties: {
+          runID: string
+          sessionID: string
+          leaseID: string
+          ownerID: string
+          releasedAt: number
+          reason: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.created"
+        properties: {
+          runID: string
+          parentRunID: string
+          sessionID: string
+          run: AgentRuntimeSessionRun
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.cancelled"
+        properties: {
+          runID: string
+          parentRunID: string
+          sessionID: string
+          from: AgentRuntimeRunStatus
+          to: "cancelled"
+          reason: string
+          cancelledAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.result-recorded"
+        properties: {
+          runID: string
+          parentRunID: string
+          sessionID: string
+          result: AgentRuntimeChildRunResult
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.settlement-intent-recorded"
+        properties: {
+          runID: string
+          sessionID: string
+          childRunID: string
+          idempotencyKey: string
+          intentID: string
+          idempotencyDigest: string
+          result: AgentRuntimeChildRunResult
+          admissionEvidence?: AgentRuntimeChildSettlementAdmissionEvidence
+          intentAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.budget-reserved"
+        properties: {
+          runID: string
+          sessionID: string
+          childRunID: string
+          childRun: AgentRuntimeSessionRun
+          reserved: AgentRuntimeChildBudgetAmount
+          reservedTotal: AgentRuntimeChildBudgetAmount
+          reservedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.budget-settled"
+        properties: {
+          runID: string
+          sessionID: string
+          childRunID: string
+          reserved: AgentRuntimeChildBudgetAmount
+          actual: AgentRuntimeChildBudgetAmount
+          reservedTotal: AgentRuntimeChildBudgetAmount
+          settledAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.child-run.settlement-observation-recorded"
+        properties: {
+          runID: string
+          sessionID: string
+          childRunID: string
+          observerID: string
+          sampleSequence: number
+          minimumSamples: number
+          sample: AgentRuntimeSettlementObservationSample
+          windowDigest: string
+          checkpointDigest: string
+          recordedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.created"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          run: AgentRuntimeControlRun
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.state-changed"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          from: AgentRuntimeRunStatus
+          to: AgentRuntimeRunStatus
+          reason: string
+          changedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.checkpoint-created"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          checkpoint: AgentRuntimeCheckpoint
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.attempt-started"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          attempt: number
+          usageBaseline?: AgentRuntimeRunUsageBaseline
+          startedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.attempt-finished"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          attempt: number
+          outcome: "completed" | "failed" | "interrupted"
+          durationMs: number
+          costMicros: number
+          tokens?: number
+          finishedAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.lease-acquired"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          lease: AgentRuntimeRunLease
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.heartbeat-recorded"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          leaseID: string
+          ownerID: string
+          generation: number
+          heartbeatAt: number
+          expiresAt: number
+        }
+      }
+    | {
+        id: string
+        type: "agent.control-run.lease-released"
+        properties: {
+          runID: string
+          subject: AgentRuntimeControlPlaneSubject
+          leaseID: string
+          ownerID: string
+          generation: number
+          releasedAt: number
+          reason: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.proposal-created"
+        properties: {
+          proposalID: string
+          candidateID: string
+          artifactDigest: string
+          actor: string
+          proposal: AgentRuntimeEvolutionProposal
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.status-changed"
+        properties: {
+          proposalID: string
+          from: AgentRuntimeEvolutionStatus
+          to: AgentRuntimeEvolutionStatus
+          revision: number
+          actor: string
+          reason: string
+          metadata: {
+            [key: string]: unknown
+          }
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.evaluation-recorded"
+        properties: {
+          proposalID: string
+          evaluation: AgentRuntimeEvaluationResult
+          actor: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.exposure-prepared"
+        properties: {
+          exposureID: string
+          ticketDigest: string
+          proposalIDs: Array<string>
+          actor: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.exposure-outcome-recorded"
+        properties: {
+          exposureID: string
+          ticketDigest: string
+          outcomeDigest: string
+          success: boolean
+          safetyIncident: boolean
+          actor: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.exposure-archived"
+        properties: {
+          archiveID: string
+          planDigest: string
+          archivedCount: number
+          actor: string
+        }
+      }
+    | {
+        id: string
+        type: "agent.evolution.exposure-restored"
+        properties: {
+          restoreID: string
+          archiveID: string
+          planDigest: string
+          restoredCount: number
+          actor: string
+        }
+      }
+    | {
+        id: string
         type: "file.edited"
         properties: {
           file: string
@@ -1384,6 +2159,7 @@ export type GlobalEvent = {
             [key: string]: unknown
           }
           source?: PermissionV2Source
+          requiresHumanConfirmation?: boolean
         }
       }
     | {
@@ -1534,6 +2310,27 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "mailbox.message.sent"
+        properties: {
+          message: MailboxMessage
+        }
+      }
+    | {
+        id: string
+        type: "mailbox.message.acknowledged"
+        properties: {
+          receipt: MailboxReceipt
+        }
+      }
+    | {
+        id: string
+        type: "mailbox.message.cancelled"
+        properties: {
+          message: MailboxMessage
+        }
+      }
+    | {
+        id: string
         type: "wait.started"
         properties: {
           wait: CooperativeWaitInfo
@@ -1605,6 +2402,7 @@ export type GlobalEvent = {
             messageID: string
             callID: string
           }
+          requiresHumanConfirmation?: boolean
         }
       }
     | {
@@ -1680,6 +2478,46 @@ export type GlobalEvent = {
         properties: {
           mcpName: string
           url: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.supervisor.changed"
+        properties: {
+          server: string
+          desiredGeneration: number
+          observedGeneration: number
+          phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+          health: "unknown" | "healthy" | "unhealthy"
+          failureCount: number
+          nextRetryAt: number
+          safeMessage: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.supervisor.checkpointed"
+        properties: {
+          aggregateID: string
+          server: string
+          desiredGeneration: number
+          observedGeneration: number
+          phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+          health: "unknown" | "healthy" | "unhealthy"
+          failureCount: number
+          nextRetryAt: number
+          circuitOpenedAt: number
+          drainDeadline: number
+          lastFailure:
+            | "connection_failed"
+            | "connection_closed"
+            | "health_check_failed"
+            | "authentication_required"
+            | "approval_required"
+            | "protocol_failed"
+            | "unknown"
+          safeMessage: string
+          savedAt: number
         }
       }
     | {
@@ -1824,6 +2662,7 @@ export type GlobalEvent = {
     | SyncEventMessageRemoved
     | SyncEventMessagePartUpdated
     | SyncEventMessagePartRemoved
+    | SyncEventSessionNextTitleGenerated
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
@@ -1832,6 +2671,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptQueueUpdated
     | SyncEventSessionNextPromptQueueRemoved
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionNextMemoryContextPrepared
+    | SyncEventSessionNextContextFusionPrepared
+    | SyncEventSessionNextRequestEnvelopePrepared
+    | SyncEventSessionNextRequestBindingPrepared
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
@@ -1851,10 +2694,60 @@ export type GlobalEvent = {
     | SyncEventSessionNextToolFailed
     | SyncEventSessionNextRetried
     | SyncEventSessionNextCompactionStarted
+    | SyncEventSessionNextCompactionRequestPrepared
     | SyncEventSessionNextCompactionEnded
     | SyncEventSessionNextRevertStaged
     | SyncEventSessionNextRevertCleared
     | SyncEventSessionNextRevertCommitted
+    | SyncEventAuthorizerControlAsked
+    | SyncEventAuthorizerControlReplied
+    | SyncEventAgentActionProposed
+    | SyncEventAgentActionPolicyEvaluated
+    | SyncEventAgentActionAuthorizationGranted
+    | SyncEventAgentActionStateChanged
+    | SyncEventAgentActionAttemptStarted
+    | SyncEventAgentActionAttemptFinished
+    | SyncEventAgentActionObserved
+    | SyncEventAgentActionPostprocessingRecorded
+    | SyncEventAgentActionReconciled
+    | SyncEventAgentActionExternalOperationBound
+    | SyncEventAgentActionMutationIntentRecorded
+    | SyncEventAgentActionProgressRecorded
+    | SyncEventAgentActionModelRequestPrepared
+    | SyncEventAgentActionLeaseAcquired
+    | SyncEventAgentActionHeartbeatRecorded
+    | SyncEventAgentActionLeaseReleased
+    | SyncEventAgentRunCreated
+    | SyncEventAgentRunStateChanged
+    | SyncEventAgentRunCheckpointCreated
+    | SyncEventAgentRunAttemptStarted
+    | SyncEventAgentRunAttemptFinished
+    | SyncEventAgentRunLeaseAcquired
+    | SyncEventAgentRunHeartbeatRecorded
+    | SyncEventAgentRunLeaseReleased
+    | SyncEventAgentChildRunCreated
+    | SyncEventAgentChildRunCancelled
+    | SyncEventAgentChildRunResultRecorded
+    | SyncEventAgentChildRunSettlementIntentRecorded
+    | SyncEventAgentChildRunBudgetReserved
+    | SyncEventAgentChildRunBudgetSettled
+    | SyncEventAgentChildRunSettlementObservationRecorded
+    | SyncEventAgentControlRunCreated
+    | SyncEventAgentControlRunStateChanged
+    | SyncEventAgentControlRunCheckpointCreated
+    | SyncEventAgentControlRunAttemptStarted
+    | SyncEventAgentControlRunAttemptFinished
+    | SyncEventAgentControlRunLeaseAcquired
+    | SyncEventAgentControlRunHeartbeatRecorded
+    | SyncEventAgentControlRunLeaseReleased
+    | SyncEventAgentEvolutionProposalCreated
+    | SyncEventAgentEvolutionStatusChanged
+    | SyncEventAgentEvolutionEvaluationRecorded
+    | SyncEventAgentEvolutionExposurePrepared
+    | SyncEventAgentEvolutionExposureOutcomeRecorded
+    | SyncEventAgentEvolutionExposureArchived
+    | SyncEventAgentEvolutionExposureRestored
+    | SyncEventMcpSupervisorCheckpointed
 }
 
 /**
@@ -2002,6 +2895,7 @@ export type ProviderConfig = {
           cache_write?: number
         }
       }
+      priceCatalog?: BillingPriceCatalog
       limit?: {
         context: number
         input?: number
@@ -2046,11 +2940,20 @@ export type McpLocalConfig = {
    */
   command: Array<string>
   cwd?: string
+  read_only_paths?: Array<string>
   environment?: {
     [key: string]: string
   }
   enabled?: boolean
-  timeout?: number
+  /**
+   * Startup and request timeouts in milliseconds. A legacy number applies to both phases. Each phase defaults to 30000 unless configured globally.
+   */
+  timeout?:
+    | number
+    | {
+        startup?: number
+        request?: number
+      }
 }
 
 export type McpOAuthConfig = {
@@ -2078,7 +2981,15 @@ export type McpRemoteConfig = {
    * OAuth authentication configuration for the MCP server. Set to false to disable OAuth auto-detection.
    */
   oauth?: McpOAuthConfig | false
-  timeout?: number
+  /**
+   * Startup and request timeouts in milliseconds. A legacy number applies to both phases. Each phase defaults to 30000 unless configured globally.
+   */
+  timeout?:
+    | number
+    | {
+        startup?: number
+        request?: number
+      }
 }
 
 /**
@@ -2172,6 +3083,7 @@ export type Config = {
       | McpRemoteConfig
       | {
           enabled: boolean
+          type?: unknown
         }
   }
   /**
@@ -2238,7 +3150,15 @@ export type Config = {
     openTelemetry?: boolean
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
-    mcp_timeout?: number
+    /**
+     * Compatibility projection of canonical MCP startup/request defaults. A legacy number applies only to requests.
+     */
+    mcp_timeout?:
+      | number
+      | {
+          startup?: number
+          request?: number
+        }
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
 }
@@ -2373,31 +3293,104 @@ export type WorktreeError = {
     | "WorktreeRemoveFailedError"
     | "WorktreeResetFailedError"
     | "WorktreeListFailedError"
+    | "WorktreeOwnershipFailedError"
+    | "WorktreeControlExecutionDeniedError"
+    | "ActionGateway.BlockedError"
+    | "ActionGateway.RecoveryRequiredError"
+    | "ActionGateway.ActionInProgressError"
   data: {
     message: string
   }
 }
 
-export type WorktreeCreateInput = {
+export type WorktreeCreateControlInput = {
   name?: string
   /**
    * Additional startup script to run after the project's start command
    */
   startCommand?: string
+  requestID: string
 }
 
-export type Worktree = {
-  name: string
-  branch?: string
-  directory: string
+export type ControlOperationResult =
+  | {
+      kind: "worktree.create"
+      name: string
+      directory: string
+      branch: string
+    }
+  | {
+      kind: "worktree.remove"
+      completed: true
+    }
+  | {
+      kind: "worktree.reset"
+      completed: true
+    }
+  | {
+      kind: "session.revert" | "session.unrevert"
+      completed: true
+    }
+
+export type ControlOperationStatus = {
+  runID: string
+  actionID: string
+  requestID: string
+  operation:
+    | "worktree.create"
+    | "worktree.remove"
+    | "worktree.reset"
+    | "session.revert"
+    | "session.unrevert"
+    | "session.share"
+    | "session.unshare"
+  phase:
+    | "preparing"
+    | "waiting_for_confirmation"
+    | "queued"
+    | "executing"
+    | "recovering"
+    | "verifying"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled"
+  recovery: "awaiting_authorization" | "resume" | "recover" | "none"
+  canApprove: boolean
+  result?: ControlOperationResult
 }
 
-export type WorktreeRemoveInput = {
+export type WorktreeRemoveControlInput = {
   directory: string
+  requestID: string
 }
 
-export type WorktreeResetInput = {
+export type WorktreeResetControlInput = {
   directory: string
+  requestID: string
+}
+
+export type SessionRevertControlInput = {
+  requestID: string
+  messageID: string
+  partID?: string
+}
+
+export type SessionUnrevertControlInput = {
+  requestID: string
+}
+
+export type SessionShareControlInput = {
+  requestID: string
+  baseURL: string
+  organizationID: string
+  visibility: "private" | "organization" | "public"
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
 }
 
 export type ProjectSummary = {
@@ -2618,12 +3611,61 @@ export type McpStatusNeedsClientRegistration = {
   error: string
 }
 
+export type McpStatusNeedsApproval = {
+  status: "needs_approval"
+  reason: string
+}
+
 export type McpStatus =
   | McpStatusConnected
   | McpStatusDisabled
   | McpStatusFailed
   | McpStatusNeedsAuth
   | McpStatusNeedsClientRegistration
+  | McpStatusNeedsApproval
+
+export type McpSupervisorPhase = "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+
+export type McpSupervisorHealth = "unknown" | "healthy" | "unhealthy"
+
+export type McpSupervisorFailure =
+  | "connection_failed"
+  | "connection_closed"
+  | "health_check_failed"
+  | "authentication_required"
+  | "approval_required"
+  | "protocol_failed"
+  | "unknown"
+
+export type McpSupervisorCheckpoint = {
+  server: string
+  desiredGeneration: number
+  observedGeneration: number
+  phase: McpSupervisorPhase
+  health: McpSupervisorHealth
+  failureCount: number
+  nextRetryAt: number
+  circuitOpenedAt: number
+  drainDeadline: number
+  lastFailure: McpSupervisorFailure
+  safeMessage: string
+  savedAt: number
+}
+
+export type McpSupervisorSnapshot = {
+  server: string
+  desiredGeneration: number
+  observedGeneration: number
+  phase: McpSupervisorPhase
+  health: McpSupervisorHealth
+  failureCount: number
+  nextRetryAt: number
+  circuitOpenedAt: number
+  drainDeadline: number
+  lastFailure: McpSupervisorFailure
+  safeMessage: string
+  lastKnown?: McpSupervisorCheckpoint
+}
 
 export type McpUnsupportedOAuthError = {
   error: string
@@ -2692,6 +3734,7 @@ export type PermissionRequest = {
     messageID: string
     callID: string
   }
+  requiresHumanConfirmation?: boolean
 }
 
 export type PermissionNotFoundError = {
@@ -2813,6 +3856,18 @@ export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
   message: string
+}
+
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
+export type EffectHttpApiErrorServiceUnavailable = {
+  _tag: "ServiceUnavailable"
 }
 
 export type EventTuiPromptAppend = {
@@ -2967,6 +4022,8 @@ export type PromptInput = {
   text: string
   files?: Array<PromptInputFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  scheduledTasks?: Array<PromptScheduledTask>
+  system?: PromptRequestSystem
   route?: {
     agent?: string
     model?: ModelRef
@@ -2975,6 +4032,7 @@ export type PromptInput = {
     name: string
     arguments: string
   }
+  format?: PromptOutputFormat
 }
 
 export type MessageNotFoundError = {
@@ -2984,12 +4042,6 @@ export type MessageNotFoundError = {
   message: string
 }
 
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
-}
-
 export type UnknownError1 = {
   _tag: "UnknownError"
   message: string
@@ -2997,6 +4049,7 @@ export type UnknownError1 = {
 }
 
 export type SessionDurableEvent =
+  | SessionNextTitleGenerated
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
@@ -3005,6 +4058,10 @@ export type SessionDurableEvent =
   | SessionNextPromptQueueUpdated
   | SessionNextPromptQueueRemoved
   | SessionNextContextUpdated
+  | SessionNextMemoryContextPrepared
+  | SessionNextContextFusionPrepared
+  | SessionNextRequestEnvelopePrepared
+  | SessionNextRequestBindingPrepared
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3024,6 +4081,7 @@ export type SessionDurableEvent =
   | SessionNextReasoningEnded
   | SessionNextRetried
   | SessionNextCompactionStarted
+  | SessionNextCompactionRequestPrepared
   | SessionNextCompactionEnded
   | SessionNextRevertStaged
   | SessionNextRevertCleared
@@ -3035,6 +4093,25 @@ export type SessionHistory = {
 }
 
 export type SessionDurableEventStream = string
+
+export type ForbiddenError = {
+  _tag: "ForbiddenError"
+  message: string
+}
+
+export type RateLimitedError = {
+  _tag: "RateLimitedError"
+  message: string
+  retryAfterSeconds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type SubagentControlNotFoundError = {
+  _tag: "SubagentControlNotFoundError"
+  parentRunID: string
+  childRunID: string
+  requestID: string
+  message: string
+}
 
 export type GoalNotFoundError = {
   _tag: "GoalNotFoundError"
@@ -3062,11 +4139,6 @@ export type TaskNotFoundError = {
   _tag: "TaskNotFoundError"
   sessionID: string
   taskID: string
-  message: string
-}
-
-export type ForbiddenError = {
-  _tag: "ForbiddenError"
   message: string
 }
 
@@ -3137,6 +4209,101 @@ export type MemoryNotFoundError = {
   message: string
 }
 
+export type MemoryCorrectionReason = string
+
+export type MemoryCorrectionStatus = "active" | "undone"
+
+export type MemoryConflictKey = string
+
+export type MemoryConflictBasis = "explicit-tag" | "deterministic-pattern-v1"
+
+export type MemoryConflictStatus = "pending" | "resolved" | "dismissed" | "undone"
+
+export type MemoryConflictReason = string
+
+export type MemoryClass = "working" | "episodic" | "semantic" | "user" | "project"
+
+export type MemoryCandidateSensitivity = "public" | "internal" | "confidential" | "secret"
+
+export type MemoryCandidateConfidence = number
+
+export type MemoryCandidateDedupStatus = "unknown" | "novel" | "near_duplicate" | "duplicate" | "conflict"
+
+export type MemoryCandidateDedup = {
+  status: MemoryCandidateDedupStatus
+  comparedMemoryIDs: Array<string>
+  similarity?: number
+}
+
+export type MemoryCandidateRetentionMode = "default" | "short" | "long" | "indefinite" | "until_review"
+
+export type MemoryCandidateRetentionProposal = {
+  mode: MemoryCandidateRetentionMode
+  expiresAt?: number
+  reason: string
+}
+
+export type MemoryCandidateProposer = {
+  kind: "user" | "agent" | "system"
+  principalRef?: string
+  runID?: string
+}
+
+export type MemoryCandidatePolicyDecision = {
+  status: "pending" | "allow" | "deny" | "review"
+  policyVersion: string
+  reason: string
+}
+
+export type MemoryCandidateStatus = "proposed" | "approved" | "rejected" | "promoted" | "expired" | "superseded"
+
+export type MemoryCandidateReviewBlockCode =
+  | "status_not_proposed"
+  | "policy_not_allow"
+  | "secret_or_credential"
+  | "duplicate"
+  | "conflict"
+  | "working_state"
+
+export type MemoryCandidateReviewOperation = "proposed" | "approved" | "rejected" | "activated"
+
+export type MemoryCandidateReviewAudit = {
+  auditID: string
+  operation: MemoryCandidateReviewOperation
+  actorKind: "user" | "agent" | "system" | "maintenance" | "recovery"
+  reason: string
+  policyVersion: string
+  statusFrom?: MemoryCandidateStatus
+  statusTo: MemoryCandidateStatus
+  createdAt: number
+}
+
+export type MemoryCandidateReview = {
+  candidateID: string
+  proposedClass: MemoryClass
+  content?: MemoryContent
+  contentRedacted: boolean
+  sourceEvidenceIDs: Array<string>
+  scope: MemoryScope
+  sensitivity: MemoryCandidateSensitivity
+  confidence: MemoryCandidateConfidence
+  dedup: MemoryCandidateDedup
+  retention: MemoryCandidateRetentionProposal
+  proposer: MemoryCandidateProposer
+  policy: MemoryCandidatePolicyDecision
+  status: MemoryCandidateStatus
+  reason: string
+  time: {
+    created: number
+    updated: number
+    expires?: number
+  }
+  approvalAllowed: boolean
+  activationAllowed: boolean
+  blockedReasons: Array<MemoryCandidateReviewBlockCode>
+  audit: Array<MemoryCandidateReviewAudit>
+}
+
 export type FeedbackCategory = "bug" | "feature" | "experience" | "other"
 
 export type FeedbackRating = number
@@ -3163,6 +4330,10 @@ export type McpStatus2 =
   | {
       status: "needs_client_registration"
       error: string
+    }
+  | {
+      status: "needs_approval"
+      reason: string
     }
 
 export type McpServer = {
@@ -3192,10 +4363,53 @@ export type McpResourceCatalog = {
   templates: Array<McpResourceTemplate>
 }
 
+export type McpCapability = {
+  id: string
+  server: string
+  kind: "tool" | "prompt" | "resource" | "resource_template"
+  generation: number
+  name: string
+  reference?: string
+  permission: string
+  patterns: Array<string>
+}
+
+export type McpCapabilityCatalog = Array<McpCapability>
+
+export type McpReconciliationEvidence = {
+  state: "known_success" | "known_failure" | "unknown"
+  evidenceDigest: string
+  source: string
+  observedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  summary: string
+}
+
+export type McpReconciliation = {
+  actionID: string
+  kind: "confirmed" | "manual_review"
+  state: "known_success" | "known_failure" | "unknown"
+  automaticRetryAllowed: false
+  reason: string
+  evidence: McpReconciliationEvidence
+}
+
 export type McpServerNotFoundError1 = {
   _tag: "McpServerNotFoundError"
   server: string
   message: string
+}
+
+export type McpReconciliationHandle = {
+  actionKind: "mcp"
+  actionVersion: "1"
+  intentDigest: string
+  idempotencyKey: string
+  state: "known_success" | "known_failure" | "unknown"
+  evidenceDigest: string
+  source: string
+  observedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  summary: string
+  operatorRequired: true
 }
 
 export type SessionMessagesResponse = {
@@ -3211,16 +4425,6 @@ export type ProviderNotFoundError = {
   providerID: string
   message: string
 }
-
-export type OutputFormat1 =
-  | {
-      type: "text"
-    }
-  | {
-      type: "json_schema"
-      schema: JsonSchema
-      retryCount?: number
-    }
 
 export type SessionStatus2 = {
   id: string
@@ -3289,6 +4493,7 @@ export type V2Event =
   | MessageRemoved
   | MessagePartUpdated
   | MessagePartRemoved
+  | SessionNextTitleGenerated
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
@@ -3297,6 +4502,10 @@ export type V2Event =
   | SessionNextPromptQueueUpdated
   | SessionNextPromptQueueRemoved
   | SessionNextContextUpdated
+  | SessionNextMemoryContextPrepared
+  | SessionNextContextFusionPrepared
+  | SessionNextRequestEnvelopePrepared
+  | SessionNextRequestBindingPrepared
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3319,6 +4528,7 @@ export type V2Event =
   | SessionNextToolFailed
   | SessionNextRetried
   | SessionNextCompactionStarted
+  | SessionNextCompactionRequestPrepared
   | SessionNextCompactionDelta
   | SessionNextCompactionEnded
   | SessionNextRevertStaged
@@ -3329,6 +4539,54 @@ export type V2Event =
   | SessionError
   | InstallationUpdated
   | InstallationUpdateAvailable
+  | AuthorizerControlAsked
+  | AuthorizerControlReplied
+  | AgentActionProposed
+  | AgentActionPolicyEvaluated
+  | AgentActionAuthorizationGranted
+  | AgentActionStateChanged
+  | AgentActionAttemptStarted
+  | AgentActionAttemptFinished
+  | AgentActionObserved
+  | AgentActionPostprocessingRecorded
+  | AgentActionReconciled
+  | AgentActionExternalOperationBound
+  | AgentActionMutationIntentRecorded
+  | AgentActionProgressRecorded
+  | AgentActionModelRequestPrepared
+  | AgentActionLeaseAcquired
+  | AgentActionHeartbeatRecorded
+  | AgentActionLeaseReleased
+  | AgentRunCreated
+  | AgentRunStateChanged
+  | AgentRunCheckpointCreated
+  | AgentRunAttemptStarted
+  | AgentRunAttemptFinished
+  | AgentRunLeaseAcquired
+  | AgentRunHeartbeatRecorded
+  | AgentRunLeaseReleased
+  | AgentChildRunCreated
+  | AgentChildRunCancelled
+  | AgentChildRunResultRecorded
+  | AgentChildRunSettlementIntentRecorded
+  | AgentChildRunBudgetReserved
+  | AgentChildRunBudgetSettled
+  | AgentChildRunSettlementObservationRecorded
+  | AgentControlRunCreated
+  | AgentControlRunStateChanged
+  | AgentControlRunCheckpointCreated
+  | AgentControlRunAttemptStarted
+  | AgentControlRunAttemptFinished
+  | AgentControlRunLeaseAcquired
+  | AgentControlRunHeartbeatRecorded
+  | AgentControlRunLeaseReleased
+  | AgentEvolutionProposalCreated
+  | AgentEvolutionStatusChanged
+  | AgentEvolutionEvaluationRecorded
+  | AgentEvolutionExposurePrepared
+  | AgentEvolutionExposureOutcomeRecorded
+  | AgentEvolutionExposureArchived
+  | AgentEvolutionExposureRestored
   | FileEdited
   | GoalCreated
   | GoalUpdated
@@ -3353,6 +4611,9 @@ export type V2Event =
   | TeamUpdated
   | TeamDeleted
   | TeamMessageSent
+  | MailboxMessageSent
+  | MailboxMessageAcknowledged
+  | MailboxMessageCancelled
   | WaitStarted
   | WaitCheckIn
   | WaitCompleted
@@ -3369,6 +4630,8 @@ export type V2Event =
   | TuiSessionSelect
   | McpToolsChanged
   | McpBrowserOpenFailed
+  | McpSupervisorChanged
+  | McpSupervisorCheckpointed
   | CommandExecuted
   | ProjectUpdated
   | SessionStatus2
@@ -3396,8 +4659,17 @@ export type ProjectCopyError = {
   }
 }
 
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
+export type PersonalJobIdempotencyKey = string
+
+export type PersonalJobTitle = string
+
+export type PersonalJobPrompt = string
+
+export type PersonalJobNotFoundError = {
+  _tag: "PersonalJobNotFoundError"
+  sessionID: string
+  jobID: string
+  message: string
 }
 
 export type EventTuiPromptAppend2 = {
@@ -3474,6 +4746,20 @@ export type MoveSessionDestination = {
   directory: string
 }
 
+export type PromptOutputFormatText = {
+  type: "text"
+}
+
+export type PromptJsonSchema = {
+  [key: string]: unknown
+}
+
+export type PromptOutputFormatJsonSchema = {
+  type: "json_schema"
+  schema: PromptJsonSchema
+  retryCount?: number
+}
+
 export type ModelRef = {
   id: string
   providerID: string
@@ -3504,13 +4790,60 @@ export type PromptAgentAttachment = {
   source?: PromptSource
 }
 
+export type PromptScheduledTask = {
+  id: string
+  prompt: string
+  description: string
+  agent: string
+  model?: ModelRef
+  command?: string
+}
+
+export type PromptRequestSystem = {
+  text: string
+  source: "request"
+  scope: "turn"
+}
+
+export type PromptOutputFormat = PromptOutputFormatText | PromptOutputFormatJsonSchema
+
 export type SessionErrorUnknown = {
   type: "unknown"
   message: string
 }
 
+export type AgentRuntimeArtifactOwner = {
+  scope: "session" | "profile" | "tenant"
+  id: string
+}
+
+export type AgentRuntimeArtifactRetention = {
+  mode: "ephemeral" | "session" | "durable"
+  expiresAt?: number
+}
+
+export type AgentRuntimeArtifactRetrievalHint = {
+  kind: "managed"
+  handle: string
+}
+
+export type AgentRuntimeOpaqueArtifactRef = {
+  version: 1
+  artifactID: string
+  kind: string
+  digest: string
+  mime: string
+  sizeBytes: number
+  owner: AgentRuntimeArtifactOwner
+  retention: AgentRuntimeArtifactRetention
+  retrievalHint: AgentRuntimeArtifactRetrievalHint
+  label?: string
+  createdAt: number
+}
+
 export type PrimaryDeliveryArtifact = {
   artifactID: string
+  artifactRef?: AgentRuntimeOpaqueArtifactRef
   path: string
   displayName: string
   mime: string
@@ -3577,6 +4910,600 @@ export type RevertState = {
   snapshot?: string
   diff?: string
   files?: Array<FileDiff>
+}
+
+export type AgentRuntimeControlPlaneActor = "user"
+
+export type AgentRuntimeControlPlaneSubject = {
+  type: "control-plane"
+  id: string
+  location: string
+  project: string
+  actor: AgentRuntimeControlPlaneActor
+  principalRef: string
+  requestID: string
+}
+
+export type AgentRuntimeSessionSubject = {
+  type: "session"
+  sessionID: string
+  agent: string
+  assistantMessageID: string
+  toolCallID: string
+}
+
+export type AgentRuntimeSubject = AgentRuntimeSessionSubject | AgentRuntimeControlPlaneSubject
+
+export type AgentRuntimeActionStatus =
+  | "proposed"
+  | "policy_evaluated"
+  | "awaiting_approval"
+  | "authorized"
+  | "executing"
+  | "observed"
+  | "verifying"
+  | "settled"
+  | "compensating"
+  | "blocked"
+  | "cancelled"
+
+export type AgentRuntimeRiskTier = "L0" | "L1" | "L2" | "L3" | "L4"
+
+export type AgentRuntimeAuthority = "automatic" | "scoped_grant" | "human" | "forbidden"
+
+export type AgentRuntimeEffectSemantics = {
+  riskTier: AgentRuntimeRiskTier
+  authority: AgentRuntimeAuthority
+  idempotency: "idempotent" | "conditional" | "non_idempotent"
+  retryability: "safe" | "guarded" | "never"
+  reversibility: "not_applicable" | "reversible" | "compensatable" | "irreversible"
+  filesystemScope: Array<string>
+  networkScope: Array<string>
+  secretScope: Array<string>
+  externalServices: Array<string>
+  compensation?: string
+  expectedArtifacts: Array<string>
+  successCriteria: Array<string>
+}
+
+export type AgentRuntimeInitiator = "user" | "agent" | "schedule" | "trigger" | "recovery" | "evolution"
+
+export type AgentRuntimeBudget = {
+  maxAttempts: number
+  maxDurationMs: number
+  maxCostMicros: number
+  maxTokens?: number
+  attemptsUsed: number
+  durationMsUsed: number
+  costMicrosUsed: number
+  tokensUsed?: number
+}
+
+export type AgentRuntimeVisibility = "summary" | "details" | "audit"
+
+export type AgentRuntimeControlAction = {
+  id: string
+  runID?: string
+  stepID?: string
+  parentActionID?: string
+  name: string
+  status: AgentRuntimeActionStatus
+  semantics: AgentRuntimeEffectSemantics
+  resources: Array<string>
+  idempotencyKey: string
+  intentDigest?: string
+  inputDigest?: string
+  initiator: AgentRuntimeInitiator
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  reasonSummary: string
+  budget: AgentRuntimeBudget
+  traceID: string
+  parentTraceID?: string
+  visibility: AgentRuntimeVisibility
+  time: {
+    created: number
+    updated: number
+  }
+  subject: AgentRuntimeControlPlaneSubject
+}
+
+export type AgentRuntimeAction =
+  | {
+      id: string
+      runID?: string
+      stepID?: string
+      parentActionID?: string
+      name: string
+      status: AgentRuntimeActionStatus
+      semantics: AgentRuntimeEffectSemantics
+      resources: Array<string>
+      idempotencyKey: string
+      intentDigest?: string
+      inputDigest?: string
+      initiator: AgentRuntimeInitiator
+      authority: AgentRuntimeAuthority
+      riskTier: AgentRuntimeRiskTier
+      reasonSummary: string
+      budget: AgentRuntimeBudget
+      traceID: string
+      parentTraceID?: string
+      visibility: AgentRuntimeVisibility
+      time: {
+        created: number
+        updated: number
+      }
+      sessionID: string
+      subject?: AgentRuntimeSubject
+    }
+  | AgentRuntimeControlAction
+
+export type AgentRuntimePolicyDecision = {
+  actionID: string
+  subject?: AgentRuntimeSubject
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  decision: "allow" | "ask" | "deny"
+  reason: string
+  policyVersion: string
+  decidedAt: number
+}
+
+export type AgentRuntimePermissionRequest = {
+  action: string
+  resources: Array<string>
+}
+
+export type AgentRuntimeControlGrant = {
+  id: string
+  actionID: string
+  parentActionID?: string
+  parentGrantID?: string
+  runID?: string
+  toolName: string
+  requests: Array<AgentRuntimePermissionRequest>
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  policyVersion: string
+  bindingDigest: string
+  proofProvider: string
+  proof: string
+  issuedAt: number
+  expiresAt: number
+  subject: AgentRuntimeControlPlaneSubject
+}
+
+export type AgentRuntimeAuthorizationGrant =
+  | {
+      id: string
+      actionID: string
+      parentActionID?: string
+      parentGrantID?: string
+      runID?: string
+      toolName: string
+      requests: Array<AgentRuntimePermissionRequest>
+      authority: AgentRuntimeAuthority
+      riskTier: AgentRuntimeRiskTier
+      policyVersion: string
+      bindingDigest: string
+      proofProvider: string
+      proof: string
+      issuedAt: number
+      expiresAt: number
+      sessionID: string
+      agent: string
+      assistantMessageID: string
+      toolCallID: string
+      subject?: AgentRuntimeSubject
+    }
+  | AgentRuntimeControlGrant
+
+export type AgentRuntimeActionOutput =
+  | {
+      encoding: "json"
+      value: unknown
+      digest: string
+      byteLength: number
+    }
+  | {
+      encoding: "artifact"
+      value: AgentRuntimeOpaqueArtifactRef
+      digest: string
+      byteLength: number
+    }
+
+export type AgentRuntimeObservation = {
+  id: string
+  actionID: string
+  status: "succeeded" | "failed" | "interrupted"
+  summary: string
+  outputDigest?: string
+  output?: AgentRuntimeActionOutput
+  artifactIDs: Array<string>
+  observedAt: number
+}
+
+export type AgentRuntimeActionPostProcessing = {
+  observationID: string
+  state: "started" | "completed" | "failed" | "interrupted"
+  output?: AgentRuntimeActionOutput
+  recordedAt: number
+}
+
+export type AgentRuntimeActionReconciliation = {
+  actionID: string
+  intentDigest: string
+  idempotencyKey: string
+  state: "known_success" | "known_failure" | "unknown"
+  evidenceDigest: string
+  source: string
+  observedAt: number
+  summary?: string
+  automaticRetryAllowed: false
+}
+
+export type AgentRuntimeActionExternalOperationBinding = {
+  version: 1
+  kind: "mcp_task"
+  server: string
+  operation: string
+  taskID: string
+  boundAt: number
+}
+
+export type AgentRuntimeMutationIntentPhase =
+  | "prepared"
+  | "committed"
+  | "postprocessing"
+  | "settled"
+  | "rollback_required"
+  | "rolled_back"
+  | "rollback_blocked"
+  | "outcome_unknown"
+
+export type AgentRuntimeMutationRollbackArtifact = {
+  version: 1
+  artifactID: string
+  digest: string
+  byteLength: number
+}
+
+export type AgentRuntimeMutationIntentEntry = {
+  target: string
+  operation: "create" | "write" | "remove"
+  beforeDigest?: string
+  afterDigest?: string
+  afterByteLength?: number
+  rollbackArtifact?: AgentRuntimeMutationRollbackArtifact
+  recovery: "remove-if-matching" | "restore-from-volatile-journal" | "restore-from-artifact" | "manual-review"
+}
+
+export type AgentRuntimeMutationPostProcessingStage =
+  | "formatter"
+  | "bom"
+  | "lsp_touch"
+  | "diagnostics"
+  | "event_v2"
+  | "watcher"
+
+export type AgentRuntimeMutationPostProcessingStatus = "started" | "completed"
+
+export type AgentRuntimeMutationPostProcessingCheckpoint = {
+  sequence: number
+  stage: AgentRuntimeMutationPostProcessingStage
+  status: AgentRuntimeMutationPostProcessingStatus
+  target?: string
+}
+
+export type AgentRuntimeMutationIntent = {
+  version: 1
+  transactionID: string
+  actionID: string
+  intentDigest: string
+  idempotencyKey: string
+  phase: AgentRuntimeMutationIntentPhase
+  entries: Array<AgentRuntimeMutationIntentEntry>
+  manifestDigest: string
+  automaticRetryAllowed: false
+  createdAt: number
+  updatedAt: number
+  postProcessing?: Array<AgentRuntimeMutationPostProcessingCheckpoint>
+  summary?: string
+}
+
+export type AgentRuntimeActionLease = {
+  id: string
+  actionID: string
+  ownerID: string
+  generation: number
+  acquiredAt: number
+  heartbeatAt: number
+  expiresAt: number
+}
+
+export type AgentRuntimeRunStatus =
+  | "draft"
+  | "preflight"
+  | "awaiting_authorization"
+  | "queued"
+  | "running"
+  | "paused"
+  | "recovering"
+  | "verifying"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type BillingCurrency = string
+
+export type BillingBudget = {
+  currency: BillingCurrency
+  limitMinor?: number
+}
+
+export type PersonalJobOccurrence = {
+  version: 1
+  messageID: string
+  digest: PersonalJobDigest
+}
+
+export type AgentRuntimeSessionRunAdmission = {
+  version: 1
+  owner: "session-runner"
+  credentialIDs: Array<string>
+  billing: {
+    budget: BillingBudget
+    estimatorID: string
+  }
+  personalJob?: {
+    jobID: string
+    occurrence: PersonalJobOccurrence
+  }
+}
+
+export type AgentRuntimeChildCapability = {
+  action: string
+  resources: Array<string>
+  access: "read" | "write"
+}
+
+export type AgentRuntimeCustomAgentAdmissionEvidence = {
+  schema_version: 1
+  kind: "custom-agent-admission"
+  role: string
+  profile_path: string
+  status: "admitted" | "opt_in_required" | "workspace_untrusted" | "unsupported_tools" | "collision"
+  decision: "admitted" | "blocked"
+  reason: string
+  ready: boolean
+  descriptor_digest?: string
+  checks: {
+    status_consistent: boolean
+    descriptor_digest_consistent: boolean
+    tool_projection_consistent: boolean
+    payload_free: boolean
+  }
+  declared_tool_count: number
+  canonical_tool_count: number
+  unsupported_tool_count: number
+  valid: boolean
+  violations: Array<string>
+}
+
+export type AgentRuntimeChildRuntimeAdmission = {
+  evidence: AgentRuntimeCustomAgentAdmissionEvidence
+  evidenceRefs: Array<string>
+}
+
+export type AgentRuntimeChildExpectedDeliverable = {
+  summaryRequired: boolean
+  artifactKinds: Array<string>
+  evidenceKinds: Array<string>
+  verifier?: string
+}
+
+export type AgentRuntimeChildRunBinding = {
+  version: 1
+  parentRunID: string
+  idempotencyKey: string
+  runtimeDescriptorDigest?: string
+  runtimeAdmission?: AgentRuntimeChildRuntimeAdmission
+  delegatedObjective: string
+  allowedCapabilities: Array<AgentRuntimeChildCapability>
+  project: string
+  location: string
+  expectedDeliverable: AgentRuntimeChildExpectedDeliverable
+  deadlineAt?: number
+  depth: number
+}
+
+export type AgentRuntimeChildBudgetAmount = {
+  attempts: number
+  durationMs: number
+  costMicros: number
+  tokens?: number
+}
+
+export type AgentRuntimeChildRunResult = {
+  status: "completed" | "failed" | "cancelled"
+  resultDigest: string
+  summary: string
+  artifactRefs: Array<string>
+  evidenceRefs: Array<string>
+  usage: AgentRuntimeChildBudgetAmount
+  recordedAt: number
+}
+
+export type AgentRuntimeSessionRun = {
+  id: string
+  sessionID: string
+  goalID?: string
+  taskID?: string
+  project?: string
+  location?: string
+  status: AgentRuntimeRunStatus
+  admission?: AgentRuntimeSessionRunAdmission
+  delegableCapabilities?: Array<AgentRuntimeChildCapability>
+  child?: AgentRuntimeChildRunBinding
+  childResult?: AgentRuntimeChildRunResult
+  childBudgetReserved?: AgentRuntimeChildBudgetAmount
+  initiator: AgentRuntimeInitiator
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  reasonSummary: string
+  budget: AgentRuntimeBudget
+  traceID: string
+  parentTraceID?: string
+  visibility: AgentRuntimeVisibility
+  time: {
+    created: number
+    updated: number
+    started?: number
+    finished?: number
+  }
+}
+
+export type AgentRuntimeRunLease = {
+  id: string
+  runID: string
+  ownerID: string
+  generation: number
+  acquiredAt: number
+  heartbeatAt: number
+  expiresAt: number
+}
+
+export type AgentRuntimeCheckpoint = {
+  id: string
+  runID: string
+  lastActionID?: string
+  eventSequence: number
+  stateDigest: string
+  resumeToken: string
+  state: {
+    [key: string]: unknown
+  }
+  createdAt: number
+}
+
+export type AgentRuntimeRunUsageBaseline = {
+  costMicros: number
+  tokens: number
+}
+
+export type AgentRuntimeChildSettlementAdmissionEvidence = {
+  evidenceID: string
+  recordDigest: string
+  actionID?: string
+  observationID?: string
+}
+
+export type AgentRuntimeSettlementObservationSample = {
+  schemaVersion: 1
+  planDigest: string
+  evidenceDigest: string
+  transactionKey: string
+  transactionID: string
+  ownerOrder: Array<"admission-evidence" | "child-result" | "parent-budget">
+  ownerCount: 3
+  outcome: "committed"
+  providerExecutionAllowed: false
+  executionDigest: string
+  observedAtMs: number
+}
+
+export type AgentRuntimeControlOperationSnapshot = {
+  version: 1
+  id: string
+  kind: string
+  generation: number
+  policyVersion: string
+  claimDigest: string
+  authorizationDigest: string
+  inputDigest: string
+  actionID: string
+  resources: Array<string>
+  semantics: AgentRuntimeEffectSemantics
+  payload: unknown
+  payloadDigest: string
+}
+
+export type AgentRuntimeControlRun = {
+  id: string
+  subject: AgentRuntimeControlPlaneSubject
+  operation: AgentRuntimeControlOperationSnapshot
+  goalID?: string
+  taskID?: string
+  status: AgentRuntimeRunStatus
+  initiator: AgentRuntimeInitiator
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  reasonSummary: string
+  budget: AgentRuntimeBudget
+  traceID: string
+  parentTraceID?: string
+  visibility: AgentRuntimeVisibility
+  time: {
+    created: number
+    updated: number
+    started?: number
+    finished?: number
+  }
+}
+
+export type AgentRuntimeEvolutionLevel = "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+
+export type AgentRuntimeEvolutionStatus =
+  | "signal"
+  | "proposal"
+  | "candidate"
+  | "sandbox_evaluation"
+  | "rejected"
+  | "eligible"
+  | "canary"
+  | "promoted"
+  | "monitoring"
+  | "retained"
+  | "rolled_back"
+  | "archived"
+
+export type AgentRuntimeEvolutionProposal = {
+  id: string
+  sourceExperienceIDs: Array<string>
+  candidateKind: "skill" | "prompt" | "router" | "workflow" | "code"
+  evolutionLevel: AgentRuntimeEvolutionLevel
+  target: string
+  status: AgentRuntimeEvolutionStatus
+  candidateDigest: string
+  baseline: string
+  evaluationID?: string
+  rollbackArtifactID?: string
+  constitutionVersion: string
+  initiator: AgentRuntimeInitiator
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  reasonSummary: string
+  budget: AgentRuntimeBudget
+  traceID: string
+  parentTraceID?: string
+  visibility: AgentRuntimeVisibility
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type AgentRuntimeEvaluationResult = {
+  id: string
+  baseline: string
+  candidate: string
+  sampleSize: number
+  successDelta: number
+  costDelta: number
+  latencyDelta: number
+  passed: boolean
+  evidenceIDs: Array<string>
+  evaluatedAt: number
 }
 
 export type GoalInfo = {
@@ -3701,6 +5628,51 @@ export type TeamMessage = {
   approve?: boolean
   time: {
     created: number
+  }
+}
+
+export type MailboxPayload = {
+  summary: MailboxSummary
+  text: MailboxText
+  artifactRefs: MailboxArtifactRefs
+  evidenceRefs: MailboxEvidenceRefs
+}
+
+export type MailboxMessage = {
+  version: 1
+  id: string
+  teamID: string
+  runID: string
+  taskID: string
+  sender: TeamMemberName
+  recipient: TeamMemberName
+  sequence: number
+  idempotencyKey: MailboxIdempotencyKey
+  kind: MailboxMessageKind
+  payload: MailboxPayload
+  digest: MailboxDigest
+  status: MailboxMessageStatus
+  cancelReason?: MailboxReason
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type MailboxReceipt = {
+  version: 1
+  id: string
+  messageID: string
+  teamID: string
+  runID: string
+  taskID: string
+  recipient: TeamMemberName
+  status: MailboxAckStatus
+  messageDigest: MailboxDigest
+  reason: MailboxReason
+  time: {
+    created: number
+    updated: number
   }
 }
 
@@ -3866,6 +5838,24 @@ export type SyncEventMessagePartRemoved = {
   }
 }
 
+export type SyncEventSessionNextTitleGenerated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.title.generated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      expectedTitle: string
+      title: string
+    }
+  }
+}
+
 export type SyncEventSessionNextAgentSwitched = {
   type: "sync"
   id: string
@@ -4006,6 +5996,129 @@ export type SyncEventSessionNextContextUpdated = {
   }
 }
 
+export type SyncEventSessionNextMemoryContextPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.memory.context.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      userMessageID: string
+      turnStep: number
+      queryDigest: string
+      contextDigest: string
+      injectedBytes: number
+      status: "prepared" | "unavailable"
+      algorithm: "hybrid_bm25_hashing_vector"
+      localOnly: true
+      candidates: Array<{
+        memoryID: string
+        rank: number
+        score: number
+        lexicalScore: number
+        vectorScore: number
+      }>
+    }
+  }
+}
+
+export type SyncEventSessionNextContextFusionPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.context.fusion.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      userMessageID: string
+      turnStep: number
+      queryDigest: string
+      combinedContextDigest: string
+      totalInjectedBytes: number
+      providerCallReady: true
+      degraded: boolean
+      bridgeProtocol?: "arforge.bridge/1.2"
+      assemblyProtocol?: "arforge.context/2"
+      runtimeTopology?: "typescript-single-runtime" | "legacy-dual-runtime"
+      memory: {
+        runtime: "typescript-core"
+        status: "prepared" | "unavailable"
+        contextDigest: string
+        injectedBytes: number
+        candidateCount: number
+      }
+      learning: {
+        runtime: "typescript-core"
+        status: "prepared" | "unavailable"
+        contextDigest: string
+        injectedBytes: number
+      }
+      evolution: {
+        runtime: "typescript-core" | "python-sidecar"
+        status: "prepared" | "unavailable"
+        contextDigest: string
+        injectedBytes: number
+        activeCandidateCount: number
+        injectedCandidateCount: number
+      }
+    }
+  }
+}
+
+export type SyncEventSessionNextRequestEnvelopePrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.request.envelope.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      runID: string
+      turnStep: number
+      attempt?: number
+      schemaVersion: "1.0"
+      requestDigest: string
+      envelope: string
+    }
+  }
+}
+
+export type SyncEventSessionNextRequestBindingPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.request.binding.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      runID: string
+      turnStep: number
+      attempt: number
+      schemaVersion: 1
+      runtime: "native" | "ai-sdk"
+      mode: "native-envelope" | "prepared-projection"
+      requestDigest: string
+      contextDigest: string
+      toolSetRevision: string
+      routeConfigRevision: string
+      compilerRevision: string
+    }
+  }
+}
+
 export type SyncEventSessionNextSynthetic = {
   type: "sync"
   id: string
@@ -4070,6 +6183,8 @@ export type SyncEventSessionNextStepStarted = {
       timestamp: number
       sessionID: string
       assistantMessageID: string
+      runID?: string
+      requestDigest?: string
       agent: string
       model: ModelRef
       snapshot?: string
@@ -4102,6 +6217,9 @@ export type SyncEventSessionNextStepEnded = {
       }
       snapshot?: string
       files?: Array<string>
+      structured?: {
+        [key: string]: unknown
+      }
     }
   }
 }
@@ -4313,6 +6431,7 @@ export type SyncEventSessionNextToolSuccess = {
         [key: string]: unknown
       }
       content: Array<LlmToolContent>
+      artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
       outputPaths?: Array<string>
       result?: unknown
       provider: {
@@ -4337,6 +6456,12 @@ export type SyncEventSessionNextToolFailed = {
       assistantMessageID: string
       callID: string
       error: SessionErrorUnknown
+      content?: Array<LlmToolContent>
+      structured?: {
+        [key: string]: unknown
+      }
+      artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
+      outputPaths?: Array<string>
       result?: unknown
       provider: {
         executed: boolean
@@ -4380,6 +6505,24 @@ export type SyncEventSessionNextCompactionStarted = {
   }
 }
 
+export type SyncEventSessionNextCompactionRequestPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.compaction.request.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      requestDigest: string
+      envelope: string
+    }
+  }
+}
+
 export type SyncEventSessionNextCompactionEnded = {
   type: "sync"
   id: string
@@ -4395,6 +6538,20 @@ export type SyncEventSessionNextCompactionEnded = {
       reason: "auto" | "manual"
       text: string
       recent: string
+      usage?: {
+        cost: number
+        tokens: {
+          input: number
+          output: number
+          reasoning: number
+          cache: {
+            read: number
+            write: number
+          }
+        }
+      }
+      operationID?: string
+      candidateDigest?: string
     }
   }
 }
@@ -4446,6 +6603,937 @@ export type SyncEventSessionNextRevertCommitted = {
   }
 }
 
+export type SyncEventAuthorizerControlAsked = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "authorizer.control.asked.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      id: string
+      subject: AgentRuntimeControlPlaneSubject
+      action: string
+      resources: Array<string>
+      metadata?: {
+        [key: string]: unknown
+      }
+    }
+  }
+}
+
+export type SyncEventAuthorizerControlReplied = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "authorizer.control.replied.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      subject: AgentRuntimeControlPlaneSubject
+      requestID: string
+      reply: "once" | "always" | "reject"
+      message?: string
+    }
+  }
+}
+
+export type SyncEventAgentActionProposed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.proposed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      action: AgentRuntimeAction
+    }
+  }
+}
+
+export type SyncEventAgentActionPolicyEvaluated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.policy-evaluated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      decision: AgentRuntimePolicyDecision
+    }
+  }
+}
+
+export type SyncEventAgentActionAuthorizationGranted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.authorization-granted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      grant: AgentRuntimeAuthorizationGrant
+    }
+  }
+}
+
+export type SyncEventAgentActionStateChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.state-changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      from: AgentRuntimeActionStatus
+      to: AgentRuntimeActionStatus
+      reason: string
+      changedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentActionAttemptStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.attempt-started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      attempt: number
+      startedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentActionAttemptFinished = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.attempt-finished.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      attempt: number
+      outcome: "succeeded" | "failed" | "interrupted"
+      durationMs: number
+      costMicros?: number
+      tokens?: number
+      finishedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentActionObserved = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.observed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      observation: AgentRuntimeObservation
+    }
+  }
+}
+
+export type SyncEventAgentActionPostprocessingRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.postprocessing-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      processing: AgentRuntimeActionPostProcessing
+    }
+  }
+}
+
+export type SyncEventAgentActionReconciled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.reconciled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      reconciliation: AgentRuntimeActionReconciliation
+    }
+  }
+}
+
+export type SyncEventAgentActionExternalOperationBound = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.external-operation-bound.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      binding: AgentRuntimeActionExternalOperationBinding
+    }
+  }
+}
+
+export type SyncEventAgentActionMutationIntentRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.mutation-intent-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      intent: AgentRuntimeMutationIntent
+    }
+  }
+}
+
+export type SyncEventAgentActionProgressRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.progress-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      progress: {
+        phase:
+          | "executing"
+          | "fetching"
+          | "planning"
+          | "prepared"
+          | "committing"
+          | "committed"
+          | "settled"
+          | "failed"
+          | "cancelled"
+          | "outcome_unknown"
+        completed: number
+        total: number
+        sequence: number
+        updatedAt: number
+        detail?: string
+      }
+    }
+  }
+}
+
+export type SyncEventAgentActionModelRequestPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.model-request-prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      sessionID?: string
+      subject?: AgentRuntimeSubject
+      attempt: number
+      leaseID: string
+      generation: number
+      envelope: string
+      recordedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentActionLeaseAcquired = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.lease-acquired.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      lease: AgentRuntimeActionLease
+    }
+  }
+}
+
+export type SyncEventAgentActionHeartbeatRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.heartbeat-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      leaseID: string
+      ownerID: string
+      generation: number
+      heartbeatAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type SyncEventAgentActionLeaseReleased = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.action.lease-released.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      actionID: string
+      leaseID: string
+      ownerID: string
+      generation: number
+      releasedAt: number
+      reason: string
+    }
+  }
+}
+
+export type SyncEventAgentRunCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      run: AgentRuntimeSessionRun
+      initialLease?: AgentRuntimeRunLease
+    }
+  }
+}
+
+export type SyncEventAgentRunStateChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.state-changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      from: AgentRuntimeRunStatus
+      to: AgentRuntimeRunStatus
+      reason: string
+      changedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentRunCheckpointCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.checkpoint-created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      checkpoint: AgentRuntimeCheckpoint
+    }
+  }
+}
+
+export type SyncEventAgentRunAttemptStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.attempt-started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      attempt: number
+      usageBaseline?: AgentRuntimeRunUsageBaseline
+      startedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentRunAttemptFinished = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.attempt-finished.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      attempt: number
+      outcome: "completed" | "failed" | "interrupted"
+      durationMs: number
+      costMicros: number
+      tokens?: number
+      finishedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentRunLeaseAcquired = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.lease-acquired.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      lease: AgentRuntimeRunLease
+    }
+  }
+}
+
+export type SyncEventAgentRunHeartbeatRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.heartbeat-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      leaseID: string
+      ownerID: string
+      heartbeatAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type SyncEventAgentRunLeaseReleased = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.run.lease-released.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      leaseID: string
+      ownerID: string
+      releasedAt: number
+      reason: string
+    }
+  }
+}
+
+export type SyncEventAgentChildRunCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      parentRunID: string
+      sessionID: string
+      run: AgentRuntimeSessionRun
+    }
+  }
+}
+
+export type SyncEventAgentChildRunCancelled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.cancelled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      parentRunID: string
+      sessionID: string
+      from: AgentRuntimeRunStatus
+      to: "cancelled"
+      reason: string
+      cancelledAt: number
+    }
+  }
+}
+
+export type SyncEventAgentChildRunResultRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.result-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      parentRunID: string
+      sessionID: string
+      result: AgentRuntimeChildRunResult
+    }
+  }
+}
+
+export type SyncEventAgentChildRunSettlementIntentRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.settlement-intent-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      childRunID: string
+      idempotencyKey: string
+      intentID: string
+      idempotencyDigest: string
+      result: AgentRuntimeChildRunResult
+      admissionEvidence?: AgentRuntimeChildSettlementAdmissionEvidence
+      intentAt: number
+    }
+  }
+}
+
+export type SyncEventAgentChildRunBudgetReserved = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.budget-reserved.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      childRunID: string
+      childRun: AgentRuntimeSessionRun
+      reserved: AgentRuntimeChildBudgetAmount
+      reservedTotal: AgentRuntimeChildBudgetAmount
+      reservedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentChildRunBudgetSettled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.budget-settled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      childRunID: string
+      reserved: AgentRuntimeChildBudgetAmount
+      actual: AgentRuntimeChildBudgetAmount
+      reservedTotal: AgentRuntimeChildBudgetAmount
+      settledAt: number
+    }
+  }
+}
+
+export type SyncEventAgentChildRunSettlementObservationRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.child-run.settlement-observation-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      sessionID: string
+      childRunID: string
+      observerID: string
+      sampleSequence: number
+      minimumSamples: number
+      sample: AgentRuntimeSettlementObservationSample
+      windowDigest: string
+      checkpointDigest: string
+      recordedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentControlRunCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.created.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      run: AgentRuntimeControlRun
+    }
+  }
+}
+
+export type SyncEventAgentControlRunStateChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.state-changed.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      from: AgentRuntimeRunStatus
+      to: AgentRuntimeRunStatus
+      reason: string
+      changedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentControlRunCheckpointCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.checkpoint-created.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      checkpoint: AgentRuntimeCheckpoint
+    }
+  }
+}
+
+export type SyncEventAgentControlRunAttemptStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.attempt-started.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      attempt: number
+      usageBaseline?: AgentRuntimeRunUsageBaseline
+      startedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentControlRunAttemptFinished = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.attempt-finished.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      attempt: number
+      outcome: "completed" | "failed" | "interrupted"
+      durationMs: number
+      costMicros: number
+      tokens?: number
+      finishedAt: number
+    }
+  }
+}
+
+export type SyncEventAgentControlRunLeaseAcquired = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.lease-acquired.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      lease: AgentRuntimeRunLease
+    }
+  }
+}
+
+export type SyncEventAgentControlRunHeartbeatRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.heartbeat-recorded.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      leaseID: string
+      ownerID: string
+      generation: number
+      heartbeatAt: number
+      expiresAt: number
+    }
+  }
+}
+
+export type SyncEventAgentControlRunLeaseReleased = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.control-run.lease-released.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      runID: string
+      subject: AgentRuntimeControlPlaneSubject
+      leaseID: string
+      ownerID: string
+      generation: number
+      releasedAt: number
+      reason: string
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionProposalCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.proposal-created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      proposalID: string
+      candidateID: string
+      artifactDigest: string
+      actor: string
+      proposal: AgentRuntimeEvolutionProposal
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionStatusChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.status-changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      proposalID: string
+      from: AgentRuntimeEvolutionStatus
+      to: AgentRuntimeEvolutionStatus
+      revision: number
+      actor: string
+      reason: string
+      metadata: {
+        [key: string]: unknown
+      }
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionEvaluationRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.evaluation-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      proposalID: string
+      evaluation: AgentRuntimeEvaluationResult
+      actor: string
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionExposurePrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.exposure-prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      exposureID: string
+      ticketDigest: string
+      proposalIDs: Array<string>
+      actor: string
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionExposureOutcomeRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.exposure-outcome-recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      exposureID: string
+      ticketDigest: string
+      outcomeDigest: string
+      success: boolean
+      safetyIncident: boolean
+      actor: string
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionExposureArchived = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.exposure-archived.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      archiveID: string
+      planDigest: string
+      archivedCount: number
+      actor: string
+    }
+  }
+}
+
+export type SyncEventAgentEvolutionExposureRestored = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "agent.evolution.exposure-restored.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      restoreID: string
+      archiveID: string
+      planDigest: string
+      restoredCount: number
+      actor: string
+    }
+  }
+}
+
+export type SyncEventMcpSupervisorCheckpointed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "mcp.supervisor.checkpointed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      aggregateID: string
+      server: string
+      desiredGeneration: number
+      observedGeneration: number
+      phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+      health: "unknown" | "healthy" | "unhealthy"
+      failureCount: number
+      nextRetryAt: number
+      circuitOpenedAt: number
+      drainDeadline: number
+      lastFailure:
+        | "connection_failed"
+        | "connection_closed"
+        | "health_check_failed"
+        | "authentication_required"
+        | "approval_required"
+        | "protocol_failed"
+        | "unknown"
+      safeMessage: string
+      savedAt: number
+    }
+  }
+}
+
 export type ConfigV2ReferenceGit = {
   repository: string
   branch?: string
@@ -4459,12 +7547,47 @@ export type ConfigV2ReferenceLocal = {
   hidden?: boolean
 }
 
+export type BillingPriceRate = {
+  amountMinor: number
+}
+
+export type BillingPriceRates = {
+  unknownInput?: BillingPriceRate
+  imageInput?: BillingPriceRate
+  audioInput?: BillingPriceRate
+  cacheReadInput?: BillingPriceRate
+  cacheWriteInput?: BillingPriceRate
+  textOutput?: BillingPriceRate
+  reasoningOutput?: BillingPriceRate
+  audioOutput?: BillingPriceRate
+}
+
+export type BillingPriceCatalog = {
+  revision: string
+  currency: BillingCurrency
+  minorUnit: number
+  unit: "token" | "1k-tokens" | "1m-tokens"
+  effectiveFrom: number
+  source: string
+  rates: BillingPriceRates
+}
+
 export type PolicyEffect = "allow" | "deny"
 
 export type ConfigV2ExperimentalPolicy = {
   action: "provider.use"
   effect: PolicyEffect
   resource: string
+}
+
+export type AgentRuntimeControlRequest = {
+  id: string
+  subject: AgentRuntimeControlPlaneSubject
+  action: string
+  resources: Array<string>
+  metadata?: {
+    [key: string]: unknown
+  }
 }
 
 export type ProjectDirectories = Array<{
@@ -4606,6 +7729,17 @@ export type SessionMessageUser = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  scheduledTasks?: Array<PromptScheduledTask>
+  system?: PromptRequestSystem
+  route?: {
+    agent?: string
+    model?: ModelRef
+  }
+  command?: {
+    name: string
+    arguments: string
+  }
+  format?: PromptOutputFormat
   type: "user"
 }
 
@@ -4689,6 +7823,7 @@ export type SessionMessageToolStateCompleted = {
   }
   attachments?: Array<PromptFileAttachment>
   content: Array<LlmToolContent>
+  artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
   outputPaths?: Array<string>
   structured: {
     [key: string]: unknown
@@ -4706,6 +7841,8 @@ export type SessionMessageToolStateError = {
     [key: string]: unknown
   }
   error: SessionErrorUnknown
+  artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
+  outputPaths?: Array<string>
   result?: unknown
 }
 
@@ -4744,6 +7881,9 @@ export type SessionMessageAssistant = {
   agent: string
   model: ModelRef
   content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
+  structured?: {
+    [key: string]: unknown
+  }
   delivery?: PrimaryDeliveryMetadata
   snapshot?: {
     start?: string
@@ -4787,6 +7927,27 @@ export type SessionMessage =
   | SessionMessageShell
   | SessionMessageAssistant
   | SessionMessageCompaction
+
+export type SessionNextTitleGenerated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.title.generated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    expectedTitle: string
+    title: string
+  }
+}
 
 export type SessionNextAgentSwitched = {
   id: string
@@ -4952,6 +8113,141 @@ export type SessionNextContextUpdated = {
   }
 }
 
+export type SessionNextMemoryContextPrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.memory.context.prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    userMessageID: string
+    turnStep: number
+    queryDigest: string
+    contextDigest: string
+    injectedBytes: number
+    status: "prepared" | "unavailable"
+    algorithm: "hybrid_bm25_hashing_vector"
+    localOnly: true
+    candidates: Array<{
+      memoryID: string
+      rank: number
+      score: number
+      lexicalScore: number
+      vectorScore: number
+    }>
+  }
+}
+
+export type SessionNextContextFusionPrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.context.fusion.prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    userMessageID: string
+    turnStep: number
+    queryDigest: string
+    combinedContextDigest: string
+    totalInjectedBytes: number
+    providerCallReady: true
+    degraded: boolean
+    bridgeProtocol?: "arforge.bridge/1.2"
+    assemblyProtocol?: "arforge.context/2"
+    runtimeTopology?: "typescript-single-runtime" | "legacy-dual-runtime"
+    memory: {
+      runtime: "typescript-core"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+      candidateCount: number
+    }
+    learning: {
+      runtime: "typescript-core"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+    }
+    evolution: {
+      runtime: "typescript-core" | "python-sidecar"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+      activeCandidateCount: number
+      injectedCandidateCount: number
+    }
+  }
+}
+
+export type SessionNextRequestEnvelopePrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.request.envelope.prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    runID: string
+    turnStep: number
+    attempt?: number
+    schemaVersion: "1.0"
+    requestDigest: string
+    envelope: string
+  }
+}
+
+export type SessionNextRequestBindingPrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.request.binding.prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    runID: string
+    turnStep: number
+    attempt: number
+    schemaVersion: 1
+    runtime: "native" | "ai-sdk"
+    mode: "native-envelope" | "prepared-projection"
+    requestDigest: string
+    contextDigest: string
+    toolSetRevision: string
+    routeConfigRevision: string
+    compilerRevision: string
+  }
+}
+
 export type SessionNextSynthetic = {
   id: string
   metadata?: {
@@ -5029,6 +8325,8 @@ export type SessionNextStepStarted = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
+    runID?: string
+    requestDigest?: string
     agent: string
     model: ModelRef
     snapshot?: string
@@ -5064,6 +8362,9 @@ export type SessionNextStepEnded = {
     }
     snapshot?: string
     files?: Array<string>
+    structured?: {
+      [key: string]: unknown
+    }
   }
 }
 
@@ -5265,6 +8566,7 @@ export type SessionNextToolSuccess = {
       [key: string]: unknown
     }
     content: Array<LlmToolContent>
+    artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
     outputPaths?: Array<string>
     result?: unknown
     provider: {
@@ -5292,6 +8594,12 @@ export type SessionNextToolFailed = {
     assistantMessageID: string
     callID: string
     error: SessionErrorUnknown
+    content?: Array<LlmToolContent>
+    structured?: {
+      [key: string]: unknown
+    }
+    artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
+    outputPaths?: Array<string>
     result?: unknown
     provider: {
       executed: boolean
@@ -5383,6 +8691,27 @@ export type SessionNextCompactionStarted = {
   }
 }
 
+export type SessionNextCompactionRequestPrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.compaction.request.prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    requestDigest: string
+    envelope: string
+  }
+}
+
 export type SessionNextCompactionEnded = {
   id: string
   metadata?: {
@@ -5402,6 +8731,20 @@ export type SessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+    usage?: {
+      cost: number
+      tokens: {
+        input: number
+        output: number
+        reasoning: number
+        cache: {
+          read: number
+          write: number
+        }
+      }
+    }
+    operationID?: string
+    candidateDigest?: string
   }
 }
 
@@ -5468,6 +8811,147 @@ export type PrimaryDeliveryMetadata2 = {
   attachments: Array<PrimaryDeliveryArtifact>
   localOnly: true
   uploaded: false
+}
+
+export type ArtifactReadRequest = {
+  reference: AgentRuntimeOpaqueArtifactRef
+  maxBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type ArtifactReadRangeRequest = {
+  reference: AgentRuntimeOpaqueArtifactRef
+  offset: number
+  length: number
+  ifMatch?: string
+}
+
+export type ArtifactOwnerContext = {
+  profile: AgentRuntimeArtifactOwner
+  tenant: AgentRuntimeArtifactOwner
+  tenantReadable: boolean
+}
+
+export type ArtifactMaintenanceScanRecord = {
+  scanID: string
+  status: "active" | "complete" | "expired"
+  pageNumber: number
+  scannedActions: number
+  scanLimit: number
+  scanComplete: boolean
+  scanExpiresAt: number
+  sessionDigest: string
+}
+
+export type ArtifactMaintenanceContext = {
+  owner: AgentRuntimeArtifactOwner
+  maintenanceScope: "profile"
+  canMaintain: boolean
+  scan: ArtifactMaintenanceScanRecord
+  reason: string
+}
+
+export type ArtifactCatalogRequest = {
+  limit?: number
+  beforeSequence?: number
+}
+
+export type ArtifactCatalogEntry = {
+  reference: AgentRuntimeOpaqueArtifactRef
+  firstSeenAt: number
+  lastSeenAt: number
+  lastSequence: number
+  readCount: number
+}
+
+export type ArtifactCatalogPage = {
+  entries: Array<ArtifactCatalogEntry>
+  nextSequence?: number
+  headSequence: number
+  headHash: string
+  droppedAuditEntries: number
+}
+
+export type ArtifactAuditRequest = {
+  limit?: number
+  beforeSequence?: number
+}
+
+export type ArtifactAuditRecord = {
+  sequence: number
+  recordedAt: number
+  actor: string
+  action: "registered" | "read" | "range" | "rejected" | "rate_limited" | "removed"
+  artifactID: string
+  digest: string
+  owner: AgentRuntimeArtifactOwner
+  reason?: string
+  offset?: number
+  length?: number
+  previousHash: string
+  recordHash: string
+}
+
+export type SubagentControlResultReceiptStatus = "pending" | "missing" | "present" | "not-required"
+
+export type SubagentControlChildSummary = {
+  childRunID: string
+  sessionID: string
+  status: AgentRuntimeRunStatus
+  resultReceiptStatus?: SubagentControlResultReceiptStatus
+  depth: number
+  objectiveDigest: string
+}
+
+export type SubagentControlChildrenResponse = {
+  parentRunID: string
+  controlAvailable?: boolean
+  children: Array<SubagentControlChildSummary>
+}
+
+export type SubagentControlSteerPayload = {
+  requestID: string
+  prompt: PromptInput
+}
+
+export type SubagentControlOperation = "steer" | "followup" | "wait" | "cancel"
+
+export type SubagentControlAdmission = {
+  messageID: string
+  sessionID: string
+  delivery: "steer" | "queue"
+  promptDigest: string
+  envelopeDigest: string
+}
+
+export type SubagentControlResponse = {
+  operation: SubagentControlOperation
+  parentRunID: string
+  childRunID: string
+  status: AgentRuntimeRunStatus
+  timedOut: boolean
+  resultReceiptStatus?: SubagentControlResultReceiptStatus
+  requestID?: string
+  admission?: SubagentControlAdmission
+  controlRunID?: string
+  actionID?: string
+  claim?: "claimed" | "existing"
+}
+
+export type SubagentControlFollowupPayload = {
+  requestID: string
+  prompt: PromptInput
+}
+
+export type SubagentControlWaitPayload = {
+  requestID: string
+  timeoutMs?: number
+}
+
+export type SubagentControlCancelPayload = {
+  requestID: string
+  reason: string
+  recursive?: boolean
+  timeoutMs?: number
 }
 
 export type GoalPage = {
@@ -5566,6 +9050,7 @@ export type TriggerResult = {
 
 export type MemoryInfo = {
   id: string
+  version: number
   content: MemoryContent
   type: MemoryType
   tags: MemoryTags
@@ -5590,6 +9075,70 @@ export type MemoryPage = {
   total: number
 }
 
+export type MemoryCorrectionInfo = {
+  id: string
+  originalMemoryID: string
+  successorMemoryID: string
+  originalSource: MemorySource
+  reason: MemoryCorrectionReason
+  status: MemoryCorrectionStatus
+  time: {
+    created: number
+    undone?: number
+  }
+}
+
+export type MemoryCorrectionResult = {
+  correction: MemoryCorrectionInfo
+  original: MemoryInfo
+  successor: MemoryInfo
+}
+
+export type MemoryCorrectionHistory = {
+  items: Array<MemoryCorrectionInfo>
+  count: number
+}
+
+export type MemoryConflictInfo = {
+  id: string
+  conflictKey: MemoryConflictKey
+  basis: MemoryConflictBasis
+  leftMemoryID: string
+  rightMemoryID: string
+  status: MemoryConflictStatus
+  chosenMemoryID?: string
+  retiredMemoryID?: string
+  decisionReason?: MemoryConflictReason
+  time: {
+    created: number
+    updated: number
+    decided?: number
+    undone?: number
+  }
+}
+
+export type MemoryConflictCandidate = {
+  conflict: MemoryConflictInfo
+  left: MemoryInfo
+  right: MemoryInfo
+}
+
+export type MemoryConflictPage = {
+  detectorVersion: "deterministic-v1"
+  scanned: number
+  detected: number
+  newCandidates: number
+  items: Array<MemoryConflictCandidate>
+  count: number
+  truncated: boolean
+}
+
+export type MemoryConflictDecisionResult = {
+  conflict: MemoryConflictInfo
+  left: MemoryInfo
+  right: MemoryInfo
+}
+
 export type MemoryDeleteResult = {
   deleted: Array<string>
   notFound: Array<string>
@@ -5604,8 +9153,8 @@ export type MemorySemanticHit = {
 }
 
 export type MemorySemanticResults = {
-  algorithm: "hybrid_bm25_hashing_vector"
-  localOnly: true
+  algorithm: "hybrid_bm25_embedding_api" | "hybrid_bm25_hashing_vector"
+  localOnly: boolean
   items: Array<MemorySemanticHit>
   count: number
 }
@@ -5629,6 +9178,7 @@ export type MemoryStatus = {
   workspace: number
   global: number
   quarantined: number
+  pendingConflicts: number
   recent: Array<MemoryInfo>
 }
 
@@ -5683,9 +9233,42 @@ export type MemoryGovernanceApplied = {
   status: "applied"
 }
 
+export type LearningDream = {
+  consolidation: {
+    status: "not_run"
+    patternsFound: number
+    savedNew: number
+    updatedExisting: number
+    patterns: number
+    breakdown: {
+      failure: number
+      fix: number
+      preference: number
+    }
+    reason: string
+  }
+  dream: {
+    totalTurns: number
+    totalFailures: number
+    totalPatterns: number
+    insights: Array<string>
+    suggestions: Array<string>
+    timestamp: string
+  }
+  executionMode: "read-only-core-projection"
+  sideEffects: "none"
+  caveat: string
+}
+
 export type LearningOutcome = {
   id: string
   sessionID?: string
+  runID?: string
+  actionID?: string
+  evaluationID?: string
+  evidenceIDs?: Array<string>
+  terminal?: boolean
+  verifierPassed?: boolean
   projectID: string
   workspacePath: string
   turnIndex: number
@@ -5866,10 +9449,87 @@ export type MultimodalDiagnosisSummary = {
   matches: number
 }
 
+export type FrontendDiagnosisMode = "frontend" | "javascript"
+
+export type FrontendDiagnosisScriptSummary = {
+  tags: number
+  inline: number
+  external: number
+  blocking: number
+}
+
+export type FrontendDiagnosisFramework = "none" | "vue3"
+
+export type FrontendDiagnosisExternalAsset = {
+  kind: "script" | "stylesheet"
+  url: string
+  local: boolean
+}
+
+export type FrontendDiagnosisAssetLocalizationPreview = {
+  status: "ready" | "none" | "blocked"
+  execution: "preview_only"
+  htmlResource: string
+  assetRoot: string
+  discoveryDigest?: string
+  references: Array<{
+    kind: "script" | "stylesheet"
+    url: string
+  }>
+  networkScopeCount: number
+  reason?: string
+}
+
+export type FrontendDiagnosisIssueCode =
+  | "empty_source"
+  | "missing_body"
+  | "missing_html"
+  | "unclosed_script"
+  | "blocking_script"
+  | "external_asset_not_checked"
+  | "unbalanced_braces"
+  | "unbalanced_parentheses"
+  | "unbalanced_brackets"
+  | "stray_closing_delimiter"
+  | "unterminated_string"
+  | "unterminated_comment"
+  | "missing_mount_target"
+  | "prefix_icon_literal"
+  | "undeclared_app"
+  | "router_history_unclear"
+  | "vue_detected"
+
+export type FrontendDiagnosisSeverity = "error" | "warning" | "info"
+
+export type FrontendDiagnosisIssue = {
+  code: FrontendDiagnosisIssueCode
+  severity: FrontendDiagnosisSeverity
+  message: string
+  line?: number
+  detail?: string
+}
+
+export type FrontendDiagnosisReport = {
+  schemaVersion: 1
+  localOnly: true
+  mode: FrontendDiagnosisMode
+  path: string
+  success: boolean
+  textChars: number
+  lineCount: number
+  truncated: boolean
+  script?: FrontendDiagnosisScriptSummary
+  framework: FrontendDiagnosisFramework
+  externalAssets: Array<FrontendDiagnosisExternalAsset>
+  assetLocalizationPreview?: FrontendDiagnosisAssetLocalizationPreview
+  issues: Array<FrontendDiagnosisIssue>
+}
+
 export type MultimodalDiagnosisResult = {
   schemaVersion: 1
   localOnly: true
   modelCalls: 0
+  mode: "error" | "frontend" | "javascript"
   success: boolean
   path: string
   source: MultimodalDiagnosisSource
@@ -5879,6 +9539,7 @@ export type MultimodalDiagnosisResult = {
   suggestions: Array<string>
   warnings: Array<string>
   summary: MultimodalDiagnosisSummary
+  frontend?: FrontendDiagnosisReport
 }
 
 export type AgentCapabilityHealth = {
@@ -5901,6 +9562,38 @@ export type AgentCapabilityInfo = {
 export type AgentCapabilityList = {
   count: number
   items: Array<AgentCapabilityInfo>
+}
+
+export type AgentCapabilitySystemOverviewSection = {
+  id: "status" | "runtime-stats" | "runtime-metrics" | "sandbox" | "tools" | "subagent-roles" | "cost-optimization"
+  title: string
+  data: TriggerJsonValue
+}
+
+export type AgentCapabilitySystemOverview = {
+  schema_version: 1
+  sections: Array<AgentCapabilitySystemOverviewSection>
+}
+
+export type AgentCapabilityDeepInsightSection = {
+  id:
+    | "features"
+    | "file-state"
+    | "memory-feedback"
+    | "feature-policy-contract"
+    | "permission-rules"
+    | "permission-policy-contract"
+    | "permission-mode"
+    | "self-correct"
+    | "release-gates"
+    | "release-remediation"
+  title: string
+  data: TriggerJsonValue
+}
+
+export type AgentCapabilityDeepInsights = {
+  schema_version: 1
+  sections: Array<AgentCapabilityDeepInsightSection>
 }
 
 export type AgentCapabilityRepoScaleFile = {
@@ -6062,6 +9755,30 @@ export type AgentCapabilityManagedSkillList = {
   roots: Array<string>
 }
 
+export type AgentCapabilitySkillReadResult =
+  | {
+      ok: false
+      error: string
+    }
+  | {
+      ok: true
+      manifest: AgentCapabilityManagedSkill
+      content: string
+      truncated: boolean
+      resources: Array<string>
+    }
+
+export type AgentCapabilitySkillRoute = {
+  mode: string
+  selected: Array<string>
+  phases: Array<string>
+  reasons: {
+    [key: string]: string
+  }
+  missing: Array<string>
+  relationship: string
+}
+
 export type AgentCapabilityManagedSkillMutation = {
   skill_id: string
   enabled: boolean
@@ -6075,6 +9792,45 @@ export type AgentCapabilityPluginTool = {
   parameters: TriggerJsonValue
 }
 
+export type AgentCapabilityPluginPermission = {
+  action: string
+  resources: Array<string>
+}
+
+export type AgentCapabilityPluginCompatibility = {
+  api_version: number
+  runtime?: string
+  platforms: Array<string>
+}
+
+export type AgentCapabilityPluginSignature = {
+  status: "unsigned" | "untrusted" | "verified" | "invalid"
+  algorithm?: "ed25519"
+  key_id?: string
+  signed_digest: string
+  reason?: string
+}
+
+export type AgentCapabilityPluginSecurityFinding = {
+  rule:
+    | "forbidden-runtime-boundary"
+    | "undeclared-egress"
+    | "undeclared-secret"
+    | "signature"
+    | "scan-limit"
+    | "unsafe-path"
+  severity: "info" | "warning" | "blocking"
+  path: string
+  message: string
+}
+
+export type AgentCapabilityPluginSecurityReport = {
+  status: "passed" | "warning" | "blocked"
+  findings: Array<AgentCapabilityPluginSecurityFinding>
+  scanned_files: number
+  scanned_bytes: number
+}
+
 export type AgentCapabilityManagedPlugin = {
   name: string
   version: string
@@ -6083,6 +9839,14 @@ export type AgentCapabilityManagedPlugin = {
   tools: Array<AgentCapabilityPluginTool>
   manifest_path: string
   entrypoint: string
+  source: "profile" | "workspace" | "external"
+  sha256: string
+  permissions: Array<AgentCapabilityPluginPermission>
+  egress: Array<string>
+  secrets: Array<string>
+  compatibility: AgentCapabilityPluginCompatibility
+  signature: AgentCapabilityPluginSignature
+  security: AgentCapabilityPluginSecurityReport
   enabled: boolean
   problems: Array<string>
   managed: boolean
@@ -6092,6 +9856,50 @@ export type AgentCapabilityManagedPluginList = {
   count: number
   items: Array<AgentCapabilityManagedPlugin>
   roots: Array<string>
+}
+
+export type AgentCapabilityCustomCommand = {
+  name: string
+  description: string
+  template: string
+  source: string
+  path: string
+  category: string
+  problems: Array<string>
+}
+
+export type AgentCapabilityCustomHook = {
+  name: string
+  event: string
+  description: string
+  source: string
+  path: string
+  priority: number
+  enabled: boolean
+  matcher: string
+  timeout_seconds: number
+  problems: Array<string>
+  command_configured: boolean
+  executable: string
+}
+
+export type AgentCapabilityCustomizationList = {
+  commands: {
+    count: number
+    enabled_count: number
+    items: Array<AgentCapabilityCustomCommand>
+  }
+  hooks: {
+    count: number
+    enabled_count: number
+    items: Array<AgentCapabilityCustomHook>
+  }
+  roots: Array<string>
+}
+
+export type AgentCapabilityCustomizationRender = {
+  name: string
+  rendered: string
 }
 
 export type AgentCapabilityPluginInspection = {
@@ -6107,6 +9915,13 @@ export type AgentCapabilityPluginInspection = {
     tools: Array<AgentCapabilityPluginTool>
     manifest_path: string
     entrypoint: string
+    source: "profile" | "workspace" | "external"
+    permissions: Array<AgentCapabilityPluginPermission>
+    egress: Array<string>
+    secrets: Array<string>
+    compatibility: AgentCapabilityPluginCompatibility
+    signature: AgentCapabilityPluginSignature
+    security: AgentCapabilityPluginSecurityReport
     enabled: boolean
     problems: Array<string>
     sha256: string
@@ -6145,6 +9960,12 @@ export type AgentCapabilityWorkflowPreview = {
   steps: Array<{
     id: string
     title: string
+    kind?: string
+    access?: string
+    max_attempts?: number
+    depends_on?: Array<string>
+    continue_on_error?: boolean
+    condition?: unknown
     status: string
     output: string
     error: string
@@ -6156,6 +9977,42 @@ export type AgentCapabilityWorkflowPreview = {
   node_kinds: {
     [key: string]: string
   }
+}
+
+export type AgentCapabilityWorkflowRunBudget = {
+  max_attempts: number
+  reserved_attempts: number
+  used_attempts: number
+  max_duration_ms: number
+}
+
+export type AgentCapabilityWorkflowScheduling = {
+  schema_version: number
+  request_digest: string
+  requested_max_parallel: number
+  effective_max_parallel: number
+  action: string
+  execute_mode: string
+  eligible: boolean
+  reasons: Array<string>
+  failed_checks: Array<string>
+  reason: string
+  decision_digest: string
+  evaluated_at: string
+  evidence_digest?: string
+  policy_revision?: string
+}
+
+export type AgentCapabilityWorkflowVerification = {
+  schema_version: 1
+  action_kind: "workflow"
+  action_version: "1"
+  passed: boolean
+  total: number
+  passed_count: number
+  failed_checks: Array<string>
+  evidence_digest: string
+  evaluated_at: string
 }
 
 export type AgentCapabilityWorkflowNode = {
@@ -6173,6 +10030,8 @@ export type AgentCapabilityWorkflowNode = {
   error: string
   started_at: string
   finished_at: string
+  budget_reserved_attempts?: number
+  child_run_id?: string
 }
 
 export type AgentCapabilityWorkflowRun = {
@@ -6191,6 +10050,10 @@ export type AgentCapabilityWorkflowRun = {
   started_at: string
   finished_at: string
   last_error: string
+  definition_digest?: string
+  budget?: AgentCapabilityWorkflowRunBudget
+  scheduling?: AgentCapabilityWorkflowScheduling
+  verification?: AgentCapabilityWorkflowVerification
   progress: {
     settled: number
     total: number
@@ -6206,6 +10069,734 @@ export type AgentCapabilityWorkflowRunList = {
   schema_version: 1
   items: Array<AgentCapabilityWorkflowRun>
   count: number
+}
+
+export type AgentCapabilityWorkflowEvent = {
+  sequence: number
+  type: string
+  node_id: string
+  data: TriggerJsonValue
+  created_at: string
+}
+
+export type AgentCapabilityWorkflowEventList = {
+  schema_version: 1
+  run_id: string
+  items: Array<AgentCapabilityWorkflowEvent>
+  count: number
+  next_after: number
+}
+
+export type AgentCapabilityPlanPreview = {
+  schema_version: 1
+  mode: "plan"
+  approval_required: boolean
+  execution_mode_after_approval: string
+  task: string
+  summary: string
+  affected_files: Array<string>
+  steps: Array<{
+    index: number
+    content: string
+    status: string
+  }>
+  risks: Array<string>
+  rollback: Array<string>
+  estimated_steps: number
+  raw_plan: string
+}
+
+export type AgentCapabilityRunTraceExport =
+  | {
+      format: "json"
+      mime_type: "application/json"
+      filename: ""
+      content: ""
+      trace_events: 0
+      found: false
+    }
+  | {
+      format: "json"
+      mime_type: "application/json"
+      filename: string
+      content: string
+      trace_events: number
+    }
+
+export type AgentCapabilityEvolutionStatus = {
+  schema_version: 1
+  counts: {
+    [key: string]: number
+  }
+  total: number
+  active: number
+  constitution: {
+    version: string
+    allowed_targets: Array<string>
+    protected_prefixes: Array<string>
+    self_approval_allowed: false
+    source_mutation_allowed: false
+  }
+  evolution_levels: {
+    version: string
+    levels: {
+      L0: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+      L1: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+      L2: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+      L3: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+      L4: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+      L5: {
+        level: "L0" | "L1" | "L2" | "L3" | "L4" | "L5"
+        capability: string
+        operations: Array<string>
+        executable: boolean
+      }
+    }
+  }
+  audit: {
+    schema_version: 1
+    valid: boolean
+    events: number
+    head_hash?: string
+    issue: string
+  }
+  policy: {
+    min_auto_proposal_frequency: number
+    min_auto_proposal_confidence: number
+    min_canary_observations: number
+    min_control_observations: number
+    min_canary_success_rate: number
+    min_success_rate_delta: number
+    default_traffic_percent: number
+    auto_rollback_min_observations: number
+    auto_rollback_success_rate: number
+    max_active_candidates: number
+  }
+}
+
+export type AgentCapabilityEvolutionPromotionGateReceipt = {
+  schema_version: 1
+  candidate_id: string
+  candidate_digest: string
+  source_experience_ids: Array<string>
+  source_evidence_ids: Array<string>
+  source_evaluation_ids: Array<string>
+  source_provenance_digest: string
+  evaluation: {
+    id: string
+    baseline_digest: string
+    candidate_digest: string
+    report_digest: string
+  }
+  approval_actor: string
+  canary: {
+    candidate_observations: number
+    control_observations: number
+    observation_ids: Array<string>
+    observation_digest: string
+  }
+  rollback_artifact: {
+    artifact_id: string
+    digest: string
+    plan_digest: string
+  }
+  policy: {
+    version: string
+    action_gateway_policy_version: string
+    digest: string
+  }
+  checks: {
+    immutable_artifact_digest: boolean
+    source_experience_evidence: boolean
+    baseline_candidate_evaluation: boolean
+    safety_pass: boolean
+    permission_pass: boolean
+    secret_pass: boolean
+    egress_pass: boolean
+    budget_pass: boolean
+    human_actor_approval: boolean
+    canary_cohort_observations: boolean
+    no_unacceptable_regression: boolean
+    rollback_artifact_plan: boolean
+    current_policy_version: boolean
+  }
+  gate_passed: true
+  gate_digest: string
+}
+
+export type AgentCapabilityEvolutionCandidateState = {
+  schema_version: 1
+  candidate_id: string
+  artifact_digest: string
+  status: "proposed" | "evaluated" | "approved" | "rejected" | "canary" | "promoted" | "rolled_back"
+  revision: number
+  updated_at: string
+  evaluation_id: string
+  approval: TriggerJsonValue
+  deployment: TriggerJsonValue
+  rollback: TriggerJsonValue
+  promotion_gate: AgentCapabilityEvolutionPromotionGateReceipt
+  evolution_level: "L0" | "L2" | "L3" | "L4"
+}
+
+export type AgentCapabilityEvolutionEvaluationCase = {
+  case_id: string
+  category: string
+  passed: boolean
+  score: number
+  baseline_score: number
+  detail: string
+  required: boolean
+}
+
+export type AgentCapabilityEvolutionEvaluation = {
+  schema_version: 1
+  candidate_id: string
+  candidate_digest: string
+  created_at: string
+  isolation: "temporary_directory"
+  workspace_retained: false
+  gate_passed: boolean
+  budget: {
+    max_attempts: number
+    attempts_used: number
+    max_duration_ms: number
+    duration_ms_used: number
+    max_cost_micros: number
+    cost_micros_used: number
+    passed: boolean
+  }
+  cases: Array<AgentCapabilityEvolutionEvaluationCase>
+  evaluation_id: string
+  report_digest: string
+}
+
+export type AgentCapabilityEvolutionCandidate = {
+  schema_version: 1
+  candidate_type: "strategy_rule"
+  title: string
+  target: "learning.failure" | "learning.fix" | "learning.preference" | "routing.advice" | "tool.advice"
+  instruction: string
+  rationale: string
+  evidence_refs: Array<string>
+  source_experience_ids: Array<string>
+  source_evidence_ids: Array<string>
+  source_evaluation_ids: Array<string>
+  source_provenance_digest: string
+  source_provenance_artifact: {
+    digest: string
+    record_digest: string
+    kind: "evolution-source-provenance"
+    uri: string
+  }
+  capability_boundary: {
+    permission_requests: Array<string>
+    secret_refs: Array<string>
+    network_egress: Array<string>
+  }
+  evaluation_budget: {
+    max_attempts: number
+    max_duration_ms: number
+    max_cost_micros: number
+  }
+  baseline_digest: string
+  rollback_artifact: {
+    artifact_id: string
+    digest: string
+    plan_digest: string
+    operation: "deactivate_strategy_overlay"
+  }
+  created_by: string
+  created_at: string
+  constitution_version: string
+  evolution_level: "L2"
+  candidate_id: string
+  artifact_digest: string
+  state: AgentCapabilityEvolutionCandidateState
+  evaluation?: AgentCapabilityEvolutionEvaluation
+}
+
+export type AgentCapabilityEvolutionCandidateList = {
+  schema_version: 1
+  count: number
+  items: Array<AgentCapabilityEvolutionCandidate>
+}
+
+export type AgentCapabilityEvolutionExposureAssignment = {
+  candidate_id: string
+  candidate_digest: string
+  cohort: "candidate" | "control"
+}
+
+export type AgentCapabilityEvolutionExposureOutcome = {
+  success: boolean
+  stop_reason: string
+  safety_incident: boolean
+}
+
+export type AgentCapabilityEvolutionExposureReceipt = {
+  receipt_digest: string
+  recorded_at: string
+  outcome: AgentCapabilityEvolutionExposureOutcome
+  observation_count: number
+  assistant_message_id?: string
+}
+
+export type AgentCapabilityEvolutionExposureSource = {
+  kind: "session_turn"
+  authority: "typescript-core"
+  session_id: string
+  user_message_id: string
+  turn_step: number
+}
+
+export type AgentCapabilityEvolutionExposure = {
+  schema_version: 1
+  exposure_id: string
+  created_at: string
+  cohort_key_digest: string
+  context_digest: string
+  injected_candidate_ids: Array<string>
+  assignments: Array<AgentCapabilityEvolutionExposureAssignment>
+  status: "pending" | "recorded"
+  ticket_digest: string
+  receipt: AgentCapabilityEvolutionExposureReceipt
+  source?: AgentCapabilityEvolutionExposureSource
+}
+
+export type AgentCapabilityEvolutionExposureList = {
+  schema_version: 1
+  count: number
+  total: number
+  counts: {
+    pending: number
+    recorded: number
+  }
+  truncated: boolean
+  items: Array<AgentCapabilityEvolutionExposure>
+}
+
+export type AgentCapabilityEvolutionExposureArchiveItem = {
+  exposure_id: string
+  created_at: string
+  ticket_digest: string
+  receipt_digest: string
+  source?: AgentCapabilityEvolutionExposureSource
+}
+
+export type AgentCapabilityEvolutionExposureArchivePlan = {
+  schema_version: 1
+  archive_id: string
+  plan_digest: string
+  keep_recorded: number
+  eligible_count: number
+  counts: {
+    pending: number
+    recorded: number
+    retained_recorded: number
+  }
+  truncated: boolean
+  items: Array<AgentCapabilityEvolutionExposureArchiveItem>
+}
+
+export type AgentCapabilityEvolutionExposureArchiveResult = {
+  schema_version: 1
+  applied: boolean
+  archive_id: string
+  plan_digest: string
+  archived_count: number
+  completed_at: string
+  active_counts: {
+    pending: number
+    recorded: number
+  }
+}
+
+export type AgentCapabilityEvolutionExposureArchiveRestoreStatus = {
+  missing: number
+  identical: number
+  conflicts: number
+  can_restore: boolean
+}
+
+export type AgentCapabilityEvolutionExposureArchiveSummary = {
+  schema_version: 1
+  archive_id: string
+  integrity: {
+    valid: boolean
+    issue: string
+  }
+  published_at: string
+  completed_at: string
+  archived_count: number
+  keep_recorded: number
+  plan_digest: "" | string
+  manifest_digest: "" | string
+  completion_digest: "" | string
+  evidence_set_digest: "" | string
+  restore: AgentCapabilityEvolutionExposureArchiveRestoreStatus
+}
+
+export type AgentCapabilityEvolutionExposureArchiveList = {
+  schema_version: 1
+  count: number
+  total: number
+  valid_count: number
+  invalid_count: number
+  truncated: boolean
+  items: Array<AgentCapabilityEvolutionExposureArchiveSummary>
+}
+
+export type AgentCapabilityEvolutionExposureArchiveEvidenceItem = {
+  exposure_id: string
+  created_at: string
+  ticket_digest: string
+  receipt_digest: string
+  ticket_file_digest: string
+  receipt_file_digest: string
+  live_status: "missing" | "identical" | "conflict"
+  source?: AgentCapabilityEvolutionExposureSource
+}
+
+export type AgentCapabilityEvolutionExposureArchiveDetail = {
+  schema_version: 1
+  archive_id: string
+  integrity: {
+    valid: boolean
+    issue: string
+  }
+  published_at: string
+  completed_at: string
+  archived_count: number
+  keep_recorded: number
+  plan_digest: "" | string
+  manifest_digest: "" | string
+  completion_digest: "" | string
+  evidence_set_digest: "" | string
+  restore: AgentCapabilityEvolutionExposureArchiveRestoreStatus
+  count: number
+  truncated: boolean
+  capacity_exceeded: boolean
+  active_total: number
+  active_after: number
+  items: Array<AgentCapabilityEvolutionExposureArchiveEvidenceItem>
+}
+
+export type AgentCapabilityEvolutionExposureRestoreItem = {
+  exposure_id: string
+  created_at: string
+  ticket_digest: string
+  receipt_digest: string
+  live_status: "missing" | "identical" | "conflict"
+  source?: AgentCapabilityEvolutionExposureSource
+}
+
+export type AgentCapabilityEvolutionExposureRestorePlan = {
+  schema_version: 1
+  restore_id: string
+  archive_id: string
+  plan_digest: string
+  manifest_digest: string
+  completion_digest: string
+  archived_count: number
+  counts: {
+    missing: number
+    already_present: number
+    conflicts: number
+    active_total: number
+    active_after: number
+  }
+  capacity_exceeded: boolean
+  can_apply: boolean
+  truncated: boolean
+  items: Array<AgentCapabilityEvolutionExposureRestoreItem>
+}
+
+export type AgentCapabilityEvolutionExposureRestoreResult = {
+  schema_version: 1
+  applied: boolean
+  restore_id: string
+  archive_id: string
+  plan_digest: string
+  restored_count: number
+  already_present_count: number
+  completed_at: string
+  active_counts: {
+    pending: number
+    recorded: number
+  }
+}
+
+export type AgentCapabilityEvolutionExposureArchiveExport = {
+  schema_version: 1
+  filename: string
+  media_type: "application/json"
+  sha256: string
+  content: string
+}
+
+export type AgentCapabilityEvolutionAuditEvent = {
+  schema_version: 1
+  sequence: number
+  recorded_at: string
+  subject_id: string
+  subject_kind: "candidate" | "archive" | "restore" | "exposure" | "system"
+  action: string
+  actor: string
+  reason: string
+  metadata: {
+    [key: string]: TriggerJsonValue
+  }
+  previous_hash: string
+  record_hash: string
+}
+
+export type AgentCapabilityEvolutionAuditEventList = {
+  schema_version: 1
+  valid: true
+  head_hash: string
+  total: number
+  count: number
+  truncated: boolean
+  items: Array<AgentCapabilityEvolutionAuditEvent>
+}
+
+export type AgentCapabilityEvolutionOpportunity = {
+  kind: string
+  source_ref: string
+  category: string
+  proposal_available: boolean
+  frequency?: number
+  confidence?: number
+  stop_reason?: string
+  count?: number
+}
+
+export type AgentCapabilityEvolutionOpportunityList = {
+  schema_version: 1
+  count: number
+  items: Array<AgentCapabilityEvolutionOpportunity>
+}
+
+export type AgentCapabilityEvolutionCanaryReport = {
+  schema_version: 1
+  candidate_id: string
+  candidate_digest: string
+  candidate_observations: number
+  control_observations: number
+  candidate_success_rate: number
+  control_success_rate: number
+  success_rate_delta: number
+  safety_incidents: number
+  control_safety_incidents: number
+  observation_ids: Array<string>
+  observation_digest: string
+  policy_version: string
+  policy_digest: string
+  checks: {
+    [key: string]: boolean
+  }
+  gate_passed: boolean
+}
+
+export type AgentCapabilityEvolutionContextPreview = {
+  schema_version: 1
+  text: string
+  candidate_ids: Array<string>
+  cohorts: {
+    [key: string]: string
+  }
+}
+
+export type AgentCapabilityExperienceCandidate = {
+  schema_version: 1
+  candidate_id: string
+  problem_signature: string
+  applicable_scope: string
+  conditions: Array<string>
+  attempted_strategy: string
+  counterexamples: Array<string>
+  support_count: number
+  source_run_ids: Array<string>
+  source_support_ids: Array<string>
+  evidence_ids: Array<string>
+  evaluation_digest: string
+  review_actor: string
+  review_reason: string
+  review_status: "pending" | "approved" | "rejected" | "expired"
+  status: "candidate" | "active" | "rejected" | "expired"
+  policy_version: string
+  expiry_at: number
+  digest: string
+  revision: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export type AgentCapabilityExperienceCandidateList = {
+  schema_version: 1
+  count: number
+  items: Array<AgentCapabilityExperienceCandidate>
+}
+
+export type AgentCapabilityExperienceReviewResult = {
+  schema_version: 1
+  candidate: AgentCapabilityExperienceCandidate
+  experience_ids: Array<string>
+  receipt_digest: string
+}
+
+export type AgentCapabilityExperienceSource = {
+  schema_version: 1
+  experience_id: string
+  candidate_id: string
+  summary: string
+  evidence_count: number
+  record_digest: string
+  policy_version: string
+  created_at: string
+}
+
+export type AgentCapabilityExperienceSourceList = {
+  schema_version: 1
+  count: number
+  items: Array<AgentCapabilityExperienceSource>
+}
+
+export type AgentCapabilitySkillLifecycleCandidate = {
+  schema_version: 1
+  candidate_id: string
+  skill_id: string
+  version: string
+  digest: string
+  status: "draft" | "candidate" | "canary" | "active" | "retired"
+  purpose: string
+  triggers: Array<string>
+  allowed_tools: Array<string>
+  allowed_capabilities: Array<string>
+  source_experience_ids: Array<string>
+  source_evidence_ids: Array<string>
+  test_ids: Array<string>
+  evaluation_id: string
+  evaluation_digest: string
+  evaluation_passed: boolean
+  baseline_candidate_id: string
+  revision: number
+  created_by: string
+  review_actor: string
+  review_reason: string
+  traffic_percent: number
+  canary_digest: string
+  rollback_version: string
+  record_digest: string
+  created_at: string
+  updated_at: string
+}
+
+export type AgentCapabilitySkillLifecycleCandidateList = {
+  schema_version: 1
+  count: number
+  items: Array<AgentCapabilitySkillLifecycleCandidate>
+}
+
+export type AgentCapabilitySkillEvaluationReport = {
+  candidate_digest: string
+  baseline_digest: string
+  sample_size: number
+  utility_delta: number
+  regression_cases: Array<string>
+  new_failure_count: number
+  new_secret_findings: number
+  new_egress_attempts: number
+  checks: {
+    no_permission_expansion: boolean
+    no_new_secret: boolean
+    no_new_egress: boolean
+    no_regression: boolean
+    utility_non_regression: boolean
+  }
+  passed: boolean
+  evidence_ids: Array<string>
+}
+
+export type AgentCapabilitySkillCanarySummary = {
+  observation_count: number
+  success_count: number
+  safety_incident_count: number
+  success_rate: number
+  minimum_observations: number
+  minimum_success_rate: number
+  promotion_ready: boolean
+}
+
+export type AgentCapabilitySkillLifecycleCandidateDetail = {
+  schema_version: 1
+  candidate: AgentCapabilitySkillLifecycleCandidate
+  evaluation: AgentCapabilitySkillEvaluationReport
+  canary: AgentCapabilitySkillCanarySummary
+}
+
+export type AgentCapabilitySkillEvaluationResult = {
+  schema_version: 1
+  candidate: AgentCapabilitySkillLifecycleCandidate
+  report: AgentCapabilitySkillEvaluationReport
+}
+
+export type AgentCapabilitySkillCanaryObservationResult = {
+  schema_version: 1
+  candidate: AgentCapabilitySkillLifecycleCandidate
+  observation_id: string
+  replayed: boolean
+}
+
+export type AgentCapabilitySkillDeployment = {
+  schema_version: 1
+  skill_id: string
+  active_candidate_id: string
+  previous_candidate_id: string
+  generation: number
+  digest: string
+}
+
+export type AgentCapabilitySkillPromotionResult = {
+  schema_version: 1
+  candidate: AgentCapabilitySkillLifecycleCandidate
+  deployment: AgentCapabilitySkillDeployment
+  receipt_digest: string
+}
+
+export type AgentCapabilitySkillRollbackResult = {
+  schema_version: 1
+  rolled_back: AgentCapabilitySkillLifecycleCandidate
+  restored: AgentCapabilitySkillLifecycleCandidate
+  deployment: AgentCapabilitySkillDeployment
+  receipt_digest: string
 }
 
 export type ModelApi =
@@ -6226,6 +10817,69 @@ export type ModelApi =
         [key: string]: TriggerJsonValue
       }
     }
+
+export type ModelModalityProfile = {
+  input: Array<"text" | "image" | "audio" | "video" | "document">
+  output: Array<"text" | "image" | "audio" | "video" | "document">
+}
+
+export type ModelProfileLimits = {
+  context: number
+  input?: number
+  output: number
+}
+
+export type ModelProfileCapabilities = {
+  tools: "supported" | "unsupported" | "unknown"
+  structured: "native" | "synthetic_tool" | "unsupported" | "unknown"
+  reasoning: "none" | "effort" | "budget" | "provider_defined" | "unknown"
+  cache: "none" | "implicit" | "explicit" | "provider_defined" | "unknown"
+}
+
+export type ModelObservation = {
+  kind: "latency" | "error" | "capability"
+  status: "pass" | "fail" | "inconclusive"
+  source: "catalog" | "recorded" | "local" | "live"
+  sourceID: string
+  observedAt: number
+  expiresAt?: number
+  value: TriggerJsonValue
+}
+
+export type ModelRegionPolicy = {
+  mode: "allowlist" | "provider_default" | "unknown"
+  regions: Array<string>
+}
+
+export type ModelEgressPolicy = {
+  mode: "provider" | "proxy" | "direct" | "unknown"
+  origins: Array<string>
+}
+
+export type ModelDataPolicy = {
+  retention: "ephemeral" | "provider_defined" | "unknown"
+  training: "excluded" | "provider_defined" | "unknown"
+}
+
+export type ModelProfilePolicy = {
+  region: ModelRegionPolicy
+  egress: ModelEgressPolicy
+  data: ModelDataPolicy
+}
+
+export type ModelProfile = {
+  version: "v1"
+  providerID: string
+  modelID: string
+  modality: ModelModalityProfile
+  limits: ModelProfileLimits
+  capabilities: ModelProfileCapabilities
+  tokenizer: string
+  estimator: string
+  priceCatalogRevision: string
+  observations: Array<ModelObservation>
+  policy: ModelProfilePolicy
+}
 
 export type ModelCapabilities = {
   tools: boolean
@@ -6252,6 +10906,7 @@ export type ModelV2Info = {
   family?: string
   name: string
   api: ModelApi
+  profile?: ModelProfile
   capabilities: ModelCapabilities
   request: {
     headers: {
@@ -6275,6 +10930,7 @@ export type ModelV2Info = {
     released: number
   }
   cost: Array<ModelCost>
+  priceCatalog?: BillingPriceCatalog
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: {
@@ -6427,6 +11083,7 @@ export type PermissionV2Request = {
     [key: string]: TriggerJsonValue
   }
   source?: PermissionV2Source
+  requiresHumanConfirmation?: boolean
 }
 
 export type PermissionSavedInfo = {
@@ -6836,6 +11493,1080 @@ export type InstallationUpdateAvailable = {
   }
 }
 
+export type AuthorizerControlAsked = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "authorizer.control.asked"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    id: string
+    subject: AgentRuntimeControlPlaneSubject
+    action: string
+    resources: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type AuthorizerControlReplied = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "authorizer.control.replied"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    subject: AgentRuntimeControlPlaneSubject
+    requestID: string
+    reply: "once" | "always" | "reject"
+    message?: string
+  }
+}
+
+export type AgentActionProposed = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.proposed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    action: AgentRuntimeAction
+  }
+}
+
+export type AgentActionPolicyEvaluated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.policy-evaluated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    decision: AgentRuntimePolicyDecision
+  }
+}
+
+export type AgentActionAuthorizationGranted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.authorization-granted"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    grant: AgentRuntimeAuthorizationGrant
+  }
+}
+
+export type AgentActionStateChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.state-changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    from: AgentRuntimeActionStatus
+    to: AgentRuntimeActionStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type AgentActionAttemptStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.attempt-started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    startedAt: number
+  }
+}
+
+export type AgentActionAttemptFinished = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.attempt-finished"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    outcome: "succeeded" | "failed" | "interrupted"
+    durationMs: number
+    costMicros?: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type AgentActionObserved = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.observed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    observation: AgentRuntimeObservation
+  }
+}
+
+export type AgentActionPostprocessingRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.postprocessing-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    processing: AgentRuntimeActionPostProcessing
+  }
+}
+
+export type AgentActionReconciled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.reconciled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    reconciliation: AgentRuntimeActionReconciliation
+  }
+}
+
+export type AgentActionExternalOperationBound = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.external-operation-bound"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    binding: AgentRuntimeActionExternalOperationBinding
+  }
+}
+
+export type AgentRuntimeMutationIntent1 = {
+  version: 1
+  transactionID: string
+  actionID: string
+  intentDigest: string
+  idempotencyKey: string
+  phase: AgentRuntimeMutationIntentPhase
+  entries: Array<AgentRuntimeMutationIntentEntry>
+  manifestDigest: string
+  automaticRetryAllowed: false
+  createdAt: number
+  updatedAt: number
+  postProcessing?: Array<AgentRuntimeMutationPostProcessingCheckpoint>
+  summary?: string
+}
+
+export type AgentActionMutationIntentRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.mutation-intent-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    intent: AgentRuntimeMutationIntent1
+  }
+}
+
+export type AgentActionProgressRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.progress-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    progress: {
+      phase:
+        | "executing"
+        | "fetching"
+        | "planning"
+        | "prepared"
+        | "committing"
+        | "committed"
+        | "settled"
+        | "failed"
+        | "cancelled"
+        | "outcome_unknown"
+      completed: number
+      total: number
+      sequence: number
+      updatedAt: number
+      detail?: string
+    }
+  }
+}
+
+export type AgentActionModelRequestPrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.model-request-prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    leaseID: string
+    generation: number
+    envelope: string
+    recordedAt: number
+  }
+}
+
+export type AgentActionLeaseAcquired = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.lease-acquired"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    lease: AgentRuntimeActionLease
+  }
+}
+
+export type AgentActionHeartbeatRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.heartbeat-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    leaseID: string
+    ownerID: string
+    generation: number
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type AgentActionLeaseReleased = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.action.lease-released"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    actionID: string
+    leaseID: string
+    ownerID: string
+    generation: number
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type AgentRunCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    run: AgentRuntimeSessionRun
+    initialLease?: AgentRuntimeRunLease
+  }
+}
+
+export type AgentRunStateChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.state-changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    from: AgentRuntimeRunStatus
+    to: AgentRuntimeRunStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type AgentRunCheckpointCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.checkpoint-created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    checkpoint: AgentRuntimeCheckpoint
+  }
+}
+
+export type AgentRunAttemptStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.attempt-started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    attempt: number
+    usageBaseline?: AgentRuntimeRunUsageBaseline
+    startedAt: number
+  }
+}
+
+export type AgentRunAttemptFinished = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.attempt-finished"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    attempt: number
+    outcome: "completed" | "failed" | "interrupted"
+    durationMs: number
+    costMicros: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type AgentRunLeaseAcquired = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.lease-acquired"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    lease: AgentRuntimeRunLease
+  }
+}
+
+export type AgentRunHeartbeatRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.heartbeat-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    leaseID: string
+    ownerID: string
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type AgentRunLeaseReleased = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.run.lease-released"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    leaseID: string
+    ownerID: string
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type AgentChildRunCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    run: AgentRuntimeSessionRun
+  }
+}
+
+export type AgentChildRunCancelled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.cancelled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    from: AgentRuntimeRunStatus
+    to: "cancelled"
+    reason: string
+    cancelledAt: number
+  }
+}
+
+export type AgentChildRunResultRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.result-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    result: AgentRuntimeChildRunResult
+  }
+}
+
+export type AgentChildRunSettlementIntentRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.settlement-intent-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    idempotencyKey: string
+    intentID: string
+    idempotencyDigest: string
+    result: AgentRuntimeChildRunResult
+    admissionEvidence?: AgentRuntimeChildSettlementAdmissionEvidence
+    intentAt: number
+  }
+}
+
+export type AgentChildRunBudgetReserved = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.budget-reserved"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    childRun: AgentRuntimeSessionRun
+    reserved: AgentRuntimeChildBudgetAmount
+    reservedTotal: AgentRuntimeChildBudgetAmount
+    reservedAt: number
+  }
+}
+
+export type AgentChildRunBudgetSettled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.budget-settled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    reserved: AgentRuntimeChildBudgetAmount
+    actual: AgentRuntimeChildBudgetAmount
+    reservedTotal: AgentRuntimeChildBudgetAmount
+    settledAt: number
+  }
+}
+
+export type AgentChildRunSettlementObservationRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.child-run.settlement-observation-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    observerID: string
+    sampleSequence: number
+    minimumSamples: number
+    sample: AgentRuntimeSettlementObservationSample
+    windowDigest: string
+    checkpointDigest: string
+    recordedAt: number
+  }
+}
+
+export type AgentRuntimeControlOperationSnapshot1 = {
+  version: 1
+  id: string
+  kind: string
+  generation: number
+  policyVersion: string
+  claimDigest: string
+  authorizationDigest: string
+  inputDigest: string
+  actionID: string
+  resources: Array<string>
+  semantics: AgentRuntimeEffectSemantics
+  payload: TriggerJsonValue
+  payloadDigest: string
+}
+
+export type AgentControlRunCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    run: AgentRuntimeControlRun
+  }
+}
+
+export type AgentControlRunStateChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.state-changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    from: AgentRuntimeRunStatus
+    to: AgentRuntimeRunStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type AgentControlRunCheckpointCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.checkpoint-created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    checkpoint: AgentRuntimeCheckpoint
+  }
+}
+
+export type AgentControlRunAttemptStarted = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.attempt-started"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    attempt: number
+    usageBaseline?: AgentRuntimeRunUsageBaseline
+    startedAt: number
+  }
+}
+
+export type AgentControlRunAttemptFinished = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.attempt-finished"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    attempt: number
+    outcome: "completed" | "failed" | "interrupted"
+    durationMs: number
+    costMicros: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type AgentControlRunLeaseAcquired = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.lease-acquired"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    lease: AgentRuntimeRunLease
+  }
+}
+
+export type AgentControlRunHeartbeatRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.heartbeat-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    leaseID: string
+    ownerID: string
+    generation: number
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type AgentControlRunLeaseReleased = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.control-run.lease-released"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    leaseID: string
+    ownerID: string
+    generation: number
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type AgentEvolutionProposalCreated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.proposal-created"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    proposalID: string
+    candidateID: string
+    artifactDigest: string
+    actor: string
+    proposal: AgentRuntimeEvolutionProposal
+  }
+}
+
+export type AgentEvolutionStatusChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.status-changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    proposalID: string
+    from: AgentRuntimeEvolutionStatus
+    to: AgentRuntimeEvolutionStatus
+    revision: number
+    actor: string
+    reason: string
+    metadata: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type AgentEvolutionEvaluationRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.evaluation-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    proposalID: string
+    evaluation: AgentRuntimeEvaluationResult
+    actor: string
+  }
+}
+
+export type AgentEvolutionExposurePrepared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.exposure-prepared"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    exposureID: string
+    ticketDigest: string
+    proposalIDs: Array<string>
+    actor: string
+  }
+}
+
+export type AgentEvolutionExposureOutcomeRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.exposure-outcome-recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    exposureID: string
+    ticketDigest: string
+    outcomeDigest: string
+    success: boolean
+    safetyIncident: boolean
+    actor: string
+  }
+}
+
+export type AgentEvolutionExposureArchived = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.exposure-archived"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    archiveID: string
+    planDigest: string
+    archivedCount: number
+    actor: string
+  }
+}
+
+export type AgentEvolutionExposureRestored = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "agent.evolution.exposure-restored"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    restoreID: string
+    archiveID: string
+    planDigest: string
+    restoredCount: number
+    actor: string
+  }
+}
+
 export type FileEdited = {
   id: string
   metadata?: {
@@ -6946,6 +12677,7 @@ export type PermissionV2Asked = {
       [key: string]: unknown
     }
     source?: PermissionV2Source
+    requiresHumanConfirmation?: boolean
   }
 }
 
@@ -7275,6 +13007,57 @@ export type TeamMessageSent = {
   }
 }
 
+export type MailboxMessageSent = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mailbox.message.sent"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    message: MailboxMessage
+  }
+}
+
+export type MailboxMessageAcknowledged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mailbox.message.acknowledged"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    receipt: MailboxReceipt
+  }
+}
+
+export type MailboxMessageCancelled = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mailbox.message.cancelled"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    message: MailboxMessage
+  }
+}
+
 export type WaitStarted = {
   id: string
   metadata?: {
@@ -7437,6 +13220,7 @@ export type PermissionAsked = {
       messageID: string
       callID: string
     }
+    requiresHumanConfirmation?: boolean
   }
 }
 
@@ -7582,6 +13366,66 @@ export type McpBrowserOpenFailed = {
   data: {
     mcpName: string
     url: string
+  }
+}
+
+export type McpSupervisorChanged = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mcp.supervisor.changed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    server: string
+    desiredGeneration: number
+    observedGeneration: number
+    phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+    health: "unknown" | "healthy" | "unhealthy"
+    failureCount: number
+    nextRetryAt: number
+    safeMessage: string
+  }
+}
+
+export type McpSupervisorCheckpointed = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "mcp.supervisor.checkpointed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    aggregateID: string
+    server: string
+    desiredGeneration: number
+    observedGeneration: number
+    phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+    health: "unknown" | "healthy" | "unhealthy"
+    failureCount: number
+    nextRetryAt: number
+    circuitOpenedAt: number
+    drainDeadline: number
+    lastFailure:
+      | "connection_failed"
+      | "connection_closed"
+      | "health_check_failed"
+      | "authentication_required"
+      | "approval_required"
+      | "protocol_failed"
+      | "unknown"
+    safeMessage: string
+    savedAt: number
   }
 }
 
@@ -7866,8 +13710,395 @@ export type ReferenceInfo = {
   source: ReferenceSource
 }
 
+export type ProjectCopyListEntry = {
+  directory: string
+  type: "root" | "copy"
+  strategy?: string
+}
+
+export type ProjectCopyList = Array<ProjectCopyListEntry>
+
 export type ProjectCopyCopy = {
   directory: string
+}
+
+export type PersonalJobSchedule = {
+  kind: "once" | "cron"
+  label: string
+  cron?: ScheduledPromptCron
+  nextRunAt: number
+  timezone: string
+  scheduledPromptID?: string
+}
+
+export type PersonalJobBudgetLimits = {
+  maxAttempts: number
+  maxDurationMs: number
+  maxCostMicros: number
+}
+
+export type PersonalJobApprovalPolicy = {
+  mode: "automatic" | "user_once" | "user_each_run"
+  rationale: string
+}
+
+export type PersonalJobQuietHours = {
+  timezone: string
+  startMinute: number
+  endMinute: number
+}
+
+export type PersonalJobNotificationKind =
+  | "approval_required"
+  | "started"
+  | "completed"
+  | "failed"
+  | "paused"
+  | "cancelled"
+  | "budget_exhausted"
+
+export type PersonalJobNotificationPolicy = {
+  mode: "none" | "in_app"
+  events: Array<PersonalJobNotificationKind>
+}
+
+export type PersonalJobStatus =
+  | "awaiting_approval"
+  | "queued"
+  | "running"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export type PersonalJobVisibility = {
+  mode: "background"
+  label: "后台自动"
+  userVisible: true
+}
+
+export type PersonalJobBudget = {
+  maxAttempts: number
+  maxDurationMs: number
+  maxCostMicros: number
+  attemptsUsed: number
+  durationMsUsed: number
+  costMicrosUsed: number
+}
+
+export type PersonalJobApprovalState = "not_required" | "pending" | "approved" | "rejected"
+
+export type PersonalJobExecution = {
+  leaseID: string
+  heartbeatAt: number
+}
+
+export type PersonalJobNotification = {
+  id: string
+  jobID: string
+  kind: PersonalJobNotificationKind
+  title: string
+  body: string
+  availableAt: number
+  readAt?: number
+}
+
+export type PersonalJobResultArtifact = {
+  id: string
+  artifactRef?: AgentRuntimeOpaqueArtifactRef
+  kind: "primary_delivery" | "tool_output" | "session_snapshot"
+  uri: string
+  name: string
+  mime: string
+  sizeBytes: number
+  digest: PersonalJobDigest
+}
+
+export type PersonalJobResult = {
+  status: "completed" | "failed"
+  summary: string
+  digest: PersonalJobDigest
+  artifactRefs: Array<string>
+  artifacts?: Array<PersonalJobResultArtifact>
+  usage: {
+    durationMs: number
+    costMicros: number
+  }
+  recordedAt: number
+}
+
+export type PersonalJobRetention = {
+  retainUntil?: number
+}
+
+export type PersonalJobInfo = {
+  id: string
+  sessionID: string
+  title: PersonalJobTitle
+  prompt: PersonalJobPrompt
+  status: PersonalJobStatus
+  visibility: PersonalJobVisibility
+  schedule: PersonalJobSchedule
+  credentialIDs: Array<string>
+  budget: PersonalJobBudget
+  approvalPolicy: PersonalJobApprovalPolicy
+  approvalState: PersonalJobApprovalState
+  execution?: PersonalJobExecution
+  occurrence?: PersonalJobOccurrence
+  quietHours?: PersonalJobQuietHours
+  notificationPolicy: PersonalJobNotificationPolicy
+  notifications: Array<PersonalJobNotification>
+  result?: PersonalJobResult
+  retention: PersonalJobRetention
+  admissionDigest: PersonalJobDigest
+  lastError: string
+  revision: number
+  time: {
+    created: number
+    updated: number
+    started?: number
+    finished?: number
+  }
+}
+
+export type PersonalWorkspaceProjectSummary = {
+  id: string
+  directory: string
+}
+
+export type PersonalWorkspaceLocationSummary = {
+  directory: string
+  workspaceID?: string
+  projectID: string
+  projectDirectory: string
+}
+
+export type PersonalWorkspaceAutomationState = "system_automatic" | "needs_human" | "human_visible" | "settled"
+
+export type PersonalWorkspaceSessionSummary = {
+  id: string
+  title: string
+  projectID: string
+  subpath?: string
+  state: PersonalWorkspaceAutomationState
+  createdAt: number
+  updatedAt: number
+  taskCount: number
+  runCount: number
+  personalJobCount: number
+  attentionCount: number
+}
+
+export type PersonalWorkspaceTaskSummary = {
+  id: string
+  sessionID: string
+  title: string
+  status: TaskGraphStatus
+  state: PersonalWorkspaceAutomationState
+  unresolvedBlockers: number
+  revision: number
+  createdAt: number
+  updatedAt: number
+}
+
+export type PersonalWorkspaceRunBudget = {
+  attemptsUsed: number
+  maxAttempts: number
+  durationMsUsed: number
+  maxDurationMs: number
+  costMicrosUsed: number
+  maxCostMicros: number
+}
+
+export type PersonalWorkspaceRunSummary = {
+  runID: string
+  sessionID: string
+  status: AgentRuntimeRunStatus
+  initiator: AgentRuntimeInitiator
+  authority: AgentRuntimeAuthority
+  riskTier: AgentRuntimeRiskTier
+  state: PersonalWorkspaceAutomationState
+  recoveryRequired: boolean
+  budget: PersonalWorkspaceRunBudget
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  finishedAt?: number
+}
+
+export type PersonalWorkspaceJobBudget = {
+  attemptsUsed: number
+  maxAttempts: number
+  durationMsUsed: number
+  maxDurationMs: number
+  costMicrosUsed: number
+  maxCostMicros: number
+}
+
+export type PersonalWorkspacePersonalJobSummary = {
+  id: string
+  sessionID: string
+  title: PersonalJobTitle
+  status: PersonalJobStatus
+  visibility: PersonalJobVisibility
+  scheduleLabel: string
+  nextRunAt: number
+  approvalState: PersonalJobApprovalState
+  state: PersonalWorkspaceAutomationState
+  needsHuman: boolean
+  budget: PersonalWorkspaceJobBudget
+  artifactCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+export type PersonalWorkspaceMemoryCandidateSummary = {
+  candidateID: string
+  status: MemoryCandidateStatus
+  sensitivity: MemoryCandidateSensitivity
+  confidence: MemoryCandidateConfidence
+  state: PersonalWorkspaceAutomationState
+  needsHuman: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export type PersonalWorkspaceAttentionKind =
+  | "pending_approval"
+  | "recovery_required"
+  | "artifact_ready"
+  | "memory_candidate"
+  | "cost_review"
+
+export type PersonalWorkspaceAttentionSeverity = "info" | "warning" | "critical"
+
+export type PersonalWorkspaceAttention = {
+  kind: PersonalWorkspaceAttentionKind
+  severity: PersonalWorkspaceAttentionSeverity
+  resourceType: "personal_job" | "run" | "memory_candidate" | "workspace"
+  resourceID: string
+  sessionID?: string
+  title: string
+  detail: string
+}
+
+export type PersonalWorkspaceCounts = {
+  sessions: number
+  activeSessions: number
+  tasks: number
+  pendingTasks: number
+  runs: number
+  activeRuns: number
+  recoveringRuns: number
+  personalJobs: number
+  pendingApprovals: number
+  artifacts: number
+  memoryCandidates: number
+}
+
+export type PersonalWorkspaceCost = {
+  runUsedMicros: number
+  runLimitMicros: number
+  jobUsedMicros: number
+  jobLimitMicros: number
+}
+
+export type PersonalWorkspaceSnapshot = {
+  asOf: number
+  project: PersonalWorkspaceProjectSummary
+  location: PersonalWorkspaceLocationSummary
+  sessions: Array<PersonalWorkspaceSessionSummary>
+  tasks: Array<PersonalWorkspaceTaskSummary>
+  runs: Array<PersonalWorkspaceRunSummary>
+  personalJobs: Array<PersonalWorkspacePersonalJobSummary>
+  memoryCandidates: Array<PersonalWorkspaceMemoryCandidateSummary>
+  attention: Array<PersonalWorkspaceAttention>
+  counts: PersonalWorkspaceCounts
+  cost: PersonalWorkspaceCost
+}
+
+export type TenantPlatformTenantId = string
+
+export type TenantPlatformPlatformPolicy = {
+  schema_version: 1
+  tenant_id: TenantPlatformTenantId
+  region: string
+  retention_days: number
+  quota: {
+    currency: BillingCurrency
+    limit_minor?: number
+  }
+  rate_limit: {
+    requests_per_minute: number
+    burst: number
+  }
+  key_version: number
+  revision: number
+  updated_at: string
+}
+
+export type TenantPlatformUsageSummary = {
+  tenant_id: TenantPlatformTenantId
+  currency: BillingCurrency
+  settled_amount_minor: number
+  settled_records: number
+  source: "settled-runtime-usage"
+}
+
+export type TenantPlatformPlatformOverview = {
+  schema_version: 1
+  policy: TenantPlatformPlatformPolicy
+  usage: TenantPlatformUsageSummary
+  active_rate_window_count: number
+  pending_requests: number
+}
+
+export type TenantPlatformUserId = string
+
+export type TenantPlatformDataRequest = {
+  id: string
+  tenant_id: TenantPlatformTenantId
+  kind: "tenant-export" | "tenant-delete"
+  status: "requested" | "approved" | "executing" | "completed" | "rejected" | "failed"
+  requested_by: TenantPlatformUserId
+  approved_by?: TenantPlatformUserId
+  reason: string
+  request_digest: string
+  requested_at: string
+  completed_at?: string
+}
+
+export type TenantPlatformBackupManifest = {
+  id: string
+  tenant_id: TenantPlatformTenantId
+  region: string
+  schema_revision: string
+  artifact_digest: string
+  status: "created" | "verified" | "restored" | "failed"
+  created_at: string
+  verified_at?: string
+}
+
+export type TenantPlatformAuditExport = {
+  id: string
+  tenant_id: TenantPlatformTenantId
+  requested_by: TenantPlatformUserId
+  item_count: number
+  export_digest: string
+  created_at: string
+  artifact_filename: string
+  artifact_media_type: "application/json"
+  artifact_json: string
+}
+
+export type TenantPlatformSecretMetadata = {
+  tenant_id: TenantPlatformTenantId
+  secret_id: string
+  key_version: number
+  fingerprint: string
+  status: "active" | "revoked"
+  created_at: string
+  revoked_at?: string
 }
 
 export type EventModelsDevRefreshed = {
@@ -7967,6 +14198,18 @@ export type EventMessagePartRemoved = {
   }
 }
 
+export type EventSessionNextTitleGenerated = {
+  id: string
+  type: "session.next.title.generated"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    expectedTitle: string
+    title: string
+  }
+}
+
 export type EventSessionNextAgentSwitched = {
   id: string
   type: "session.next.agent.switched"
@@ -8059,6 +14302,105 @@ export type EventSessionNextContextUpdated = {
   }
 }
 
+export type EventSessionNextMemoryContextPrepared = {
+  id: string
+  type: "session.next.memory.context.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    userMessageID: string
+    turnStep: number
+    queryDigest: string
+    contextDigest: string
+    injectedBytes: number
+    status: "prepared" | "unavailable"
+    algorithm: "hybrid_bm25_hashing_vector"
+    localOnly: true
+    candidates: Array<{
+      memoryID: string
+      rank: number
+      score: number
+      lexicalScore: number
+      vectorScore: number
+    }>
+  }
+}
+
+export type EventSessionNextContextFusionPrepared = {
+  id: string
+  type: "session.next.context.fusion.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    userMessageID: string
+    turnStep: number
+    queryDigest: string
+    combinedContextDigest: string
+    totalInjectedBytes: number
+    providerCallReady: true
+    degraded: boolean
+    bridgeProtocol?: "arforge.bridge/1.2"
+    assemblyProtocol?: "arforge.context/2"
+    runtimeTopology?: "typescript-single-runtime" | "legacy-dual-runtime"
+    memory: {
+      runtime: "typescript-core"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+      candidateCount: number
+    }
+    learning: {
+      runtime: "typescript-core"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+    }
+    evolution: {
+      runtime: "typescript-core" | "python-sidecar"
+      status: "prepared" | "unavailable"
+      contextDigest: string
+      injectedBytes: number
+      activeCandidateCount: number
+      injectedCandidateCount: number
+    }
+  }
+}
+
+export type EventSessionNextRequestEnvelopePrepared = {
+  id: string
+  type: "session.next.request.envelope.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    runID: string
+    turnStep: number
+    attempt?: number
+    schemaVersion: "1.0"
+    requestDigest: string
+    envelope: string
+  }
+}
+
+export type EventSessionNextRequestBindingPrepared = {
+  id: string
+  type: "session.next.request.binding.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    runID: string
+    turnStep: number
+    attempt: number
+    schemaVersion: 1
+    runtime: "native" | "ai-sdk"
+    mode: "native-envelope" | "prepared-projection"
+    requestDigest: string
+    contextDigest: string
+    toolSetRevision: string
+    routeConfigRevision: string
+    compilerRevision: string
+  }
+}
+
 export type EventSessionNextSynthetic = {
   id: string
   type: "session.next.synthetic"
@@ -8100,6 +14442,8 @@ export type EventSessionNextStepStarted = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
+    runID?: string
+    requestDigest?: string
     agent: string
     model: ModelRef
     snapshot?: string
@@ -8126,6 +14470,9 @@ export type EventSessionNextStepEnded = {
     }
     snapshot?: string
     files?: Array<string>
+    structured?: {
+      [key: string]: TriggerJsonValue
+    }
   }
 }
 
@@ -8307,6 +14654,7 @@ export type EventSessionNextToolSuccess = {
       [key: string]: unknown
     }
     content: Array<LlmToolContent>
+    artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
     outputPaths?: Array<string>
     result?: unknown
     provider: {
@@ -8325,6 +14673,12 @@ export type EventSessionNextToolFailed = {
     assistantMessageID: string
     callID: string
     error: SessionErrorUnknown
+    content?: Array<LlmToolContent>
+    structured?: {
+      [key: string]: unknown
+    }
+    artifactRefs?: Array<AgentRuntimeOpaqueArtifactRef>
+    outputPaths?: Array<string>
     result?: unknown
     provider: {
       executed: boolean
@@ -8355,6 +14709,18 @@ export type EventSessionNextCompactionStarted = {
   }
 }
 
+export type EventSessionNextCompactionRequestPrepared = {
+  id: string
+  type: "session.next.compaction.request.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    requestDigest: string
+    envelope: string
+  }
+}
+
 export type EventSessionNextCompactionDelta = {
   id: string
   type: "session.next.compaction.delta"
@@ -8376,6 +14742,20 @@ export type EventSessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+    usage?: {
+      cost: number
+      tokens: {
+        input: number
+        output: number
+        reasoning: number
+        cache: {
+          read: number
+          write: number
+        }
+      }
+    }
+    operationID?: string
+    candidateDigest?: string
   }
 }
 
@@ -8462,6 +14842,632 @@ export type EventInstallationUpdateAvailable = {
   }
 }
 
+export type EventAuthorizerControlAsked = {
+  id: string
+  type: "authorizer.control.asked"
+  properties: {
+    id: string
+    subject: AgentRuntimeControlPlaneSubject
+    action: string
+    resources: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type EventAuthorizerControlReplied = {
+  id: string
+  type: "authorizer.control.replied"
+  properties: {
+    subject: AgentRuntimeControlPlaneSubject
+    requestID: string
+    reply: "once" | "always" | "reject"
+    message?: string
+  }
+}
+
+export type EventAgentActionProposed = {
+  id: string
+  type: "agent.action.proposed"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    action: AgentRuntimeAction
+  }
+}
+
+export type EventAgentActionPolicyEvaluated = {
+  id: string
+  type: "agent.action.policy-evaluated"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    decision: AgentRuntimePolicyDecision
+  }
+}
+
+export type EventAgentActionAuthorizationGranted = {
+  id: string
+  type: "agent.action.authorization-granted"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    grant: AgentRuntimeAuthorizationGrant
+  }
+}
+
+export type EventAgentActionStateChanged = {
+  id: string
+  type: "agent.action.state-changed"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    from: AgentRuntimeActionStatus
+    to: AgentRuntimeActionStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type EventAgentActionAttemptStarted = {
+  id: string
+  type: "agent.action.attempt-started"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    startedAt: number
+  }
+}
+
+export type EventAgentActionAttemptFinished = {
+  id: string
+  type: "agent.action.attempt-finished"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    outcome: "succeeded" | "failed" | "interrupted"
+    durationMs: number
+    costMicros?: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type EventAgentActionObserved = {
+  id: string
+  type: "agent.action.observed"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    observation: AgentRuntimeObservation
+  }
+}
+
+export type EventAgentActionPostprocessingRecorded = {
+  id: string
+  type: "agent.action.postprocessing-recorded"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    processing: AgentRuntimeActionPostProcessing
+  }
+}
+
+export type EventAgentActionReconciled = {
+  id: string
+  type: "agent.action.reconciled"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    reconciliation: AgentRuntimeActionReconciliation
+  }
+}
+
+export type EventAgentActionExternalOperationBound = {
+  id: string
+  type: "agent.action.external-operation-bound"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    binding: AgentRuntimeActionExternalOperationBinding
+  }
+}
+
+export type EventAgentActionMutationIntentRecorded = {
+  id: string
+  type: "agent.action.mutation-intent-recorded"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    intent: AgentRuntimeMutationIntent
+  }
+}
+
+export type EventAgentActionProgressRecorded = {
+  id: string
+  type: "agent.action.progress-recorded"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    progress: {
+      phase:
+        | "executing"
+        | "fetching"
+        | "planning"
+        | "prepared"
+        | "committing"
+        | "committed"
+        | "settled"
+        | "failed"
+        | "cancelled"
+        | "outcome_unknown"
+      completed: number
+      total: number
+      sequence: number
+      updatedAt: number
+      detail?: string
+    }
+  }
+}
+
+export type EventAgentActionModelRequestPrepared = {
+  id: string
+  type: "agent.action.model-request-prepared"
+  properties: {
+    actionID: string
+    sessionID?: string
+    subject?: AgentRuntimeSubject
+    attempt: number
+    leaseID: string
+    generation: number
+    envelope: string
+    recordedAt: number
+  }
+}
+
+export type EventAgentActionLeaseAcquired = {
+  id: string
+  type: "agent.action.lease-acquired"
+  properties: {
+    actionID: string
+    lease: AgentRuntimeActionLease
+  }
+}
+
+export type EventAgentActionHeartbeatRecorded = {
+  id: string
+  type: "agent.action.heartbeat-recorded"
+  properties: {
+    actionID: string
+    leaseID: string
+    ownerID: string
+    generation: number
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type EventAgentActionLeaseReleased = {
+  id: string
+  type: "agent.action.lease-released"
+  properties: {
+    actionID: string
+    leaseID: string
+    ownerID: string
+    generation: number
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type EventAgentRunCreated = {
+  id: string
+  type: "agent.run.created"
+  properties: {
+    runID: string
+    sessionID: string
+    run: AgentRuntimeSessionRun
+    initialLease?: AgentRuntimeRunLease
+  }
+}
+
+export type EventAgentRunStateChanged = {
+  id: string
+  type: "agent.run.state-changed"
+  properties: {
+    runID: string
+    sessionID: string
+    from: AgentRuntimeRunStatus
+    to: AgentRuntimeRunStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type EventAgentRunCheckpointCreated = {
+  id: string
+  type: "agent.run.checkpoint-created"
+  properties: {
+    runID: string
+    sessionID: string
+    checkpoint: AgentRuntimeCheckpoint
+  }
+}
+
+export type EventAgentRunAttemptStarted = {
+  id: string
+  type: "agent.run.attempt-started"
+  properties: {
+    runID: string
+    sessionID: string
+    attempt: number
+    usageBaseline?: AgentRuntimeRunUsageBaseline
+    startedAt: number
+  }
+}
+
+export type EventAgentRunAttemptFinished = {
+  id: string
+  type: "agent.run.attempt-finished"
+  properties: {
+    runID: string
+    sessionID: string
+    attempt: number
+    outcome: "completed" | "failed" | "interrupted"
+    durationMs: number
+    costMicros: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type EventAgentRunLeaseAcquired = {
+  id: string
+  type: "agent.run.lease-acquired"
+  properties: {
+    runID: string
+    sessionID: string
+    lease: AgentRuntimeRunLease
+  }
+}
+
+export type EventAgentRunHeartbeatRecorded = {
+  id: string
+  type: "agent.run.heartbeat-recorded"
+  properties: {
+    runID: string
+    sessionID: string
+    leaseID: string
+    ownerID: string
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type EventAgentRunLeaseReleased = {
+  id: string
+  type: "agent.run.lease-released"
+  properties: {
+    runID: string
+    sessionID: string
+    leaseID: string
+    ownerID: string
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type EventAgentChildRunCreated = {
+  id: string
+  type: "agent.child-run.created"
+  properties: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    run: AgentRuntimeSessionRun
+  }
+}
+
+export type EventAgentChildRunCancelled = {
+  id: string
+  type: "agent.child-run.cancelled"
+  properties: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    from: AgentRuntimeRunStatus
+    to: "cancelled"
+    reason: string
+    cancelledAt: number
+  }
+}
+
+export type EventAgentChildRunResultRecorded = {
+  id: string
+  type: "agent.child-run.result-recorded"
+  properties: {
+    runID: string
+    parentRunID: string
+    sessionID: string
+    result: AgentRuntimeChildRunResult
+  }
+}
+
+export type EventAgentChildRunSettlementIntentRecorded = {
+  id: string
+  type: "agent.child-run.settlement-intent-recorded"
+  properties: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    idempotencyKey: string
+    intentID: string
+    idempotencyDigest: string
+    result: AgentRuntimeChildRunResult
+    admissionEvidence?: AgentRuntimeChildSettlementAdmissionEvidence
+    intentAt: number
+  }
+}
+
+export type EventAgentChildRunBudgetReserved = {
+  id: string
+  type: "agent.child-run.budget-reserved"
+  properties: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    childRun: AgentRuntimeSessionRun
+    reserved: AgentRuntimeChildBudgetAmount
+    reservedTotal: AgentRuntimeChildBudgetAmount
+    reservedAt: number
+  }
+}
+
+export type EventAgentChildRunBudgetSettled = {
+  id: string
+  type: "agent.child-run.budget-settled"
+  properties: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    reserved: AgentRuntimeChildBudgetAmount
+    actual: AgentRuntimeChildBudgetAmount
+    reservedTotal: AgentRuntimeChildBudgetAmount
+    settledAt: number
+  }
+}
+
+export type EventAgentChildRunSettlementObservationRecorded = {
+  id: string
+  type: "agent.child-run.settlement-observation-recorded"
+  properties: {
+    runID: string
+    sessionID: string
+    childRunID: string
+    observerID: string
+    sampleSequence: number
+    minimumSamples: number
+    sample: AgentRuntimeSettlementObservationSample
+    windowDigest: string
+    checkpointDigest: string
+    recordedAt: number
+  }
+}
+
+export type AgentRuntimeControlOperationSnapshot2 = {
+  version: 1
+  id: string
+  kind: string
+  generation: number
+  policyVersion: string
+  claimDigest: string
+  authorizationDigest: string
+  inputDigest: string
+  actionID: string
+  resources: Array<string>
+  semantics: AgentRuntimeEffectSemantics
+  payload: TriggerJsonValue
+  payloadDigest: string
+}
+
+export type EventAgentControlRunCreated = {
+  id: string
+  type: "agent.control-run.created"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    run: AgentRuntimeControlRun
+  }
+}
+
+export type EventAgentControlRunStateChanged = {
+  id: string
+  type: "agent.control-run.state-changed"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    from: AgentRuntimeRunStatus
+    to: AgentRuntimeRunStatus
+    reason: string
+    changedAt: number
+  }
+}
+
+export type EventAgentControlRunCheckpointCreated = {
+  id: string
+  type: "agent.control-run.checkpoint-created"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    checkpoint: AgentRuntimeCheckpoint
+  }
+}
+
+export type EventAgentControlRunAttemptStarted = {
+  id: string
+  type: "agent.control-run.attempt-started"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    attempt: number
+    usageBaseline?: AgentRuntimeRunUsageBaseline
+    startedAt: number
+  }
+}
+
+export type EventAgentControlRunAttemptFinished = {
+  id: string
+  type: "agent.control-run.attempt-finished"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    attempt: number
+    outcome: "completed" | "failed" | "interrupted"
+    durationMs: number
+    costMicros: number
+    tokens?: number
+    finishedAt: number
+  }
+}
+
+export type EventAgentControlRunLeaseAcquired = {
+  id: string
+  type: "agent.control-run.lease-acquired"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    lease: AgentRuntimeRunLease
+  }
+}
+
+export type EventAgentControlRunHeartbeatRecorded = {
+  id: string
+  type: "agent.control-run.heartbeat-recorded"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    leaseID: string
+    ownerID: string
+    generation: number
+    heartbeatAt: number
+    expiresAt: number
+  }
+}
+
+export type EventAgentControlRunLeaseReleased = {
+  id: string
+  type: "agent.control-run.lease-released"
+  properties: {
+    runID: string
+    subject: AgentRuntimeControlPlaneSubject
+    leaseID: string
+    ownerID: string
+    generation: number
+    releasedAt: number
+    reason: string
+  }
+}
+
+export type EventAgentEvolutionProposalCreated = {
+  id: string
+  type: "agent.evolution.proposal-created"
+  properties: {
+    proposalID: string
+    candidateID: string
+    artifactDigest: string
+    actor: string
+    proposal: AgentRuntimeEvolutionProposal
+  }
+}
+
+export type EventAgentEvolutionStatusChanged = {
+  id: string
+  type: "agent.evolution.status-changed"
+  properties: {
+    proposalID: string
+    from: AgentRuntimeEvolutionStatus
+    to: AgentRuntimeEvolutionStatus
+    revision: number
+    actor: string
+    reason: string
+    metadata: {
+      [key: string]: unknown
+    }
+  }
+}
+
+export type EventAgentEvolutionEvaluationRecorded = {
+  id: string
+  type: "agent.evolution.evaluation-recorded"
+  properties: {
+    proposalID: string
+    evaluation: AgentRuntimeEvaluationResult
+    actor: string
+  }
+}
+
+export type EventAgentEvolutionExposurePrepared = {
+  id: string
+  type: "agent.evolution.exposure-prepared"
+  properties: {
+    exposureID: string
+    ticketDigest: string
+    proposalIDs: Array<string>
+    actor: string
+  }
+}
+
+export type EventAgentEvolutionExposureOutcomeRecorded = {
+  id: string
+  type: "agent.evolution.exposure-outcome-recorded"
+  properties: {
+    exposureID: string
+    ticketDigest: string
+    outcomeDigest: string
+    success: boolean
+    safetyIncident: boolean
+    actor: string
+  }
+}
+
+export type EventAgentEvolutionExposureArchived = {
+  id: string
+  type: "agent.evolution.exposure-archived"
+  properties: {
+    archiveID: string
+    planDigest: string
+    archivedCount: number
+    actor: string
+  }
+}
+
+export type EventAgentEvolutionExposureRestored = {
+  id: string
+  type: "agent.evolution.exposure-restored"
+  properties: {
+    restoreID: string
+    archiveID: string
+    planDigest: string
+    restoredCount: number
+    actor: string
+  }
+}
+
 export type EventFileEdited = {
   id: string
   type: "file.edited"
@@ -8518,6 +15524,7 @@ export type EventPermissionV2Asked = {
       [key: string]: unknown
     }
     source?: PermissionV2Source
+    requiresHumanConfirmation?: boolean
   }
 }
 
@@ -8685,6 +15692,30 @@ export type EventTeamMessageSent = {
   }
 }
 
+export type EventMailboxMessageSent = {
+  id: string
+  type: "mailbox.message.sent"
+  properties: {
+    message: MailboxMessage
+  }
+}
+
+export type EventMailboxMessageAcknowledged = {
+  id: string
+  type: "mailbox.message.acknowledged"
+  properties: {
+    receipt: MailboxReceipt
+  }
+}
+
+export type EventMailboxMessageCancelled = {
+  id: string
+  type: "mailbox.message.cancelled"
+  properties: {
+    message: MailboxMessage
+  }
+}
+
 export type EventWaitStarted = {
   id: string
   type: "wait.started"
@@ -8766,6 +15797,7 @@ export type EventPermissionAsked = {
       messageID: string
       callID: string
     }
+    requiresHumanConfirmation?: boolean
   }
 }
 
@@ -8793,6 +15825,48 @@ export type EventMcpBrowserOpenFailed = {
   properties: {
     mcpName: string
     url: string
+  }
+}
+
+export type EventMcpSupervisorChanged = {
+  id: string
+  type: "mcp.supervisor.changed"
+  properties: {
+    server: string
+    desiredGeneration: number
+    observedGeneration: number
+    phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+    health: "unknown" | "healthy" | "unhealthy"
+    failureCount: number
+    nextRetryAt: number
+    safeMessage: string
+  }
+}
+
+export type EventMcpSupervisorCheckpointed = {
+  id: string
+  type: "mcp.supervisor.checkpointed"
+  properties: {
+    aggregateID: string
+    server: string
+    desiredGeneration: number
+    observedGeneration: number
+    phase: "idle" | "connecting" | "ready" | "backoff" | "circuit_open" | "draining" | "closed"
+    health: "unknown" | "healthy" | "unhealthy"
+    failureCount: number
+    nextRetryAt: number
+    circuitOpenedAt: number
+    drainDeadline: number
+    lastFailure:
+      | "connection_failed"
+      | "connection_closed"
+      | "health_check_failed"
+      | "authentication_required"
+      | "approval_required"
+      | "protocol_failed"
+      | "unknown"
+    safeMessage: string
+    savedAt: number
   }
 }
 
@@ -9575,7 +16649,7 @@ export type ToolIdsResponses = {
 export type ToolIdsResponse = ToolIdsResponses[keyof ToolIdsResponses]
 
 export type WorktreeRemoveData = {
-  body?: WorktreeRemoveInput
+  body?: WorktreeRemoveControlInput
   path?: never
   query?: {
     directory?: string
@@ -9595,9 +16669,9 @@ export type WorktreeRemoveError = WorktreeRemoveErrors[keyof WorktreeRemoveError
 
 export type WorktreeRemoveResponses = {
   /**
-   * Worktree removed
+   * Durable worktree operation accepted
    */
-  200: boolean
+  200: ControlOperationStatus
 }
 
 export type WorktreeRemoveResponse = WorktreeRemoveResponses[keyof WorktreeRemoveResponses]
@@ -9631,7 +16705,7 @@ export type WorktreeListResponses = {
 export type WorktreeListResponse = WorktreeListResponses[keyof WorktreeListResponses]
 
 export type WorktreeCreateData = {
-  body?: WorktreeCreateInput
+  body?: WorktreeCreateControlInput
   path?: never
   query?: {
     directory?: string
@@ -9651,15 +16725,15 @@ export type WorktreeCreateError = WorktreeCreateErrors[keyof WorktreeCreateError
 
 export type WorktreeCreateResponses = {
   /**
-   * Worktree created
+   * Durable worktree operation accepted
    */
-  200: Worktree
+  200: ControlOperationStatus
 }
 
 export type WorktreeCreateResponse = WorktreeCreateResponses[keyof WorktreeCreateResponses]
 
 export type WorktreeResetData = {
-  body?: WorktreeResetInput
+  body?: WorktreeResetControlInput
   path?: never
   query?: {
     directory?: string
@@ -9679,12 +16753,246 @@ export type WorktreeResetError = WorktreeResetErrors[keyof WorktreeResetErrors]
 
 export type WorktreeResetResponses = {
   /**
-   * Worktree reset
+   * Durable worktree operation accepted
+   */
+  200: ControlOperationStatus
+}
+
+export type WorktreeResetResponse = WorktreeResetResponses[keyof WorktreeResetResponses]
+
+export type SessionRevertControlData = {
+  body?: SessionRevertControlInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/revert"
+}
+
+export type SessionRevertControlErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type SessionRevertControlError = SessionRevertControlErrors[keyof SessionRevertControlErrors]
+
+export type SessionRevertControlResponses = {
+  /**
+   * Durable session revert operation accepted
+   */
+  200: ControlOperationStatus
+}
+
+export type SessionRevertControlResponse = SessionRevertControlResponses[keyof SessionRevertControlResponses]
+
+export type SessionUnrevertControlData = {
+  body?: SessionUnrevertControlInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/unrevert"
+}
+
+export type SessionUnrevertControlErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+}
+
+export type SessionUnrevertControlError = SessionUnrevertControlErrors[keyof SessionUnrevertControlErrors]
+
+export type SessionUnrevertControlResponses = {
+  /**
+   * Durable session unrevert operation accepted
+   */
+  200: ControlOperationStatus
+}
+
+export type SessionUnrevertControlResponse = SessionUnrevertControlResponses[keyof SessionUnrevertControlResponses]
+
+export type SessionShareControlData = {
+  body?: SessionShareControlInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/share"
+}
+
+export type SessionShareControlErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionShareControlError = SessionShareControlErrors[keyof SessionShareControlErrors]
+
+export type SessionShareControlResponses = {
+  /**
+   * Durable session share operation accepted
+   */
+  200: ControlOperationStatus
+}
+
+export type SessionShareControlResponse = SessionShareControlResponses[keyof SessionShareControlResponses]
+
+export type SessionUnshareControlData = {
+  body?: SessionShareControlInput
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/session/{sessionID}/unshare"
+}
+
+export type SessionUnshareControlErrors = {
+  /**
+   * WorktreeError | InvalidRequestError
+   */
+  400: WorktreeError | InvalidRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionUnshareControlError = SessionUnshareControlErrors[keyof SessionUnshareControlErrors]
+
+export type SessionUnshareControlResponses = {
+  /**
+   * Durable session unshare operation accepted
+   */
+  200: ControlOperationStatus
+}
+
+export type SessionUnshareControlResponse = SessionUnshareControlResponses[keyof SessionUnshareControlResponses]
+
+export type ExperimentalControlApprovalListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    requestID?: string
+  }
+  url: "/experimental/control-approval"
+}
+
+export type ExperimentalControlApprovalListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalControlApprovalListError =
+  ExperimentalControlApprovalListErrors[keyof ExperimentalControlApprovalListErrors]
+
+export type ExperimentalControlApprovalListResponses = {
+  /**
+   * Pending control-plane approvals
+   */
+  200: Array<AgentRuntimeControlRequest>
+}
+
+export type ExperimentalControlApprovalListResponse =
+  ExperimentalControlApprovalListResponses[keyof ExperimentalControlApprovalListResponses]
+
+export type ExperimentalControlApprovalReplyData = {
+  body?: {
+    reply: PermissionV2Reply
+    message?: string
+  }
+  path: {
+    requestID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/control-approval/{requestID}/reply"
+}
+
+export type ExperimentalControlApprovalReplyErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalControlApprovalReplyError =
+  ExperimentalControlApprovalReplyErrors[keyof ExperimentalControlApprovalReplyErrors]
+
+export type ExperimentalControlApprovalReplyResponses = {
+  /**
+   * Control-plane approval processed
    */
   200: boolean
 }
 
-export type WorktreeResetResponse = WorktreeResetResponses[keyof WorktreeResetResponses]
+export type ExperimentalControlApprovalReplyResponse =
+  ExperimentalControlApprovalReplyResponses[keyof ExperimentalControlApprovalReplyResponses]
+
+export type ExperimentalControlOperationStatusData = {
+  body?: never
+  path: {
+    requestID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    operation:
+      | "worktree.create"
+      | "worktree.remove"
+      | "worktree.reset"
+      | "session.revert"
+      | "session.unrevert"
+      | "session.share"
+      | "session.unshare"
+  }
+  url: "/experimental/control-operation/{requestID}"
+}
+
+export type ExperimentalControlOperationStatusErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalControlOperationStatusError =
+  ExperimentalControlOperationStatusErrors[keyof ExperimentalControlOperationStatusErrors]
+
+export type ExperimentalControlOperationStatusResponses = {
+  /**
+   * Control operation status
+   */
+  200: ControlOperationStatus
+}
+
+export type ExperimentalControlOperationStatusResponse =
+  ExperimentalControlOperationStatusResponses[keyof ExperimentalControlOperationStatusResponses]
 
 export type ExperimentalSessionListData = {
   body?: never
@@ -10385,6 +17693,36 @@ export type McpAddResponses = {
 
 export type McpAddResponse = McpAddResponses[keyof McpAddResponses]
 
+export type McpHealthData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/mcp/health"
+}
+
+export type McpHealthErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type McpHealthError = McpHealthErrors[keyof McpHealthErrors]
+
+export type McpHealthResponses = {
+  /**
+   * MCP supervisor health
+   */
+  200: {
+    [key: string]: McpSupervisorSnapshot
+  }
+}
+
+export type McpHealthResponse = McpHealthResponses[keyof McpHealthResponses]
+
 export type McpAuthRemoveData = {
   body?: never
   path: {
@@ -10461,6 +17799,7 @@ export type McpAuthStartResponse = McpAuthStartResponses[keyof McpAuthStartRespo
 export type McpAuthCallbackData = {
   body?: {
     code: string
+    oauthState: string
   }
   path: {
     name: string
@@ -11510,9 +18849,10 @@ export type SessionUpdateData = {
     metadata?: {
       [key: string]: unknown
     }
+    sandboxProfile?: "read-only" | "workspace-write" | "unrestricted"
     permission?: PermissionRuleset
     time?: {
-      archived?: number | null
+      archived?: number
     }
   }
   path: {
@@ -11630,9 +18970,13 @@ export type SessionDiffData = {
 
 export type SessionDiffErrors = {
   /**
-   * Bad request
+   * BadRequest | InvalidRequestError
    */
-  400: BadRequestError
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
 }
 
 export type SessionDiffError = SessionDiffErrors[keyof SessionDiffErrors]
@@ -11940,9 +19284,9 @@ export type SessionUnshareErrors = {
    */
   404: NotFoundError
   /**
-   * InternalServerError
+   * ServiceUnavailableError
    */
-  500: EffectHttpApiErrorInternalServerError
+  503: ServiceUnavailableError
 }
 
 export type SessionUnshareError = SessionUnshareErrors[keyof SessionUnshareErrors]
@@ -11978,9 +19322,9 @@ export type SessionShareErrors = {
    */
   404: NotFoundError
   /**
-   * InternalServerError
+   * ServiceUnavailableError
    */
-  500: EffectHttpApiErrorInternalServerError
+  503: ServiceUnavailableError
 }
 
 export type SessionShareError = SessionShareErrors[keyof SessionShareErrors]
@@ -12199,17 +19543,17 @@ export type SessionRevertData = {
 
 export type SessionRevertErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * Bad request
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: BadRequestError
   /**
    * NotFoundError
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * ServiceUnavailableError
    */
-  409: SessionBusyError
+  503: ServiceUnavailableError
 }
 
 export type SessionRevertError = SessionRevertErrors[keyof SessionRevertErrors]
@@ -12237,17 +19581,17 @@ export type SessionUnrevertData = {
 
 export type SessionUnrevertErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * Bad request
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: BadRequestError
   /**
    * NotFoundError
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * ServiceUnavailableError
    */
-  409: SessionBusyError
+  503: ServiceUnavailableError
 }
 
 export type SessionUnrevertError = SessionUnrevertErrors[keyof SessionUnrevertErrors]
@@ -12369,6 +19713,251 @@ export type PartUpdateResponses = {
 }
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
+
+export type SelfHostedSharePublishData = {
+  body: {
+    operationID: string
+    frozenExport: {
+      format: "share-next-static-v1"
+      items: Array<{
+        key: string
+        type: "session" | "message" | "part" | "session_diff" | "model"
+        data: unknown
+      }>
+      contentDigest: string
+      canonicalBytes: number
+    }
+    exportDigest: string
+    target: {
+      baseURL: string
+      organizationID: string
+      visibility: "private" | "organization" | "public"
+      publication: {
+        id: string
+        url: string
+        exportDigest: string
+      }
+      transportPolicy: "https-only"
+    }
+  }
+  path?: never
+  query?: never
+  url: "/api/self-hosted-share/publish"
+}
+
+export type SelfHostedSharePublishErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type SelfHostedSharePublishError = SelfHostedSharePublishErrors[keyof SelfHostedSharePublishErrors]
+
+export type SelfHostedSharePublishResponses = {
+  /**
+   * Self-hosted publication receipt
+   */
+  200: {
+    operationID: string
+    status: "settled"
+    publication: {
+      providerReceiptID: string
+      publicationID: string
+      publicationURL: string
+      storedDigest: string
+      visibility: "private" | "organization" | "public"
+      organizationID: string
+    }
+  }
+}
+
+export type SelfHostedSharePublishResponse = SelfHostedSharePublishResponses[keyof SelfHostedSharePublishResponses]
+
+export type SelfHostedShareLookupData = {
+  body?: never
+  path: {
+    operationID: string
+  }
+  query?: never
+  url: "/api/self-hosted-share/lookup/{operationID}"
+}
+
+export type SelfHostedShareLookupErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type SelfHostedShareLookupError = SelfHostedShareLookupErrors[keyof SelfHostedShareLookupErrors]
+
+export type SelfHostedShareLookupResponses = {
+  /**
+   * Self-hosted publication lookup
+   */
+  200: {
+    operationID: string
+    status: "missing" | "pending" | "settled" | "conflict"
+    publication?: {
+      providerReceiptID: string
+      publicationID: string
+      publicationURL: string
+      storedDigest: string
+      visibility: "private" | "organization" | "public"
+      organizationID: string
+    }
+    conflictingDigest?: string
+  }
+}
+
+export type SelfHostedShareLookupResponse = SelfHostedShareLookupResponses[keyof SelfHostedShareLookupResponses]
+
+export type SelfHostedShareRevokeData = {
+  body: {
+    operationID: string
+    publicationID: string
+    originalDigest: string
+    target: {
+      baseURL: string
+      organizationID: string
+      visibility: "private" | "organization" | "public"
+      publication: {
+        id: string
+        url: string
+        exportDigest: string
+      }
+      transportPolicy: "https-only"
+    }
+  }
+  path?: never
+  query?: never
+  url: "/api/self-hosted-share/revoke"
+}
+
+export type SelfHostedShareRevokeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type SelfHostedShareRevokeError = SelfHostedShareRevokeErrors[keyof SelfHostedShareRevokeErrors]
+
+export type SelfHostedShareRevokeResponses = {
+  /**
+   * Self-hosted revocation receipt
+   */
+  200: {
+    operationID: string
+    status: "settled"
+    publicationID: string
+    removedDigest: string
+    visibility: "private" | "organization" | "public"
+    organizationID: string
+  }
+}
+
+export type SelfHostedShareRevokeResponse = SelfHostedShareRevokeResponses[keyof SelfHostedShareRevokeResponses]
+
+export type SelfHostedShareLookupRevokeData = {
+  body?: never
+  path: {
+    operationID: string
+  }
+  query?: never
+  url: "/api/self-hosted-share/revoke/{operationID}"
+}
+
+export type SelfHostedShareLookupRevokeErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Unauthorized
+   */
+  401: unknown
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * ServiceUnavailable
+   */
+  503: EffectHttpApiErrorServiceUnavailable
+}
+
+export type SelfHostedShareLookupRevokeError =
+  SelfHostedShareLookupRevokeErrors[keyof SelfHostedShareLookupRevokeErrors]
+
+export type SelfHostedShareLookupRevokeResponses = {
+  /**
+   * Self-hosted revocation lookup
+   */
+  200: {
+    operationID: string
+    status: "missing" | "pending" | "settled" | "conflict"
+    publicationID?: string
+    removedDigest?: string
+    conflictingDigest?: string
+  }
+}
+
+export type SelfHostedShareLookupRevokeResponse =
+  SelfHostedShareLookupRevokeResponses[keyof SelfHostedShareLookupRevokeResponses]
 
 export type SyncStartData = {
   body?: never
@@ -13969,6 +21558,10 @@ export type V2SessionRevertStageErrors = {
    * UnknownError
    */
   500: UnknownError1
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionRevertStageError = V2SessionRevertStageErrors[keyof V2SessionRevertStageErrors]
@@ -14010,6 +21603,10 @@ export type V2SessionRevertClearErrors = {
    * UnknownError
    */
   500: UnknownError1
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionRevertClearError = V2SessionRevertClearErrors[keyof V2SessionRevertClearErrors]
@@ -14045,6 +21642,10 @@ export type V2SessionRevertCommitErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionRevertCommitError = V2SessionRevertCommitErrors[keyof V2SessionRevertCommitErrors]
@@ -14250,6 +21851,718 @@ export type V2SessionMessageResponses = {
 }
 
 export type V2SessionMessageResponse = V2SessionMessageResponses[keyof V2SessionMessageResponses]
+
+export type V2ArtifactReadData = {
+  body: ArtifactReadRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/artifacts/read"
+}
+
+export type V2ArtifactReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * RateLimitedError
+   */
+  429: RateLimitedError
+}
+
+export type V2ArtifactReadError = V2ArtifactReadErrors[keyof V2ArtifactReadErrors]
+
+export type V2ArtifactReadResponses = {
+  /**
+   * Success
+   */
+  200: Blob | File
+}
+
+export type V2ArtifactReadResponse = V2ArtifactReadResponses[keyof V2ArtifactReadResponses]
+
+export type V2ArtifactReadRangeData = {
+  body: ArtifactReadRangeRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/artifacts/read-range"
+}
+
+export type V2ArtifactReadRangeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * RateLimitedError
+   */
+  429: RateLimitedError
+}
+
+export type V2ArtifactReadRangeError = V2ArtifactReadRangeErrors[keyof V2ArtifactReadRangeErrors]
+
+export type V2ArtifactReadRangeResponses = {
+  /**
+   * Success
+   */
+  206: Blob | File
+}
+
+export type V2ArtifactReadRangeResponse = V2ArtifactReadRangeResponses[keyof V2ArtifactReadRangeResponses]
+
+export type V2ArtifactReadScopedData = {
+  body: ArtifactReadRequest
+  path?: never
+  query?: never
+  url: "/api/artifacts/read"
+}
+
+export type V2ArtifactReadScopedErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * RateLimitedError
+   */
+  429: RateLimitedError
+}
+
+export type V2ArtifactReadScopedError = V2ArtifactReadScopedErrors[keyof V2ArtifactReadScopedErrors]
+
+export type V2ArtifactReadScopedResponses = {
+  /**
+   * Success
+   */
+  200: Blob | File
+}
+
+export type V2ArtifactReadScopedResponse = V2ArtifactReadScopedResponses[keyof V2ArtifactReadScopedResponses]
+
+export type V2ArtifactReadScopedRangeData = {
+  body: ArtifactReadRangeRequest
+  path?: never
+  query?: never
+  url: "/api/artifacts/read-range"
+}
+
+export type V2ArtifactReadScopedRangeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * RateLimitedError
+   */
+  429: RateLimitedError
+}
+
+export type V2ArtifactReadScopedRangeError = V2ArtifactReadScopedRangeErrors[keyof V2ArtifactReadScopedRangeErrors]
+
+export type V2ArtifactReadScopedRangeResponses = {
+  /**
+   * Success
+   */
+  206: Blob | File
+}
+
+export type V2ArtifactReadScopedRangeResponse =
+  V2ArtifactReadScopedRangeResponses[keyof V2ArtifactReadScopedRangeResponses]
+
+export type V2ArtifactOwnerContextData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/artifacts/owner-context"
+}
+
+export type V2ArtifactOwnerContextErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2ArtifactOwnerContextError = V2ArtifactOwnerContextErrors[keyof V2ArtifactOwnerContextErrors]
+
+export type V2ArtifactOwnerContextResponses = {
+  /**
+   * Artifact.OwnerContext
+   */
+  200: ArtifactOwnerContext
+}
+
+export type V2ArtifactOwnerContextResponse = V2ArtifactOwnerContextResponses[keyof V2ArtifactOwnerContextResponses]
+
+export type V2ArtifactMaintenanceContextData = {
+  body?: never
+  path?: never
+  query?: {
+    scope?: "profile" | "tenant"
+  }
+  url: "/api/artifacts/maintenance-context"
+}
+
+export type V2ArtifactMaintenanceContextErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2ArtifactMaintenanceContextError =
+  V2ArtifactMaintenanceContextErrors[keyof V2ArtifactMaintenanceContextErrors]
+
+export type V2ArtifactMaintenanceContextResponses = {
+  /**
+   * Artifact.MaintenanceContext
+   */
+  200: ArtifactMaintenanceContext
+}
+
+export type V2ArtifactMaintenanceContextResponse =
+  V2ArtifactMaintenanceContextResponses[keyof V2ArtifactMaintenanceContextResponses]
+
+export type V2ArtifactCatalogData = {
+  body: ArtifactCatalogRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/artifacts/catalog"
+}
+
+export type V2ArtifactCatalogErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2ArtifactCatalogError = V2ArtifactCatalogErrors[keyof V2ArtifactCatalogErrors]
+
+export type V2ArtifactCatalogResponses = {
+  /**
+   * Artifact.CatalogPage
+   */
+  200: ArtifactCatalogPage
+}
+
+export type V2ArtifactCatalogResponse = V2ArtifactCatalogResponses[keyof V2ArtifactCatalogResponses]
+
+export type V2ArtifactCatalogScopedData = {
+  body: {
+    owner: AgentRuntimeArtifactOwner
+    limit?: number
+    beforeSequence?: number
+  }
+  path?: never
+  query?: never
+  url: "/api/artifacts/catalog"
+}
+
+export type V2ArtifactCatalogScopedErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2ArtifactCatalogScopedError = V2ArtifactCatalogScopedErrors[keyof V2ArtifactCatalogScopedErrors]
+
+export type V2ArtifactCatalogScopedResponses = {
+  /**
+   * Artifact.CatalogPage
+   */
+  200: ArtifactCatalogPage
+}
+
+export type V2ArtifactCatalogScopedResponse = V2ArtifactCatalogScopedResponses[keyof V2ArtifactCatalogScopedResponses]
+
+export type V2ArtifactAuditData = {
+  body: ArtifactAuditRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/artifacts/audit"
+}
+
+export type V2ArtifactAuditErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2ArtifactAuditError = V2ArtifactAuditErrors[keyof V2ArtifactAuditErrors]
+
+export type V2ArtifactAuditResponses = {
+  /**
+   * Success
+   */
+  200: Array<ArtifactAuditRecord>
+}
+
+export type V2ArtifactAuditResponse = V2ArtifactAuditResponses[keyof V2ArtifactAuditResponses]
+
+export type V2ArtifactAuditScopedData = {
+  body: {
+    owner: AgentRuntimeArtifactOwner
+    limit?: number
+    beforeSequence?: number
+  }
+  path?: never
+  query?: never
+  url: "/api/artifacts/audit"
+}
+
+export type V2ArtifactAuditScopedErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2ArtifactAuditScopedError = V2ArtifactAuditScopedErrors[keyof V2ArtifactAuditScopedErrors]
+
+export type V2ArtifactAuditScopedResponses = {
+  /**
+   * Success
+   */
+  200: Array<ArtifactAuditRecord>
+}
+
+export type V2ArtifactAuditScopedResponse = V2ArtifactAuditScopedResponses[keyof V2ArtifactAuditScopedResponses]
+
+export type V2SubagentControlChildrenData = {
+  body?: never
+  path: {
+    parentRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/children"
+}
+
+export type V2SubagentControlChildrenErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlChildrenError = V2SubagentControlChildrenErrors[keyof V2SubagentControlChildrenErrors]
+
+export type V2SubagentControlChildrenResponses = {
+  /**
+   * SubagentControl.ChildrenResponse
+   */
+  200: SubagentControlChildrenResponse
+}
+
+export type V2SubagentControlChildrenResponse =
+  V2SubagentControlChildrenResponses[keyof V2SubagentControlChildrenResponses]
+
+export type V2SubagentControlSteerData = {
+  body: SubagentControlSteerPayload
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/{childRunID}/steer"
+}
+
+export type V2SubagentControlSteerErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlSteerError = V2SubagentControlSteerErrors[keyof V2SubagentControlSteerErrors]
+
+export type V2SubagentControlSteerResponses = {
+  /**
+   * SubagentControl.Response
+   */
+  200: SubagentControlResponse
+}
+
+export type V2SubagentControlSteerResponse = V2SubagentControlSteerResponses[keyof V2SubagentControlSteerResponses]
+
+export type V2SubagentControlFollowupData = {
+  body: SubagentControlFollowupPayload
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/{childRunID}/followup"
+}
+
+export type V2SubagentControlFollowupErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlFollowupError = V2SubagentControlFollowupErrors[keyof V2SubagentControlFollowupErrors]
+
+export type V2SubagentControlFollowupResponses = {
+  /**
+   * SubagentControl.Response
+   */
+  200: SubagentControlResponse
+}
+
+export type V2SubagentControlFollowupResponse =
+  V2SubagentControlFollowupResponses[keyof V2SubagentControlFollowupResponses]
+
+export type V2SubagentControlWaitData = {
+  body: SubagentControlWaitPayload
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/{childRunID}/wait"
+}
+
+export type V2SubagentControlWaitErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlWaitError = V2SubagentControlWaitErrors[keyof V2SubagentControlWaitErrors]
+
+export type V2SubagentControlWaitResponses = {
+  /**
+   * SubagentControl.Response
+   */
+  200: SubagentControlResponse
+}
+
+export type V2SubagentControlWaitResponse = V2SubagentControlWaitResponses[keyof V2SubagentControlWaitResponses]
+
+export type V2SubagentControlCancelData = {
+  body: SubagentControlCancelPayload
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/{childRunID}/cancel"
+}
+
+export type V2SubagentControlCancelErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlCancelError = V2SubagentControlCancelErrors[keyof V2SubagentControlCancelErrors]
+
+export type V2SubagentControlCancelResponses = {
+  /**
+   * SubagentControl.Response
+   */
+  200: SubagentControlResponse
+}
+
+export type V2SubagentControlCancelResponse = V2SubagentControlCancelResponses[keyof V2SubagentControlCancelResponses]
+
+export type V2SubagentControlStatusData = {
+  body?: never
+  path: {
+    parentRunID: string
+    childRunID: string
+    operation: SubagentControlOperation
+    requestID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/subagent-control/{parentRunID}/{childRunID}/{operation}/{requestID}"
+}
+
+export type V2SubagentControlStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
+   * SubagentControlNotFoundError
+   */
+  404: SubagentControlNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SubagentControlStatusError = V2SubagentControlStatusErrors[keyof V2SubagentControlStatusErrors]
+
+export type V2SubagentControlStatusResponses = {
+  /**
+   * SubagentControl.Response
+   */
+  200: SubagentControlResponse
+}
+
+export type V2SubagentControlStatusResponse = V2SubagentControlStatusResponses[keyof V2SubagentControlStatusResponses]
 
 export type V2GoalListData = {
   body?: never
@@ -16250,43 +24563,6 @@ export type ServerMemoryMemoryCreateResponses = {
 export type ServerMemoryMemoryCreateResponse =
   ServerMemoryMemoryCreateResponses[keyof ServerMemoryMemoryCreateResponses]
 
-export type ServerMemoryMemoryDeleteData = {
-  body?: never
-  path: {
-    memoryID: string
-  }
-  query?: {
-    location?: {
-      directory?: string
-      workspace?: string
-    }
-  }
-  url: "/api/memory/{memoryID}"
-}
-
-export type ServerMemoryMemoryDeleteErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-}
-
-export type ServerMemoryMemoryDeleteError = ServerMemoryMemoryDeleteErrors[keyof ServerMemoryMemoryDeleteErrors]
-
-export type ServerMemoryMemoryDeleteResponses = {
-  /**
-   * <No Content>
-   */
-  204: void
-}
-
-export type ServerMemoryMemoryDeleteResponse =
-  ServerMemoryMemoryDeleteResponses[keyof ServerMemoryMemoryDeleteResponses]
-
 export type ServerMemoryMemoryGetData = {
   body?: never
   path: {
@@ -16384,21 +24660,162 @@ export type ServerMemoryMemoryUpdateResponses = {
 export type ServerMemoryMemoryUpdateResponse =
   ServerMemoryMemoryUpdateResponses[keyof ServerMemoryMemoryUpdateResponses]
 
-export type ServerMemoryMemoryDeleteManyData = {
+export type ServerMemoryMemoryCorrectData = {
   body: {
-    ids: Array<string>
+    content: MemoryContent
+    reason: MemoryCorrectionReason
+    expectedUpdatedAt: number
   }
-  path?: never
+  path: {
+    memoryID: string
+  }
   query?: {
     location?: {
       directory?: string
       workspace?: string
     }
   }
-  url: "/api/memory/delete"
+  url: "/api/memory/{memoryID}/correct"
 }
 
-export type ServerMemoryMemoryDeleteManyErrors = {
+export type ServerMemoryMemoryCorrectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MemoryNotFoundError
+   */
+  404: MemoryNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryCorrectError = ServerMemoryMemoryCorrectErrors[keyof ServerMemoryMemoryCorrectErrors]
+
+export type ServerMemoryMemoryCorrectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCorrectionResult
+  }
+}
+
+export type ServerMemoryMemoryCorrectResponse =
+  ServerMemoryMemoryCorrectResponses[keyof ServerMemoryMemoryCorrectResponses]
+
+export type ServerMemoryMemoryCorrectionHistoryData = {
+  body?: never
+  path: {
+    memoryID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/{memoryID}/corrections"
+}
+
+export type ServerMemoryMemoryCorrectionHistoryErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MemoryNotFoundError
+   */
+  404: MemoryNotFoundError
+}
+
+export type ServerMemoryMemoryCorrectionHistoryError =
+  ServerMemoryMemoryCorrectionHistoryErrors[keyof ServerMemoryMemoryCorrectionHistoryErrors]
+
+export type ServerMemoryMemoryCorrectionHistoryResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCorrectionHistory
+  }
+}
+
+export type ServerMemoryMemoryCorrectionHistoryResponse =
+  ServerMemoryMemoryCorrectionHistoryResponses[keyof ServerMemoryMemoryCorrectionHistoryResponses]
+
+export type ServerMemoryMemoryUndoCorrectionData = {
+  body: {
+    expectedSuccessorUpdatedAt: number
+  }
+  path: {
+    correctionID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/corrections/{correctionID}/undo"
+}
+
+export type ServerMemoryMemoryUndoCorrectionErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryUndoCorrectionError =
+  ServerMemoryMemoryUndoCorrectionErrors[keyof ServerMemoryMemoryUndoCorrectionErrors]
+
+export type ServerMemoryMemoryUndoCorrectionResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCorrectionResult
+  }
+}
+
+export type ServerMemoryMemoryUndoCorrectionResponse =
+  ServerMemoryMemoryUndoCorrectionResponses[keyof ServerMemoryMemoryUndoCorrectionResponses]
+
+export type ServerMemoryMemoryConflictListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    includeClosed?: "true" | "false"
+    limit?: MemoryImportance
+  }
+  url: "/api/memory/conflicts"
+}
+
+export type ServerMemoryMemoryConflictListErrors = {
   /**
    * InvalidRequestError
    */
@@ -16409,10 +24826,465 @@ export type ServerMemoryMemoryDeleteManyErrors = {
   401: UnauthorizedError
 }
 
-export type ServerMemoryMemoryDeleteManyError =
-  ServerMemoryMemoryDeleteManyErrors[keyof ServerMemoryMemoryDeleteManyErrors]
+export type ServerMemoryMemoryConflictListError =
+  ServerMemoryMemoryConflictListErrors[keyof ServerMemoryMemoryConflictListErrors]
 
-export type ServerMemoryMemoryDeleteManyResponses = {
+export type ServerMemoryMemoryConflictListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryConflictPage
+  }
+}
+
+export type ServerMemoryMemoryConflictListResponse =
+  ServerMemoryMemoryConflictListResponses[keyof ServerMemoryMemoryConflictListResponses]
+
+export type ServerMemoryMemoryConflictScanData = {
+  body: {
+    scanLimit?: number
+    resultLimit?: number
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/conflicts/scan"
+}
+
+export type ServerMemoryMemoryConflictScanErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerMemoryMemoryConflictScanError =
+  ServerMemoryMemoryConflictScanErrors[keyof ServerMemoryMemoryConflictScanErrors]
+
+export type ServerMemoryMemoryConflictScanResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryConflictPage
+  }
+}
+
+export type ServerMemoryMemoryConflictScanResponse =
+  ServerMemoryMemoryConflictScanResponses[keyof ServerMemoryMemoryConflictScanResponses]
+
+export type ServerMemoryMemoryResolveConflictData = {
+  body: {
+    chosenMemoryID: string
+    reason: MemoryConflictReason
+    expectedLeftUpdatedAt: number
+    expectedRightUpdatedAt: number
+  }
+  path: {
+    conflictID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/conflicts/{conflictID}/resolve"
+}
+
+export type ServerMemoryMemoryResolveConflictErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryResolveConflictError =
+  ServerMemoryMemoryResolveConflictErrors[keyof ServerMemoryMemoryResolveConflictErrors]
+
+export type ServerMemoryMemoryResolveConflictResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryConflictDecisionResult
+  }
+}
+
+export type ServerMemoryMemoryResolveConflictResponse =
+  ServerMemoryMemoryResolveConflictResponses[keyof ServerMemoryMemoryResolveConflictResponses]
+
+export type ServerMemoryMemoryDismissConflictData = {
+  body: {
+    reason: MemoryConflictReason
+    expectedLeftUpdatedAt: number
+    expectedRightUpdatedAt: number
+  }
+  path: {
+    conflictID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/conflicts/{conflictID}/dismiss"
+}
+
+export type ServerMemoryMemoryDismissConflictErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryDismissConflictError =
+  ServerMemoryMemoryDismissConflictErrors[keyof ServerMemoryMemoryDismissConflictErrors]
+
+export type ServerMemoryMemoryDismissConflictResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryConflictDecisionResult
+  }
+}
+
+export type ServerMemoryMemoryDismissConflictResponse =
+  ServerMemoryMemoryDismissConflictResponses[keyof ServerMemoryMemoryDismissConflictResponses]
+
+export type ServerMemoryMemoryUndoConflictData = {
+  body: {
+    expectedLeftUpdatedAt: number
+    expectedRightUpdatedAt: number
+  }
+  path: {
+    conflictID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/conflicts/{conflictID}/undo"
+}
+
+export type ServerMemoryMemoryUndoConflictErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryUndoConflictError =
+  ServerMemoryMemoryUndoConflictErrors[keyof ServerMemoryMemoryUndoConflictErrors]
+
+export type ServerMemoryMemoryUndoConflictResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryConflictDecisionResult
+  }
+}
+
+export type ServerMemoryMemoryUndoConflictResponse =
+  ServerMemoryMemoryUndoConflictResponses[keyof ServerMemoryMemoryUndoConflictResponses]
+
+export type ServerMemoryMemoryCandidateReviewData = {
+  body?: never
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/candidates/{candidateID}"
+}
+
+export type ServerMemoryMemoryCandidateReviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerMemoryMemoryCandidateReviewError =
+  ServerMemoryMemoryCandidateReviewErrors[keyof ServerMemoryMemoryCandidateReviewErrors]
+
+export type ServerMemoryMemoryCandidateReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCandidateReview
+  }
+}
+
+export type ServerMemoryMemoryCandidateReviewResponse =
+  ServerMemoryMemoryCandidateReviewResponses[keyof ServerMemoryMemoryCandidateReviewResponses]
+
+export type ServerMemoryMemoryCandidateApproveData = {
+  body: {
+    expectedUpdatedAt: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/candidates/{candidateID}/approve"
+}
+
+export type ServerMemoryMemoryCandidateApproveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryCandidateApproveError =
+  ServerMemoryMemoryCandidateApproveErrors[keyof ServerMemoryMemoryCandidateApproveErrors]
+
+export type ServerMemoryMemoryCandidateApproveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCandidateReview
+  }
+}
+
+export type ServerMemoryMemoryCandidateApproveResponse =
+  ServerMemoryMemoryCandidateApproveResponses[keyof ServerMemoryMemoryCandidateApproveResponses]
+
+export type ServerMemoryMemoryCandidateRejectData = {
+  body: {
+    expectedUpdatedAt: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/candidates/{candidateID}/reject"
+}
+
+export type ServerMemoryMemoryCandidateRejectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryCandidateRejectError =
+  ServerMemoryMemoryCandidateRejectErrors[keyof ServerMemoryMemoryCandidateRejectErrors]
+
+export type ServerMemoryMemoryCandidateRejectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCandidateReview
+  }
+}
+
+export type ServerMemoryMemoryCandidateRejectResponse =
+  ServerMemoryMemoryCandidateRejectResponses[keyof ServerMemoryMemoryCandidateRejectResponses]
+
+export type ServerMemoryMemoryCandidateActivateData = {
+  body: {
+    expectedUpdatedAt: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/candidates/{candidateID}/activate"
+}
+
+export type ServerMemoryMemoryCandidateActivateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type ServerMemoryMemoryCandidateActivateError =
+  ServerMemoryMemoryCandidateActivateErrors[keyof ServerMemoryMemoryCandidateActivateErrors]
+
+export type ServerMemoryMemoryCandidateActivateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: MemoryCandidateReview
+  }
+}
+
+export type ServerMemoryMemoryCandidateActivateResponse =
+  ServerMemoryMemoryCandidateActivateResponses[keyof ServerMemoryMemoryCandidateActivateResponses]
+
+export type ServerMemoryMemoryMaintenanceDeleteData = {
+  body: {
+    expectedVersion: number
+    actionID: string
+    redactionEvidenceID: string
+    reason: string
+  }
+  path: {
+    memoryID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/maintenance/{memoryID}"
+}
+
+export type ServerMemoryMemoryMaintenanceDeleteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerMemoryMemoryMaintenanceDeleteError =
+  ServerMemoryMemoryMaintenanceDeleteErrors[keyof ServerMemoryMemoryMaintenanceDeleteErrors]
+
+export type ServerMemoryMemoryMaintenanceDeleteResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type ServerMemoryMemoryMaintenanceDeleteResponse =
+  ServerMemoryMemoryMaintenanceDeleteResponses[keyof ServerMemoryMemoryMaintenanceDeleteResponses]
+
+export type ServerMemoryMemoryMaintenanceDeleteManyData = {
+  body: {
+    items: Array<{
+      memoryID: string
+      expectedVersion: number
+      actionID: string
+      redactionEvidenceID: string
+      reason: string
+    }>
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/memory/maintenance/delete"
+}
+
+export type ServerMemoryMemoryMaintenanceDeleteManyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerMemoryMemoryMaintenanceDeleteManyError =
+  ServerMemoryMemoryMaintenanceDeleteManyErrors[keyof ServerMemoryMemoryMaintenanceDeleteManyErrors]
+
+export type ServerMemoryMemoryMaintenanceDeleteManyResponses = {
   /**
    * Success
    */
@@ -16421,8 +25293,8 @@ export type ServerMemoryMemoryDeleteManyResponses = {
   }
 }
 
-export type ServerMemoryMemoryDeleteManyResponse =
-  ServerMemoryMemoryDeleteManyResponses[keyof ServerMemoryMemoryDeleteManyResponses]
+export type ServerMemoryMemoryMaintenanceDeleteManyResponse =
+  ServerMemoryMemoryMaintenanceDeleteManyResponses[keyof ServerMemoryMemoryMaintenanceDeleteManyResponses]
 
 export type ServerMemoryMemorySemanticData = {
   body?: never
@@ -16657,6 +25529,44 @@ export type ServerMemoryMemoryGovernanceApplyResponses = {
 
 export type ServerMemoryMemoryGovernanceApplyResponse =
   ServerMemoryMemoryGovernanceApplyResponses[keyof ServerMemoryMemoryGovernanceApplyResponses]
+
+export type ServerLearningLearningDreamData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/learning/dream"
+}
+
+export type ServerLearningLearningDreamErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerLearningLearningDreamError =
+  ServerLearningLearningDreamErrors[keyof ServerLearningLearningDreamErrors]
+
+export type ServerLearningLearningDreamResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: LearningDream
+  }
+}
+
+export type ServerLearningLearningDreamResponse =
+  ServerLearningLearningDreamResponses[keyof ServerLearningLearningDreamResponses]
 
 export type ServerLearningLearningStatusData = {
   body?: never
@@ -17001,6 +25911,7 @@ export type ServerMultimodalDiagnosisMultimodalDiagnosisDiagnoseData = {
     filename: string
     extractedText?: string
     limit?: number
+    mode?: "error" | "frontend" | "javascript"
   }
   path?: never
   query?: {
@@ -17123,6 +26034,92 @@ export type ServerAgentCapabilityAgentCapabilityListResponses = {
 
 export type ServerAgentCapabilityAgentCapabilityListResponse =
   ServerAgentCapabilityAgentCapabilityListResponses[keyof ServerAgentCapabilityAgentCapabilityListResponses]
+
+export type V2AgentCapabilitySystemOverviewData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/system-overview"
+}
+
+export type V2AgentCapabilitySystemOverviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AgentCapabilitySystemOverviewError =
+  V2AgentCapabilitySystemOverviewErrors[keyof V2AgentCapabilitySystemOverviewErrors]
+
+export type V2AgentCapabilitySystemOverviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySystemOverview
+  }
+}
+
+export type V2AgentCapabilitySystemOverviewResponse =
+  V2AgentCapabilitySystemOverviewResponses[keyof V2AgentCapabilitySystemOverviewResponses]
+
+export type V2AgentCapabilityDeepInsightsData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/deep-insights"
+}
+
+export type V2AgentCapabilityDeepInsightsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2AgentCapabilityDeepInsightsError =
+  V2AgentCapabilityDeepInsightsErrors[keyof V2AgentCapabilityDeepInsightsErrors]
+
+export type V2AgentCapabilityDeepInsightsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityDeepInsights
+  }
+}
+
+export type V2AgentCapabilityDeepInsightsResponse =
+  V2AgentCapabilityDeepInsightsResponses[keyof V2AgentCapabilityDeepInsightsResponses]
 
 export type ServerAgentCapabilityAgentCapabilityRepoScaleData = {
   body: {
@@ -17349,9 +26346,101 @@ export type ServerAgentCapabilityAgentCapabilitySkillListResponses = {
 export type ServerAgentCapabilityAgentCapabilitySkillListResponse =
   ServerAgentCapabilityAgentCapabilitySkillListResponses[keyof ServerAgentCapabilityAgentCapabilitySkillListResponses]
 
+export type ServerAgentCapabilityAgentCapabilitySkillReadData = {
+  body?: never
+  path: {
+    skillID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    maxChars?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/skills/{skillID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillReadError =
+  ServerAgentCapabilityAgentCapabilitySkillReadErrors[keyof ServerAgentCapabilityAgentCapabilitySkillReadErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillReadResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillReadResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillReadResponse =
+  ServerAgentCapabilityAgentCapabilitySkillReadResponses[keyof ServerAgentCapabilityAgentCapabilitySkillReadResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillRouteData = {
+  body: {
+    request: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skills/route"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillRouteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillRouteError =
+  ServerAgentCapabilityAgentCapabilitySkillRouteErrors[keyof ServerAgentCapabilityAgentCapabilitySkillRouteErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillRouteResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillRoute
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillRouteResponse =
+  ServerAgentCapabilityAgentCapabilitySkillRouteResponses[keyof ServerAgentCapabilityAgentCapabilitySkillRouteResponses]
+
 export type ServerAgentCapabilityAgentCapabilitySkillSetEnabledData = {
   body: {
     enabled: boolean
+    requestID?: string
   }
   path: {
     skillID: string
@@ -17482,9 +26571,99 @@ export type ServerAgentCapabilityAgentCapabilityPluginListResponses = {
 export type ServerAgentCapabilityAgentCapabilityPluginListResponse =
   ServerAgentCapabilityAgentCapabilityPluginListResponses[keyof ServerAgentCapabilityAgentCapabilityPluginListResponses]
 
+export type ServerAgentCapabilityAgentCapabilityCustomizationListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/customizations"
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationListError =
+  ServerAgentCapabilityAgentCapabilityCustomizationListErrors[keyof ServerAgentCapabilityAgentCapabilityCustomizationListErrors]
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityCustomizationList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationListResponse =
+  ServerAgentCapabilityAgentCapabilityCustomizationListResponses[keyof ServerAgentCapabilityAgentCapabilityCustomizationListResponses]
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationRenderData = {
+  body: {
+    name: string
+    args?: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/customizations/render"
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationRenderErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationRenderError =
+  ServerAgentCapabilityAgentCapabilityCustomizationRenderErrors[keyof ServerAgentCapabilityAgentCapabilityCustomizationRenderErrors]
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationRenderResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityCustomizationRender
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityCustomizationRenderResponse =
+  ServerAgentCapabilityAgentCapabilityCustomizationRenderResponses[keyof ServerAgentCapabilityAgentCapabilityCustomizationRenderResponses]
+
 export type ServerAgentCapabilityAgentCapabilityPluginSetEnabledData = {
   body: {
     enabled: boolean
+    requestID?: string
   }
   path: {
     name: string
@@ -17579,6 +26758,7 @@ export type ServerAgentCapabilityAgentCapabilityPluginApplyData = {
     token: string
     name?: string
     replace?: boolean
+    requestID?: string
   }
   path?: never
   query?: {
@@ -17622,7 +26802,9 @@ export type ServerAgentCapabilityAgentCapabilityPluginApplyResponse =
   ServerAgentCapabilityAgentCapabilityPluginApplyResponses[keyof ServerAgentCapabilityAgentCapabilityPluginApplyResponses]
 
 export type ServerAgentCapabilityAgentCapabilityPluginRemoveData = {
-  body?: never
+  body: {
+    requestID?: string
+  }
   path: {
     name: string
   }
@@ -17669,6 +26851,7 @@ export type ServerAgentCapabilityAgentCapabilityPluginRemoveResponse =
 export type ServerAgentCapabilityAgentCapabilityPluginRestoreData = {
   body: {
     recoveryID: string
+    requestID?: string
   }
   path?: never
   query?: {
@@ -17889,6 +27072,146 @@ export type ServerAgentCapabilityAgentCapabilityWorkflowRunGetResponses = {
 export type ServerAgentCapabilityAgentCapabilityWorkflowRunGetResponse =
   ServerAgentCapabilityAgentCapabilityWorkflowRunGetResponses[keyof ServerAgentCapabilityAgentCapabilityWorkflowRunGetResponses]
 
+export type ServerAgentCapabilityAgentCapabilityWorkflowRunEventsData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    after?: MemoryImportance
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/workflow-runs/{runID}/events"
+}
+
+export type ServerAgentCapabilityAgentCapabilityWorkflowRunEventsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityWorkflowRunEventsError =
+  ServerAgentCapabilityAgentCapabilityWorkflowRunEventsErrors[keyof ServerAgentCapabilityAgentCapabilityWorkflowRunEventsErrors]
+
+export type ServerAgentCapabilityAgentCapabilityWorkflowRunEventsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityWorkflowEventList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityWorkflowRunEventsResponse =
+  ServerAgentCapabilityAgentCapabilityWorkflowRunEventsResponses[keyof ServerAgentCapabilityAgentCapabilityWorkflowRunEventsResponses]
+
+export type ServerAgentCapabilityAgentCapabilityPlanPreviewData = {
+  body: {
+    task: string
+    planText: string
+    exploredFiles?: Array<string>
+    estimatedSteps?: number
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/plan-preview"
+}
+
+export type ServerAgentCapabilityAgentCapabilityPlanPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityPlanPreviewError =
+  ServerAgentCapabilityAgentCapabilityPlanPreviewErrors[keyof ServerAgentCapabilityAgentCapabilityPlanPreviewErrors]
+
+export type ServerAgentCapabilityAgentCapabilityPlanPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityPlanPreview
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityPlanPreviewResponse =
+  ServerAgentCapabilityAgentCapabilityPlanPreviewResponses[keyof ServerAgentCapabilityAgentCapabilityPlanPreviewResponses]
+
+export type ServerAgentCapabilityAgentCapabilityRunTraceExportData = {
+  body?: never
+  path: {
+    runID: AgentCapabilityRunId
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/runs/{runID}/trace"
+}
+
+export type ServerAgentCapabilityAgentCapabilityRunTraceExportErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityRunTraceExportError =
+  ServerAgentCapabilityAgentCapabilityRunTraceExportErrors[keyof ServerAgentCapabilityAgentCapabilityRunTraceExportErrors]
+
+export type ServerAgentCapabilityAgentCapabilityRunTraceExportResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityRunTraceExport
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityRunTraceExportResponse =
+  ServerAgentCapabilityAgentCapabilityRunTraceExportResponses[keyof ServerAgentCapabilityAgentCapabilityRunTraceExportResponses]
+
 export type ServerAgentCapabilityAgentCapabilityWorkflowStartData = {
   body: {
     path: string
@@ -18081,6 +27404,1491 @@ export type ServerAgentCapabilityAgentCapabilityWorkflowRetryResponses = {
 export type ServerAgentCapabilityAgentCapabilityWorkflowRetryResponse =
   ServerAgentCapabilityAgentCapabilityWorkflowRetryResponses[keyof ServerAgentCapabilityAgentCapabilityWorkflowRetryResponses]
 
+export type ServerAgentCapabilityAgentCapabilityEvolutionStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/status"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionStatusError =
+  ServerAgentCapabilityAgentCapabilityEvolutionStatusErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionStatusErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionStatus
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionStatusResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionStatusResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionStatusResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidatesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    status?: string
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/candidates"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidatesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidatesError =
+  ServerAgentCapabilityAgentCapabilityEvolutionCandidatesErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionCandidatesErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidatesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCandidateList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidatesResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionCandidatesResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionCandidatesResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCreateData = {
+  body: {
+    title: string
+    target: "learning.failure" | "learning.fix" | "learning.preference" | "routing.advice" | "tool.advice"
+    instruction: string
+    rationale: string
+    evidenceRefs: Array<string>
+    sourceExperienceIDs?: Array<string>
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/candidates"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCreateError =
+  ServerAgentCapabilityAgentCapabilityEvolutionCreateErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionCreateErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCreateResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionCreateResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionCreateResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposuresData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    status?: "pending" | "recorded"
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/exposures"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposuresErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposuresError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposuresErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposuresErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposuresResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposuresResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposuresResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposuresResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    keepRecorded?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archive"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureArchivePlan
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivePreviewResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyData = {
+  body: {
+    keepRecorded: number
+    expectedPlanDigest: string
+    reason: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archive/apply"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureArchiveResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveApplyResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archives"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureArchiveList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchivesResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetData = {
+  body?: never
+  path: {
+    archiveID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archives/{archiveID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureArchiveDetail
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveGetResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewData = {
+  body?: never
+  path: {
+    archiveID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/restore"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureRestorePlan
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureRestorePreviewResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyData = {
+  body: {
+    expectedPlanDigest: string
+    reason: string
+  }
+  path: {
+    archiveID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/restore/apply"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureRestoreResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureRestoreApplyResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportData = {
+  body?: never
+  path: {
+    archiveID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/export"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportError =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionExposureArchiveExport
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionExposureArchiveExportResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+    beforeSequence?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/audit/events"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsError =
+  ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionAuditEventList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionAuditEventsResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetData = {
+  body?: never
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/candidates/{candidateID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetError =
+  ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionCandidateGetResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/evolution/opportunities"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesError =
+  ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionOpportunityList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionOpportunitiesResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionFromPatternData = {
+  body?: never
+  path: {
+    patternID: MemoryImportance
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/patterns/{patternID}/candidate"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionFromPatternErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionFromPatternError =
+  ServerAgentCapabilityAgentCapabilityEvolutionFromPatternErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionFromPatternErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionFromPatternResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionFromPatternResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionFromPatternResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionFromPatternResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionTransitionData = {
+  body: {
+    action: "evaluate" | "approve" | "reject" | "startCanary" | "promote" | "rollback"
+    expectedRevision: number
+    reason?: string
+    trafficPercent?: number
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/candidates/{candidateID}/transition"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionTransitionErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionTransitionError =
+  ServerAgentCapabilityAgentCapabilityEvolutionTransitionErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionTransitionErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionTransitionResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionTransitionResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionTransitionResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionTransitionResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportData = {
+  body?: never
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/candidates/{candidateID}/canary"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportError =
+  ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionCanaryReport
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionCanaryReportResponses]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewData = {
+  body: {
+    userInput: string
+    cohortKey: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/evolution/context"
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewError =
+  ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewErrors[keyof ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewErrors]
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityEvolutionContextPreview
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewResponse =
+  ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewResponses[keyof ServerAgentCapabilityAgentCapabilityEvolutionContextPreviewResponses]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    status?: "candidate" | "active" | "rejected" | "expired"
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/experience/candidates"
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateListError =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateListErrors[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateListErrors]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityExperienceCandidateList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateListResponse =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateListResponses[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateListResponses]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateGetData = {
+  body?: never
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/experience/candidates/{candidateID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateGetError =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateGetErrors[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateGetErrors]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityExperienceCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateGetResponse =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateGetResponses[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateGetResponses]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewData = {
+  body: {
+    expectedRevision: number
+    decision: "approve" | "reject"
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/experience/candidates/{candidateID}/review"
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewError =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewErrors[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewErrors]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityExperienceReviewResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewResponse =
+  ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewResponses[keyof ServerAgentCapabilityAgentCapabilityExperienceCandidateReviewResponses]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceSourceListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/experience/sources"
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceSourceListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceSourceListError =
+  ServerAgentCapabilityAgentCapabilityExperienceSourceListErrors[keyof ServerAgentCapabilityAgentCapabilityExperienceSourceListErrors]
+
+export type ServerAgentCapabilityAgentCapabilityExperienceSourceListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilityExperienceSourceList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilityExperienceSourceListResponse =
+  ServerAgentCapabilityAgentCapabilityExperienceSourceListResponses[keyof ServerAgentCapabilityAgentCapabilityExperienceSourceListResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    skillID?: string
+    status?: "draft" | "candidate" | "canary" | "active" | "retired"
+    limit?: MemoryImportance
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillLifecycleCandidateList
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateListResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateData = {
+  body: {
+    skillID: string
+    version: string
+    purpose: string
+    triggers: Array<string>
+    allowedTools: Array<string>
+    allowedCapabilities: Array<string>
+    inputSchema: {
+      [key: string]: TriggerJsonValue
+    }
+    outputSchema: {
+      [key: string]: TriggerJsonValue
+    }
+    instructions: string
+    assets?: Array<{
+      path: string
+      content: string
+    }>
+    scripts?: Array<{
+      path: string
+      content: string
+    }>
+    sourceExperienceIDs: Array<string>
+    testCases: Array<{
+      id: string
+      input: {
+        [key: string]: TriggerJsonValue
+      }
+      expected: {
+        [key: string]: TriggerJsonValue
+      }
+    }>
+    policyVersion: string
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillLifecycleCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateCreateResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetData = {
+  body?: never
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillLifecycleCandidateDetail
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCandidateGetResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateData = {
+  body: {
+    expectedRevision: number
+    observations: Array<{
+      caseID: string
+      baseline: {
+        success: boolean
+        steps: number
+        tokens: number
+        costMinor: number
+        newFailures: number
+        newSecretFindings: number
+        newEgressAttempts: number
+      }
+      candidate: {
+        success: boolean
+        steps: number
+        tokens: number
+        costMinor: number
+        newFailures: number
+        newSecretFindings: number
+        newEgressAttempts: number
+      }
+      evidenceIDs: Array<string>
+    }>
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/evaluate"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillEvaluationResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleEvaluateResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationData = {
+  body: {
+    expectedRevision: number
+    idempotencyKey: string
+    cohortKey: string
+    runID: string
+    evaluationID: string
+    evidenceIDs: Array<string>
+    success: boolean
+    safetyIncident: boolean
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/canary/observations"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillCanaryObservationResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryObservationResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartData = {
+  body: {
+    expectedRevision: number
+    trafficPercent: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/canary"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillLifecycleCandidate
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleCanaryStartResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteData = {
+  body: {
+    expectedRevision: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/promote"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillPromotionResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecyclePromoteResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackData = {
+  body: {
+    expectedRevision: number
+    reason: string
+  }
+  path: {
+    candidateID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/rollback"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillRollbackResult
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleRollbackResponses]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetData = {
+  body?: never
+  path: {
+    skillID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/agent-capabilities/skill-lifecycle/deployments/{skillID}"
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetError =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetErrors[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetErrors]
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: AgentCapabilitySkillDeployment
+  }
+}
+
+export type ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetResponse =
+  ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetResponses[keyof ServerAgentCapabilityAgentCapabilitySkillLifecycleDeploymentGetResponses]
+
 export type ServerMcpMcpListData = {
   body?: never
   path?: never
@@ -18156,6 +28964,136 @@ export type ServerMcpMcpResourceCatalogResponses = {
 
 export type ServerMcpMcpResourceCatalogResponse =
   ServerMcpMcpResourceCatalogResponses[keyof ServerMcpMcpResourceCatalogResponses]
+
+export type ServerMcpMcpCapabilitiesData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/mcp/capabilities"
+}
+
+export type ServerMcpMcpCapabilitiesErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerMcpMcpCapabilitiesError = ServerMcpMcpCapabilitiesErrors[keyof ServerMcpMcpCapabilitiesErrors]
+
+export type ServerMcpMcpCapabilitiesResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: McpCapabilityCatalog
+  }
+}
+
+export type ServerMcpMcpCapabilitiesResponse =
+  ServerMcpMcpCapabilitiesResponses[keyof ServerMcpMcpCapabilitiesResponses]
+
+export type V2McpActionReconciliationData = {
+  body?: never
+  path: {
+    actionID: string
+  }
+  query: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    intentDigest: string
+    idempotencyKey: string
+  }
+  url: "/api/mcp/actions/{actionID}/reconciliation"
+}
+
+export type V2McpActionReconciliationErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2McpActionReconciliationError = V2McpActionReconciliationErrors[keyof V2McpActionReconciliationErrors]
+
+export type V2McpActionReconciliationResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: McpReconciliation
+  }
+}
+
+export type V2McpActionReconciliationResponse =
+  V2McpActionReconciliationResponses[keyof V2McpActionReconciliationResponses]
+
+export type V2McpActionReconciliationRecordData = {
+  body: {
+    expectedEvidenceDigest: string
+    approval: "record_evidence"
+  }
+  path: {
+    actionID: string
+  }
+  query: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    intentDigest: string
+    idempotencyKey: string
+  }
+  url: "/api/mcp/actions/{actionID}/reconciliation/record"
+}
+
+export type V2McpActionReconciliationRecordErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2McpActionReconciliationRecordError =
+  V2McpActionReconciliationRecordErrors[keyof V2McpActionReconciliationRecordErrors]
+
+export type V2McpActionReconciliationRecordResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: McpReconciliation
+  }
+}
+
+export type V2McpActionReconciliationRecordResponse =
+  V2McpActionReconciliationRecordResponses[keyof V2McpActionReconciliationRecordResponses]
 
 export type ServerMcpMcpConnectData = {
   body?: never
@@ -18236,6 +29174,1016 @@ export type ServerMcpMcpDisconnectResponses = {
 }
 
 export type ServerMcpMcpDisconnectResponse = ServerMcpMcpDisconnectResponses[keyof ServerMcpMcpDisconnectResponses]
+
+export type ServerPrivateOperationPrivateOperationOverviewData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/private-operations/overview"
+}
+
+export type ServerPrivateOperationPrivateOperationOverviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerPrivateOperationPrivateOperationOverviewError =
+  ServerPrivateOperationPrivateOperationOverviewErrors[keyof ServerPrivateOperationPrivateOperationOverviewErrors]
+
+export type ServerPrivateOperationPrivateOperationOverviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: {
+      schemaVersion: 1
+      generatedAt: string
+      readOnly: true
+      doctor: {
+        ok: boolean
+        passed: number
+        failed: number
+        checks: Array<{
+          id: string
+          label: string
+          ok: boolean
+          detail: string
+        }>
+      }
+      usage: {
+        sessions: number
+        cost: number
+        tokens: {
+          input: number
+          output: number
+          reasoning: number
+          cacheRead: number
+          cacheWrite: number
+          total: number
+        }
+      }
+      backup: {
+        available: boolean
+        createdAt?: string
+        database?: string
+        bytes: number
+        encrypted: boolean
+        checksumVerified: boolean
+        restoreListVerified: boolean
+      }
+      recoveryDrill: {
+        available: boolean
+        completedAt?: string
+        passed: boolean
+        tables: number
+        sourceRows: number
+        restoredRows: number
+        differences: number
+      }
+      secrets: {
+        filesScanned: number
+        filesSkipped: number
+        findingFiles: number
+        findings: number
+        truncated: boolean
+      }
+      logs: {
+        retentionDays: number
+        cutoff: string
+        files: number
+        bytes: number
+      }
+    }
+  }
+}
+
+export type ServerPrivateOperationPrivateOperationOverviewResponse =
+  ServerPrivateOperationPrivateOperationOverviewResponses[keyof ServerPrivateOperationPrivateOperationOverviewResponses]
+
+export type ServerRuntimeInsightRuntimeInsightSnapshotData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: string
+  }
+  url: "/api/runtime-insight/snapshot"
+}
+
+export type ServerRuntimeInsightRuntimeInsightSnapshotErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerRuntimeInsightRuntimeInsightSnapshotError =
+  ServerRuntimeInsightRuntimeInsightSnapshotErrors[keyof ServerRuntimeInsightRuntimeInsightSnapshotErrors]
+
+export type ServerRuntimeInsightRuntimeInsightSnapshotResponses = {
+  /**
+   * Success
+   */
+  200: {
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+    contextLayers: Array<{
+      sessionID: string
+      timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      model: string
+      totalTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      layers: Array<{
+        layer: string
+        name: string
+        source: string
+        tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        chars: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        kept: boolean
+      }>
+    }>
+    routing: Array<{
+      timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      sessionID: string
+      task: string
+      providerID: string
+      modelID: string
+      inputCost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputCost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reason: string
+      candidates: Array<{
+        providerID: string
+        modelID: string
+        inputCost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputCost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }>
+    }>
+    verifications: Array<{
+      timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      sessionID: string
+      toolCallID: string
+      claim: string
+      commands: Array<string>
+      results: Array<{
+        command: string
+        ok: boolean
+        exitCode: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTail: string
+      }>
+      passed: boolean
+      durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    audit: Array<{
+      seq: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      recordedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      actor: string
+      action: string
+      resource: string
+      reason: string
+      metadata: {
+        [key: string]: TriggerJsonValue
+      }
+      previousHash: string
+      recordHash: string
+    }>
+    auditDropped: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    auditVerify: {
+      valid: boolean
+      count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      headHash: string
+      issue: string
+    }
+    runs: Array<{
+      runID: string
+      sessionID: string
+      status: string
+      startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      finishedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      lastSeq: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      error: string
+    }>
+    durableRuns: Array<{
+      runID: string
+      sessionID: string
+      status: string
+      initiator: string
+      authority: string
+      riskTier: string
+      reasonSummary: string
+      attemptsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxAttempts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      durationMsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxDurationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      costMicrosUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxCostMicros: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      activeAttempt: {
+        attempt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      startedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      finishedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      lastLeaseGeneration: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      lastTransition: {
+        from: string
+        to: string
+        reason: string
+        changedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      lease: {
+        leaseID: string
+        ownerID: string
+        generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        acquiredAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        heartbeatAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        expiresAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      checkpoint: {
+        checkpointID: string
+        eventSequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        stateDigest: string
+        createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      admission: {
+        role: string
+        status: string
+        decision: "admitted" | "blocked"
+        reason: string
+        ready: boolean
+        descriptorDigest: string
+        checks: {
+          statusConsistent: boolean
+          descriptorDigestConsistent: boolean
+          toolProjectionConsistent: boolean
+          payloadFree: boolean
+        }
+        declaredToolCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        canonicalToolCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        unsupportedToolCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        valid: boolean
+        evidenceRefs: Array<string>
+      }
+    }>
+    durableActions: Array<{
+      actionID: string
+      runID: string
+      sessionID: string
+      name: string
+      status: string
+      authority: string
+      riskTier: string
+      reasonSummary: string
+      resourceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      observationStatus: string
+      resultReplayable: boolean
+      outputDigest: string
+      outputByteLength: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      progress?: {
+        phase: string
+        completed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        sequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        detail?: string
+      }
+      attemptsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxAttempts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      durationMsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxDurationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      costMicrosUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxCostMicros: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      mcpReconciliation?: McpReconciliationHandle
+      mutationRecovery: {
+        transactionID: string
+        phase: string
+        decision: string
+        automaticRetryAllowed: false
+        requiresReview: boolean
+        postProcessing?: Array<{
+          sequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stage: string
+          status: string
+          target?: string
+        }>
+        postProcessingRecovery?: {
+          status: string
+          stage?: string
+          target?: string
+          sequence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          reason: string
+        }
+        reason: string
+      }
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      updatedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+    recalls: Array<{
+      timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      sessionID: string
+      scopeHash: string
+      queryFingerprint: string
+      algorithm: string
+      algorithmRevision: string
+      latencyMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      hits: Array<{
+        memoryID: string
+        score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        source: string
+      }>
+    }>
+  }
+}
+
+export type ServerRuntimeInsightRuntimeInsightSnapshotResponse =
+  ServerRuntimeInsightRuntimeInsightSnapshotResponses[keyof ServerRuntimeInsightRuntimeInsightSnapshotResponses]
+
+export type V2RuntimeInsightActionRecoveryData = {
+  body?: never
+  path: {
+    actionID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/actions/{actionID}/recovery"
+}
+
+export type V2RuntimeInsightActionRecoveryErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RuntimeInsightActionRecoveryError =
+  V2RuntimeInsightActionRecoveryErrors[keyof V2RuntimeInsightActionRecoveryErrors]
+
+export type V2RuntimeInsightActionRecoveryResponses = {
+  /**
+   * Success
+   */
+  200: {
+    actionID: string
+    actionStatus: string
+    state: string
+    outcome: string
+    repair: {
+      required: boolean
+      source: string
+      reason: string
+    }
+    mutationRecovery: {
+      transactionID: string
+      phase: string
+      decision: string
+      automaticRetryAllowed: false
+      requiresReview: boolean
+      postProcessing?: Array<{
+        sequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        stage: string
+        status: string
+        target?: string
+      }>
+      postProcessingRecovery?: {
+        status: string
+        stage?: string
+        target?: string
+        sequence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reason: string
+      }
+      reason: string
+    }
+    inspection: {
+      transactionID: string
+      phase: string
+      observationDigest: string
+      decision: string
+      automaticRetryAllowed: false
+      rollbackAvailable: boolean
+      entries: Array<{
+        target: string
+        operation: string
+        state: string
+      }>
+      reason: string
+    }
+    inspectionError: string
+    artifact: {
+      status: "not_required" | "available" | "missing" | "corrupt" | "quota_pressure" | "unavailable"
+      referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      missingReferenceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      corruptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      overQuota: boolean
+      reason: string
+    }
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+  }
+}
+
+export type V2RuntimeInsightActionRecoveryResponse =
+  V2RuntimeInsightActionRecoveryResponses[keyof V2RuntimeInsightActionRecoveryResponses]
+
+export type V2RuntimeInsightActionRecoveryReviewData = {
+  body: {
+    transactionID: string
+    expectedPhase: string
+    observationDigest: string
+    decision: "settle_postimage" | "require_rollback" | "confirm_rolled_back" | "block_rollback"
+    inspectedDecision: "postimage_matches" | "preimage_matches" | "manual_review"
+  }
+  path: {
+    actionID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/actions/{actionID}/recovery/review"
+}
+
+export type V2RuntimeInsightActionRecoveryReviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2RuntimeInsightActionRecoveryReviewError =
+  V2RuntimeInsightActionRecoveryReviewErrors[keyof V2RuntimeInsightActionRecoveryReviewErrors]
+
+export type V2RuntimeInsightActionRecoveryReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    actionID: string
+    actionStatus: string
+    state: string
+    outcome: string
+    repair: {
+      required: boolean
+      source: string
+      reason: string
+    }
+    mutationRecovery: {
+      transactionID: string
+      phase: string
+      decision: string
+      automaticRetryAllowed: false
+      requiresReview: boolean
+      postProcessing?: Array<{
+        sequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        stage: string
+        status: string
+        target?: string
+      }>
+      postProcessingRecovery?: {
+        status: string
+        stage?: string
+        target?: string
+        sequence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reason: string
+      }
+      reason: string
+    }
+    inspection: {
+      transactionID: string
+      phase: string
+      observationDigest: string
+      decision: string
+      automaticRetryAllowed: false
+      rollbackAvailable: boolean
+      entries: Array<{
+        target: string
+        operation: string
+        state: string
+      }>
+      reason: string
+    }
+    inspectionError: string
+    artifact: {
+      status: "not_required" | "available" | "missing" | "corrupt" | "quota_pressure" | "unavailable"
+      referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      missingReferenceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      corruptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      overQuota: boolean
+      reason: string
+    }
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+  }
+}
+
+export type V2RuntimeInsightActionRecoveryReviewResponse =
+  V2RuntimeInsightActionRecoveryReviewResponses[keyof V2RuntimeInsightActionRecoveryReviewResponses]
+
+export type V2RuntimeInsightActionRecoveryRollbackData = {
+  body: {
+    transactionID: string
+    expectedPhase: "rollback_required"
+    observationDigest: string
+    inspectedDecision: "postimage_matches"
+    approval: "execute_rollback"
+  }
+  path: {
+    actionID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/actions/{actionID}/recovery/rollback"
+}
+
+export type V2RuntimeInsightActionRecoveryRollbackErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2RuntimeInsightActionRecoveryRollbackError =
+  V2RuntimeInsightActionRecoveryRollbackErrors[keyof V2RuntimeInsightActionRecoveryRollbackErrors]
+
+export type V2RuntimeInsightActionRecoveryRollbackResponses = {
+  /**
+   * Success
+   */
+  200: {
+    actionID: string
+    actionStatus: string
+    state: string
+    outcome: string
+    repair: {
+      required: boolean
+      source: string
+      reason: string
+    }
+    mutationRecovery: {
+      transactionID: string
+      phase: string
+      decision: string
+      automaticRetryAllowed: false
+      requiresReview: boolean
+      postProcessing?: Array<{
+        sequence: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        stage: string
+        status: string
+        target?: string
+      }>
+      postProcessingRecovery?: {
+        status: string
+        stage?: string
+        target?: string
+        sequence?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        reason: string
+      }
+      reason: string
+    }
+    inspection: {
+      transactionID: string
+      phase: string
+      observationDigest: string
+      decision: string
+      automaticRetryAllowed: false
+      rollbackAvailable: boolean
+      entries: Array<{
+        target: string
+        operation: string
+        state: string
+      }>
+      reason: string
+    }
+    inspectionError: string
+    artifact: {
+      status: "not_required" | "available" | "missing" | "corrupt" | "quota_pressure" | "unavailable"
+      referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      missingReferenceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      corruptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      overQuota: boolean
+      reason: string
+    }
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+  }
+}
+
+export type V2RuntimeInsightActionRecoveryRollbackResponse =
+  V2RuntimeInsightActionRecoveryRollbackResponses[keyof V2RuntimeInsightActionRecoveryRollbackResponses]
+
+export type V2RuntimeInsightArtifactMaintenanceData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    scanID?: string
+    cursor?: string
+  }
+  url: "/api/runtime-insight/artifacts/maintenance"
+}
+
+export type V2RuntimeInsightArtifactMaintenanceErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2RuntimeInsightArtifactMaintenanceError =
+  V2RuntimeInsightArtifactMaintenanceErrors[keyof V2RuntimeInsightArtifactMaintenanceErrors]
+
+export type V2RuntimeInsightArtifactMaintenanceResponses = {
+  /**
+   * Success
+   */
+  200: {
+    scope: "profile"
+    operation: "audit" | "sweep"
+    scanID: string
+    scanStatus: "active" | "complete" | "expired"
+    pageNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scannedActions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scanLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scanComplete: boolean
+    scanExpiresAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sessionDigest: string
+    nextCursor?: string
+    referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    audit: {
+      scannedEntries: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      artifactCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      orphanCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      expiredOrphanCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      missingReferenceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      invalidCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      unsafeCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      corruptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      overQuota: boolean
+    }
+    removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type V2RuntimeInsightArtifactMaintenanceResponse =
+  V2RuntimeInsightArtifactMaintenanceResponses[keyof V2RuntimeInsightArtifactMaintenanceResponses]
+
+export type V2RuntimeInsightArtifactMaintenanceSweepData = {
+  body: {
+    scanID: string
+    approval: "execute_sweep"
+    maxAgeMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    enforceQuota?: boolean
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/artifacts/maintenance"
+}
+
+export type V2RuntimeInsightArtifactMaintenanceSweepErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2RuntimeInsightArtifactMaintenanceSweepError =
+  V2RuntimeInsightArtifactMaintenanceSweepErrors[keyof V2RuntimeInsightArtifactMaintenanceSweepErrors]
+
+export type V2RuntimeInsightArtifactMaintenanceSweepResponses = {
+  /**
+   * Success
+   */
+  200: {
+    scope: "profile"
+    operation: "audit" | "sweep"
+    scanID: string
+    scanStatus: "active" | "complete" | "expired"
+    pageNumber: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scannedActions: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scanLimit: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    scanComplete: boolean
+    scanExpiresAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sessionDigest: string
+    nextCursor?: string
+    referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    audit: {
+      scannedEntries: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      artifactCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      totalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      referencedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      orphanCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      expiredOrphanCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      missingReferenceCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      invalidCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      unsafeCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      corruptCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      overQuota: boolean
+    }
+    removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type V2RuntimeInsightArtifactMaintenanceSweepResponse =
+  V2RuntimeInsightArtifactMaintenanceSweepResponses[keyof V2RuntimeInsightArtifactMaintenanceSweepResponses]
+
+export type ServerRuntimeInsightRuntimeInsightAuditVerifyData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/audit/verify"
+}
+
+export type ServerRuntimeInsightRuntimeInsightAuditVerifyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type ServerRuntimeInsightRuntimeInsightAuditVerifyError =
+  ServerRuntimeInsightRuntimeInsightAuditVerifyErrors[keyof ServerRuntimeInsightRuntimeInsightAuditVerifyErrors]
+
+export type ServerRuntimeInsightRuntimeInsightAuditVerifyResponses = {
+  /**
+   * Success
+   */
+  200: {
+    valid: boolean
+    count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    headHash: string
+    issue: string
+  }
+}
+
+export type ServerRuntimeInsightRuntimeInsightAuditVerifyResponse =
+  ServerRuntimeInsightRuntimeInsightAuditVerifyResponses[keyof ServerRuntimeInsightRuntimeInsightAuditVerifyResponses]
+
+export type V2RuntimeInsightChildSettlementAuditData = {
+  body?: never
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/settlements/{parentRunID}/{childRunID}"
+}
+
+export type V2RuntimeInsightChildSettlementAuditErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2RuntimeInsightChildSettlementAuditError =
+  V2RuntimeInsightChildSettlementAuditErrors[keyof V2RuntimeInsightChildSettlementAuditErrors]
+
+export type V2RuntimeInsightChildSettlementAuditResponses = {
+  /**
+   * Success
+   */
+  200: {
+    parentRunID: string
+    childRunID: string
+    status: "complete" | "repairable" | "manual-review" | "missing-intent"
+    deterministic: true
+    providerExecutionAllowed: false
+    intentID: string
+    decision: {
+      next: Array<string>
+      missing: Array<string>
+      conflicts: Array<string>
+      complete: boolean
+      reason: string
+    }
+    reason: string
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+  }
+}
+
+export type V2RuntimeInsightChildSettlementAuditResponse =
+  V2RuntimeInsightChildSettlementAuditResponses[keyof V2RuntimeInsightChildSettlementAuditResponses]
+
+export type V2RuntimeInsightChildSettlementRecoverData = {
+  body: {
+    approval: "recover_settlement"
+  }
+  path: {
+    parentRunID: string
+    childRunID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/runtime-insight/settlements/{parentRunID}/{childRunID}/recover"
+}
+
+export type V2RuntimeInsightChildSettlementRecoverErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+}
+
+export type V2RuntimeInsightChildSettlementRecoverError =
+  V2RuntimeInsightChildSettlementRecoverErrors[keyof V2RuntimeInsightChildSettlementRecoverErrors]
+
+export type V2RuntimeInsightChildSettlementRecoverResponses = {
+  /**
+   * Success
+   */
+  200: {
+    before: {
+      parentRunID: string
+      childRunID: string
+      status: "complete" | "repairable" | "manual-review" | "missing-intent"
+      deterministic: true
+      providerExecutionAllowed: false
+      intentID: string
+      decision: {
+        next: Array<string>
+        missing: Array<string>
+        conflicts: Array<string>
+        complete: boolean
+        reason: string
+      }
+      reason: string
+      access: {
+        role: "owner" | "admin" | "member"
+        canReviewMutation: boolean
+        canRollbackMutation: boolean
+        canMaintainArtifacts: boolean
+        canRecordMcpEvidence: boolean
+      }
+    }
+    after: {
+      parentRunID: string
+      childRunID: string
+      status: "complete" | "repairable" | "manual-review" | "missing-intent"
+      deterministic: true
+      providerExecutionAllowed: false
+      intentID: string
+      decision: {
+        next: Array<string>
+        missing: Array<string>
+        conflicts: Array<string>
+        complete: boolean
+        reason: string
+      }
+      reason: string
+      access: {
+        role: "owner" | "admin" | "member"
+        canReviewMutation: boolean
+        canRollbackMutation: boolean
+        canMaintainArtifacts: boolean
+        canRecordMcpEvidence: boolean
+      }
+    }
+    attempted: Array<string>
+    repaired: Array<string>
+    deterministic: true
+    providerExecutionAllowed: false
+    reason: string
+    access: {
+      role: "owner" | "admin" | "member"
+      canReviewMutation: boolean
+      canRollbackMutation: boolean
+      canMaintainArtifacts: boolean
+      canRecordMcpEvidence: boolean
+    }
+  }
+}
+
+export type V2RuntimeInsightChildSettlementRecoverResponse =
+  V2RuntimeInsightChildSettlementRecoverResponses[keyof V2RuntimeInsightChildSettlementRecoverResponses]
 
 export type V2SessionMessagesData = {
   body?: never
@@ -19769,6 +31717,38 @@ export type V2ProjectCopyRemoveResponses = {
 
 export type V2ProjectCopyRemoveResponse = V2ProjectCopyRemoveResponses[keyof V2ProjectCopyRemoveResponses]
 
+export type V2ProjectCopyListData = {
+  body?: never
+  path: {
+    projectID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/experimental/project/{projectID}/copy"
+}
+
+export type V2ProjectCopyListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type V2ProjectCopyListError = V2ProjectCopyListErrors[keyof V2ProjectCopyListErrors]
+
+export type V2ProjectCopyListResponses = {
+  /**
+   * ProjectCopy.List
+   */
+  200: ProjectCopyList
+}
+
+export type V2ProjectCopyListResponse = V2ProjectCopyListResponses[keyof V2ProjectCopyListResponses]
+
 export type V2ProjectCopyCreateData = {
   body?: {
     strategy: string
@@ -19836,6 +31816,1016 @@ export type V2ProjectCopyRefreshResponses = {
 }
 
 export type V2ProjectCopyRefreshResponse = V2ProjectCopyRefreshResponses[keyof V2ProjectCopyRefreshResponses]
+
+export type V2PersonalJobListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    status?: PersonalJobStatus
+  }
+  url: "/api/session/{sessionID}/personal-job"
+}
+
+export type V2PersonalJobListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobListError = V2PersonalJobListErrors[keyof V2PersonalJobListErrors]
+
+export type V2PersonalJobListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<PersonalJobInfo>
+  }
+}
+
+export type V2PersonalJobListResponse = V2PersonalJobListResponses[keyof V2PersonalJobListResponses]
+
+export type V2PersonalJobCreateData = {
+  body: {
+    idempotencyKey: PersonalJobIdempotencyKey
+    title: PersonalJobTitle
+    prompt: PersonalJobPrompt
+    schedule: PersonalJobSchedule
+    credentialIDs?: Array<string>
+    budget: PersonalJobBudgetLimits
+    approvalPolicy: PersonalJobApprovalPolicy
+    quietHours?: PersonalJobQuietHours
+    notificationPolicy?: PersonalJobNotificationPolicy
+    retainUntil?: number
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job"
+}
+
+export type V2PersonalJobCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobCreateError = V2PersonalJobCreateErrors[keyof V2PersonalJobCreateErrors]
+
+export type V2PersonalJobCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobCreateResponse = V2PersonalJobCreateResponses[keyof V2PersonalJobCreateResponses]
+
+export type V2PersonalJobDeleteData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}"
+}
+
+export type V2PersonalJobDeleteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobDeleteError = V2PersonalJobDeleteErrors[keyof V2PersonalJobDeleteErrors]
+
+export type V2PersonalJobDeleteResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2PersonalJobDeleteResponse = V2PersonalJobDeleteResponses[keyof V2PersonalJobDeleteResponses]
+
+export type V2PersonalJobGetData = {
+  body?: never
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}"
+}
+
+export type V2PersonalJobGetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobGetError = V2PersonalJobGetErrors[keyof V2PersonalJobGetErrors]
+
+export type V2PersonalJobGetResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobGetResponse = V2PersonalJobGetResponses[keyof V2PersonalJobGetResponses]
+
+export type V2PersonalJobApproveData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/approve"
+}
+
+export type V2PersonalJobApproveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobApproveError = V2PersonalJobApproveErrors[keyof V2PersonalJobApproveErrors]
+
+export type V2PersonalJobApproveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobApproveResponse = V2PersonalJobApproveResponses[keyof V2PersonalJobApproveResponses]
+
+export type V2PersonalJobRejectData = {
+  body: {
+    expectedRevision: number
+    reason?: string
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/reject"
+}
+
+export type V2PersonalJobRejectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobRejectError = V2PersonalJobRejectErrors[keyof V2PersonalJobRejectErrors]
+
+export type V2PersonalJobRejectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobRejectResponse = V2PersonalJobRejectResponses[keyof V2PersonalJobRejectResponses]
+
+export type V2PersonalJobStartData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/start"
+}
+
+export type V2PersonalJobStartErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobStartError = V2PersonalJobStartErrors[keyof V2PersonalJobStartErrors]
+
+export type V2PersonalJobStartResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobStartResponse = V2PersonalJobStartResponses[keyof V2PersonalJobStartResponses]
+
+export type V2PersonalJobExecuteData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/execute"
+}
+
+export type V2PersonalJobExecuteErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobExecuteError = V2PersonalJobExecuteErrors[keyof V2PersonalJobExecuteErrors]
+
+export type V2PersonalJobExecuteResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobExecuteResponse = V2PersonalJobExecuteResponses[keyof V2PersonalJobExecuteResponses]
+
+export type V2PersonalJobDispatchData = {
+  body: {
+    limit?: number
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/dispatch"
+}
+
+export type V2PersonalJobDispatchErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobDispatchError = V2PersonalJobDispatchErrors[keyof V2PersonalJobDispatchErrors]
+
+export type V2PersonalJobDispatchResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: {
+      recovered: number
+      advanced: number
+      attempted: number
+      completed: number
+      failed: number
+      skipped: number
+    }
+  }
+}
+
+export type V2PersonalJobDispatchResponse = V2PersonalJobDispatchResponses[keyof V2PersonalJobDispatchResponses]
+
+export type V2PersonalJobPauseData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/pause"
+}
+
+export type V2PersonalJobPauseErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobPauseError = V2PersonalJobPauseErrors[keyof V2PersonalJobPauseErrors]
+
+export type V2PersonalJobPauseResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobPauseResponse = V2PersonalJobPauseResponses[keyof V2PersonalJobPauseResponses]
+
+export type V2PersonalJobResumeData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/resume"
+}
+
+export type V2PersonalJobResumeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobResumeError = V2PersonalJobResumeErrors[keyof V2PersonalJobResumeErrors]
+
+export type V2PersonalJobResumeResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobResumeResponse = V2PersonalJobResumeResponses[keyof V2PersonalJobResumeResponses]
+
+export type V2PersonalJobCancelData = {
+  body: {
+    expectedRevision: number
+    reason?: string
+  }
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/cancel"
+}
+
+export type V2PersonalJobCancelErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobCancelError = V2PersonalJobCancelErrors[keyof V2PersonalJobCancelErrors]
+
+export type V2PersonalJobCancelResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobCancelResponse = V2PersonalJobCancelResponses[keyof V2PersonalJobCancelResponses]
+
+export type V2PersonalJobNotificationsData = {
+  body?: never
+  path: {
+    sessionID: string
+    jobID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/notifications"
+}
+
+export type V2PersonalJobNotificationsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobNotificationsError = V2PersonalJobNotificationsErrors[keyof V2PersonalJobNotificationsErrors]
+
+export type V2PersonalJobNotificationsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<PersonalJobNotification>
+  }
+}
+
+export type V2PersonalJobNotificationsResponse =
+  V2PersonalJobNotificationsResponses[keyof V2PersonalJobNotificationsResponses]
+
+export type V2PersonalJobNotificationReadData = {
+  body: {
+    expectedRevision: number
+  }
+  path: {
+    sessionID: string
+    jobID: string
+    notificationID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/personal-job/{jobID}/notifications/{notificationID}/read"
+}
+
+export type V2PersonalJobNotificationReadErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * PersonalJobNotFoundError | SessionNotFoundError
+   */
+  404: PersonalJobNotFoundError | SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type V2PersonalJobNotificationReadError =
+  V2PersonalJobNotificationReadErrors[keyof V2PersonalJobNotificationReadErrors]
+
+export type V2PersonalJobNotificationReadResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: PersonalJobInfo
+  }
+}
+
+export type V2PersonalJobNotificationReadResponse =
+  V2PersonalJobNotificationReadResponses[keyof V2PersonalJobNotificationReadResponses]
+
+export type V2PersonalWorkspaceSnapshotData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+    limit?: MemoryImportance
+  }
+  url: "/api/personal-workspace"
+}
+
+export type V2PersonalWorkspaceSnapshotErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2PersonalWorkspaceSnapshotError =
+  V2PersonalWorkspaceSnapshotErrors[keyof V2PersonalWorkspaceSnapshotErrors]
+
+export type V2PersonalWorkspaceSnapshotResponses = {
+  /**
+   * PersonalWorkspace.Snapshot
+   */
+  200: PersonalWorkspaceSnapshot
+}
+
+export type V2PersonalWorkspaceSnapshotResponse =
+  V2PersonalWorkspaceSnapshotResponses[keyof V2PersonalWorkspaceSnapshotResponses]
+
+export type ServerTenantPlatformTenantPlatformOverviewData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/overview"
+}
+
+export type ServerTenantPlatformTenantPlatformOverviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformOverviewError =
+  ServerTenantPlatformTenantPlatformOverviewErrors[keyof ServerTenantPlatformTenantPlatformOverviewErrors]
+
+export type ServerTenantPlatformTenantPlatformOverviewResponses = {
+  /**
+   * TenantPlatform.PlatformOverview
+   */
+  200: TenantPlatformPlatformOverview
+}
+
+export type ServerTenantPlatformTenantPlatformOverviewResponse =
+  ServerTenantPlatformTenantPlatformOverviewResponses[keyof ServerTenantPlatformTenantPlatformOverviewResponses]
+
+export type ServerTenantPlatformTenantPlatformSetPolicyData = {
+  body: {
+    region: string
+    retention_days: number
+    quota: {
+      currency: BillingCurrency
+      limit_minor?: number
+    }
+    rate_limit: {
+      requests_per_minute: number
+      burst: number
+    }
+    key_version: number
+  }
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/policy"
+}
+
+export type ServerTenantPlatformTenantPlatformSetPolicyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformSetPolicyError =
+  ServerTenantPlatformTenantPlatformSetPolicyErrors[keyof ServerTenantPlatformTenantPlatformSetPolicyErrors]
+
+export type ServerTenantPlatformTenantPlatformSetPolicyResponses = {
+  /**
+   * TenantPlatform.PlatformPolicy
+   */
+  200: TenantPlatformPlatformPolicy
+}
+
+export type ServerTenantPlatformTenantPlatformSetPolicyResponse =
+  ServerTenantPlatformTenantPlatformSetPolicyResponses[keyof ServerTenantPlatformTenantPlatformSetPolicyResponses]
+
+export type ServerTenantPlatformTenantPlatformRequestDataData = {
+  body: {
+    kind: "tenant-export" | "tenant-delete"
+    reason: string
+  }
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/data-requests"
+}
+
+export type ServerTenantPlatformTenantPlatformRequestDataErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformRequestDataError =
+  ServerTenantPlatformTenantPlatformRequestDataErrors[keyof ServerTenantPlatformTenantPlatformRequestDataErrors]
+
+export type ServerTenantPlatformTenantPlatformRequestDataResponses = {
+  /**
+   * TenantPlatform.DataRequest
+   */
+  200: TenantPlatformDataRequest
+}
+
+export type ServerTenantPlatformTenantPlatformRequestDataResponse =
+  ServerTenantPlatformTenantPlatformRequestDataResponses[keyof ServerTenantPlatformTenantPlatformRequestDataResponses]
+
+export type ServerTenantPlatformTenantPlatformApproveDataData = {
+  body: {
+    approve: boolean
+  }
+  path: {
+    requestID: string
+  }
+  query?: never
+  url: "/api/tenant-platform/data-requests/{requestID}/approval"
+}
+
+export type ServerTenantPlatformTenantPlatformApproveDataErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformApproveDataError =
+  ServerTenantPlatformTenantPlatformApproveDataErrors[keyof ServerTenantPlatformTenantPlatformApproveDataErrors]
+
+export type ServerTenantPlatformTenantPlatformApproveDataResponses = {
+  /**
+   * TenantPlatform.DataRequest
+   */
+  200: TenantPlatformDataRequest
+}
+
+export type ServerTenantPlatformTenantPlatformApproveDataResponse =
+  ServerTenantPlatformTenantPlatformApproveDataResponses[keyof ServerTenantPlatformTenantPlatformApproveDataResponses]
+
+export type ServerTenantPlatformTenantPlatformCreateBackupData = {
+  body: {
+    region: string
+    schema_revision: string
+    artifact_digest: string
+  }
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/backups"
+}
+
+export type ServerTenantPlatformTenantPlatformCreateBackupErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformCreateBackupError =
+  ServerTenantPlatformTenantPlatformCreateBackupErrors[keyof ServerTenantPlatformTenantPlatformCreateBackupErrors]
+
+export type ServerTenantPlatformTenantPlatformCreateBackupResponses = {
+  /**
+   * TenantPlatform.BackupManifest
+   */
+  200: TenantPlatformBackupManifest
+}
+
+export type ServerTenantPlatformTenantPlatformCreateBackupResponse =
+  ServerTenantPlatformTenantPlatformCreateBackupResponses[keyof ServerTenantPlatformTenantPlatformCreateBackupResponses]
+
+export type ServerTenantPlatformTenantPlatformVerifyBackupData = {
+  body: {
+    artifact_digest: string
+  }
+  path: {
+    manifestID: string
+  }
+  query?: never
+  url: "/api/tenant-platform/backups/{manifestID}/verify"
+}
+
+export type ServerTenantPlatformTenantPlatformVerifyBackupErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformVerifyBackupError =
+  ServerTenantPlatformTenantPlatformVerifyBackupErrors[keyof ServerTenantPlatformTenantPlatformVerifyBackupErrors]
+
+export type ServerTenantPlatformTenantPlatformVerifyBackupResponses = {
+  /**
+   * TenantPlatform.BackupManifest
+   */
+  200: TenantPlatformBackupManifest
+}
+
+export type ServerTenantPlatformTenantPlatformVerifyBackupResponse =
+  ServerTenantPlatformTenantPlatformVerifyBackupResponses[keyof ServerTenantPlatformTenantPlatformVerifyBackupResponses]
+
+export type ServerTenantPlatformTenantPlatformExportAuditData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/audit/export"
+}
+
+export type ServerTenantPlatformTenantPlatformExportAuditErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformExportAuditError =
+  ServerTenantPlatformTenantPlatformExportAuditErrors[keyof ServerTenantPlatformTenantPlatformExportAuditErrors]
+
+export type ServerTenantPlatformTenantPlatformExportAuditResponses = {
+  /**
+   * TenantPlatform.AuditExport
+   */
+  200: TenantPlatformAuditExport
+}
+
+export type ServerTenantPlatformTenantPlatformExportAuditResponse =
+  ServerTenantPlatformTenantPlatformExportAuditResponses[keyof ServerTenantPlatformTenantPlatformExportAuditResponses]
+
+export type ServerTenantPlatformTenantPlatformListSecretsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/tenant-platform/secrets"
+}
+
+export type ServerTenantPlatformTenantPlatformListSecretsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformListSecretsError =
+  ServerTenantPlatformTenantPlatformListSecretsErrors[keyof ServerTenantPlatformTenantPlatformListSecretsErrors]
+
+export type ServerTenantPlatformTenantPlatformListSecretsResponses = {
+  /**
+   * Success
+   */
+  200: Array<TenantPlatformSecretMetadata>
+}
+
+export type ServerTenantPlatformTenantPlatformListSecretsResponse =
+  ServerTenantPlatformTenantPlatformListSecretsResponses[keyof ServerTenantPlatformTenantPlatformListSecretsResponses]
+
+export type ServerTenantPlatformTenantPlatformRevokeSecretData = {
+  body?: never
+  path: {
+    secretID: string
+  }
+  query?: never
+  url: "/api/tenant-platform/secrets/{secretID}/revoke"
+}
+
+export type ServerTenantPlatformTenantPlatformRevokeSecretErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type ServerTenantPlatformTenantPlatformRevokeSecretError =
+  ServerTenantPlatformTenantPlatformRevokeSecretErrors[keyof ServerTenantPlatformTenantPlatformRevokeSecretErrors]
+
+export type ServerTenantPlatformTenantPlatformRevokeSecretResponses = {
+  /**
+   * TenantPlatform.SecretMetadata
+   */
+  200: TenantPlatformSecretMetadata
+}
+
+export type ServerTenantPlatformTenantPlatformRevokeSecretResponse =
+  ServerTenantPlatformTenantPlatformRevokeSecretResponses[keyof ServerTenantPlatformTenantPlatformRevokeSecretResponses]
 
 export type PtyConnectData = {
   body?: never

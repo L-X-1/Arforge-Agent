@@ -1,14 +1,25 @@
 import { Effect, Schema } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import * as Tool from "./tool"
 import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
+import { Egress } from "@arforge-ai/core/egress"
 
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
 const MAX_TIMEOUT = 120 * 1000 // 2 minutes
+
+const isCloudflareChallenge = (error: unknown) => {
+  if (!error || typeof error !== "object" || !("reason" in error)) return false
+  const reason = error.reason
+  if (!reason || typeof reason !== "object" || !("_tag" in reason) || reason._tag !== "StatusCodeError") return false
+  if (!("response" in reason) || !reason.response || typeof reason.response !== "object") return false
+  const response = reason.response as { readonly status?: unknown; readonly headers?: Record<string, string> }
+  return response.status === 403 && response.headers?.["cf-mitigated"] === "challenge"
+}
 
 export const Parameters = Schema.Struct({
   url: Schema.String.annotate({ description: "The URL to fetch content from" }),
@@ -25,7 +36,6 @@ export const WebFetchTool = Tool.define(
   "webfetch",
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
-    const httpOk = HttpClient.filterStatusOk(http)
 
     return {
       description: DESCRIPTION,
@@ -46,6 +56,15 @@ export const WebFetchTool = Tool.define(
               timeout: params.timeout,
             },
           })
+
+          const egress =
+            ctx.egress ??
+            Egress.make({
+              action: "webfetch",
+              networkScope: [params.url],
+              secretScope: [],
+              allowedMethods: ["GET"],
+            })
 
           const timeout = Math.min((params.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000, MAX_TIMEOUT)
 
@@ -73,22 +92,39 @@ export const WebFetchTool = Tool.define(
             "Accept-Language": "en-US,en;q=0.9",
           }
 
-          const request = HttpClientRequest.get(params.url).pipe(HttpClientRequest.setHeaders(headers))
+          const execute = (userAgent: string) =>
+            Effect.gen(function* () {
+              let target = params.url
+              let redirectFrom: string | undefined
+              for (let redirects = 0; ; redirects++) {
+                yield* egress.assert({
+                  url: target,
+                  method: "GET",
+                  ...(redirectFrom === undefined ? {} : { redirectFrom }),
+                })
+                const response = yield* http.execute(
+                  HttpClientRequest.get(target).pipe(
+                    HttpClientRequest.setHeaders({ ...headers, "User-Agent": userAgent }),
+                  ),
+                )
+                if (response.status >= 300 && response.status < 400) {
+                  const location = response.headers.location
+                  if (!location) return yield* Effect.fail(new Error("HTTP redirect did not include a Location header"))
+                  if (redirects >= 3) return yield* Effect.fail(new Error("HTTP redirect limit exceeded"))
+                  redirectFrom = target
+                  target = yield* Effect.try({
+                    try: () => new URL(location, target).toString(),
+                    catch: (error) => error,
+                  })
+                  continue
+                }
+                return yield* HttpClientResponse.filterStatusOk(response)
+              }
+            })
 
           // Retry with honest UA if blocked by Cloudflare bot detection (TLS fingerprint mismatch)
-          const response = yield* httpOk.execute(request).pipe(
-            Effect.catchIf(
-              (err) =>
-                err.reason._tag === "StatusCodeError" &&
-                err.reason.response.status === 403 &&
-                err.reason.response.headers["cf-mitigated"] === "challenge",
-              () =>
-                httpOk.execute(
-                  HttpClientRequest.get(params.url).pipe(
-                    HttpClientRequest.setHeaders({ ...headers, "User-Agent": "arforge" }),
-                  ),
-                ),
-            ),
+          const response = yield* execute(headers["User-Agent"]).pipe(
+            Effect.catchIf(isCloudflareChallenge, () => execute("arforge")),
             Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }),
           )
 
@@ -131,24 +167,24 @@ export const WebFetchTool = Tool.define(
               if (contentType.includes("text/html")) {
                 const markdown = convertHTMLToMarkdown(content)
                 return {
-                  output: markdown,
+                  output: ContextFirewall.untrusted("web", markdown),
                   title,
                   metadata: {},
                 }
               }
-              return { output: content, title, metadata: {} }
+              return { output: ContextFirewall.untrusted("web", content), title, metadata: {} }
 
             case "text":
               if (contentType.includes("text/html")) {
-                return { output: extractTextFromHTML(content), title, metadata: {} }
+                return { output: ContextFirewall.untrusted("web", extractTextFromHTML(content)), title, metadata: {} }
               }
-              return { output: content, title, metadata: {} }
+              return { output: ContextFirewall.untrusted("web", content), title, metadata: {} }
 
             case "html":
-              return { output: content, title, metadata: {} }
+              return { output: ContextFirewall.untrusted("web", content), title, metadata: {} }
 
             default:
-              return { output: content, title, metadata: {} }
+              return { output: ContextFirewall.untrusted("web", content), title, metadata: {} }
           }
         }).pipe(Effect.orDie),
     }

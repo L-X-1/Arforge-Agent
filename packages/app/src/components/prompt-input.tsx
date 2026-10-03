@@ -334,7 +334,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const historyComments = () => {
     const byID = new Map(comments.all().map((item) => [`${item.file}\n${item.id}`, item] as const))
     return prompt.context.items().flatMap((item) => {
-      if (item.type !== "file") return []
+      if (item.type !== "file" || item.htmlSelection !== undefined) return []
       const comment = item.comment?.trim()
       if (!comment) return []
 
@@ -1119,6 +1119,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
         for (const item of edit.context) {
           prompt.context.add({
+            ...item,
             type: item.type,
             path: item.path,
             selection: item.selection,

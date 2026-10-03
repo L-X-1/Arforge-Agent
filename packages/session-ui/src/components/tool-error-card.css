@@ -64,6 +64,26 @@
     background: var(--v2-state-bg-danger);
     color: var(--v2-text-text-base);
   }
+
+  [data-slot="tool-error-card-conflict"] {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  [data-slot="tool-error-card-conflict-path"],
+  [data-slot="tool-error-card-conflict-versions"],
+  [data-slot="tool-error-card-conflict-raw"] {
+    color: var(--v2-text-text-faint);
+    font-size: 12px;
+    line-height: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  [data-slot="tool-error-card-conflict-path"] code {
+    color: var(--v2-text-text-muted);
+    font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  }
 }
 
 body:not([data-new-layout]) [data-component="card"][data-kind="tool-error-card"] {

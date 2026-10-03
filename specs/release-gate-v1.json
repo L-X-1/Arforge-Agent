@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "decision_values": ["SHIP", "DO_NOT_SHIP"],
+  "required_checks": ["signedReleaseEvidence", "slo", "canary", "releaseOwner"],
+  "digest_bindings": ["release_manifest_sha256", "slo_report_sha256", "canary_receipt_sha256", "artifact_digest"],
+  "canary_requirements": [
+    "status=passed",
+    "endpoint=/global/health",
+    "all_observed_requests_successful",
+    "p95_latency_ms<=750",
+    "critical_alerts=0",
+    "failure_reasons=[]",
+    "rollback_artifact_digest!=artifact_digest"
+  ],
+  "default_cli_policy": "DO_NOT_SHIP exits nonzero unless --report-only",
+  "owner_checklist": [
+    "sbom_license_reviewed",
+    "signature_verified",
+    "canary_passed",
+    "slo_passed",
+    "backup_restore_drill_passed",
+    "rollback_artifact_ready",
+    "incident_contact_confirmed"
+  ]
+}

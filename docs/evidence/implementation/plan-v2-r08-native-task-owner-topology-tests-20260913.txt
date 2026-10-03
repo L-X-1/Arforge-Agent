@@ -1,0 +1,19 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent/script
+Command: bun test arforge-session-execution-topology.test.ts
+Exit code: 0
+Raw captured output:
+
+bun test v1.3.14 (0d9b296a)
+
+arforge-session-execution-topology.test.ts:
+(pass) session execution topology > rejects a production SessionPrompt loop bypass [1.56ms]
+(pass) session execution topology > rejects reintroducing the retired mature execution adapter [0.14ms]
+(pass) session execution topology > does not confuse direct shell ActionGateway transport with an Agent Loop owner [0.05ms]
+(pass) session execution topology > reports canonical admission progress without calling a conditional Mature/Formal split ready [3.09ms]
+(pass) session execution topology > marks Formal ready only when every admission surface and product root has converged [0.20ms]
+
+ 5 pass
+ 0 fail
+ 17 expect() calls
+Ran 5 tests across 1 file. [263.00ms]

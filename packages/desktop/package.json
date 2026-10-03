@@ -3,7 +3,6 @@
   "private": true,
   "version": "1.0.0-test.1",
   "description": "Arforge 私人化 AI 开发智能体桌面端",
-  "author": "Arforge",
   "type": "module",
   "license": "UNLICENSED",
   "scripts": {

@@ -9,6 +9,7 @@ import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { Question } from "../../src/question"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
+import { SessionCompaction } from "@arforge-ai/core/session/compaction"
 
 const sessionID = SessionID.make("session")
 const providerID = ProviderV2.ID.make("test")
@@ -317,6 +318,127 @@ describe("session.message-v2.toModelMessage", () => {
         ],
       },
     ])
+  })
+
+  test("projects a committed mature compaction through the canonical Core checkpoint", async () => {
+    const compactionID = "msg_compaction"
+    const summaryID = "msg_summary"
+    const summary = "## Objective\n- Preserve the exact task"
+    const marker: SessionV1.WithParts = {
+      info: userInfo(compactionID),
+      parts: [
+        {
+          ...basePart(compactionID, "prt_compaction"),
+          type: "compaction",
+          auto: true,
+        },
+      ] as SessionV1.Part[],
+    }
+    const summaryMessage: SessionV1.WithParts = {
+      info: {
+        ...assistantInfo(summaryID, compactionID),
+        summary: true,
+        finish: "stop",
+      },
+      parts: [
+        {
+          ...basePart(summaryID, "prt_summary"),
+          type: "text",
+          text: summary,
+        },
+      ] as SessionV1.Part[],
+    }
+
+    expect(await MessageV2.toModelMessages([marker, summaryMessage], model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: SessionCompaction.checkpointText({ summary }) }],
+      },
+    ])
+  })
+
+  test("folds the reordered retained tail into the canonical checkpoint exactly once", async () => {
+    const compactionID = "msg_compaction_tail"
+    const summaryID = "msg_summary_tail"
+    const tailID = "msg_retained_tail"
+    const continueID = "msg_continue_tail"
+    const summary = "## Objective\n- Continue deterministically"
+    const marker: SessionV1.WithParts = {
+      info: { ...userInfo(compactionID), time: { created: 30 } },
+      parts: [
+        {
+          ...basePart(compactionID, "prt_compaction_tail"),
+          type: "compaction",
+          auto: true,
+          tail_start_id: MessageID.make(tailID),
+        },
+      ] as SessionV1.Part[],
+    }
+    const summaryMessage: SessionV1.WithParts = {
+      info: {
+        ...assistantInfo(summaryID, compactionID),
+        time: { created: 31, completed: 32 },
+        summary: true,
+        finish: "stop",
+      },
+      parts: [{ ...basePart(summaryID, "prt_summary_tail"), type: "text", text: summary }] as SessionV1.Part[],
+    }
+    const retained: SessionV1.WithParts = {
+      info: { ...userInfo(tailID), time: { created: 20 } },
+      parts: [
+        { ...basePart(tailID, "prt_retained_tail"), type: "text", text: "verbatim recent turn" },
+      ] as SessionV1.Part[],
+    }
+    const continuation: SessionV1.WithParts = {
+      info: { ...userInfo(continueID), time: { created: 40 } },
+      parts: [{ ...basePart(continueID, "prt_continue_tail"), type: "text", text: "continue now" }] as SessionV1.Part[],
+    }
+    const recent = SessionCompaction.serializeUserContext({ text: "verbatim recent turn" })
+
+    expect(await MessageV2.toModelMessages([marker, summaryMessage, retained, continuation], model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: SessionCompaction.checkpointText({ summary, recent }) }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue now" }],
+      },
+    ])
+  })
+
+  test("does not treat an empty summary as a committed compaction", () => {
+    const earlier: SessionV1.WithParts = {
+      info: userInfo("msg_earlier"),
+      parts: [{ ...basePart("msg_earlier", "prt_earlier"), type: "text", text: "do not hide me" }],
+    }
+    const marker: SessionV1.WithParts = {
+      info: userInfo("msg_compaction_empty"),
+      parts: [
+        {
+          ...basePart("msg_compaction_empty", "prt_compaction_empty"),
+          type: "compaction",
+          auto: true,
+        },
+      ] as SessionV1.Part[],
+    }
+    const emptySummary: SessionV1.WithParts = {
+      info: {
+        ...assistantInfo("msg_summary_empty", "msg_compaction_empty"),
+        summary: true,
+        finish: "stop",
+      },
+      parts: [{ ...basePart("msg_summary_empty", "prt_summary_empty"), type: "text", text: "  " }],
+    }
+
+    const filtered = MessageV2.filterCompacted([earlier, marker, emptySummary])
+    expect(filtered).toHaveLength(3)
+    expect(filtered.map((item) => item.info.id).sort()).toEqual(
+      [earlier.info.id, marker.info.id, emptySummary.info.id].sort(),
+    )
+    expect(
+      filtered.some((item) => item.parts.some((part) => part.type === "text" && part.text === "do not hide me")),
+    ).toBe(true)
   })
 
   test("converts assistant tool completion into tool-call + tool-result messages with attachments", async () => {
@@ -925,7 +1047,7 @@ describe("session.message-v2.toModelMessage", () => {
             state: {
               status: "error",
               input: { command: "for i in {1..20}; do print -- $RANDOM; sleep 1; done" },
-              error: "Tool execution aborted",
+              error: "Tool execution interrupted",
               metadata: { interrupted: true, output },
               time: { start: 0, end: 1 },
             },
@@ -1658,5 +1780,24 @@ describe("session.message-v2.latest", () => {
     expect(state.user?.id).toBe(NEW_COMPACTION_USER)
     expect(state.tasks).toHaveLength(1)
     expect(state.tasks[0]).toMatchObject({ type: "compaction", auto: true })
+  })
+
+  test("uses creation time before ID for stable replay assistants", () => {
+    const user = userInfo(MessageID.make("msg_007"))
+    user.time.created = 1
+    const shellAssistant = assistantInfo(MessageID.make("msg_shell_008"), user.id)
+    shellAssistant.time.created = 2
+    const modelAssistant = assistantInfo(MessageID.make("msg_009"), user.id)
+    modelAssistant.time.created = 3
+    modelAssistant.finish = "stop"
+
+    const state = MessageV2.latest([
+      { info: shellAssistant, parts: [] },
+      { info: modelAssistant, parts: [] },
+      { info: user, parts: [] },
+    ])
+
+    expect(state.assistant?.id).toBe(modelAssistant.id)
+    expect(state.finished?.id).toBe(modelAssistant.id)
   })
 })

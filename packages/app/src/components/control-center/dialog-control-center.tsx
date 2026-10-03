@@ -1,16 +1,27 @@
+import { bindManagementApi, createManagementScope } from "@/components/settings-v2/management-async"
+import { managementErrorText } from "@/components/settings-v2/management-state"
+import { ManagementStatus } from "@/components/settings-v2/management-status"
+import "@/components/settings-v2/management-review.css"
 import { useControlCenterText } from "@/components/control-center/control-center-text"
 import { Button } from "@arforge-ai/ui/button"
 import { TabsV2 } from "@arforge-ai/ui/v2/tabs-v2"
-import { For, Show, createEffect, createMemo, on, onMount, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, on, onCleanup, onMount, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
-import { useServerSDK } from "@/context/server-sdk"
+import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import type { OperationsApi } from "@/utils/server"
+import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { CONTROL_CENTER_CAPABILITY_MAP } from "@/capabilities/control-center-map"
 import { SessionExtensionControl } from "@/components/session/session-extension-control"
 import { SessionRunHistory } from "@/components/session/session-run-history"
 import { AgentDeepDiagnostics } from "./agent-deep-diagnostics"
 import { AgentExtensionInsights } from "./agent-extension-insights"
 import { DiagnosticsWorkbench, MemoryLearningGovernance } from "./capability-workbench"
+import { EvolutionWorkbench } from "./evolution-workbench"
+import { ExperienceCandidateWorkbench, SkillLifecycleWorkbench, TenantPlatformWorkbench } from "./governance-workbench"
+import { RuntimeInsightWorkbench } from "./runtime-insight-workbench"
+import { PersonalWorkspace } from "./personal-workspace"
+import { parseCustomAgentAdmission } from "./custom-agent-admission-presentation"
 import "./control-center.css"
 type LocationInfo = Awaited<ReturnType<OperationsApi["location"]["get"]>>
 type LocationInput = {
@@ -19,20 +30,19 @@ type LocationInput = {
     workspace?: string
   }
 }
-const publicError = (error: unknown, fallback: string) => {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return fallback
-  }
-}
-export function ArforgeSettingsPanels(props: {
+const publicError = managementErrorText
+type ArforgeSettingsProps = {
   value: string
   sessionID?: string
   onNavigate: (value: string) => void
-}) {
+}
+
+export function ArforgeSettingsPanels(props: ArforgeSettingsProps) {
+  const serverSDK = useServerSDK()
+  return <Show when={serverSDK()} keyed>{(sdk) => <ArforgeSettingsContent {...props} sdk={sdk} />}</Show>
+}
+
+function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }) {
   const t = useControlCenterText()
   const serverSDK = useServerSDK()
   const [state, setState] = createStore({
@@ -40,7 +50,10 @@ export function ArforgeSettingsPanels(props: {
     error: "",
     location: undefined as LocationInfo | undefined,
   })
-  const api = () => serverSDK().operationsApi
+  const scope = createManagementScope(props.sdk, "", () => ({ source: serverSDK(), sessionID: "" }))
+  onCleanup(scope.dispose)
+  const scopedAPI = bindManagementApi(props.sdk.operationsApi, scope)
+  const api = () => scopedAPI
   const location = createMemo<LocationInput>(() => ({
     location: {
       directory: state.location?.directory ?? "",
@@ -48,14 +61,14 @@ export function ArforgeSettingsPanels(props: {
     },
   }))
   const loadLocation = async () => {
-    if (state.loading && state.location) return
+    if (!scope.live() || (state.loading && state.location)) return
     setState({ loading: true, error: "" })
     try {
       setState("location", await api().location.get())
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scope.live()) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("loading", false)
+      if (scope.live()) setState("loading", false)
     }
   }
   onMount(() => void loadLocation())
@@ -72,9 +85,32 @@ export function ArforgeSettingsPanels(props: {
   })
   return (
     <>
+      <Show when={props.value === "arforge-workspace"}>
+        <ControlPanel
+          {...panelProps(
+            "arforge-workspace",
+            t("个人工作区"),
+            t(
+              "统一查看项目（Project）、工作区（Location）、会话（Session）、任务（Task）、运行记录（Run）与后台任务的安全状态。",
+            ),
+          )}
+        >
+          <PersonalWorkspace
+            api={api}
+            location={location}
+            ready={() => !state.loading && !!state.location}
+            sessionID={props.sessionID}
+            onNavigate={props.onNavigate}
+          />
+        </ControlPanel>
+      </Show>
       <Show when={props.value === "arforge-overview"}>
         <ControlPanel
-          {...panelProps("arforge-overview", t("系统概览"), t("Server、工作区和 Agent 能力引擎的实时只读状态。"))}
+          {...panelProps(
+            "arforge-overview",
+            t("系统概览"),
+            t("查看 Server、当前工作区和 Agent 引擎是否正常；此页面不会修改数据。"),
+          )}
         >
           <SystemOverview api={api} location={location} ready={() => !state.loading && !!state.location} />
         </ControlPanel>
@@ -83,8 +119,8 @@ export function ArforgeSettingsPanels(props: {
         <ControlPanel
           {...panelProps(
             "arforge-integrations",
-            t("Provider / 模型"),
-            t("模型配置仍由成熟设置界面管理；这里补齐集成连接和凭据生命周期。"),
+            t("模型与服务商（Provider）"),
+            t("管理模型服务连接和凭据；具体模型选择仍在“模型”设置中完成。"),
           )}
         >
           <ProviderControl
@@ -99,7 +135,7 @@ export function ArforgeSettingsPanels(props: {
         <ControlPanel
           {...panelProps(
             "arforge-permissions",
-            t("权限 / 安全"),
+            t("权限与安全"),
             t("查看待处理请求以及已经持久化的权限规则，并可精确撤销单条规则。"),
           )}
         >
@@ -110,34 +146,72 @@ export function ArforgeSettingsPanels(props: {
         <ControlPanel
           {...panelProps(
             "arforge-memory",
-            t("Memory / Learning"),
-            t("同一工作区中的持久记忆、语义检索、召回质量、编辑和治理闭环。"),
+            t("记忆与学习（Memory / Learning）"),
+            t("查看、搜索和管理当前工作区长期保留的记忆，并检查召回质量。"),
           )}
         >
           <MemoryControl api={api} location={location} ready={() => !state.loading && !!state.location} />
-          <MemoryLearningGovernance api={api} location={location} ready={() => !state.loading && !!state.location} />
+          <MemoryLearningGovernance
+            api={api}
+            location={location}
+            sessionID={props.sessionID}
+            ready={() => !state.loading && !!state.location}
+          />
+        </ControlPanel>
+      </Show>
+      <Show when={props.value === "arforge-evolution"}>
+        <ControlPanel
+          {...panelProps(
+            "arforge-evolution",
+            t("受控自主进化"),
+            t("审查学习证据提出的策略候选，并通过隔离评测、人工批准、灰度和回滚治理能力变化。"),
+          )}
+        >
+          <EvolutionWorkbench api={api} location={location} ready={() => !state.loading && !!state.location} />
+          <ExperienceCandidateWorkbench
+            api={api}
+            location={location}
+            ready={() => !state.loading && !!state.location}
+          />
+        </ControlPanel>
+      </Show>
+      <Show when={props.value === "arforge-runtime"}>
+        <ControlPanel
+          {...panelProps(
+            "arforge-runtime",
+            t("运行时透视"),
+            t("上下文分层编译、模型路由决策、独立验证、审计链与运行状态的可视化。"),
+          )}
+        >
+          <RuntimeInsightWorkbench
+            api={api}
+            location={location}
+            sessionID={props.sessionID}
+            ready={() => !state.loading && !!state.location}
+          />
         </ControlPanel>
       </Show>
       <Show when={props.value === "arforge-extensions"}>
         <ControlPanel
           {...panelProps(
             "arforge-extensions",
-            t("Workflow / Plugin / Skill"),
-            t("Workflow 运行、插件两阶段安装、Skill 开关与恢复入口共用同一 typed Server API。"),
+            t("工作流、插件与技能（Workflow / Plugin / Skill）"),
+            t("运行 Workflow，管理 Plugin 和 Skill；安装与启用分开确认，并通过同一 typed Server API 执行。"),
           )}
         >
           <Show when={!state.loading && state.location}>
             <SessionExtensionControl api={api} location={location} sessionID={props.sessionID} />
           </Show>
           <AgentExtensionInsights api={api} location={location} ready={() => !state.loading && !!state.location} />
+          <SkillLifecycleWorkbench api={api} location={location} ready={() => !state.loading && !!state.location} />
         </ControlPanel>
       </Show>
       <Show when={props.value === "arforge-diagnostics"}>
         <ControlPanel
           {...panelProps(
             "arforge-diagnostics",
-            t("诊断 / 运行报告"),
-            t("读取持久运行事实；报告不会创建第二份状态源。"),
+            t("诊断与运行报告"),
+            t("查看真实运行记录和诊断结果；报告只读取现有数据。"),
           )}
         >
           <Show when={!state.loading && state.location}>
@@ -151,7 +225,7 @@ export function ArforgeSettingsPanels(props: {
         <ControlPanel
           {...panelProps(
             "arforge-operations",
-            t("数据库 / 私有运维"),
+            t("数据库与本地运维"),
             t("破坏性运维不伪装成普通按钮；此处明确展示当前安全入口和执行边界。"),
           )}
         >
@@ -159,14 +233,21 @@ export function ArforgeSettingsPanels(props: {
             {(value) => <ProjectCopyControl api={api} location={location} info={value()} />}
           </Show>
           <PrivateOperations api={api} location={location} ready={() => !state.loading && !!state.location} />
+          <TenantPlatformWorkbench
+            api={api}
+            scopeKey={() =>
+              `${props.sdk.url}\u0000${state.location?.directory ?? ""}\u0000${state.location?.workspaceID ?? ""}`
+            }
+            ready={() => !state.loading && !!state.location}
+          />
         </ControlPanel>
       </Show>
       <Show when={props.value === "arforge-coverage"}>
         <ControlPanel
           {...panelProps(
             "arforge-coverage",
-            t("能力映射"),
-            t("由机器可读合同生成的覆盖视图。新增 Server API 未归属时，测试会失败。"),
+            t("开发者：能力映射"),
+            t("供开发者核对前端功能与 Server API 的覆盖关系。"),
           )}
         >
           <CapabilityCoverage />
@@ -185,7 +266,7 @@ function ControlPanel(props: {
 }) {
   const t = useControlCenterText()
   return (
-    <TabsV2.Content value={props.value} class="settings-v2-panel arforge-control-center-panel">
+    <TabsV2.Content value={props.value} class="settings-v2-panel arforge-control-center-panel" aria-busy={props.context().loading}>
       <header class="settings-v2-tab-header arforge-control-center-header">
         <h2 class="settings-v2-tab-title">{props.title}</h2>
         <p class="arforge-control-center-description">{props.description}</p>
@@ -205,23 +286,17 @@ function ControlPanel(props: {
         </div>
       </header>
       <div class="settings-v2-tab-body arforge-control-center-body">
-        <Show when={props.context().error}>
-          <Notice tone="warning">{props.context().error}</Notice>
-        </Show>
-        <Show when={!props.context().directory && props.context().loading}>
-          <div class="settings-v2-loading" role="status" aria-live="polite">
-            {t("正在解析工作区…")}
-          </div>
-        </Show>
+        <ManagementStatus loading={props.context().loading} error={props.context().error} onRetry={() => void props.onRefresh()} />
         <Show when={props.context().directory}>{props.children}</Show>
       </div>
     </TabsV2.Content>
   )
 }
-function SystemOverview(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
+export function SystemOverview(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
   const t = useControlCenterText()
   const [state, setState] = createStore({
     loading: false,
+    saving: false,
     error: "",
     health: undefined as Awaited<ReturnType<OperationsApi["health"]["get"]>> | undefined,
     agents: [] as Awaited<ReturnType<OperationsApi["agents"]["list"]>>["data"],
@@ -233,48 +308,92 @@ function SystemOverview(props: { api: () => OperationsApi; location: () => Locat
       | Awaited<ReturnType<OperationsApi["agentCapabilities"]["systemOverview"]>>["data"]
       | undefined,
   })
-  const refresh = async () => {
-    if (!props.ready() || state.loading) return
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return `${value.directory}\u0000${value.workspace ?? ""}`
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let refreshQueued = false
+  let activeRequest: ScopeRequestToken | undefined
+  const refresh = async (force = false) => {
+    if (!props.ready()) return
+    if (activeRequest && !force) {
+      refreshQueued = true
+      return
+    }
+    if (force) refreshQueued = false
+    scopeGuard.current()
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    activeRequest = request
     setState({ loading: true, error: "" })
     try {
       const [health, agents, capabilityHealth, capabilities, systemOverview] = await Promise.all([
         props.api().health.get(),
-        props.api().agents.list(props.location()),
-        props.api().agentCapabilities.health(props.location()),
-        props.api().agentCapabilities.list(props.location()),
-        props.api().agentCapabilities.systemOverview(props.location()),
+        props.api().agents.list(requestedLocation),
+        props.api().agentCapabilities.health(requestedLocation),
+        props.api().agentCapabilities.list(requestedLocation),
+        props.api().agentCapabilities.systemOverview(requestedLocation),
       ])
-      setState({
-        health,
-        agents: [...agents.data],
-        capabilityHealth: capabilityHealth.data,
-        capabilities: [...capabilities.data.items],
-        systemOverview: systemOverview.data,
-      })
+      if (scopeGuard.isCurrent(request))
+        setState({
+          health,
+          agents: [...agents.data],
+          capabilityHealth: capabilityHealth.data,
+          capabilities: [...capabilities.data.items],
+          systemOverview: systemOverview.data,
+        })
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
+      if (activeRequest !== request) return
+      activeRequest = undefined
       setState("loading", false)
+      if (refreshQueued && props.ready()) {
+        refreshQueued = false
+        void refresh()
+      }
     }
   }
+  let previousScopeKey: string | undefined
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => {
-        if (ready) void refresh()
+      () => `${props.ready() ? "ready" : "not-ready"}\u0000${locationScopeKey()}`,
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        refreshQueued = false
+        if (!props.ready()) {
+          setState({ loading: false, error: "", health: undefined, agents: [], capabilityHealth: undefined, capabilities: [], systemOverview: undefined })
+          return
+        }
+        if (scopeChanged)
+          setState({
+            loading: false,
+            error: "",
+            health: undefined,
+            agents: [],
+            capabilityHealth: undefined,
+            capabilities: [],
+            systemOverview: undefined,
+          })
+        void refresh(scopeChanged)
       },
     ),
   )
   return (
-    <section class="flex flex-col gap-4" data-testid="control-center-overview">
+    <section
+      class="flex flex-col gap-4"
+      data-testid="control-center-overview"
+      aria-busy={state.loading ? "true" : "false"}
+    >
       <div class="flex justify-end">
         <Button size="small" variant="ghost" disabled={state.loading} onClick={() => void refresh()}>
           {t("\u5237\u65B0")}
         </Button>
       </div>
-      <Show when={state.error}>
-        <Notice tone="warning">{state.error}</Notice>
-      </Show>
+      <ManagementStatus loading={state.loading} error={state.error} onRetry={() => void refresh()} />
       <div class="grid gap-3 md:grid-cols-3">
         <MetricCard
           label={t("Server")}
@@ -307,14 +426,71 @@ function SystemOverview(props: { api: () => OperationsApi; location: () => Locat
             <h2 class="text-13-medium text-text-strong">{t("Runtime \u6DF1\u5EA6\u72B6\u6001")}</h2>
             <div class="mt-3 grid gap-2">
               <For each={overview().sections}>
-                {(section) => (
-                  <details class="rounded-md bg-background-weak p-3">
-                    <summary class="cursor-pointer text-12-medium text-text-strong">{section.title}</summary>
-                    <pre class="mt-3 max-h-72 select-text overflow-auto whitespace-pre-wrap break-all text-10-regular text-text-weak">
-                      {JSON.stringify(section.data, null, 2)}
-                    </pre>
-                  </details>
-                )}
+                {(section) => {
+                  const admission = section.id === "subagent-roles" ? parseCustomAgentAdmission(section.data) : undefined
+                  return (
+                    <details class="rounded-md bg-background-weak p-3">
+                      <summary class="cursor-pointer text-12-medium text-text-strong">{section.title}</summary>
+                      <Show
+                        when={admission}
+                        fallback={
+                          <pre class="mt-3 max-h-72 select-text overflow-auto whitespace-pre-wrap break-all text-10-regular text-text-weak">
+                            {JSON.stringify(section.data, null, 2)}
+                          </pre>
+                        }
+                      >
+                        {(value) => (
+                          <div class="mt-3 grid gap-2" data-testid="custom-agent-admission-card">
+                            <div class="grid gap-2 text-11-regular text-text-weak sm:grid-cols-3">
+                              <span>profiles · {value().count}</span>
+                              <span>errors · {value().errors.length}</span>
+                              <span>truncated · {String(value().truncated)}</span>
+                            </div>
+                            <For each={value().items}>
+                              {(item) => (
+                                <article class="rounded-md border border-border-weak-base p-2 text-11-regular">
+                                  <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <code class="text-text-strong">{item.role}</code>
+                                    <span
+                                      class={
+                                        item.decision === "admitted"
+                                          ? "text-text-success"
+                                          : "text-text-warning"
+                                      }
+                                    >
+                                      {item.decision} · {item.status}
+                                    </span>
+                                  </div>
+                                  <p class="mt-1 text-text-weak">{item.reason}</p>
+                                  <div class="flex flex-wrap gap-2 text-10-regular text-text-weak">
+                                    <span>declared {item.declared_tool_count}</span>
+                                    <span>canonical {item.canonical_tool_count}</span>
+                                    <span>unsupported {item.unsupported_tool_count}</span>
+                                    <Show when={item.descriptor_digest}>
+                                      {(digest) => <code title={digest()}>{digest().slice(0, 12)}…</code>}
+                                    </Show>
+                                  </div>
+                                  <Show when={item.violations.length > 0}>
+                                    <ul class="mt-1 list-disc pl-4 text-10-regular text-text-warning">
+                                      <For each={item.violations}>{(violation) => <li>{violation}</li>}</For>
+                                    </ul>
+                                  </Show>
+                                </article>
+                              )}
+                            </For>
+                            <For each={value().errors}>
+                              {(error) => (
+                                <div class="text-10-regular text-text-warning">
+                                  {error.file}: {error.error}
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        )}
+                      </Show>
+                    </details>
+                  )
+                }}
               </For>
             </div>
           </div>
@@ -323,7 +499,7 @@ function SystemOverview(props: { api: () => OperationsApi; location: () => Locat
     </section>
   )
 }
-function ProviderControl(props: {
+export function ProviderControl(props: {
   api: () => OperationsApi
   location: () => LocationInput
   ready: () => boolean
@@ -344,35 +520,52 @@ function ProviderControl(props: {
     notice: "",
     integrations: [] as IntegrationList,
   })
-  const refresh = async () => {
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let previousScopeKey: string | undefined
+
+  const refresh = async (
+    requestedLocation = props.location(),
+    request: ScopeRequestToken = scopeGuard.capture(),
+  ) => {
     if (!props.ready() || state.loading) return
     setState({ loading: true, error: "" })
     try {
-      const result = await props.api().integrations.list(props.location())
-      setState("integrations", [...result.data])
+      const result = await props.api().integrations.list(requestedLocation)
+      if (scopeGuard.isCurrent(request)) setState("integrations", [...result.data])
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
-  const mutate = async (action: () => Promise<unknown>, notice: string) => {
+  const mutate = async (
+    action: (location: LocationInput, request: ScopeRequestToken) => Promise<unknown>,
+    notice: string,
+  ) => {
+    if (state.saving) return
+    const requestedLocation = props.location()
+    const request = scopeGuard.capture()
     setState({ saving: true, error: "", notice: "" })
     try {
-      await action()
-      await refresh()
-      setState("notice", notice)
+      await action(requestedLocation, request)
+      if (!scopeGuard.isCurrent(request)) return
+      await refresh(requestedLocation, request)
+      if (scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("saving", false)
+      if (scopeGuard.isCurrent(request)) setState("saving", false)
     }
   }
   const rename = (connection: CredentialConnection) => {
     const label = window.prompt(t("\u65B0\u7684\u51ED\u636E\u6807\u7B7E\uFF1A"), connection.label)?.trim()
     if (!label || label === connection.label) return
     void mutate(
-      () => props.api().credentials.update({ ...props.location(), credentialID: connection.id, label }),
+      (location) => props.api().credentials.update({ ...location, credentialID: connection.id, label }),
       t("\u51ED\u636E\u6807\u7B7E\u5DF2\u66F4\u65B0\u3002"),
     )
   }
@@ -383,23 +576,28 @@ function ProviderControl(props: {
           label: connection.label,
         }),
       )
-    )
+      )
       return
     void mutate(
-      () => props.api().credentials.remove({ ...props.location(), credentialID: connection.id }),
+      (location) => props.api().credentials.remove({ ...location, credentialID: connection.id }),
       t("\u51ED\u636E\u5DF2\u5220\u9664\u3002"),
     )
   }
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => {
-        if (ready) void refresh()
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged) setState({ loading: false, saving: false, error: "", notice: "", integrations: [] })
+        void refresh()
       },
     ),
   )
   return (
-    <section class="flex flex-col gap-4" data-testid="control-center-providers">
+    <section class="flex flex-col gap-4" data-testid="control-center-providers" aria-busy={state.loading || state.saving}>
       <div class="flex flex-wrap justify-between gap-2">
         <Button type="button" size="small" variant="secondary" onClick={() => props.onNavigate("providers")}>
           {t("\u6253\u5F00\u6A21\u578B\u4E0E Provider \u8BBE\u7F6E")}
@@ -414,12 +612,8 @@ function ProviderControl(props: {
           {t("\u5237\u65B0\u8FDE\u63A5")}
         </Button>
       </div>
-      <Show when={state.error}>
-        <Notice tone="warning">{state.error}</Notice>
-      </Show>
-      <Show when={state.notice}>
-        <Notice>{state.notice}</Notice>
-      </Show>
+      <ManagementStatus loading={state.loading} saving={state.saving} error={state.error} notice={state.notice} />
+      <ManagementStatus empty={props.ready() && !state.loading && !state.error && state.integrations.length === 0} />
       <For each={state.integrations}>
         {(integration) => (
           <article class="rounded-md border border-border-weak-base p-3">
@@ -472,7 +666,7 @@ function ProviderControl(props: {
     </section>
   )
 }
-function SavedPermissionControl(props: {
+export function SavedPermissionControl(props: {
   api: () => OperationsApi
   location: () => LocationInput
   ready: () => boolean
@@ -482,24 +676,35 @@ function SavedPermissionControl(props: {
   type PendingRequest = Awaited<ReturnType<OperationsApi["permissions"]["listRequests"]>>["data"][number]
   const [state, setState] = createStore({
     loading: false,
+    saving: false,
     error: "",
     notice: "",
     saved: [] as SavedRule[],
     pending: [] as PendingRequest[],
   })
-  const refresh = async () => {
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let previousScopeKey: string | undefined
+
+  const refresh = async (
+    requestedLocation = props.location(),
+    request: ScopeRequestToken = scopeGuard.capture(),
+  ) => {
     if (!props.ready() || state.loading) return
     setState({ loading: true, error: "" })
     try {
       const [saved, pending] = await Promise.all([
         props.api().permissions.listSaved(),
-        props.api().permissions.listRequests(props.location()),
+        props.api().permissions.listRequests(requestedLocation),
       ])
-      setState({ saved: [...saved], pending: [...pending.data] })
+      if (scopeGuard.isCurrent(request)) setState({ saved: [...saved], pending: [...pending.data] })
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const remove = async (rule: SavedRule) => {
@@ -512,35 +717,42 @@ function SavedPermissionControl(props: {
       )
     )
       return
+    if (state.saving) return
+    const requestedLocation = props.location()
+    const request = scopeGuard.capture()
+    setState({ saving: true, error: "", notice: "" })
     try {
       await props.api().permissions.removeSaved({ id: rule.id })
-      setState("notice", t("\u6301\u4E45\u6743\u9650\u5DF2\u64A4\u9500\u3002"))
-      await refresh()
+      if (!scopeGuard.isCurrent(request)) return
+      await refresh(requestedLocation, request)
+      if (scopeGuard.isCurrent(request)) setState("notice", t("\u6301\u4E45\u6743\u9650\u5DF2\u64A4\u9500\u3002"))
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
+    } finally {
+      if (scopeGuard.isCurrent(request)) setState("saving", false)
     }
   }
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => {
-        if (ready) void refresh()
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged) setState({ loading: false, saving: false, error: "", notice: "", saved: [], pending: [] })
+        void refresh()
       },
     ),
   )
   return (
-    <section class="flex flex-col gap-4" data-testid="control-center-permissions">
+    <section class="flex flex-col gap-4" data-testid="control-center-permissions" aria-busy={state.loading || state.saving}>
       <div class="flex justify-end">
-        <Button size="small" variant="ghost" disabled={state.loading} onClick={() => void refresh()}>
+        <Button size="small" variant="ghost" disabled={state.loading || state.saving} onClick={() => void refresh()}>
           {t("\u5237\u65B0")}
         </Button>
       </div>
-      <Show when={state.error}>
-        <Notice tone="warning">{state.error}</Notice>
-      </Show>
-      <Show when={state.notice}>
-        <Notice>{state.notice}</Notice>
-      </Show>
+      <ManagementStatus loading={state.loading} saving={state.saving} error={state.error} notice={state.notice} />
       <div class="grid gap-3 md:grid-cols-2">
         <MetricCard label={t("\u5F85\u5904\u7406\u8BF7\u6C42")} value={state.pending.length} />
         <MetricCard label={t("\u5DF2\u4FDD\u5B58\u89C4\u5219")} value={state.saved.length} />
@@ -557,20 +769,20 @@ function SavedPermissionControl(props: {
                   {rule.projectID}
                 </div>
               </div>
-              <Button size="small" variant="ghost" onClick={() => void remove(rule)}>
+              <Button size="small" variant="ghost" disabled={state.loading || state.saving} onClick={() => void remove(rule)}>
                 {t("\u64A4\u9500\u2026")}
               </Button>
             </article>
           )}
         </For>
-        <Show when={!state.loading && state.saved.length === 0}>
+        <Show when={!state.loading && !state.error && state.saved.length === 0}>
           <Notice>{t("\u5F53\u524D\u6CA1\u6709\u6301\u4E45\u6743\u9650\u89C4\u5219\u3002")}</Notice>
         </Show>
       </div>
     </section>
   )
 }
-function MemoryControl(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
+export function MemoryControl(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
   const t = useControlCenterText()
   type Page = Awaited<ReturnType<OperationsApi["memories"]["list"]>>
   type Item = Page["items"][number]
@@ -590,74 +802,116 @@ function MemoryControl(props: { api: () => OperationsApi; location: () => Locati
     quality: undefined as Quality | undefined,
     semanticResult: undefined as Semantic | undefined,
   })
-  const refresh = async () => {
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let previousScopeKey: string | undefined
+
+  const refresh = async (
+    requestedLocation = props.location(),
+    request: ScopeRequestToken = scopeGuard.capture(),
+  ) => {
     if (!props.ready() || state.loading) return
+    const query = state.query.trim()
+    const semanticMode = state.semantic
     setState({ loading: true, error: "", semanticResult: undefined })
     try {
       const [page, facets, quality] = await Promise.all([
         props.api().memories.list({
-          ...props.location(),
-          ...(state.query.trim() && !state.semantic ? { query: state.query.trim() } : {}),
+          ...requestedLocation,
+          ...(query && !semanticMode ? { query } : {}),
           includeGlobal: "true",
           limit: 100,
         }),
-        props.api().memories.facets({ ...props.location(), includeGlobal: "true" }),
-        props.api().memories.recallQuality(props.location()),
+        props.api().memories.facets({ ...requestedLocation, includeGlobal: "true" }),
+        props.api().memories.recallQuality(requestedLocation),
       ])
-      if (state.semantic && state.query.trim()) {
+      if (semanticMode && query) {
         const semantic = await props.api().memories.semantic({
-          ...props.location(),
-          query: state.query.trim(),
+          ...requestedLocation,
+          query,
           includeGlobal: "true",
           topK: 20,
         })
-        setState({
-          semanticResult: semantic,
-          items: semantic.items.map((hit) => hit.memory),
-        })
+        if (scopeGuard.isCurrent(request))
+          setState({
+            semanticResult: semantic,
+            items: semantic.items.map((hit) => hit.memory),
+          })
       } else {
-        setState("items", [...page.items])
+        if (scopeGuard.isCurrent(request)) setState("items", [...page.items])
       }
-      setState({ facets, quality })
+      if (scopeGuard.isCurrent(request)) setState({ facets, quality })
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
-  const mutate = async (action: () => Promise<unknown>, notice: string) => {
+  const mutate = async (
+    action: (location: LocationInput, request: ScopeRequestToken) => Promise<unknown>,
+    notice: string,
+  ) => {
     if (state.saving) return
+    const requestedLocation = props.location()
+    const request = scopeGuard.capture()
     setState({ saving: true, error: "", notice: "" })
     try {
-      await action()
-      await refresh()
-      setState("notice", notice)
+      await action(requestedLocation, request)
+      if (!scopeGuard.isCurrent(request)) return
+      await refresh(requestedLocation, request)
+      if (scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      setState("error", publicError(error, t("Unknown control-center error")))
+      if (scopeGuard.isCurrent(request)) setState("error", publicError(error, t("Unknown control-center error")))
     } finally {
-      setState("saving", false)
+      if (scopeGuard.isCurrent(request)) setState("saving", false)
     }
   }
   const edit = (item: Item) => {
     const content = window.prompt(t("\u7F16\u8F91\u8BB0\u5FC6\u5185\u5BB9\uFF1A"), item.content)?.trim()
     if (!content || content === item.content) return
     void mutate(
-      () => props.api().memories.update({ ...props.location(), memoryID: item.id, content }),
+      (location) => props.api().memories.update({ ...location, memoryID: item.id, content }),
       t("\u8BB0\u5FC6\u5DF2\u66F4\u65B0\u3002"),
     )
   }
   const remove = (item: Item) => {
     if (!window.confirm(t("删除记忆 {{id}}？此操作不会删除关联会话。", { id: item.id }))) return
     void mutate(
-      () => props.api().memories.delete({ ...props.location(), memoryID: item.id }),
+      (location) =>
+        props.api().memories.maintenanceDelete({
+          ...location,
+          memoryID: item.id,
+          expectedVersion: item.version,
+          actionID: AgentRuntime.ActionID.create(),
+          redactionEvidenceID: AgentRuntime.EvidenceID.create(),
+          reason: `Control Center confirmed memory deletion: ${item.id}`,
+        }),
       t("\u8BB0\u5FC6\u5DF2\u5220\u9664\u3002"),
     )
   }
   const removeSelected = () => {
     if (state.selected.length === 0) return
     if (!window.confirm(t("批量删除选中的 {{count}} 条记忆？", { count: state.selected.length }))) return
+    const selectedItems = state.selected.map((id) => state.items.find((item) => item.id === id))
+    if (selectedItems.some((item) => item === undefined)) {
+      setState("error", t("Unknown control-center error"))
+      return
+    }
     void mutate(
-      () => props.api().memories.deleteMany({ ...props.location(), ids: state.selected }),
+      (location) =>
+        props.api().memories.maintenanceDeleteMany({
+          ...location,
+          items: selectedItems.map((item) => ({
+            memoryID: item!.id,
+            expectedVersion: item!.version,
+            actionID: AgentRuntime.ActionID.create(),
+            redactionEvidenceID: AgentRuntime.EvidenceID.create(),
+            reason: `Control Center confirmed bulk memory deletion: ${item!.id}`,
+          })),
+        }),
       t("\u9009\u4E2D\u7684\u8BB0\u5FC6\u5DF2\u6279\u91CF\u5220\u9664\u3002"),
     )
     setState("selected", [])
@@ -669,14 +923,30 @@ function MemoryControl(props: { api: () => OperationsApi; location: () => Locati
     )
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => {
-        if (ready) void refresh()
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged)
+          setState({
+            loading: false,
+            saving: false,
+            error: "",
+            notice: "",
+            items: [],
+            selected: [],
+            facets: undefined,
+            quality: undefined,
+            semanticResult: undefined,
+          })
+        void refresh()
       },
     ),
   )
   return (
-    <section class="flex flex-col gap-4" data-testid="control-center-memory">
+    <section class="flex flex-col gap-4" data-testid="control-center-memory" aria-busy={state.loading || state.saving}>
       <div class="grid gap-3 md:grid-cols-3">
         <MetricCard label={t("\u5F53\u524D\u7ED3\u679C")} value={state.items.length} />
         <MetricCard
@@ -694,6 +964,7 @@ function MemoryControl(props: { api: () => OperationsApi; location: () => Locati
       >
         <input
           class="h-9 min-w-[240px] flex-1 rounded-md border border-border-weak-base bg-background-base px-3 text-12-regular text-text-strong"
+          aria-label={t("\u641C\u7D22\u6301\u4E45\u8BB0\u5FC6")}
           value={state.query}
           onInput={(event) => setState("query", event.currentTarget.value)}
           placeholder={t("\u641C\u7D22\u6301\u4E45\u8BB0\u5FC6")}
@@ -713,12 +984,7 @@ function MemoryControl(props: { api: () => OperationsApi; location: () => Locati
           {t("\u5220\u9664\u6240\u9009\u2026")}
         </Button>
       </form>
-      <Show when={state.error}>
-        <Notice tone="warning">{state.error}</Notice>
-      </Show>
-      <Show when={state.notice}>
-        <Notice>{state.notice}</Notice>
-      </Show>
+      <ManagementStatus loading={state.loading} saving={state.saving} error={state.error} notice={state.notice} />
       <Show when={state.facets}>
         {(facets) => (
           <div class="flex flex-wrap gap-2 text-10-regular text-text-weak">
@@ -775,15 +1041,12 @@ function MemoryControl(props: { api: () => OperationsApi; location: () => Locati
           )}
         </For>
       </div>
+      <ManagementStatus empty={props.ready() && !state.loading && !state.error && state.items.length === 0} />
       <Show when={state.quality}>{(quality) => <Notice>{quality().caveat}</Notice>}</Show>
     </section>
   )
 }
-function PrivateOperations(props: {
-  api: () => OperationsApi
-  location: () => LocationInput
-  ready: () => boolean
-}) {
+function PrivateOperations(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
   const t = useControlCenterText()
   type Overview = Awaited<ReturnType<OperationsApi["privateOperations"]["overview"]>>["data"]
   const [state, setState] = createStore({
@@ -803,7 +1066,12 @@ function PrivateOperations(props: {
       setState("loading", false)
     }
   }
-  createEffect(on(() => props.ready(), (ready) => ready && void refresh()))
+  createEffect(
+    on(
+      () => props.ready(),
+      (ready) => ready && void refresh(),
+    ),
+  )
   const rows = [
     [
       t("\u7EDF\u4E00\u5065\u5EB7\u68C0\u67E5"),
@@ -843,7 +1111,11 @@ function PrivateOperations(props: {
     ],
   ] as const
   return (
-    <section class="flex flex-col gap-4" data-testid="control-center-private-operations">
+    <section
+      class="flex flex-col gap-4"
+      data-testid="control-center-private-operations"
+      aria-busy={state.loading ? "true" : "false"}
+    >
       <Notice tone="warning">
         {t(
           "`clear-data`\u3001\u771F\u5B9E\u6570\u636E\u5E93\u6062\u590D\u548C\u65E5\u5FD7\u5B9E\u9645\u5220\u9664\u5C5E\u4E8E\u7BA1\u7406\u6A21\u5F0F\u64CD\u4F5C\u3002\u666E\u901A\u63A7\u5236\u4E2D\u5FC3\u4E0D\u4F1A\u76F4\u63A5\u6267\u884C\u5B83\u4EEC\u3002",
@@ -854,6 +1126,16 @@ function PrivateOperations(props: {
           {t("\u5237\u65B0")}
         </Button>
       </div>
+      <Show when={state.loading}>
+        <div
+          class="rounded-md border border-border-weak-base px-3 py-2 text-11-regular text-text-weak"
+          data-testid="private-operations-loading"
+          role="status"
+          aria-live="polite"
+        >
+          {t("\u6b63\u5728\u8fd0\u884c\u2026")}
+        </div>
+      </Show>
       <Show when={state.error}>
         <Notice tone="warning">{state.error}</Notice>
       </Show>
@@ -887,7 +1169,7 @@ function PrivateOperations(props: {
               <article class="rounded-md border border-border-weak-base p-3">
                 <h3 class="text-12-medium text-text-strong">{t("PostgreSQL \u5907\u4EFD")}</h3>
                 <div class="mt-2 text-11-regular text-text-weak">
-                  <div>{overview().backup.available ? overview().backup.createdAt ?? "✓" : "—"}</div>
+                  <div>{overview().backup.available ? (overview().backup.createdAt ?? "✓") : "—"}</div>
                   <div>
                     {overview().backup.database ?? "PostgreSQL"} · {overview().backup.bytes} B · AES-256-CBC{" "}
                     {overview().backup.checksumVerified ? "✓ SHA-256" : "—"}
@@ -1046,6 +1328,7 @@ function ProjectCopyControl(props: { api: () => OperationsApi; location: () => L
       <div class="flex flex-wrap gap-2">
         <input
           class="h-9 min-w-[280px] flex-1 rounded-md border border-border-weak-base bg-background-base px-3 text-12-regular text-text-strong"
+          aria-label={t("\u65B0 worktree \u7684\u7EDD\u5BF9\u76EE\u5F55")}
           value={state.destination}
           onInput={(event) => setState("destination", event.currentTarget.value)}
           placeholder={t("\u65B0 worktree \u7684\u7EDD\u5BF9\u76EE\u5F55")}
@@ -1079,17 +1362,12 @@ function ProjectCopyControl(props: { api: () => OperationsApi; location: () => L
           </div>
         )}
       </For>
-      <Show when={!state.loading && state.entries.every((entry) => entry.type !== "copy")}>
+      <Show when={!state.loading && !state.error && state.entries.every((entry) => entry.type !== "copy")}>
         <p class="text-11-regular text-text-weak">
           {t("\u5F53\u524D\u6CA1\u6709\u5DF2\u767B\u8BB0\u7684\u9879\u76EE\u526F\u672C\u3002")}
         </p>
       </Show>
-      <Show when={state.error}>
-        <Notice tone="warning">{state.error}</Notice>
-      </Show>
-      <Show when={state.notice}>
-        <Notice>{state.notice}</Notice>
-      </Show>
+      <ManagementStatus loading={state.loading} saving={state.saving} error={state.error} notice={state.notice} />
     </section>
   )
 }
@@ -1124,7 +1402,6 @@ function CapabilityCoverage() {
   )
 }
 function MetricCard(props: { label: string; value: string | number }) {
-  const t = useControlCenterText()
   return (
     <div class="rounded-md border border-border-weak-base bg-background-base p-3">
       <div class="text-10-regular text-text-weak">{props.label}</div>

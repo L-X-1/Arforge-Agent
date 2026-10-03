@@ -7,7 +7,7 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@arforge-ai/core/effect/app-node-platform"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Global } from "@arforge-ai/core/global"
-import { SkillDiscovery } from "@arforge-ai/core/skill/discovery"
+import { limits, SkillDiscovery } from "@arforge-ai/core/skill/discovery"
 import { tmpdir } from "./fixture/tmpdir"
 
 const base = "https://skills.example.test/catalog/"
@@ -42,6 +42,61 @@ async function pull(skills: unknown[], files: Record<string, string> = {}, cache
 }
 
 describe("SkillDiscovery.pull", () => {
+  test("rejects an oversized index before walking or downloading entries", async () => {
+    const skills = Array.from({ length: limits.maxSkills + 1 }, (_, index) => ({
+      name: `skill-${index}`,
+      files: ["SKILL.md"],
+    }))
+    const result = await pull(skills)
+    try {
+      expect(result.directories).toEqual([])
+      expect(result.requests).toEqual([`${base}index.json`])
+      expect(await fs.readdir(result.tmp.path)).toEqual([])
+    } finally {
+      await result.tmp[Symbol.asyncDispose]()
+    }
+  })
+
+  test("keeps a published revision when an unversioned refresh is incomplete", async () => {
+    const tmp = await tmpdir()
+    try {
+      const first = await pull(
+        [{ name: "deploy", files: ["SKILL.md", "reference.md"] }],
+        {
+          [`${base}deploy/SKILL.md`]: "# Old",
+          [`${base}deploy/reference.md`]: "old reference",
+        },
+        tmp,
+      )
+      const root = first.directories[0]
+      await fs.rm(path.join(root, "reference.md"))
+
+      const second = await pull(
+        [{ name: "deploy", files: ["SKILL.md", "reference.md"] }],
+        { [`${base}deploy/SKILL.md`]: "# New" },
+        tmp,
+      )
+
+      expect(second.directories).toEqual([root])
+      expect(await fs.readFile(path.join(root, "SKILL.md"), "utf8")).toBe("# Old")
+    } finally {
+      await tmp[Symbol.asyncDispose]()
+    }
+  })
+
+  test("rejects an oversized skill file without publishing a partial directory", async () => {
+    const result = await pull([{ name: "deploy", files: ["SKILL.md"] }], {
+      [`${base}deploy/SKILL.md`]: "x".repeat(limits.maxFileBytes + 1),
+    })
+    try {
+      expect(result.directories).toEqual([])
+      expect(result.requests).toEqual([`${base}index.json`, `${base}deploy/SKILL.md`])
+      expect(await fs.readdir(result.tmp.path)).toEqual([])
+    } finally {
+      await result.tmp[Symbol.asyncDispose]()
+    }
+  })
+
   test("rejects skill name traversal without fetching files", async () => {
     const result = await pull([{ name: "../outside", files: ["SKILL.md"] }])
     try {

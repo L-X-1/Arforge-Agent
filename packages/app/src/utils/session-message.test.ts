@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionMessageInfo } from "@arforge-ai/client/promise"
+import { StructuredOutput } from "@arforge-ai/core/tool/structured-output"
 import { normalizeSessionMessages } from "./session-message"
 
 describe("normalizeSessionMessages", () => {
@@ -116,6 +117,75 @@ describe("normalizeSessionMessages", () => {
     ] satisfies SessionMessageInfo[]
 
     expect(normalizeSessionMessages("ses_1", source).messages).toEqual([])
+  })
+
+  test("renders validated structured output as the final answer when prose is absent", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "return JSON", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [],
+        structured: { answer: 42, note: "contains ``` safely" },
+        time: { created: 2, completed: 3 },
+      },
+    ] as unknown as SessionMessageInfo[]
+
+    const result = normalizeSessionMessages("ses_1", source)
+
+    expect(result.parts.get("msg_assistant")).toEqual([
+      expect.objectContaining({
+        id: "msg_assistant:text:0",
+        type: "text",
+        synthetic: true,
+        text: '````json\n{\n  "answer": 42,\n  "note": "contains ``` safely"\n}\n````',
+      }),
+    ])
+  })
+
+  test("does not duplicate structured output when the assistant already has prose", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "summarize", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [{ type: "text", text: "Human-readable result" }],
+        structured: { answer: 42 },
+        time: { created: 2, completed: 3 },
+      },
+    ] as unknown as SessionMessageInfo[]
+
+    expect(normalizeSessionMessages("ses_1", source).parts.get("msg_assistant")).toEqual([
+      expect.objectContaining({ type: "text", text: "Human-readable result", synthetic: undefined }),
+    ])
+  })
+
+  test("keeps the bounded structured-output exhaustion message visible to the user", () => {
+    const message = StructuredOutput.exhaustedMessage(1)
+    const source = [
+      { id: "msg_user", type: "user", text: "return JSON", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [],
+        finish: "error",
+        error: { type: "unknown", message },
+        time: { created: 2, completed: 3 },
+      },
+    ] as unknown as SessionMessageInfo[]
+
+    const result = normalizeSessionMessages("ses_1", source)
+
+    expect(result.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      error: { name: "UnknownError", data: { message } },
+    })
   })
 
   test("projects a current shell message into a renderable standalone turn", () => {

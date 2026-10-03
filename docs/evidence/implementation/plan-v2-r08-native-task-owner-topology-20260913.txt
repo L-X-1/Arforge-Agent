@@ -1,0 +1,179 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent
+Command: bun run audit:session-owner
+Exit code: 0
+Raw captured output:
+
+$ bun run script/arforge-session-execution-topology.ts --root .
+{
+  "schema_version": "1.1",
+  "valid": true,
+  "owner": "SessionExecution",
+  "sites": [
+    {
+      "path": "packages/arforge/src/control-plane/workspace.ts",
+      "line": 584,
+      "service": "SessionExecution",
+      "method": "interrupt"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 91,
+      "service": "SessionExecution",
+      "method": "wakeAndWait"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 97,
+      "service": "SessionPrompt",
+      "method": "latestAssistant"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 103,
+      "service": "SessionPrompt",
+      "method": "latestAssistant"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 116,
+      "service": "SessionPrompt",
+      "method": "admitCommand"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 306,
+      "service": "SessionExecution",
+      "method": "interrupt"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 368,
+      "service": "SessionPrompt",
+      "method": "admit"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 390,
+      "service": "SessionPrompt",
+      "method": "admit"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 422,
+      "service": "SessionPrompt",
+      "method": "shell"
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "line": 464,
+      "service": "SessionExecution",
+      "method": "exclusive"
+    },
+    {
+      "path": "packages/arforge/src/session/execution-formal.ts",
+      "line": 124,
+      "service": "SessionPrompt",
+      "method": "scheduledTaskTool"
+    },
+    {
+      "path": "packages/arforge/src/session/execution-formal.ts",
+      "line": 226,
+      "service": "SessionPrompt",
+      "method": "recoverTask"
+    },
+    {
+      "path": "packages/arforge/src/session/prompt.ts",
+      "line": 452,
+      "service": "SessionExecution",
+      "method": "interrupt"
+    },
+    {
+      "path": "packages/arforge/src/session/prompt.ts",
+      "line": 1723,
+      "service": "SessionExecution",
+      "method": "wakeAndWait"
+    },
+    {
+      "path": "packages/arforge/src/session/prompt.ts",
+      "line": 2059,
+      "service": "SessionExecution",
+      "method": "exclusive"
+    },
+    {
+      "path": "packages/core/src/runtime/subagent-control.ts",
+      "line": 541,
+      "service": "SessionExecution",
+      "method": "wake"
+    },
+    {
+      "path": "packages/core/src/runtime/subagent-control.ts",
+      "line": 838,
+      "service": "SessionExecution",
+      "method": "interrupt"
+    },
+    {
+      "path": "packages/core/src/session.ts",
+      "line": 501,
+      "service": "SessionExecution",
+      "method": "wake"
+    },
+    {
+      "path": "packages/core/src/session.ts",
+      "line": 567,
+      "service": "SessionExecution",
+      "method": "wakeAndWait"
+    },
+    {
+      "path": "packages/core/src/session.ts",
+      "line": 574,
+      "service": "SessionExecution",
+      "method": "resume"
+    },
+    {
+      "path": "packages/core/src/session.ts",
+      "line": 578,
+      "service": "SessionExecution",
+      "method": "resumeWith"
+    },
+    {
+      "path": "packages/core/src/session.ts",
+      "line": 590,
+      "service": "SessionExecution",
+      "method": "interrupt"
+    }
+  ],
+  "findings": [],
+  "formal_default": {
+    "ready": true,
+    "selected_owner": "formal",
+    "checks": [
+      {
+        "id": "AFD-001",
+        "ready": true,
+        "detail": "Mature HTTP admission must freeze the same message identity into canonical SessionInput."
+      },
+      {
+        "id": "AFD-002",
+        "ready": true,
+        "detail": "Slash-command admission must preserve resolved text and original command identity."
+      },
+      {
+        "id": "AFD-003",
+        "ready": true,
+        "detail": "Request-scoped custom system prompts need a canonical durable schema and Formal compiler owner."
+      },
+      {
+        "id": "AFD-004",
+        "ready": true,
+        "detail": "Automatic subtasks must use the canonical Prompt, Core task tool, ToolRegistry and ActionGateway without a retired carrier or Mature shadow projection."
+      },
+      {
+        "id": "AFD-005",
+        "ready": true,
+        "detail": "Every integrated product root must bind Formal by default with no credential/billing-dependent owner split."
+      }
+    ],
+    "blockers": []
+  }
+}

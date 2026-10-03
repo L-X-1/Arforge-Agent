@@ -1,4 +1,3 @@
-import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { EOL } from "os"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { basename } from "path"
@@ -6,14 +5,28 @@ import { Cause, Effect } from "effect"
 import { Agent } from "../../../agent/agent"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
-import type { MessageV2 } from "../../../session/message-v2"
 import { MessageID, PartID } from "../../../session/schema"
 import { ToolRegistry } from "@/tool/registry"
+import { Tool as MatureTool } from "@/tool/tool"
 import { Permission } from "../../../permission"
 import { iife } from "../../../util/iife"
 import { fail } from "../../effect-cmd"
 import { InstanceRef } from "@/effect/instance-ref"
 import type { InstanceContext } from "@/project/instance-context"
+import { LocationServiceMap } from "@arforge-ai/core/location-services"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
+import { ToolRegistry as CoreToolRegistry } from "@arforge-ai/core/tool/registry"
+import { PermissionV2 } from "@arforge-ai/core/permission"
+import { SessionMessage } from "@arforge-ai/core/session/message"
+import { SessionSchema as DurableSessionSchema } from "@arforge-ai/core/session/schema"
+import { AgentV2 } from "@arforge-ai/core/agent"
+import { SandboxPolicy } from "@arforge-ai/core/sandbox/policy"
+import { ToolCoreBridge } from "@/tool/core-bridge"
+import { Plugin } from "@/plugin"
+import { Config } from "@/config/config"
+import { Shell } from "@arforge-ai/core/shell"
+import { ExplicitToolApproval } from "./explicit-tool-approval"
 
 export const debugAgent = Effect.fn("Cli.debug.agent")(function* (args: {
   name: string
@@ -51,8 +64,7 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
       return yield* fail("", 1)
     }
     const params = parseToolParams(args.params)
-    const toolCtx = yield* createToolContext(agent, ctx)
-    const result = yield* tool.execute(params, toolCtx)
+    const result = yield* executeExplicitTool({ tool, params, agent, ctx })
     process.stdout.write(JSON.stringify({ tool: toolID, input: params, result }, null, 2) + EOL)
     return
   }
@@ -124,15 +136,28 @@ function parseToolParams(input?: string) {
   return parsed as Record<string, unknown>
 }
 
-const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(function* (
-  agent: Agent.Info,
-  ctx: InstanceContext,
-) {
+const errorMessage = (error: unknown) =>
+  error instanceof Error
+    ? error.message
+    : error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : String(error)
+
+const executeExplicitTool = Effect.fn("Cli.debug.agent.executeExplicitTool")(function* (input: {
+  tool: MatureTool.Def
+  params: Record<string, unknown>
+  agent: Agent.Info
+  ctx: InstanceContext
+}) {
   const sessionSvc = yield* Session.Service
-  const session = yield* sessionSvc.create({ title: `Debug tool run (${agent.name})` })
+  const session = yield* sessionSvc.create({
+    title: `Debug tool run (${input.agent.name})`,
+    agent: input.agent.name,
+    permission: input.agent.permission,
+  })
   const messageID = MessageID.ascending()
-  const model = agent.model
-    ? agent.model
+  const model = input.agent.model
+    ? input.agent.model
     : yield* Effect.gen(function* () {
         const provider = yield* Provider.Service
         return yield* provider.defaultModel().pipe(
@@ -161,35 +186,60 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
     modelID: model.modelID,
     providerID: model.providerID,
     mode: "debug",
-    agent: agent.name,
+    agent: input.agent.name,
     path: {
-      cwd: ctx.directory,
-      root: ctx.worktree,
+      cwd: input.ctx.directory,
+      root: input.ctx.worktree,
     },
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   }
   yield* sessionSvc.updateMessage(message)
 
-  const ruleset = Permission.merge(agent.permission, session.permission ?? [])
+  const locations = yield* LocationServiceMap.Service
+  const plugin = yield* Plugin.Service
+  const config = yield* Config.Service
+  const durableSessionID = DurableSessionSchema.ID.make(session.id)
+  const assistantMessageID = SessionMessage.ID.make(messageID)
+  const toolCallID = PartID.ascending()
+  const location = locations.get(
+    Location.Ref.make({
+      directory: AbsolutePath.make(session.directory),
+      ...(session.workspaceID ? { workspaceID: session.workspaceID } : {}),
+    }),
+  )
 
-  return {
-    sessionID: session.id,
-    messageID,
-    callID: PartID.ascending(),
-    agent: agent.name,
-    abort: new AbortController().signal,
-    messages: [],
-    metadata: () => Effect.void,
-    ask(req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) {
-      return Effect.sync(() => {
-        for (const pattern of req.patterns) {
-          const rule = Permission.evaluate(req.permission, pattern, ruleset)
-          if (rule.action === "deny") {
-            throw new PermissionV1.DeniedError({ ruleset })
-          }
-        }
+  return yield* Effect.gen(function* () {
+    const registry = yield* CoreToolRegistry.Service
+    const permissions = yield* PermissionV2.Service
+    const carrier = ToolCoreBridge.makeLegacySessionTools(
+      [input.tool],
+      { plugin, directory: input.ctx.directory, worktree: input.ctx.worktree },
+      {
+        messages: [],
+        sandboxProfile: SandboxPolicy.profileFromMetadata(session.metadata),
+        extra: {},
+        workspace: input.ctx.worktree,
+        shell: Shell.acceptable((yield* config.get()).shell),
+        metadata: () => Effect.void,
+      },
+    )
+    const materialized = yield* registry
+      .materialize([], durableSessionID, {
+        includeRegistered: false,
+        legacySessionTools: carrier,
       })
-    },
-  }
+      .pipe(Effect.catch((error) => fail(`Tool ${input.tool.id} could not be prepared: ${errorMessage(error)}`)))
+    const settlement = yield* ExplicitToolApproval.settle({
+      permissions,
+      materialized,
+      identity: { sessionID: durableSessionID, assistantMessageID, toolCallID },
+      agent: AgentV2.ID.make(input.agent.name),
+      name: input.tool.id,
+      args: input.params,
+    }).pipe(Effect.catch((error) => fail(`Tool ${input.tool.id} could not settle: ${errorMessage(error)}`)))
+    if (settlement.result.type === "error")
+      return yield* fail(`Tool ${input.tool.id} failed: ${String(settlement.result.value)}`)
+    return ToolCoreBridge.settlementToMatureResult(settlement)
+  }).pipe(Effect.provide(location))
 })

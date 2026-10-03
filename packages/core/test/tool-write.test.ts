@@ -4,6 +4,7 @@ import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@arforge-ai/core/file-mutation"
+import { extractOfficeText } from "@arforge-ai/core/office-document"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { FSUtil } from "@arforge-ai/core/fs-util"
@@ -97,6 +98,207 @@ const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
 const it = testEffect(Layer.empty)
 
 describe("WriteTool", () => {
+  it.live("fuses bounded XLSX creation into the canonical write permission and mutation path", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* settleTool(
+              registry,
+              call({
+                path: "report.xlsx",
+                content: JSON.stringify([
+                  ["month", "income"],
+                  ["July", 128],
+                ]),
+              }),
+            )
+            expect(settled.result).toEqual({ type: "text", value: "Created file successfully: report.xlsx" })
+            const bytes = yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "report.xlsx")))
+            expect(extractOfficeText(bytes, ".xlsx")).toEqual({
+              ok: true,
+              engine: "ooxml",
+              text: "month\tincome\nJuly\t128",
+            })
+            expect(assertions.map((input) => input.action)).toEqual(["edit"])
+            expect(writes).toEqual([path.join(yield* Effect.promise(() => fs.realpath(tmp.path)), "report.xlsx")])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("rejects malformed XLSX JSON before touching the target", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "broken.xlsx")
+        return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const result = yield* executeTool(
+                  registry,
+                  call({ path: "broken.xlsx", content: "not-json" }, "call-broken-xlsx"),
+                )
+                expect(result).toMatchObject({ type: "error", value: "XLSX content is not valid JSON" })
+                expect(writes).toEqual([])
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+              }),
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("fuses bounded DOCX creation into the canonical write permission and mutation path", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* settleTool(
+              registry,
+              call(
+                {
+                  path: "report.docx",
+                  content: "# 月报\n\n收入 **已确认**\n- 一项",
+                },
+                "call-docx",
+              ),
+            )
+            expect(settled.result).toEqual({ type: "text", value: "Created file successfully: report.docx" })
+            const bytes = yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "report.docx")))
+            expect(extractOfficeText(bytes, ".docx")).toEqual({
+              ok: true,
+              engine: "ooxml",
+              text: "月报\n收入 已确认\n• 一项",
+            })
+            expect(assertions.map((input) => input.action)).toEqual(["edit"])
+            expect(writes).toEqual([path.join(yield* Effect.promise(() => fs.realpath(tmp.path)), "report.docx")])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("rejects DOCX XML control characters before creating or overwriting the target", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "broken.docx")
+        return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const result = yield* executeTool(
+                  registry,
+                  call({ path: "broken.docx", content: "bad\u0001text" }, "call-broken-docx"),
+                )
+                expect(result).toMatchObject({ type: "error", value: expect.stringContaining("invalid XML character") })
+                expect(writes).toEqual([])
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+              }),
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("fuses bounded PPTX creation into the canonical write permission and mutation path", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* settleTool(
+              registry,
+              call(
+                {
+                  path: "report.pptx",
+                  content: JSON.stringify([{ title: "路线图", body: "阶段一\n阶段二" }]),
+                },
+                "call-pptx",
+              ),
+            )
+            expect(settled.result).toEqual({ type: "text", value: "Created file successfully: report.pptx" })
+            const bytes = yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "report.pptx")))
+            expect(extractOfficeText(bytes, ".pptx")).toEqual({
+              ok: true,
+              engine: "ooxml",
+              text: "路线图\n阶段一\n阶段二",
+            })
+            expect(assertions.map((input) => input.action)).toEqual(["edit"])
+            expect(writes).toEqual([path.join(yield* Effect.promise(() => fs.realpath(tmp.path)), "report.pptx")])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("fuses bounded PDF creation into the canonical write permission and mutation path", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* settleTool(
+              registry,
+              call({ path: "report.pdf", content: "# 月报\n收入 **已确认**\n<!-- pagebreak -->\n## 后续" }, "call-pdf"),
+            )
+            expect(settled.result).toEqual({ type: "text", value: "Created file successfully: report.pdf" })
+            const bytes = yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "report.pdf")))
+            expect(bytes.subarray(0, 8).toString("latin1")).toBe("%PDF-1.4")
+            expect(bytes.toString("latin1")).toContain("/Type /Pages /Count 2")
+            expect(assertions.map((input) => input.action)).toEqual(["edit"])
+            expect(writes).toEqual([path.join(yield* Effect.promise(() => fs.realpath(tmp.path)), "report.pdf")])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("rejects PDF control characters before creating or overwriting the target", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "broken.pdf")
+        return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const result = yield* executeTool(
+                  registry,
+                  call({ path: "broken.pdf", content: "bad\u0001text" }, "call-broken-pdf"),
+                )
+                expect(result).toMatchObject({ type: "error", value: expect.stringContaining("control character") })
+                expect(writes).toEqual([])
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+              }),
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("registers and creates a relative file through FileMutation once", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -121,7 +323,10 @@ describe("WriteTool", () => {
             expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "src", "new.txt"), "utf8"))).toBe(
               "created",
             )
-            expect(assertions).toMatchObject([{ sessionID, action: "edit", resources: ["src/new.txt"], save: ["*"] }])
+            expect(assertions).toMatchObject([
+              { sessionID, agent: "build", action: "edit", resources: ["src/new.txt"], save: ["src/new.txt"] },
+            ])
+            expect(assertions[0]?.resources).not.toContain("*")
             expect(writes).toEqual([path.join(yield* Effect.promise(() => fs.realpath(tmp.path)), "src", "new.txt")])
           }),
         )
@@ -148,6 +353,42 @@ describe("WriteTool", () => {
               )
               expect(writes).toHaveLength(1)
             }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("fails closed when the same action identity carries different write content", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return Effect.promise(() => fs.writeFile(path.join(tmp.path, "existing.txt"), "before")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                yield* settleTool(registry, call({ path: "existing.txt", content: "after" }))
+                const replay = yield* executeTool(
+                  registry,
+                  call({ path: "existing.txt", content: "different-content" }),
+                )
+                // Same tool/path/scope but different content: the durable
+                // intent fingerprint differs, so the call fails closed before
+                // any permission request, attempt, or file mutation, and the
+                // first result is never replayed.
+                expect(replay).toEqual({
+                  type: "error",
+                  value: expect.stringContaining("intent does not match"),
+                })
+                expect(assertions).toHaveLength(1)
+                expect(writes).toHaveLength(1)
+                expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "existing.txt"), "utf8"))).toBe(
+                  "after",
+                )
+              }),
+            ),
           ),
         )
       },
@@ -217,13 +458,16 @@ describe("WriteTool", () => {
           Effect.andThen((settled) =>
             Effect.gen(function* () {
               const canonicalTarget = path.join(yield* Effect.promise(() => fs.realpath(outside.path)), "external.txt")
-              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "edit"])
+              expect(assertions.map((input) => input.action)).toEqual(["edit", "external_directory"])
               expect(assertions[0]).toMatchObject({
+                resources: [canonicalTarget.replaceAll("\\", "/")],
+              })
+              expect(assertions[0]?.resources).not.toContain("*")
+              expect(assertions[1]).toMatchObject({
                 resources: [
                   path.join(yield* Effect.promise(() => fs.realpath(outside.path)), "*").replaceAll("\\", "/"),
                 ],
               })
-              expect(assertions[1]).toMatchObject({ resources: [canonicalTarget.replaceAll("\\", "/")], save: ["*"] })
               expect(settled.output?.structured).toMatchObject({
                 target: canonicalTarget,
                 resource: canonicalTarget.replaceAll("\\", "/"),
@@ -252,24 +496,26 @@ describe("WriteTool", () => {
           denyAction = "external_directory"
           expect(
             yield* withTool(active.path, (registry) =>
-              executeTool(registry, call({ path: external, content: "blocked" })),
+              executeTool(registry, call({ path: external, content: "blocked" }, "call-deny-ext")),
             ),
           ).toEqual({
             type: "error",
-            value: `Unable to write ${external}`,
+            value: `Permission denied for edit: ${external.replaceAll("\\", "/")}; external_directory: ${path
+              .join(path.dirname(external), "*")
+              .replaceAll("\\", "/")}`,
           })
-          expect(assertions.map((input) => input.action)).toEqual(["external_directory"])
+          expect(assertions.map((input) => input.action)).toEqual(["edit", "external_directory"])
           expect(writes).toEqual([])
 
           reset()
           denyAction = "edit"
           expect(
             yield* withTool(active.path, (registry) =>
-              executeTool(registry, call({ path: "denied.txt", content: "blocked" })),
+              executeTool(registry, call({ path: "denied.txt", content: "blocked" }, "call-deny-edit")),
             ),
           ).toEqual({
             type: "error",
-            value: "Unable to write denied.txt",
+            value: "Permission denied for edit: denied.txt",
           })
           expect(assertions.map((input) => input.action)).toEqual(["edit"])
           expect(writes).toEqual([])

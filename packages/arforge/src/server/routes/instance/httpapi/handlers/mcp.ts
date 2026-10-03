@@ -13,6 +13,10 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
       return yield* mcp.status()
     })
 
+    const health = Effect.fn("McpHttpApi.health")(function* () {
+      return yield* mcp.health({ probe: true })
+    })
+
     const add = Effect.fn("McpHttpApi.add")(function* (ctx: { payload: typeof AddPayload.Type }) {
       const result = (yield* mcp.add(ctx.payload.name, ctx.payload.config)).status
       return yield* Schema.decodeUnknownEffect(StatusMap)(
@@ -38,7 +42,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
       payload: typeof AuthCallbackPayload.Type
     }) {
       return yield* mcp
-        .finishAuth(ctx.params.name, ctx.payload.code)
+        .finishAuth(ctx.params.name, ctx.payload.code, ctx.payload.oauthState)
         .pipe(
           Effect.catchTag("MCP.NotFoundError", (error) =>
             Effect.fail(
@@ -100,6 +104,7 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
 
     return handlers
       .handle("status", status)
+      .handle("health", health)
       .handle("add", add)
       .handle("authStart", authStart)
       .handle("authCallback", authCallback)

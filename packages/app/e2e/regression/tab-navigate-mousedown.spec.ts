@@ -56,16 +56,27 @@ async function mockServer(page: Page) {
   const sessions = [sessionA, sessionB]
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(route) })
+    if (url.pathname === "/auth/session") return json(route, { authenticated: true, mode: "private" })
     if (url.origin !== server) return route.fallback()
     if (url.pathname === "/global/event" || url.pathname === "/event" || url.pathname === "/api/event")
       return sse(route)
     if (url.pathname === "/global/health") return json(route, { healthy: true })
+    if (url.pathname === "/api/health") return json(route, { pid: 1 })
     if (url.pathname === "/api/session") return json(route, { data: sessions.map(currentSession), cursor: {} })
     if (url.pathname === "/api/session/active") return json(route, { data: {} })
     const currentSessionInfo = sessions.find((item) => url.pathname === `/api/session/${item.id}`)
     if (currentSessionInfo) return json(route, { data: currentSession(currentSessionInfo) })
     if (sessions.some((item) => url.pathname === `/api/session/${item.id}/message`))
       return json(route, { data: [], cursor: {} })
+    if (["/api/provider", "/api/model", "/api/agent"].includes(url.pathname))
+      return json(route, { location: { directory: sessionA.directory }, data: [] })
+    if (url.pathname === "/api/model/default") return json(route, { location: { directory: sessionA.directory }, data: null })
+    if (["/api/command", "/api/reference", "/api/permission/request", "/api/question/request"].includes(url.pathname))
+      return json(route, { location: { directory: sessionA.directory }, data: [] })
+    if (url.pathname === "/api/mcp") return json(route, { location: { directory: sessionA.directory }, data: [] })
+    if (url.pathname === "/api/mcp/resource")
+      return json(route, { location: { directory: sessionA.directory }, data: { resources: [], templates: [] } })
     const byId = sessions.find((item) => url.pathname === `/session/${item.id}`)
     if (byId) return json(route, byId)
     if (/^\/session\/[^/]+$/.test(url.pathname)) return json(route, { name: "NotFoundError" }, 404)
@@ -117,9 +128,20 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
     contentType: "application/json",
-    headers: { "access-control-allow-origin": "*" },
+    headers: corsHeaders(route),
     body: JSON.stringify(body),
   })
+}
+
+function corsHeaders(route: Route) {
+  const origin = route.request().headers().origin
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+    "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers":
+      route.request().headers()["access-control-request-headers"] ?? "authorization,content-type,x-arforge-directory",
+  }
 }
 
 function sse(route: Route) {

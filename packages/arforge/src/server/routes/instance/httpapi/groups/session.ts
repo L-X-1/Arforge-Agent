@@ -20,11 +20,12 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, PermissionNotFoundError, ServiceUnavailableError, SessionBusyError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
+import { SandboxPolicy } from "@arforge-ai/core/sandbox/policy"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -49,6 +50,8 @@ export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
   title: Schema.optional(Schema.String),
   metadata: Schema.optional(Session.Metadata),
+  /** User-facing alias for the persisted session sandbox preset. */
+  sandboxProfile: Schema.optional(SandboxPolicy.ProfileSchema),
   permission: Schema.optional(PermissionV1.Ruleset),
   time: Schema.optional(
     Schema.Struct({
@@ -67,7 +70,7 @@ export const SummarizePayload = Schema.Struct({
   modelID: ModelV2.ID,
   auto: Schema.optional(Schema.Boolean),
 })
-export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
+export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID", "runID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
@@ -169,6 +172,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: DiffQuery,
           success: described(Schema.Array(Snapshot.FileDiff), "Successfully retrieved diff"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.diff",
@@ -234,7 +238,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.update",
             summary: "Update session",
-            description: "Update properties of an existing session, such as title or other metadata.",
+            description:
+              "Update properties of an existing session, including the execution sandbox preset (read-only, workspace-write, or unrestricted).",
           }),
         ),
         HttpApiEndpoint.post("fork", SessionPaths.fork, {
@@ -280,24 +285,26 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Successfully shared session"),
-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+          error: [ServiceUnavailableError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.share",
             summary: "Share session",
-            description: "Create a shareable link for a session, allowing others to view the conversation.",
+            description:
+              "Legacy sharing is disabled until publishing executes through the sealed control-plane worker.",
           }),
         ),
         HttpApiEndpoint.delete("unshare", SessionPaths.share, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Successfully unshared session"),
-          error: [HttpApiError.InternalServerError, ApiNotFoundError],
+          error: [ServiceUnavailableError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.unshare",
             summary: "Unshare session",
-            description: "Remove the shareable link for a session, making it private again.",
+            description:
+              "Legacy unsharing is disabled until publishing executes through the sealed control-plane worker.",
           }),
         ),
         HttpApiEndpoint.post("summarize", SessionPaths.summarize, {
@@ -371,25 +378,24 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: RevertPayload,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [ServiceUnavailableError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.revert",
             summary: "Revert message",
-            description:
-              "Revert a specific message in a session, undoing its effects and restoring the previous state.",
+            description: "Legacy revert is disabled until restore executes through the sealed control-plane worker.",
           }),
         ),
         HttpApiEndpoint.post("unrevert", SessionPaths.unrevert, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [ServiceUnavailableError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.unrevert",
             summary: "Restore reverted messages",
-            description: "Restore all previously reverted messages in a session.",
+            description: "Legacy unrevert is disabled until restore executes through the sealed control-plane worker.",
           }),
         ),
         HttpApiEndpoint.post("permissionRespond", SessionPaths.permissions, {

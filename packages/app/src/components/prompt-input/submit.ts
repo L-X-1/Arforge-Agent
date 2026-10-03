@@ -18,13 +18,19 @@ import { Worktree as WorktreeState } from "@/utils/worktree"
 import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
+import { formatHtmlSelectionSnapshot } from "@/utils/html-selection-reference"
 import { ScopedKey } from "@/utils/server-scope"
 import { createPromptSubmissionState } from "./submission-state"
 import { normalizeSessionInfo } from "@/utils/session"
-import { Event } from "@arforge-ai/schema/event"
 import { Prompt as DurablePromptSchema } from "@arforge-ai/schema/prompt-input"
 import type { PromptInputGoalControl } from "./contracts"
 import type { SessionPermissionMode } from "@/context/permission-mode"
+import {
+  beginControlOperation,
+  runControlOperationToCompletion,
+  type CompletedWorktree,
+} from "@/utils/control-operation-intent"
+import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
 
 type DurablePrompt = typeof DurablePromptSchema.Encoded
 
@@ -46,6 +52,7 @@ export const DEFAULT_VISIBLE_LANGUAGE_SYSTEM_PROMPT = [
 export type FollowupDraft = {
   sessionID: string
   sessionDirectory: string
+  serverScope?: string
   prompt: Prompt
   context: (ContextItem & { key: string })[]
   agent: string
@@ -82,10 +89,12 @@ export function durableFollowupPrompt(
     sessionID: draft.sessionID,
     messageID,
     sessionDirectory: draft.sessionDirectory,
+    serverScope: draft.serverScope,
   })
   const [head, ...tail] = text.split(" ")
   const name = head?.startsWith("/") ? head.slice(1) : undefined
   const command = name && commandNames.has(name) ? { name, arguments: tail.join(" ") } : undefined
+  if (command && draft.context.some((item) => item.htmlSelection !== undefined)) throw new Error("HTML selection snapshots require a normal message, not a slash command.")
 
   return {
     text: requestParts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
@@ -147,6 +156,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   const [head, ...tail] = text.split(" ")
   const cmd = head?.startsWith("/") ? head.slice(1) : undefined
   if (cmd && input.sync.data.command.find((item) => item.name === cmd)) {
+    if (input.draft.context.some((item) => item.htmlSelection !== undefined)) throw new Error("HTML selection snapshots require a normal message, not a slash command.")
     setBusy()
     try {
       if (!(await wait())) {
@@ -187,6 +197,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     sessionID: input.draft.sessionID,
     messageID,
     sessionDirectory: input.draft.sessionDirectory,
+    serverScope: input.draft.serverScope,
   })
 
   const message: Message = {
@@ -355,6 +366,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         commentID: item.commentID,
         commentOrigin: item.commentOrigin,
         preview: item.preview,
+        htmlSelection: item.htmlSelection,
       })
     }
   }
@@ -394,6 +406,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    if (context.some((item) => item.htmlSelection !== undefined) && (mode === "shell" || (text.startsWith("/") && sync().data.command.some((command) => command.name === text.split(" ")[0]?.slice(1))))) {
+      showToast({ title: language.t("common.requestFailed"), description: "HTML selection snapshots require a normal message, not Shell or a slash command." })
+      return
+    }
     const selectedPermissionMode = input.permissionMode?.() ?? (input.autoAccept() ? "fullAccess" : "acceptEdits")
 
     if (text.trim().length === 0 && images.length === 0 && input.commentCount() === 0) {
@@ -425,6 +441,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     input.resetHistoryNavigation()
 
     const projectDirectory = sdk().directory
+    const projectScope = sdk().scope
     const permissionState = permission.currentServerState()
     const isNewSession = !params.id
     const worktreeSelection = input.newSessionWorktree?.() || "main"
@@ -434,9 +451,29 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if (isNewSession) {
       if (worktreeSelection === "create") {
-        const createdWorktree = await client.worktree
-          .create({ directory: projectDirectory })
-          .then((x) => x.data)
+        const createdWorktreeResult = await beginControlOperation({
+          server: projectScope,
+          project: projectDirectory,
+          location: projectDirectory,
+          kind: "worktree.create",
+          input: {},
+        })
+          .then((intent) =>
+            runControlOperationToCompletion<CompletedWorktree>(
+              intent,
+              (requestID) =>
+                client.worktree
+                  .create({
+                    directory: projectDirectory,
+                    worktreeCreateControlInput: { requestID },
+                  })
+                  .then((x) => x.data),
+              ({ requestID, operation, location }) =>
+                client.experimental.controlOperation
+                  .status({ requestID, directory: location, operation })
+                  .then((x) => x.data),
+            ),
+          )
           .catch((err) => {
             showToast({
               title: language.t("prompt.toast.worktreeCreateFailed.title"),
@@ -445,6 +482,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             return undefined
           })
 
+        if (createdWorktreeResult?.state === "status") {
+          showControlOperationStatusNotice(createdWorktreeResult.status, (key) => language.t(key))
+          return
+        }
+        const createdWorktree = createdWorktreeResult?.value
         if (!createdWorktree?.directory) {
           showToast({
             title: language.t("prompt.toast.worktreeCreateFailed.title"),
@@ -452,7 +494,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
           return
         }
-        WorktreeState.pending(sdk().scope, createdWorktree.directory)
+        WorktreeState.pending(projectScope, createdWorktree.directory)
         sessionDirectory = createdWorktree.directory
       }
 
@@ -544,6 +586,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const draft: FollowupDraft = {
       sessionID: session.id,
       sessionDirectory,
+      serverScope: projectScope,
       prompt: currentPrompt,
       context,
       agent,
@@ -578,6 +621,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       const objective = [
         text.trim(),
         ...context.map((item) => {
+          if (item.htmlSelection !== undefined) return formatHtmlSelectionSnapshot(item.htmlSelection, { path: item.path, directory: sessionDirectory, serverScope: projectScope })
           const selection = item.selection
             ? `:${item.selection.startLine}${item.selection.endLine === item.selection.startLine ? "" : `-${item.selection.endLine}`}`
             : ""
@@ -613,11 +657,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if (mode === "shell") {
       clearInput()
-      const eventID = Event.ID.create()
+      // Direct Shell is a durable action. Its user-message identity must be
+      // a real MessageID so retries bind to the same action rather than
+      // minting a fresh side effect.
+      const messageID = Identifier.ascending("message")
       sdk()
         .api.session.shell({
           sessionID: session.id,
-          id: eventID,
+          messageID,
           command: text,
           agent,
           model,
@@ -680,7 +727,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     clearInput()
 
     const waitForWorktree = async () => {
-      const worktree = WorktreeState.get(sdk().scope, sessionDirectory)
+      const worktree = WorktreeState.get(projectScope, sessionDirectory)
       if (!worktree || worktree.status !== "pending") return true
 
       if (sessionDirectory === projectDirectory) {
@@ -724,7 +771,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
 
       const result = await Promise.race([
-        WorktreeState.wait(sdk().scope, sessionDirectory),
+        WorktreeState.wait(projectScope, sessionDirectory),
         abortWait,
         timeout,
       ]).finally(() => {

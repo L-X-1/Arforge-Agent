@@ -64,6 +64,17 @@ describe("ManagedSkillRegistry", () => {
     expect(reenable.skills.items.find((item) => item.id === "openspec")?.enabled).toBe(true)
   })
 
+  test("refuses to enable a missing or invalid managed skill", () => {
+    const home = tempHome()
+    const invalid = join(home, "skills", "broken")
+    mkdirSync(invalid, { recursive: true })
+    writeFileSync(join(invalid, "SKILL.md"), "---\nid: broken\nname: Broken\n---\n# Broken\n", "utf8")
+    const registry = new ManagedSkillRegistry({ home })
+
+    expect(() => registry.setEnabled("does-not-exist", true)).toThrow(/not found/i)
+    expect(() => registry.setEnabled("broken", true)).toThrow(/invalid/i)
+  })
+
   test("reads a skill body with truncation and resource listing", () => {
     const home = tempHome()
     const dir = writeSkill(home, "pdf", "\n# appendix\n")

@@ -38,4 +38,14 @@ describe("ScheduledPrompt cron", () => {
     expect(() => CronSchedule.parse(cron("* * *"))).toThrow("exactly five fields")
     expect(() => CronSchedule.parse(cron("* * * * */0"))).toThrow("step is outside")
   })
+
+  test("finds occurrences in the persisted IANA timezone, independent of process timezone", () => {
+    const after = Date.UTC(2026, 0, 1, 7, 59, 30)
+    expect(CronSchedule.nextInTimeZone(cron("0 0 * * *"), after, "America/Los_Angeles")).toBe(
+      Date.UTC(2026, 0, 1, 8, 0),
+    )
+    expect(() => CronSchedule.nextInTimeZone(cron("0 0 * * *"), after, "not/a-timezone")).toThrow(
+      "valid IANA timezone",
+    )
+  })
 })

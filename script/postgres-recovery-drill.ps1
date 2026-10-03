@@ -111,7 +111,12 @@ function Get-TableCounts([string]$Psql, [object]$Connection) {
 }
 
 $appUrl = if ([string]::IsNullOrWhiteSpace($DatabaseUrl)) {
-  [Environment]::GetEnvironmentVariable("ARFORGE_DB_URL", "User")
+  $processAppUrl = [Environment]::GetEnvironmentVariable("ARFORGE_DB_URL", "Process")
+  if ([string]::IsNullOrWhiteSpace($processAppUrl)) {
+    [Environment]::GetEnvironmentVariable("ARFORGE_DB_URL", "User")
+  } else {
+    $processAppUrl
+  }
 } else {
   $DatabaseUrl
 }
@@ -126,6 +131,13 @@ $app = Get-DatabaseConnection $appUrl
 $admin = Get-DatabaseConnection $adminUrl
 if ($admin.Username -eq $app.Username) {
   throw "The recovery drill requires a separate PostgreSQL maintenance role that can create and drop a temporary database."
+}
+$adminSource = [pscustomobject]@{
+  Host = $admin.Host
+  Port = $admin.Port
+  Database = $app.Database
+  Username = $admin.Username
+  Password = $admin.Password
 }
 
 $pgRestore = Join-Path $PostgresBin "pg_restore.exe"
@@ -184,12 +196,12 @@ try {
   $null = Invoke-PostgresTool $pgRestore $app @("--list", $temporaryDump)
 
   $drillName = "arforge_restore_drill_$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))_$PID"
-  $drill = [pscustomobject]@{
-    Host = $app.Host
-    Port = $app.Port
+  $drillAdmin = [pscustomobject]@{
+    Host = $admin.Host
+    Port = $admin.Port
     Database = $drillName
-    Username = $app.Username
-    Password = $app.Password
+    Username = $admin.Username
+    Password = $admin.Password
   }
   $created = $false
   $started = Get-Date
@@ -204,19 +216,19 @@ try {
     $drillName
   )
   $created = $true
-  $null = Invoke-PostgresTool $pgRestore $drill @(
-    "--host", $drill.Host,
-    "--port", "$($drill.Port)",
-    "--username", $drill.Username,
-    "--dbname", $drill.Database,
+  $null = Invoke-PostgresTool $pgRestore $drillAdmin @(
+    "--host", $drillAdmin.Host,
+    "--port", "$($drillAdmin.Port)",
+    "--username", $drillAdmin.Username,
+    "--dbname", $drillAdmin.Database,
     "--no-owner",
     "--no-privileges",
     "--exit-on-error",
     $temporaryDump
   )
 
-  $productionCounts = Get-TableCounts $psql $app
-  $restoredCounts = Get-TableCounts $psql $drill
+  $productionCounts = Get-TableCounts $psql $adminSource
+  $restoredCounts = Get-TableCounts $psql $drillAdmin
   $allTables = @($productionCounts.Keys + $restoredCounts.Keys | Sort-Object -Unique)
   $mismatches = @(
     $allTables | ForEach-Object {

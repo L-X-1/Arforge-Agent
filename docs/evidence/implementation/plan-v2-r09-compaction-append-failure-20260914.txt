@@ -1,0 +1,23 @@
+Command: bun test test/session/compaction-checkpoint.test.ts --timeout 30000 --rerun-every
+Exit: 0
+bun test v1.3.14 (0d9b296a)
+6 pass
+0 fail
+30 expect() calls
+Ran 6 tests across 1 file. [1.69s]
+
+New failure-injection case:
+- provider summary succeeds once;
+- revalidated checkpoint persists;
+- Compaction.Ended durable event is published;
+- committed checkpoint append fails once;
+- recovery promotes the same operation to committed and closed;
+- second recovery is empty and provider call count remains one.
+
+Command: bun run typecheck (packages/core)
+Exit: 0
+$ tsgo --noEmit
+
+Command: bun x oxlint --disable-nested-config src/session/compaction.ts src/session/compaction-checkpoint.ts test/session/compaction-checkpoint.test.ts --quiet
+Exit: 0
+Found 0 warnings and 0 errors.

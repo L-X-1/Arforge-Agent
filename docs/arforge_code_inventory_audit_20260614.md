@@ -1,7 +1,7 @@
 # Arforge Agent（灵枢智能体�?代码归类与报错审计报�?
 
 更新时间�?026-06-14  
-审计范围：`E:\Arforge-Agent`，排�?`.venv`、缓存目录��`.arforge/backups/checkpoints` 等生成物后的 Python 代码�?
+审计范围：`%ARFORGE_REPO%`，排�?`.venv`、缓存目录��`.arforge/backups/checkpoints` 等生成物后的 Python 代码�?
 
 ## 1. 总体判断
 
@@ -416,7 +416,7 @@ python -m ruff check arforge main.py config.py dogfood.py verify_modules.py
 建议逐步收敛为：
 
 ```text
-E:\Arforge-Agent
+%ARFORGE_REPO%
   arforge/
     cli/
     core/

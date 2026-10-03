@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "status": "specification",
+  "service": "arforge-platform",
+  "telemetry": {
+    "source": "OpenTelemetry metrics and database audit receipts",
+    "secret_policy": "never record prompts, credentials, secret values or raw tenant payloads",
+    "window": "30d rolling"
+  },
+  "evidence_contract": {
+    "schema_version": 1,
+    "required_window_fields": ["startAt", "endAt", "api", "tenantIsolation", "backupRestore", "migrationIntegrity"],
+    "evaluator": "@arforge-ai/core/runtime/slo",
+    "missing_or_invalid_data": "unknown_and_do_not_ship",
+    "raw_payloads_allowed": false
+  },
+  "slos": [
+    {
+      "id": "api.availability",
+      "target": 0.999,
+      "window": "30d",
+      "good_event": "http.server.request.count{status_code < 500}",
+      "total_event": "http.server.request.count"
+    },
+    {
+      "id": "api.latency.p95",
+      "target_ms": 750,
+      "window": "30d",
+      "metric": "http.server.request.duration",
+      "scope": "tenant-platform and control-plane HTTP routes"
+    },
+    {
+      "id": "tenant.isolation",
+      "target": 1.0,
+      "window": "30d",
+      "metric": "arforge.tenant.cross_scope_denied",
+      "failure_event": "any cross-tenant read/write or policy bypass"
+    },
+    {
+      "id": "backup.restore",
+      "target": 1.0,
+      "window": "30d",
+      "metric": "arforge.backup.restore_drill.success",
+      "requirement": "mismatch_count=0 and temporary_database_cleanup=true"
+    },
+    {
+      "id": "migration.integrity",
+      "target": 1.0,
+      "window": "per release",
+      "metric": "arforge.migration.validation.success",
+      "requirement": "schema_revision, row counts and RLS gate all pass"
+    }
+  ],
+  "alerts": [
+    {
+      "id": "critical.tenant-isolation",
+      "severity": "page",
+      "condition": "arforge.tenant.cross_scope_denied < 1 or arforge.tenant.policy_bypass > 0",
+      "action": "stop promotion, revoke affected tenant secrets, preserve audit evidence"
+    },
+    {
+      "id": "critical.migration-or-backup",
+      "severity": "page",
+      "condition": "arforge.migration.validation.success == 0 or arforge.backup.restore_drill.success == 0",
+      "action": "stop writes, block release, restore only into an isolated database until reviewed"
+    },
+    {
+      "id": "warning.api-burn",
+      "severity": "ticket",
+      "condition": "api.availability error-budget burn > 2x for 1h or p95 > target for 15m",
+      "action": "freeze canary expansion and assign release owner"
+    },
+    {
+      "id": "warning.rate-or-budget",
+      "severity": "ticket",
+      "condition": "tenant rate rejection or settled usage exceeds policy unexpectedly",
+      "action": "inspect tenant bucket and settled ledger; do not create a second billing truth"
+    }
+  ]
+}

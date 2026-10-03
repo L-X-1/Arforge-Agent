@@ -15,13 +15,46 @@ import {
 } from "@arforge-ai/protocol/errors"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionOrganization } from "@arforge-ai/core/session/organization"
+import * as ProfileMaintenanceLifecycle from "@arforge-ai/core/runtime/profile-maintenance-lifecycle"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
 
+const controlledRestoreUnavailable = (operation: "revert.stage" | "revert.clear" | "revert.commit") =>
+  new ServiceUnavailableError({
+    message: `Session ${operation} is disabled until controlled restore runs through a sealed ControlRun worker`,
+    service: `session.${operation}`,
+  })
+
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const profileMaintenance = yield* ProfileMaintenanceLifecycle.Service
+
+    const lifecycleFailure = () =>
+      new InvalidRequestError({
+        kind: "profile-maintenance-lifecycle-failed",
+        message: "Profile maintenance could not be reconciled; retry the operation.",
+      })
+
+    const lifecycleCall = <A, E, R>(
+      phase: ProfileMaintenanceLifecycle.LifecyclePhase,
+      operation: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E | InvalidRequestError, R> =>
+      Effect.gen(function* () {
+        const started = yield* (
+          phase === "open"
+            ? profileMaintenance.open()
+            : phase === "resume"
+              ? profileMaintenance.resume()
+              : profileMaintenance.idle()
+        ).pipe(Effect.mapError(lifecycleFailure))
+        const finish =
+          phase === "resume"
+            ? profileMaintenance.idle({ profileID: started.profileID })
+            : profileMaintenance.close({ profileID: started.profileID })
+        return yield* operation.pipe(Effect.ensuring(finish.pipe(Effect.ignore)))
+      }) as Effect.Effect<A, E | InvalidRequestError, R>
 
     return handlers
       .handle(
@@ -51,12 +84,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
                 )
           const { tags: _tags, ...query } = parsed
-          const sessions = yield* session.list({
-            ...query,
-            tags,
-            workspaceID: query.workspace,
-            limit: ctx.query.limit ?? DefaultSessionsLimit,
-          })
+          const sessions = yield* lifecycleCall(
+            "open",
+            session.list({
+              ...query,
+              tags,
+              workspaceID: query.workspace,
+              limit: ctx.query.limit ?? DefaultSessionsLimit,
+            }),
+          )
           const first = sessions[0]
           const last = sessions.at(-1)
           return {
@@ -90,12 +126,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.create",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.create({
-              id: ctx.payload.id,
-              agent: ctx.payload.agent,
-              model: ctx.payload.model,
-              location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
-            }),
+            data: yield* lifecycleCall(
+              "open",
+              session.create({
+                id: ctx.payload.id,
+                agent: ctx.payload.agent,
+                model: ctx.payload.model,
+                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              }),
+            ),
           }
         }),
       )
@@ -104,7 +143,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* () {
           return {
             data: Object.fromEntries(
-              Array.from(yield* session.active, (sessionID) => [sessionID, { type: "running" as const }]),
+              Array.from(yield* lifecycleCall("idle", session.active), (sessionID) => [
+                sessionID,
+                { type: "running" as const },
+              ]),
             ),
           }
         }),
@@ -113,14 +155,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.get",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.get(ctx.params.sessionID).pipe(
-              Effect.catchTag(
-                "Session.NotFoundError",
-                (error) =>
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
+            data: yield* lifecycleCall(
+              "open",
+              session.get(ctx.params.sessionID).pipe(
+                Effect.catchTag(
+                  "Session.NotFoundError",
+                  (error) =>
+                    new SessionNotFoundError({
+                      sessionID: error.sessionID,
+                      message: `Session not found: ${error.sessionID}`,
+                    }),
+                ),
               ),
             ),
           }
@@ -301,32 +346,35 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.prompt",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session
-              .prompt({
-                sessionID: ctx.params.sessionID,
-                id: ctx.payload.id,
-                prompt: ctx.payload.prompt,
-                delivery: ctx.payload.delivery,
-                resume: ctx.payload.resume,
-              })
-              .pipe(
-                Effect.catchTag("Session.NotFoundError", (error) =>
-                  Effect.fail(
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
+            data: yield* lifecycleCall(
+              ctx.payload.resume === false ? "open" : "resume",
+              session
+                .prompt({
+                  sessionID: ctx.params.sessionID,
+                  id: ctx.payload.id,
+                  prompt: ctx.payload.prompt,
+                  delivery: ctx.payload.delivery,
+                  resume: ctx.payload.resume,
+                })
+                .pipe(
+                  Effect.catchTag("Session.NotFoundError", (error) =>
+                    Effect.fail(
+                      new SessionNotFoundError({
+                        sessionID: error.sessionID,
+                        message: `Session not found: ${error.sessionID}`,
+                      }),
+                    ),
+                  ),
+                  Effect.catchTag("Session.PromptConflictError", (error) =>
+                    Effect.fail(
+                      new ConflictError({
+                        message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
+                        resource: error.messageID,
+                      }),
+                    ),
                   ),
                 ),
-                Effect.catchTag("Session.PromptConflictError", (error) =>
-                  Effect.fail(
-                    new ConflictError({
-                      message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
-                      resource: error.messageID,
-                    }),
-                  ),
-                ),
-              ),
+            ),
           }
         }),
       )
@@ -334,18 +382,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.promptQueueList",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.promptQueue
-              .list(ctx.params.sessionID)
-              .pipe(
-                Effect.catchTag("Session.NotFoundError", (error) =>
-                  Effect.fail(
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
-                  ),
+            data: yield* session.promptQueue.list(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
                 ),
               ),
+            ),
           }
         }),
       )
@@ -353,27 +399,25 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.promptQueueUpdate",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.promptQueue
-              .update({ ...ctx.params, ...ctx.payload })
-              .pipe(
-                Effect.catchTag("Session.NotFoundError", (error) =>
-                  Effect.fail(
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
-                  ),
-                ),
-                Effect.catchTag("SessionInput.QueuedPromptNotFoundError", (error) =>
-                  Effect.fail(
-                    new MessageNotFoundError({
-                      sessionID: error.sessionID,
-                      messageID: error.messageID,
-                      message: `Queued prompt not found or already promoted: ${error.messageID}`,
-                    }),
-                  ),
+            data: yield* session.promptQueue.update({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
                 ),
               ),
+              Effect.catchTag("SessionInput.QueuedPromptNotFoundError", (error) =>
+                Effect.fail(
+                  new MessageNotFoundError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    message: `Queued prompt not found or already promoted: ${error.messageID}`,
+                  }),
+                ),
+              ),
+            ),
           }
         }),
       )
@@ -429,21 +473,24 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.wait",
         Effect.fn(function* (ctx) {
-          yield* session.wait(ctx.params.sessionID).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          yield* lifecycleCall(
+            "resume",
+            session.wait(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
-                }),
+              Effect.catchTag("Session.OperationUnavailableError", (error) =>
+                Effect.fail(
+                  new ServiceUnavailableError({
+                    message: `Session ${error.operation} is not available yet`,
+                    service: `session.${error.operation}`,
+                  }),
+                ),
               ),
             ),
           )
@@ -471,6 +518,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     messageID: error.messageID,
                     message: `Message not found: ${error.messageID}`,
                   }),
+              ),
+              Effect.catchTag("SessionRevert.MutationUnavailableError", () =>
+                controlledRestoreUnavailable("revert.stage"),
               ),
               Effect.catchTag("Snapshot.Error", (error) => {
                 const ref = `err_${crypto.randomUUID().slice(0, 8)}`
@@ -501,6 +551,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   message: `Session not found: ${error.sessionID}`,
                 }),
             ),
+            Effect.catchTag("SessionRevert.MutationUnavailableError", () =>
+              controlledRestoreUnavailable("revert.clear"),
+            ),
             Effect.catchTag("Snapshot.Error", (error) => {
               const ref = `err_${crypto.randomUUID().slice(0, 8)}`
               return Effect.logError("failed to clear session revert", { cause: error }).pipe(
@@ -529,6 +582,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   sessionID: error.sessionID,
                   message: `Session not found: ${error.sessionID}`,
                 }),
+            ),
+            Effect.catchTag("SessionRevert.MutationUnavailableError", () =>
+              controlledRestoreUnavailable("revert.commit"),
             ),
           )
           return HttpApiSchema.NoContent.make()
@@ -598,7 +654,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.interrupt",
         Effect.fn(function* (ctx) {
-          yield* session.interrupt(ctx.params.sessionID)
+          yield* lifecycleCall("idle", session.interrupt(ctx.params.sessionID))
           return HttpApiSchema.NoContent.make()
         }),
       )

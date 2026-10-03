@@ -60,12 +60,15 @@ Thumbs.db
 # Local diagnostics and test-server output
 /.codex-runtime/
 /.codex-tmp/
+/.codex-analysis/
+/tmp/
 /.err
 /.out
 *.log
 *.stdout
 *.stderr
 /packages/app/e2e/.playwright-temp/
+/packages/app/test-results/
 # Generated screenshots, diagnostics, browser profiles, and acceptance evidence.
 /artifacts/
 /memory-vault/wiki/log.md

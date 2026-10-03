@@ -3,7 +3,7 @@ import { httpClient } from "@arforge-ai/core/effect/app-node-platform"
 import path from "path"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { Effect, Layer, Context } from "effect"
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -13,6 +13,9 @@ import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@arforge-ai/core/global"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
+import { Egress } from "@arforge-ai/core/egress"
+import { Database } from "@arforge-ai/core/database/database"
 
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()
@@ -56,7 +59,7 @@ const layer: Layer.Layer<
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
-    const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
+    const http = withTransientReadRetry(yield* HttpClient.HttpClient)
     const globalFiles = [
       path.join(global.config, "AGENTS.md"),
       ...(!flags.disableClaudeCodePrompt ? [path.join(global.home, ".claude", "CLAUDE.md")] : []),
@@ -93,10 +96,44 @@ const layer: Layer.Layer<
     })
 
     const fetch = Effect.fnUntraced(function* (url: string) {
-      const res = yield* http.execute(HttpClientRequest.get(url)).pipe(
-        Effect.timeout(5000),
-        Effect.catch(() => Effect.succeed(null)),
-      )
+      const egress = Egress.make({
+        action: "instruction.remote",
+        networkScope: [url],
+        secretScope: [],
+        allowedMethods: ["GET"],
+      })
+      let target = url
+      let redirectFrom: string | undefined
+      let res: HttpClientResponse.HttpClientResponse | null = null
+      for (let redirects = 0; redirects <= 3; redirects++) {
+        const current = yield* egress
+          .assert({
+            url: target,
+            method: "GET",
+            ...(redirectFrom === undefined ? {} : { redirectFrom }),
+          })
+          .pipe(Effect.timeout(5000), Effect.catch(() => Effect.succeed(undefined)))
+        if (current === undefined) break
+        const response = yield* http.execute(HttpClientRequest.get(target)).pipe(
+          Effect.timeout(5000),
+          Effect.catch(() => Effect.succeed(null)),
+        )
+        if (!response) break
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.location
+          if (!location) break
+          redirectFrom = target
+          try {
+            target = new URL(location, target).toString()
+          } catch {
+            target = ""
+          }
+          if (!target) break
+          continue
+        }
+        res = yield* HttpClientResponse.filterStatusOk(response).pipe(Effect.orElseSucceed(() => null))
+        break
+      }
       if (!res) return ""
       const body = yield* res.arrayBuffer.pipe(Effect.catch(() => Effect.succeed(new ArrayBuffer(0))))
       return new TextDecoder().decode(body)
@@ -163,8 +200,14 @@ const layer: Layer.Layer<
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
 
       return [
-        ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
-        ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
+        ...Array.from(paths).flatMap((item, i) => {
+          if (!files[i]) return []
+          const text = `Instructions from: ${item}\n${files[i]}`
+          return path.basename(item) === "AGENTS.md" || path.basename(item) === "ARFORGE.md"
+            ? [ContextFirewall.trustedProjectRules(item, text)]
+            : [ContextFirewall.untrusted("document", text)]
+        }),
+        ...urls.flatMap((item, i) => (remote[i] ? [ContextFirewall.untrusted("remote_instruction", `Instructions from: ${item}\n${remote[i]}`)] : [])),
       ]
     })
 
@@ -211,7 +254,14 @@ const layer: Layer.Layer<
         set.add(found)
         const content = yield* read(found)
         if (content) {
-          results.push({ filepath: found, content: `Instructions from: ${found}\n${content}` })
+          const text = `Instructions from: ${found}\n${content}`
+          results.push({
+            filepath: found,
+            content:
+              path.basename(found) === "AGENTS.md" || path.basename(found) === "ARFORGE.md"
+                ? ContextFirewall.trustedProjectRules(found, text)
+                : ContextFirewall.untrusted("document", text),
+          })
         }
 
         current = path.dirname(current)
@@ -231,7 +281,7 @@ export function loaded(messages: SessionV1.WithParts[]) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, FSUtil.node, Global.node, RuntimeFlags.node, httpClient],
+  deps: [Config.node, FSUtil.node, Global.node, RuntimeFlags.node, httpClient, Database.node],
 })
 
 export * as Instruction from "./instruction"

@@ -13,6 +13,12 @@ export interface TransportRuntime {
 export interface Transport<Body, Prepared, Frame> {
   readonly id: string
   readonly prepare: (input: TransportPrepareInput<Body>) => Effect.Effect<Prepared, LLMError>
+  /** Describe the already encoded body, without re-running request preparation
+   * or exposing transport authentication. No implementation means unavailable. */
+  readonly describe?: (prepared: Prepared) => {
+    readonly body: unknown
+    readonly endpoint?: { readonly url: string; readonly exact: boolean }
+  }
   readonly frames: (
     prepared: Prepared,
     request: LLMRequest,

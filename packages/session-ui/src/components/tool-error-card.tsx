@@ -6,6 +6,7 @@ import { Icon } from "@arforge-ai/ui/icon"
 import { IconButton } from "@arforge-ai/ui/icon-button"
 import { Tooltip } from "@arforge-ai/ui/tooltip"
 import { useI18n } from "@arforge-ai/ui/context/i18n"
+import { parseFileConflict, shortVersion } from "./file-conflict"
 
 export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "children" | "variant"> {
   tool: string
@@ -16,6 +17,7 @@ export interface ToolErrorCardProps extends Omit<ComponentProps<typeof Card>, "c
   onOpenChange?: (open: boolean) => void
   subtitle?: string
   href?: string
+  metadata?: Record<string, unknown>
 }
 
 export function ToolErrorCard(props: ToolErrorCardProps) {
@@ -35,6 +37,7 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     "onOpenChange",
     "subtitle",
     "href",
+    "metadata",
   ])
   const setOpen = (value: boolean) => {
     if (props.open === undefined) setState("open", value)
@@ -68,9 +71,16 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
     if (value.startsWith(prefix)) return value.slice(prefix.length)
     return value
   })
+  const conflict = createMemo(() => parseFileConflict(split.metadata))
 
   const subtitle = createMemo(() => {
     if (split.subtitle) return split.subtitle
+    const fileConflict = conflict()
+    if (fileConflict) {
+      return fileConflict.code === "target_exists"
+        ? i18n.t("ui.toolErrorCard.fileConflict.targetExists")
+        : i18n.t("ui.toolErrorCard.fileConflict.changed")
+    }
     const parts = tail().split(": ")
     if (parts.length <= 1) return i18n.t("ui.toolErrorCard.failed")
     const head = (parts[0] ?? "").trim()
@@ -148,7 +158,32 @@ export function ToolErrorCard(props: ToolErrorCardProps) {
                 </Tooltip>
               </div>
             </Show>
-            <Show when={body()}>{(value) => <CardDescription>{value()}</CardDescription>}</Show>
+            <Show
+              when={conflict()}
+              fallback={<Show when={body()}>{(value) => <CardDescription>{value()}</CardDescription>}</Show>}
+            >
+              {(value) => (
+                <div data-slot="tool-error-card-conflict">
+                  <CardDescription>{
+                    value().code === "target_exists"
+                      ? i18n.t("ui.toolErrorCard.fileConflict.targetExistsInstruction")
+                      : i18n.t("ui.toolErrorCard.fileConflict.instruction")
+                  }</CardDescription>
+                  <div data-slot="tool-error-card-conflict-path">
+                    <span>{i18n.t("ui.toolErrorCard.fileConflict.path")}:</span> <code>{value().path}</code>
+                  </div>
+                  <Show when={value().observedVersion || value().currentVersion}>
+                    <div data-slot="tool-error-card-conflict-versions">
+                      {i18n.t("ui.toolErrorCard.fileConflict.versions", {
+                        observed: shortVersion(value().observedVersion) ?? "—",
+                        current: shortVersion(value().currentVersion) ?? "—",
+                      })}
+                    </div>
+                  </Show>
+                  <Show when={body()}>{(error) => <div data-slot="tool-error-card-conflict-raw">{error()}</div>}</Show>
+                </div>
+              )}
+            </Show>
           </div>
         </Collapsible.Content>
       </Collapsible>

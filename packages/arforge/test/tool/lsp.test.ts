@@ -1,12 +1,13 @@
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import { LSP } from "@/lsp/lsp"
+import type { Diagnostic } from "@/lsp/client"
 import { Permission } from "../../src/permission"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
@@ -31,6 +32,7 @@ const ctx = {
 }
 
 const workspaceSymbolQueries: string[] = []
+const diagnosticsByFile: Record<string, Diagnostic[]> = {}
 
 const lsp = Layer.succeed(
   LSP.Service,
@@ -39,7 +41,7 @@ const lsp = Layer.succeed(
     status: () => Effect.succeed([]),
     hasClients: () => Effect.succeed(true),
     touchFile: () => Effect.void,
-    diagnostics: () => Effect.succeed({}),
+    diagnostics: () => Effect.succeed(diagnosticsByFile),
     hover: () => Effect.succeed([]),
     definition: () => Effect.succeed([]),
     references: () => Effect.succeed([]),
@@ -95,6 +97,74 @@ const asks = () => {
 }
 
 describe("tool.lsp", () => {
+  afterEach(() => {
+    for (const key of Object.keys(diagnosticsByFile)) delete diagnosticsByFile[key]
+  })
+
+  describe("operation-specific inputs", () => {
+    it.instance(
+      "runs status without a file or cursor and keeps a stable permission contract",
+      () =>
+        Effect.gen(function* () {
+          const { items, next } = asks()
+          const result = yield* run({ operation: "status" }, next)
+          const req = items.find((item) => item.permission === "lsp")
+
+          expect(req).toBeDefined()
+          expect(req!.metadata).toEqual({ operation: "status" })
+          expect(result.title).toBe("status")
+          expect(JSON.parse(result.output)).toEqual([])
+        }),
+      { git: true },
+    )
+
+    it.instance(
+      "returns diagnostics for a file without requiring a cursor",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "diagnostics.ts")
+          yield* put(file)
+          diagnosticsByFile[FSUtil.normalizePath(file)] = [
+            {
+              message: "fixture diagnostic",
+              severity: 1,
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 3 },
+              },
+            },
+          ]
+
+          const { items, next } = asks()
+          const result = yield* run({ operation: "diagnostics", filePath: file }, next)
+          const req = items.find((item) => item.permission === "lsp")
+
+          expect(req).toBeDefined()
+          expect(req!.metadata).toEqual({ operation: "diagnostics", filePath: file })
+          expect(result.title).toBe("diagnostics diagnostics.ts")
+          expect(result.output).toContain("fixture diagnostic")
+          expect(result.output).not.toContain("No diagnostics found")
+        }),
+      { git: true },
+    )
+
+    it.instance(
+      "fails closed with an actionable message when a position is omitted",
+      () =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "missing-position.ts")
+          yield* put(file)
+          const exit = yield* run({ operation: "hover", filePath: file }, asks().next).pipe(Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("line and character are required")
+        }),
+      { git: true },
+    )
+  })
+
   describe("permission metadata", () => {
     it.instance(
       "keeps cursor details for position-based operations",

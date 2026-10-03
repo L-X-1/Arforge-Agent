@@ -356,18 +356,6 @@ describe("HttpApiCodegen.generate", () => {
     ).toThrow("Unsupported Promise success encoding: session.text")
 
     expect(() =>
-      emitPromise(
-        compileContract(
-          api(
-            HttpApiEndpoint.get("binary", "/binary", {
-              success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
-            }),
-          ),
-        ),
-      ),
-    ).toThrow("Unsupported Promise success encoding: session.binary")
-
-    expect(() =>
       emitPromise(compileContract(api(HttpApiEndpoint.get("read", "/file/*", { success: Schema.String })))),
     ).toThrow("Unsupported Promise path wildcard: /file/*")
 
@@ -382,6 +370,32 @@ describe("HttpApiCodegen.generate", () => {
         ),
       ),
     ).toThrow("Unsupported Promise stream: session.events")
+  })
+
+  test("emits a Promise client that reads binary success bodies", async () => {
+    const output = emitPromise(
+      compileContract(
+        api(
+          HttpApiEndpoint.get("binary", "/binary", {
+            success: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
+          }),
+        ),
+      ),
+    )
+    const directory = await mkdtemp(join(tmpdir(), "arforge-httpapi-codegen-binary-"))
+
+    try {
+      await Promise.all(output.files.map((file) => Bun.write(join(directory, file.path), file.content)))
+      const generated = await import(`${join(directory, "index.ts")}?t=${crypto.randomUUID()}`)
+      const client = generated.Arforge.make({
+        baseUrl: "https://example.com",
+        fetch: async () => new Response(new Uint8Array([0, 1, 255]), { headers: { "content-type": "application/octet-stream" } }),
+      })
+
+      expect(await client.session.binary()).toEqual(new Uint8Array([0, 1, 255]))
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   test("executes an emitted Promise GET through fetch", async () => {

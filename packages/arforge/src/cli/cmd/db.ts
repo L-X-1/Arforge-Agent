@@ -1,9 +1,51 @@
 import type { Argv } from "yargs"
 import { spawn } from "child_process"
 import { Database } from "@arforge-ai/core/database/database"
+import { usesPostgres } from "@arforge-ai/core/database/dialect"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail } from "../effect-cmd"
+
+const DatabaseTargets = ["main", "multiagent"] as const
+
+const CurrentCommand = effectCmd({
+  command: "current [database]",
+  describe: "read the applied TypeScript migration revision",
+  instance: false,
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("database", {
+        type: "string",
+        choices: DatabaseTargets,
+        default: "main",
+        describe: "database target (only main has a TypeScript owner)",
+      })
+      .option("json", {
+        type: "boolean",
+        default: false,
+        describe: "Output machine-readable JSON",
+      }),
+  handler: Effect.fn("Cli.db.current")(function* (args: { database: string; json: boolean }) {
+    if (args.database === "multiagent") {
+      return yield* fail(
+        "db current multiagent is not owned by the TypeScript database runtime yet; use the migration compatibility command.",
+        2,
+      )
+    }
+    if (usesPostgres) {
+      return yield* fail(
+        "db current is a local SQLite ledger view; PostgreSQL revision inspection is still a deferred read-only contract.",
+        2,
+      )
+    }
+    const status = yield* Database.currentAtPath().pipe(Effect.orDie)
+    if (args.json) {
+      process.stdout.write(JSON.stringify({ database: "main", ...status }) + "\n")
+      return
+    }
+    process.stdout.write(`main: ${status.current ?? "unversioned"}\n`)
+  }),
+})
 
 const QueryCommand = effectCmd({
   command: "$0 [query]",
@@ -56,7 +98,7 @@ export const DbCommand = effectCmd({
   describe: "database tools",
   instance: false,
   builder: (yargs: Argv) => {
-    return yargs.command(QueryCommand).command(PathCommand).demandCommand()
+    return yargs.command(QueryCommand).command(PathCommand).command(CurrentCommand).demandCommand()
   },
   handler: Effect.fn("Cli.db")(function* () {}),
 })

@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { McpServerNotFoundError } from "@arforge-ai/protocol/errors"
+import { InvalidRequestError, McpServerNotFoundError } from "@arforge-ai/protocol/errors"
 import { Api } from "../api"
 import { response } from "../location"
 
@@ -18,6 +18,23 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
         Effect.succeed({
           resources: [],
           templates: [],
+        }),
+      ),
+    )
+    .handle("mcp.capabilities", () => response(Effect.succeed([])))
+    .handle("mcp.action.reconciliation", () =>
+      Effect.fail(
+        new InvalidRequestError({
+          kind: "mcp-reconciliation-unavailable",
+          message: "MCP reconciliation is unavailable in the embedded Core runtime.",
+        }),
+      ),
+    )
+    .handle("mcp.action.reconciliationRecord", () =>
+      Effect.fail(
+        new InvalidRequestError({
+          kind: "mcp-reconciliation-unavailable",
+          message: "MCP reconciliation recording is unavailable in the embedded Core runtime.",
         }),
       ),
     )

@@ -116,10 +116,10 @@ const writeNotebook = async (target: string, value: unknown) => {
 const targetFor = (mutation: LocationMutation.Interface, notebookPath: string) =>
   mutation.resolve({ path: notebookPath, kind: "file" }).pipe(Effect.orDie)
 
-const call = (name: "notebook_read" | "notebook_edit", input: unknown) => ({
+const call = (name: "notebook_read" | "notebook_edit", input: unknown, id?: string) => ({
   sessionID,
   ...toolIdentity,
-  call: { type: "tool-call" as const, id: `call-${name}`, name, input },
+  call: { type: "tool-call" as const, id: id ?? `call-${name}`, name, input },
 })
 
 const it = testEffect(Layer.empty)
@@ -368,8 +368,14 @@ describe("NotebookTools", () => {
                 ),
               ).toMatchObject({ type: "text", value: expect.stringContaining('"edit_mode": "replace"') })
               expect(
-                yield* executeTool(registry, call("notebook_read", { notebook_path: external, limit: 1 })),
+                yield* executeTool(
+                  registry,
+                  call("notebook_read", { notebook_path: external, limit: 1 }, "call-external-read"),
+                ),
               ).toMatchObject({ type: "text" })
+              // notebook_read is undeclared (fresh L3 human preflight); the
+              // L2 edit and the elevated external read assert the canonical
+              // preflight in sorted order.
               expect(assertions.map((item) => item.action)).toEqual([
                 "notebook_read",
                 "edit",

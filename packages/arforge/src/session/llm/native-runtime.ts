@@ -18,15 +18,21 @@ import {
 } from "@arforge-ai/llm"
 import type { LLMClientShape } from "@arforge-ai/llm/route"
 import { LLMNative } from "./native-request"
+import * as MatureRequestBinding from "./mature-binding"
 
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
   | { readonly type: "unsupported"; readonly reason: string }
 export type StreamResult =
-  | { readonly type: "supported"; readonly stream: Stream.Stream<LLMEvent, unknown> }
+  | {
+      readonly type: "supported"
+      readonly stream: Stream.Stream<LLMEvent, unknown>
+      /** Metadata-only durable identity for a mature provider attempt. */
+      readonly binding?: MatureRequestBinding.Binding
+    }
   | { readonly type: "unsupported"; readonly reason: string }
 
-type StreamInput = {
+export type StreamInput = {
   readonly model: Provider.Model
   readonly provider: Provider.Info
   readonly auth: Auth.Info | undefined
@@ -41,6 +47,8 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  readonly requestBinding?: MatureRequestBinding.RequestBindingContext
+  readonly promptDigest?: string
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -100,6 +108,13 @@ export function stream(input: StreamInput): StreamResult {
     providerOptions: ProviderTransform.providerOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
   })
+  const binding = input.requestBinding
+    ? MatureRequestBinding.fromRequest({
+        request,
+        binding: input.requestBinding,
+        promptDigest: input.promptDigest,
+      })
+    : undefined
   const stream = Stream.scoped(
     Stream.unwrap(
       Effect.gen(function* () {
@@ -141,6 +156,7 @@ export function stream(input: StreamInput): StreamResult {
 
   return {
     ...current,
+    ...(binding ? { binding } : {}),
     stream: fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream,
   }
 }
@@ -175,6 +191,7 @@ export function nativeTools(tools: Record<string, Tool>, input: Pick<StreamInput
       NativeTool.make({
         description: item.description ?? "",
         jsonSchema: nativeSchema(item.inputSchema),
+        ...(item.outputSchema === undefined ? {} : { outputSchema: nativeSchema(item.outputSchema) }),
         execute: (args: unknown, ctx) =>
           Effect.tryPromise({
             try: () => {

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { AbsolutePath, Agent, Location, Model, Arforge, Prompt, Session, SessionMessage } from "../src/effect"
 
 test("sessions.get returns the decoded Effect projection", async () => {
@@ -13,6 +14,84 @@ test("sessions.get returns the decoded Effect projection", async () => {
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
 
   expect(DateTime.toEpochMillis(result.time.created)).toBe(1_717_171_717_000)
+})
+
+test("artifacts.readScoped returns binary bytes through the Effect client", async () => {
+  let requestedUrl = ""
+  const httpClient = HttpClient.make((request) => {
+    requestedUrl = request.url
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(new Uint8Array([4, 5, 6]), {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        }),
+      ),
+    )
+  })
+  const reference = Schema.decodeUnknownSync(AgentRuntime.OpaqueArtifactRef)({
+    version: 1,
+    artifactID: "art_effect",
+    kind: "tool_output",
+    digest: "a".repeat(64),
+    mime: "application/octet-stream",
+    sizeBytes: 3,
+    owner: { scope: "profile", id: "usr_test" },
+    retention: { mode: "durable" },
+    retrievalHint: { kind: "managed", handle: "h_effect" },
+    createdAt: 1_717_171_717_000,
+  })
+
+  const bytes = await Effect.gen(function* () {
+    const client = yield* Arforge.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.artifacts.readScoped({ reference, maxBytes: 3 })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(bytes).toEqual(new Uint8Array([4, 5, 6]))
+  expect(requestedUrl).toBe("http://localhost:3000/api/artifacts/read")
+})
+
+test("artifacts.readRange decodes a bounded 206 response through the Effect client", async () => {
+  let requestedUrl = ""
+  const httpClient = HttpClient.make((request) => {
+    requestedUrl = request.url
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(new Uint8Array([9, 10]), {
+          status: 206,
+          headers: { "content-type": "application/octet-stream", etag: '"' + "b".repeat(64) + '"' },
+        }),
+      ),
+    )
+  })
+  const reference = Schema.decodeUnknownSync(AgentRuntime.OpaqueArtifactRef)({
+    version: 1,
+    artifactID: "art_effect_range",
+    kind: "tool_output",
+    digest: "b".repeat(64),
+    mime: "application/octet-stream",
+    sizeBytes: 8,
+    owner: { scope: "session", id: "ses_test" },
+    retention: { mode: "session" },
+    retrievalHint: { kind: "managed", handle: "h_effect_range" },
+    createdAt: 1_717_171_717_000,
+  })
+
+  const bytes = await Effect.gen(function* () {
+    const client = yield* Arforge.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.artifacts.readRange({
+      sessionID: Session.ID.make("ses_test"),
+      reference,
+      offset: 3,
+      length: 2,
+      ifMatch: `"${reference.digest}"`,
+    })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(bytes).toEqual(new Uint8Array([9, 10]))
+  expect(requestedUrl).toBe("http://localhost:3000/api/session/ses_test/artifacts/read-range")
 })
 
 test("events.subscribe exposes and decodes the native Effect event stream", async () => {

@@ -10,18 +10,26 @@
  * artifact in isolation, requires human approval, observes a deterministic
  * canary, and can remove the overlay immediately on rollback.
  *
- * Concurrency: JavaScript executes one call stack at a time and every public
- * method performs synchronous file I/O without awaiting mid-operation, so a
- * single process cannot interleave two evolution operations. Cross-process
- * coordination is not enforced (the Python sidecar no longer writes evolution
- * state after migration); the desktop and CLI share one owning process per
- * profile.
+ * Production code uses the durable DB services. This module is a read-only
+ * compatibility/import reader by default; its retired filesystem writer can
+ * only be enabled explicitly for isolated compatibility tests.
  */
 
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, renameSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { EvolutionLevels } from "./level"
+import { canaryReportFor, type CanaryGateReport, type PromotionBudgetReport } from "./promotion-gate"
 
 export class EvolutionError extends Error {}
 
@@ -104,13 +112,19 @@ export function policyFromEnv(): EvolutionPolicy {
   }
   return {
     min_auto_proposal_frequency: int("ARFORGE_EVOLUTION_MIN_FREQUENCY", DEFAULT_POLICY.min_auto_proposal_frequency),
-    min_auto_proposal_confidence: float("ARFORGE_EVOLUTION_MIN_CONFIDENCE", DEFAULT_POLICY.min_auto_proposal_confidence),
+    min_auto_proposal_confidence: float(
+      "ARFORGE_EVOLUTION_MIN_CONFIDENCE",
+      DEFAULT_POLICY.min_auto_proposal_confidence,
+    ),
     min_canary_observations: int("ARFORGE_EVOLUTION_CANARY_OBS", DEFAULT_POLICY.min_canary_observations),
     min_control_observations: int("ARFORGE_EVOLUTION_CONTROL_OBS", DEFAULT_POLICY.min_control_observations),
     min_canary_success_rate: float("ARFORGE_EVOLUTION_CANARY_SUCCESS", DEFAULT_POLICY.min_canary_success_rate),
     min_success_rate_delta: float("ARFORGE_EVOLUTION_MIN_DELTA", DEFAULT_POLICY.min_success_rate_delta),
     default_traffic_percent: int("ARFORGE_EVOLUTION_TRAFFIC_PERCENT", DEFAULT_POLICY.default_traffic_percent),
-    auto_rollback_min_observations: int("ARFORGE_EVOLUTION_ROLLBACK_OBS", DEFAULT_POLICY.auto_rollback_min_observations),
+    auto_rollback_min_observations: int(
+      "ARFORGE_EVOLUTION_ROLLBACK_OBS",
+      DEFAULT_POLICY.auto_rollback_min_observations,
+    ),
     auto_rollback_success_rate: float("ARFORGE_EVOLUTION_ROLLBACK_SUCCESS", DEFAULT_POLICY.auto_rollback_success_rate),
     max_active_candidates: int("ARFORGE_EVOLUTION_MAX_ACTIVE", DEFAULT_POLICY.max_active_candidates),
   }
@@ -124,7 +138,11 @@ export function validatePolicy(policy: EvolutionPolicy): void {
     policy.auto_rollback_min_observations,
     policy.max_active_candidates,
   ]
-  if (integers.some((value) => value < 0) || policy.min_auto_proposal_frequency < 1 || policy.max_active_candidates < 1) {
+  if (
+    integers.some((value) => value < 0) ||
+    policy.min_auto_proposal_frequency < 1 ||
+    policy.max_active_candidates < 1
+  ) {
     throw new Error("evolution observation limits must be non-negative")
   }
   if (policy.default_traffic_percent < 1 || policy.default_traffic_percent > 100) {
@@ -142,50 +160,94 @@ export function validatePolicy(policy: EvolutionPolicy): void {
   }
 }
 
-export class ConstitutionKernel {
-  static readonly VERSION = "1.0"
-  static readonly ALLOWED_TARGETS = new Set([
-    "learning.failure",
-    "learning.fix",
-    "learning.preference",
-    "routing.advice",
-    "tool.advice",
-  ])
-  static readonly PROTECTED_PREFIXES = [
-    "authority",
-    "permission",
-    "privacy",
-    "security",
-    "audit",
-    "evolution",
-    "constitution",
-    "identity",
-    "ownership",
-  ]
-  static readonly HUMAN_ACTOR_PREFIXES = ["user:", "admin:"]
+const EVOLUTION_ALLOWED_TARGETS = Object.freeze([
+  "learning.failure",
+  "learning.fix",
+  "learning.preference",
+  "routing.advice",
+  "tool.advice",
+] as const)
 
-  static validateTarget(target: string): string {
-    const normalized = String(target ?? "").trim().toLowerCase()
+/**
+ * Code-owned namespaces that an Evolution artifact can never target. Keep the
+ * list module-owned and frozen: candidate data may reference the Constitution,
+ * but cannot amend the policy that evaluates it.
+ */
+const CONSTITUTION_PROTECTED_PREFIXES = Object.freeze([
+  // identity / ownership
+  "identity",
+  "ownership",
+  // permission / policy
+  "authority",
+  "permission",
+  "policy",
+  "approval",
+  "capability",
+  // privacy / secret
+  "privacy",
+  "secret",
+  "credential",
+  "retention",
+  // security controls remain non-evolvable under the permission/policy boundary
+  "security",
+  "sandbox",
+  "network",
+  "egress",
+  // audit / event integrity
+  "audit",
+  "event",
+  // evolution gates and the protected list itself
+  "evolution",
+  "constitution",
+  // source-write authority
+  "source",
+  "repository",
+  // release / signing
+  "release",
+  "signing",
+  "signature",
+  // rollback
+  "rollback",
+  // hard budget limits; soft runtime tuning is governed separately
+  "budget.hard",
+  "budget.limit",
+  "budget.cap",
+] as const)
+
+const EVOLUTION_ALLOWED_TARGET_INDEX: ReadonlySet<string> = new Set(EVOLUTION_ALLOWED_TARGETS)
+const CONSTITUTION_HUMAN_ACTOR_PREFIXES = Object.freeze(["user:", "admin:"] as const)
+
+export class ConstitutionKernel {
+  static readonly VERSION = "2.0"
+  static readonly ALLOWED_TARGETS: ReadonlyArray<string> = EVOLUTION_ALLOWED_TARGETS
+  static readonly PROTECTED_PREFIXES: ReadonlyArray<string> = CONSTITUTION_PROTECTED_PREFIXES
+  static readonly HUMAN_ACTOR_PREFIXES: ReadonlyArray<string> = CONSTITUTION_HUMAN_ACTOR_PREFIXES
+
+  static validateTarget(target: unknown): string {
+    const normalized = typeof target === "string" ? target.trim().toLowerCase() : ""
+    const displayTarget = typeof target === "string" ? target : "<non-string>"
     if (
-      ConstitutionKernel.PROTECTED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}.`))
+      ConstitutionKernel.PROTECTED_PREFIXES.some(
+        (prefix) => normalized === prefix || normalized.startsWith(`${prefix}.`),
+      )
     ) {
-      throw new ConstitutionViolation(`target is protected by the Constitution Kernel: ${target}`)
+      throw new ConstitutionViolation(`target is protected by the Constitution Kernel: ${displayTarget}`)
     }
-    if (!ConstitutionKernel.ALLOWED_TARGETS.has(normalized)) {
-      throw new ConstitutionViolation(`target is not deployable by Evolution Runtime: ${target}`)
+    if (!EVOLUTION_ALLOWED_TARGET_INDEX.has(normalized)) {
+      throw new ConstitutionViolation(`target is not deployable by Evolution Runtime: ${displayTarget}`)
     }
     return normalized
   }
 
-  static requireHuman(actor: string): string {
-    const normalized = String(actor ?? "").trim()
+  static requireHuman(actor: unknown): string {
+    const normalized = typeof actor === "string" ? actor.trim() : ""
     if (!ConstitutionKernel.HUMAN_ACTOR_PREFIXES.some((prefix) => normalized.toLowerCase().startsWith(prefix))) {
       throw new ConstitutionViolation("approval and deployment require an explicit human actor")
     }
     return normalized
   }
 
-  static public(): Record<string, unknown> {
+  static public() {
     return {
       version: ConstitutionKernel.VERSION,
       allowed_targets: [...ConstitutionKernel.ALLOWED_TARGETS].sort(),
@@ -195,6 +257,12 @@ export class ConstitutionKernel {
     }
   }
 }
+
+Object.freeze(ConstitutionKernel.ALLOWED_TARGETS)
+Object.freeze(ConstitutionKernel.PROTECTED_PREFIXES)
+Object.freeze(ConstitutionKernel.HUMAN_ACTOR_PREFIXES)
+Object.freeze(ConstitutionKernel)
+Object.freeze(ConstitutionKernel.prototype)
 
 const CANDIDATE_ID = /^ev-[0-9a-f]{16}$/
 const EXPOSURE_ID = /^ex-[0-9a-f]{32}$/
@@ -275,18 +343,15 @@ function copyFloatMarks(source: object, target: object): void {
  */
 function parseJsonTracking<T = unknown>(text: string): T {
   const floatLiterals: string[] = []
-  const masked = text.replace(
-    /"(?:\\.|[^"\\])*"|[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?/g,
-    (match) => {
-      if (match.startsWith('"')) return match
-      if (/[.eE]/.test(match)) {
-        const index = floatLiterals.length
-        floatLiterals.push(match)
-        return `"${FLOAT_MARK_PREFIX}${index}"`
-      }
-      return match
-    },
-  )
+  const masked = text.replace(/"(?:\\.|[^"\\])*"|[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?/g, (match) => {
+    if (match.startsWith('"')) return match
+    if (/[.eE]/.test(match)) {
+      const index = floatLiterals.length
+      floatLiterals.push(match)
+      return `"${FLOAT_MARK_PREFIX}${index}"`
+    }
+    return match
+  })
   return JSON.parse(masked, (_key, value) => {
     if (value !== null && typeof value === "object" && !Array.isArray(value)) {
       for (const [key, child] of Object.entries(value)) {
@@ -322,7 +387,10 @@ function serialize(value: unknown, key: string | number | undefined, owner: obje
   if (typeof value === "object") {
     const keys = Object.keys(value as Record<string, unknown>).sort()
     return `{${keys
-      .map((itemKey) => `${JSON.stringify(itemKey)}:${serialize((value as Record<string, unknown>)[itemKey], itemKey, value)}`)
+      .map(
+        (itemKey) =>
+          `${JSON.stringify(itemKey)}:${serialize((value as Record<string, unknown>)[itemKey], itemKey, value)}`,
+      )
       .join(",")}}`
   }
   return "null"
@@ -390,6 +458,33 @@ export interface CandidateManifest {
   created_by: string
   created_at: string
   constitution_version: string
+  evolution_level?: "L2"
+  source_experience_ids?: string[]
+  source_evidence_ids?: string[]
+  source_evaluation_ids?: string[]
+  source_provenance_digest?: string
+  source_provenance_artifact?: {
+    digest: string
+    record_digest: string
+    kind: "evolution-source-provenance"
+    uri: string
+  } | null
+  capability_boundary?: {
+    permission_requests: string[]
+    secret_refs: string[]
+    network_egress: string[]
+  }
+  evaluation_budget?: {
+    max_attempts: number
+    max_duration_ms: number
+    max_cost_micros: number
+  }
+  rollback_artifact?: {
+    artifact_id: string
+    digest: string
+    plan_digest: string
+    operation: "deactivate_strategy_overlay"
+  }
   candidate_id: string
   artifact_digest: string
 }
@@ -405,16 +500,19 @@ export interface CandidateState {
   approval?: Record<string, unknown> | null
   deployment?: Record<string, unknown> | null
   rollback?: Record<string, unknown> | null
+  promotion_gate?: Record<string, unknown> | null
+  evolution_level?: "L0" | "L2" | "L3" | "L4"
 }
 
 export interface EvaluationReport {
-  schema_version: number
+  schema_version: 1
   candidate_id: string
   candidate_digest: string
   created_at: string
-  isolation: string
-  workspace_retained: boolean
+  isolation: "temporary_directory"
+  workspace_retained: false
   gate_passed: boolean
+  budget: PromotionBudgetReport
   cases: EvaluationCase[]
   evaluation_id: string
   report_digest: string
@@ -427,6 +525,9 @@ export interface CandidateView {
   target: string
   instruction: string
   evidence_refs: string[]
+  source_experience_ids: string[]
+  source_evidence_ids: string[]
+  source_evaluation_ids: string[]
   state: CandidateState
   evaluation?: EvaluationReport
 }
@@ -520,6 +621,8 @@ export type EvaluationRunner = (candidate: CandidateManifest, workspace: string)
 export interface EvolutionRuntimeOptions {
   readonly root?: string
   readonly policy?: EvolutionPolicy
+  /** The retired writer is available only to isolated compatibility tests. */
+  readonly legacyWriteMode?: "test-only"
 }
 
 export class EvolutionRuntime {
@@ -527,13 +630,22 @@ export class EvolutionRuntime {
   readonly maxActiveExposures = 10_000
   readonly root: string
   readonly policy: EvolutionPolicy
+  readonly readOnly: boolean
 
   constructor(options: EvolutionRuntimeOptions = {}) {
     const policy = options.policy ?? policyFromEnv()
     validatePolicy(policy)
     this.policy = policy
     this.root = (options.root ?? defaultEvolutionRoot()).replace(/[\\/]+$/, "")
-    mkdirSync(this.root, { recursive: true })
+    this.readOnly = options.legacyWriteMode !== "test-only"
+    if (!this.readOnly) mkdirSync(this.root, { recursive: true })
+  }
+
+  private requireLegacyWrite(operation: string): void {
+    if (this.readOnly)
+      throw new EvolutionStateError(
+        `Legacy filesystem Evolution operation ${operation} is read-only; use the durable DB service`,
+      )
   }
 
   // ------------------------------------------------------------------
@@ -548,7 +660,9 @@ export class EvolutionRuntime {
     evidenceRefs: string[]
     createdBy: string
   }): { manifest: CandidateManifest; state: CandidateState } {
+    this.requireLegacyWrite("createCandidate")
     const cleanTarget = ConstitutionKernel.validateTarget(input.target)
+    EvolutionLevels.assert({ level: "L2", operation: "create_candidate", candidateKind: "skill" })
     const cleanTitle = this.boundedText(input.title, "title", 200)
     const cleanInstruction = this.boundedText(input.instruction, "instruction", 4000)
     const cleanRationale = this.boundedText(input.rationale, "rationale", 2000)
@@ -566,10 +680,15 @@ export class EvolutionRuntime {
       created_by: cleanActor,
       created_at: createdAt,
       constitution_version: ConstitutionKernel.VERSION,
+      evolution_level: "L2",
     }
     const artifactDigest = digest(core)
     const candidateId = `ev-${artifactDigest.slice(0, 16)}`
-    const manifest: CandidateManifest = { ...core, candidate_id: candidateId, artifact_digest: artifactDigest } as CandidateManifest
+    const manifest: CandidateManifest = {
+      ...core,
+      candidate_id: candidateId,
+      artifact_digest: artifactDigest,
+    } as CandidateManifest
     const state: CandidateState = {
       schema_version: this.schemaVersion,
       candidate_id: candidateId,
@@ -581,11 +700,13 @@ export class EvolutionRuntime {
       approval: null,
       deployment: null,
       rollback: null,
+      evolution_level: "L2",
     }
     const directory = this.candidateDir(candidateId)
     if (existsSync(directory)) {
       const existing = this.getCandidate(candidateId)
-      if (existing.artifact_digest === artifactDigest) return { manifest: existing as unknown as CandidateManifest, state: existing.state }
+      if (existing.artifact_digest === artifactDigest)
+        return { manifest: existing as unknown as CandidateManifest, state: existing.state }
       throw new EvolutionConflict("candidate identifier collision")
     }
     mkdirSync(directory, { recursive: true })
@@ -609,10 +730,16 @@ export class EvolutionRuntime {
     return jsonCopy(result)
   }
 
-  listCandidates(options: { status?: string; limit?: number } = {}): { schema_version: number; count: number; items: CandidateView[] } {
+  listCandidates(options: { status?: string; limit?: number } = {}): {
+    schema_version: number
+    count: number
+    items: CandidateView[]
+  } {
     const limit = options.limit ?? 100
     if (limit < 1 || limit > 500) throw new Error("limit must be between 1 and 500")
-    const requested = String(options.status ?? "").trim().toLowerCase()
+    const requested = String(options.status ?? "")
+      .trim()
+      .toLowerCase()
     const items: CandidateView[] = []
     const candidatesRoot = join(this.root, "candidates")
     if (existsSync(candidatesRoot)) {
@@ -637,6 +764,7 @@ export class EvolutionRuntime {
     total: number
     active: number
     constitution: Record<string, unknown>
+    evolution_levels: { version: string; levels: ReturnType<typeof EvolutionLevels.public> }
     audit: ReturnType<EvolutionRuntime["verifyAudit"]>
     policy: EvolutionPolicy
   } {
@@ -652,6 +780,7 @@ export class EvolutionRuntime {
       total: items.length,
       active: (counts.canary ?? 0) + (counts.promoted ?? 0),
       constitution: ConstitutionKernel.public(),
+      evolution_levels: { version: EvolutionLevels.VERSION, levels: EvolutionLevels.public() },
       audit: this.verifyAudit(),
       policy: { ...this.policy },
     }
@@ -661,7 +790,18 @@ export class EvolutionRuntime {
   // Evaluation and approval
   // ------------------------------------------------------------------
 
-  evaluateCandidate(candidateId: string, expectedRevision: number, runner?: EvaluationRunner): CandidateView & { evaluation: EvaluationReport } {
+  evaluateCandidate(
+    candidateId: string,
+    expectedRevision: number,
+    runner?: EvaluationRunner,
+  ): CandidateView & { evaluation: EvaluationReport } {
+    this.requireLegacyWrite("evaluateCandidate")
+    EvolutionLevels.assert({
+      level: "L2",
+      operation: "offline_evaluate",
+      candidateKind: "skill",
+      isolated: true,
+    })
     const cleanId = this.validateCandidateId(candidateId)
     const candidate = this.getCandidate(cleanId)
     const state = candidate.state
@@ -677,7 +817,9 @@ export class EvolutionRuntime {
     try {
       atomicJson(join(workspace, "candidate.json"), manifest as Record<string, unknown>, true)
       try {
-        cases = (runner ?? this.builtinEvaluation).call(this, manifest as unknown as CandidateManifest, workspace).map(normalizeCase)
+        cases = (runner ?? this.builtinEvaluation)
+          .call(this, manifest as unknown as CandidateManifest, workspace)
+          .map(normalizeCase)
       } catch (exc) {
         cases = [
           {
@@ -698,22 +840,46 @@ export class EvolutionRuntime {
         // best effort
       }
     }
-    const gatePassed = cases.length > 0 && cases.filter((caseItem) => caseItem.required).every((caseItem) => caseItem.passed)
+    const gatePassed =
+      cases.length > 0 && cases.filter((caseItem) => caseItem.required).every((caseItem) => caseItem.passed)
     const createdAt = utcNow()
+    const configuredBudget =
+      typeof candidate.evaluation_budget === "object" &&
+      candidate.evaluation_budget !== null &&
+      !Array.isArray(candidate.evaluation_budget)
+        ? Object.fromEntries(Object.entries(candidate.evaluation_budget))
+        : {}
+    const maxAttempts = Number(configuredBudget.max_attempts ?? 0)
+    const maxDurationMs = Number(configuredBudget.max_duration_ms ?? 0)
+    const maxCostMicros = Number(configuredBudget.max_cost_micros ?? 0)
+    const budget: PromotionBudgetReport = {
+      max_attempts: maxAttempts,
+      attempts_used: 1,
+      max_duration_ms: maxDurationMs,
+      duration_ms_used: 0,
+      max_cost_micros: maxCostMicros,
+      cost_micros_used: 0,
+      passed: maxAttempts === 1 && maxDurationMs > 0 && maxCostMicros === 0,
+    }
     const reportCore = {
-      schema_version: this.schemaVersion,
+      schema_version: 1 as const,
       candidate_id: cleanId,
       candidate_digest: candidate.artifact_digest,
       created_at: createdAt,
-      isolation: "temporary_directory",
-      workspace_retained: false,
+      isolation: "temporary_directory" as const,
+      workspace_retained: false as const,
       gate_passed: gatePassed,
+      budget,
       cases,
     }
     const reportDigest = digest(reportCore)
     const evaluationId = `eval-${reportDigest.slice(0, 16)}`
     const report: EvaluationReport = { ...reportCore, evaluation_id: evaluationId, report_digest: reportDigest }
-    atomicJson(join(this.candidateDir(cleanId), "evaluations", `${evaluationId}.json`), report as unknown as Record<string, unknown>, true)
+    atomicJson(
+      join(this.candidateDir(cleanId), "evaluations", `${evaluationId}.json`),
+      report as unknown as Record<string, unknown>,
+      true,
+    )
     const updated = this.transition(state, "evaluated", {
       evaluation_id: evaluationId,
       approval: null,
@@ -727,10 +893,13 @@ export class EvolutionRuntime {
       gate_passed: gatePassed,
       case_count: cases.length,
     })
-    return { ...manifest, state: updated, evaluation: report } as unknown as CandidateView & { evaluation: EvaluationReport }
+    return { ...manifest, state: updated, evaluation: report } as unknown as CandidateView & {
+      evaluation: EvaluationReport
+    }
   }
 
   approveCandidate(candidateId: string, expectedRevision: number, actor: string, reason: string): CandidateView {
+    this.requireLegacyWrite("approveCandidate")
     const human = ConstitutionKernel.requireHuman(actor)
     const cleanReason = this.boundedText(reason, "reason", 500)
     const candidate = this.getCandidate(candidateId)
@@ -758,6 +927,7 @@ export class EvolutionRuntime {
   }
 
   rejectCandidate(candidateId: string, expectedRevision: number, actor: string, reason: string): CandidateView {
+    this.requireLegacyWrite("rejectCandidate")
     const human = ConstitutionKernel.requireHuman(actor)
     const cleanReason = this.boundedText(reason, "reason", 500)
     const candidate = this.getCandidate(candidateId)
@@ -766,7 +936,9 @@ export class EvolutionRuntime {
     if (state.status !== "proposed" && state.status !== "evaluated" && state.status !== "approved") {
       throw new EvolutionStateError("candidate can no longer be rejected")
     }
-    const updated = this.transition(state, "rejected", { rollback: { actor: human, reason: cleanReason, at: utcNow() } })
+    const updated = this.transition(state, "rejected", {
+      rollback: { actor: human, reason: cleanReason, at: utcNow() },
+    })
     this.writeState(candidateId, updated)
     this.audit(candidateId, "candidate_rejected", human, cleanReason)
     return { ...candidate, state: updated }
@@ -776,8 +948,22 @@ export class EvolutionRuntime {
   // Canary, observations, promotion and rollback
   // ------------------------------------------------------------------
 
-  startCanary(candidateId: string, expectedRevision: number, actor: string, reason: string, trafficPercent?: number): CandidateView {
+  startCanary(
+    candidateId: string,
+    expectedRevision: number,
+    actor: string,
+    reason: string,
+    trafficPercent?: number,
+  ): CandidateView {
+    this.requireLegacyWrite("startCanary")
     const human = ConstitutionKernel.requireHuman(actor)
+    EvolutionLevels.assert({
+      level: "L3",
+      operation: "start_canary",
+      candidateKind: "skill",
+      isolated: true,
+      reversible: true,
+    })
     const cleanReason = this.boundedText(reason, "reason", 500)
     const traffic = trafficPercent === undefined ? this.policy.default_traffic_percent : trafficPercent
     if (typeof traffic === "boolean" || !Number.isInteger(traffic) || traffic < 1 || traffic > 100) {
@@ -812,13 +998,19 @@ export class EvolutionRuntime {
     const state = candidate.state
     if (state.status === "promoted") return "candidate"
     if (state.status !== "canary" || !state.deployment) return "inactive"
-    const cleanKey = String(cohortKey ?? "").trim().slice(0, 500)
-    const bucket = parseInt(createHash("sha256").update(`${candidateId}\0${cleanKey}`, "utf8").digest("hex").slice(0, 8), 16) % 100
+    const cleanKey = String(cohortKey ?? "")
+      .trim()
+      .slice(0, 500)
+    const bucket =
+      parseInt(createHash("sha256").update(`${candidateId}\0${cleanKey}`, "utf8").digest("hex").slice(0, 8), 16) % 100
     const traffic = Number((state.deployment as Record<string, unknown>).traffic_percent)
     return bucket < traffic ? "candidate" : "control"
   }
 
-  renderContext(userInput: string, cohortKey: string): {
+  renderContext(
+    userInput: string,
+    cohortKey: string,
+  ): {
     schema_version: number
     text: string
     candidate_ids: string[]
@@ -858,11 +1050,7 @@ export class EvolutionRuntime {
     }
   }
 
-  prepareContext(input: {
-    userInput: string
-    cohortKey: string
-    source?: ExposureSource
-  }): {
+  prepareContext(input: { userInput: string; cohortKey: string; source?: ExposureSource }): {
     schema_version: number
     text: string
     candidate_ids: string[]
@@ -870,7 +1058,10 @@ export class EvolutionRuntime {
     exposure_id: string
     exposure: ExposureTicket | null
   } {
-    const cleanKey = String(input.cohortKey ?? "").trim().slice(0, 500)
+    this.requireLegacyWrite("prepareContext")
+    const cleanKey = String(input.cohortKey ?? "")
+      .trim()
+      .slice(0, 500)
     if (!cleanKey) throw new Error("cohort_key must not be empty")
     const cleanSource = this.validateExposureSource(input.source ?? null)
     this.recoverIncompleteExposureArchives()
@@ -921,8 +1112,15 @@ export class EvolutionRuntime {
     safetyIncident?: boolean
     assistantMessageId?: string
   }): ExposureReceiptResult {
-    const cleanReason = String(input.stopReason ?? "").trim().slice(0, 1000)
-    const cleanAssistantMessageId = this.validateMessageId(input.assistantMessageId ?? "", "assistant_message_id", false)
+    this.requireLegacyWrite("recordExposureOutcome")
+    const cleanReason = String(input.stopReason ?? "")
+      .trim()
+      .slice(0, 1000)
+    const cleanAssistantMessageId = this.validateMessageId(
+      input.assistantMessageId ?? "",
+      "assistant_message_id",
+      false,
+    )
     const outcomeInput = {
       success: Boolean(input.success),
       stop_reason: cleanReason,
@@ -1004,6 +1202,7 @@ export class EvolutionRuntime {
     score?: number
     safetyIncident?: boolean
   }): Record<string, unknown> {
+    this.requireLegacyWrite("recordOutcome")
     return this.recordOutcomeInternal({
       candidateId: input.candidateId,
       cohort: input.cohort,
@@ -1022,6 +1221,7 @@ export class EvolutionRuntime {
     count: number
     items: unknown[]
   } {
+    this.requireLegacyWrite("recordTaskOutcome")
     const cohortKey = String(input.task ?? "").slice(0, 500)
     const evidenceSeed = `${cohortKey}\0${input.stopReason ?? ""}\0${utcNow()}`
     const evidenceRef = `hook-run:${createHash("sha256").update(evidenceSeed, "utf8").digest("hex").slice(0, 20)}`
@@ -1044,89 +1244,39 @@ export class EvolutionRuntime {
     return { schema_version: 1, count: recorded.length, items: recorded }
   }
 
-  canaryReport(candidateId: string): {
-    schema_version: number
-    candidate_id: string
-    candidate_digest: string
-    candidate_observations: number
-    control_observations: number
-    candidate_success_rate: number
-    control_success_rate: number
-    success_rate_delta: number
-    safety_incidents: number
-    control_safety_incidents: number
-    checks: Record<string, boolean>
-    gate_passed: boolean
-  } {
+  canaryReport(candidateId: string): CanaryGateReport {
     const candidate = this.getCandidate(candidateId)
     const observations = this.loadObservations(candidateId, candidate.artifact_digest)
-    const candidateRows = observations.filter((item) => item.cohort === "candidate")
-    const controlRows = observations.filter((item) => item.cohort === "control")
-    const candidateRate = candidateRows.length > 0 ? candidateRows.filter((item) => item.success).length / candidateRows.length : 0.0
-    const controlRate = controlRows.length > 0 ? controlRows.filter((item) => item.success).length / controlRows.length : 0.0
-    const delta = candidateRate - controlRate
-    const safetyIncidents = candidateRows.filter((item) => item.safety_incident).length
-    const controlSafetyIncidents = controlRows.filter((item) => item.safety_incident).length
-    const checks = {
-      minimum_canary_observations: candidateRows.length >= this.policy.min_canary_observations,
-      minimum_control_observations: controlRows.length >= this.policy.min_control_observations,
-      minimum_canary_success_rate: candidateRate >= this.policy.min_canary_success_rate,
-      minimum_success_rate_delta: delta >= this.policy.min_success_rate_delta,
-      no_safety_incidents: safetyIncidents === 0,
-    }
-    return {
-      schema_version: 1,
-      candidate_id: candidateId,
-      candidate_digest: candidate.artifact_digest,
-      candidate_observations: candidateRows.length,
-      control_observations: controlRows.length,
-      candidate_success_rate: round4(candidateRate),
-      control_success_rate: round4(controlRate),
-      success_rate_delta: round4(delta),
-      safety_incidents: safetyIncidents,
-      control_safety_incidents: controlSafetyIncidents,
-      checks,
-      gate_passed: Object.values(checks).every(Boolean),
-    }
+    return canaryReportFor({
+      candidateID: candidateId,
+      candidateDigest: candidate.artifact_digest,
+      observations: observations.map((item) => ({
+        id: `ob-${item.record_hash.slice(0, 32)}`,
+        candidateDigest: item.candidate_digest,
+        cohort: item.cohort,
+        success: item.success,
+        score: item.score,
+        safetyIncident: item.safety_incident,
+        evidenceRef: item.evidence_ref,
+        recordHash: item.record_hash,
+      })),
+      policy: this.policy,
+    })
   }
 
   promoteCandidate(candidateId: string, expectedRevision: number, actor: string, reason: string): CandidateView {
-    const human = ConstitutionKernel.requireHuman(actor)
-    const cleanReason = this.boundedText(reason, "reason", 500)
-    const candidate = this.getCandidate(candidateId)
-    const state = candidate.state
-    this.requireRevision(state, expectedRevision)
-    if (state.status !== "canary") {
-      throw new EvolutionStateError("only a canary candidate can be promoted")
-    }
-    const report = this.canaryReport(candidateId)
-    if (!report.gate_passed) {
-      const failed = Object.entries(report.checks)
-        .filter(([, passed]) => !passed)
-        .map(([name]) => name)
-        .join(", ")
-      throw new EvolutionStateError(`canary promotion gate failed: ${failed}`)
-    }
-    const deployment = { ...(state.deployment ?? {}) }
-    Object.assign(deployment, {
-      stage: "promoted",
-      traffic_percent: 100,
-      promoted_at: utcNow(),
-      promoted_by: human,
-      promotion_reason: cleanReason,
-      canary_report: report,
-    })
-    const updated = this.transition(state, "promoted", { deployment })
-    this.writeState(candidateId, updated)
-    this.audit(candidateId, "candidate_promoted", human, cleanReason, {
-      candidate_observations: report.candidate_observations,
-      control_observations: report.control_observations,
-      success_rate_delta: report.success_rate_delta,
-    })
-    return { ...candidate, state: updated }
+    this.requireLegacyWrite("promoteCandidate")
+    void candidateId
+    void expectedRevision
+    void actor
+    void reason
+    throw new EvolutionStateError(
+      "legacy filesystem promotion is retired; L4 promotion requires the durable DB Promotion Gate",
+    )
   }
 
   rollbackCandidate(candidateId: string, expectedRevision: number, actor: string, reason: string): CandidateView {
+    this.requireLegacyWrite("rollbackCandidate")
     const cleanActor = this.boundedText(actor, "actor", 160)
     if (cleanActor.toLowerCase().startsWith("runtime:")) {
       throw new ConstitutionViolation("manual rollback runtime actors must use automatic monitoring")
@@ -1152,7 +1302,9 @@ export class EvolutionRuntime {
     truncated: boolean
     items: Array<Record<string, unknown>>
   } {
-    const cleanStatus = String(options.status ?? "").trim().toLowerCase()
+    const cleanStatus = String(options.status ?? "")
+      .trim()
+      .toLowerCase()
     if (cleanStatus && cleanStatus !== "pending" && cleanStatus !== "recorded") {
       throw new Error("status must be pending or recorded")
     }
@@ -1240,7 +1392,12 @@ export class EvolutionRuntime {
     if (typeof limit === "boolean" || !Number.isInteger(limit) || limit < 1 || limit > 500) {
       throw new Error("limit must be an integer between 1 and 500")
     }
-    if (options.beforeSequence !== undefined && (typeof options.beforeSequence === "boolean" || !Number.isInteger(options.beforeSequence) || options.beforeSequence < 1)) {
+    if (
+      options.beforeSequence !== undefined &&
+      (typeof options.beforeSequence === "boolean" ||
+        !Number.isInteger(options.beforeSequence) ||
+        options.beforeSequence < 1)
+    ) {
       throw new Error("before_sequence must be a positive integer")
     }
     const verification = this.verifyAuditUnlocked()
@@ -1318,11 +1475,19 @@ export class EvolutionRuntime {
     return this.archivePlanProjection(plan)
   }
 
-  applyExposureArchive(input: { keepRecorded?: number; expectedPlanDigest: string; actor: string; reason: string }): Record<string, unknown> {
+  applyExposureArchive(input: {
+    keepRecorded?: number
+    expectedPlanDigest: string
+    actor: string
+    reason: string
+  }): Record<string, unknown> {
+    this.requireLegacyWrite("applyExposureArchive")
     const cleanKeep = this.validateKeepRecorded(input.keepRecorded ?? 1000)
     const human = ConstitutionKernel.requireHuman(input.actor)
     const cleanReason = this.boundedText(input.reason, "reason", 500)
-    const cleanDigest = String(input.expectedPlanDigest ?? "").trim().toLowerCase()
+    const cleanDigest = String(input.expectedPlanDigest ?? "")
+      .trim()
+      .toLowerCase()
     if (!SHA256_HEX.test(cleanDigest)) throw new Error("expected_plan_digest must be a SHA-256 digest")
     const archiveId = `xa-${cleanDigest.slice(0, 24)}`
     this.recoverIncompleteExposureArchives()
@@ -1341,7 +1506,10 @@ export class EvolutionRuntime {
     }
     if (plan.items.length === 0) {
       const counts = this.activeExposureCounts(this.loadExposureRecords())
-      this.audit(archiveId, "exposure_archive_noop", human, cleanReason, { keep_recorded: cleanKeep, archived_count: 0 })
+      this.audit(archiveId, "exposure_archive_noop", human, cleanReason, {
+        keep_recorded: cleanKeep,
+        archived_count: 0,
+      })
       return {
         schema_version: this.schemaVersion,
         applied: false,
@@ -1431,7 +1599,15 @@ export class EvolutionRuntime {
     const plan = this.buildExposureRestorePlan(this.exposureArchivePath(archiveId))
     const items = plan.items.slice(0, limit).map((item) => {
       const projected: Record<string, unknown> = {}
-      for (const key of ["exposure_id", "created_at", "ticket_digest", "receipt_digest", "ticket_file_digest", "receipt_file_digest", "live_status"]) {
+      for (const key of [
+        "exposure_id",
+        "created_at",
+        "ticket_digest",
+        "receipt_digest",
+        "ticket_file_digest",
+        "receipt_file_digest",
+        "live_status",
+      ]) {
         projected[key] = (item as Record<string, unknown>)[key]
       }
       if ("source" in item) projected.source = jsonCopy((item as { source?: ExposureSource }).source)
@@ -1455,11 +1631,19 @@ export class EvolutionRuntime {
     return this.restorePlanProjection(plan)
   }
 
-  applyExposureRestore(input: { archiveId: string; expectedPlanDigest: string; actor: string; reason: string }): Record<string, unknown> {
+  applyExposureRestore(input: {
+    archiveId: string
+    expectedPlanDigest: string
+    actor: string
+    reason: string
+  }): Record<string, unknown> {
+    this.requireLegacyWrite("applyExposureRestore")
     const cleanArchiveId = this.validateArchiveId(input.archiveId)
     const human = ConstitutionKernel.requireHuman(input.actor)
     const cleanReason = this.boundedText(input.reason, "reason", 500)
-    const cleanDigest = String(input.expectedPlanDigest ?? "").trim().toLowerCase()
+    const cleanDigest = String(input.expectedPlanDigest ?? "")
+      .trim()
+      .toLowerCase()
     if (!SHA256_HEX.test(cleanDigest)) throw new Error("expected_plan_digest must be a SHA-256 digest")
     const restoreId = `xr-${cleanDigest.slice(0, 24)}`
     this.recoverIncompleteExposureArchives()
@@ -1471,7 +1655,9 @@ export class EvolutionRuntime {
       if (journalPlan.archive_id !== cleanArchiveId || journalPlan.plan_digest !== cleanDigest) {
         throw new IntegrityError("evolution exposure restore plan binding mismatch")
       }
-      return (this.completeExposureRestore(restorePath, human, cleanReason, false) as { result: Record<string, unknown> }).result
+      return (
+        this.completeExposureRestore(restorePath, human, cleanReason, false) as { result: Record<string, unknown> }
+      ).result
     }
     const plan = this.buildExposureRestorePlan(this.exposureArchivePath(cleanArchiveId))
     if (plan.plan_digest !== cleanDigest) {
@@ -1521,7 +1707,9 @@ export class EvolutionRuntime {
     })
     try {
       const restorePath2 = this.publishExposureRestoreJournal(plan, human, cleanReason)
-      return (this.completeExposureRestore(restorePath2, human, cleanReason, false) as { result: Record<string, unknown> }).result
+      return (
+        this.completeExposureRestore(restorePath2, human, cleanReason, false) as { result: Record<string, unknown> }
+      ).result
     } catch (error) {
       this.audit(restoreId, "exposure_restore_failed", human, "restore journal or live copy failed", {
         archive_id: cleanArchiveId,
@@ -1555,7 +1743,15 @@ export class EvolutionRuntime {
     }
     const items = plan.items.map((item) => {
       const projected: Record<string, unknown> = {}
-      for (const key of ["exposure_id", "created_at", "ticket_digest", "receipt_digest", "ticket_file_digest", "receipt_file_digest", "live_status"]) {
+      for (const key of [
+        "exposure_id",
+        "created_at",
+        "ticket_digest",
+        "receipt_digest",
+        "ticket_file_digest",
+        "receipt_file_digest",
+        "live_status",
+      ]) {
         projected[key] = (item as Record<string, unknown>)[key]
       }
       if ("source" in item) projected.source = jsonCopy((item as { source?: ExposureSource }).source)
@@ -1589,7 +1785,10 @@ export class EvolutionRuntime {
   // Learning pattern convergence
   // ------------------------------------------------------------------
 
-  syncLearningPatterns(patterns: LearningPatternInput[], createdBy = "runtime:core-learning"): {
+  syncLearningPatterns(
+    patterns: LearningPatternInput[],
+    createdBy = "runtime:core-learning",
+  ): {
     schema_version: number
     seen: number
     created: number
@@ -1598,6 +1797,7 @@ export class EvolutionRuntime {
     failed: number
     items: Array<Record<string, unknown>>
   } {
+    this.requireLegacyWrite("syncLearningPatterns")
     const rows = [...patterns]
     if (rows.length > 50) throw new Error("at most 50 learning patterns can be synchronized")
     const results: Array<Record<string, unknown>> = []
@@ -1621,7 +1821,11 @@ export class EvolutionRuntime {
         if (confidence < 0 || confidence > 1) throw new Error("confidence must be in [0, 1]")
         sourceRef = this.evidenceRefs([`core-learning-pattern:${patternId}`])[0]
         const target = this.targetForPattern(patternType)
-        if (target === null || (frequency as number) < this.policy.min_auto_proposal_frequency || confidence < this.policy.min_auto_proposal_confidence) {
+        if (
+          target === null ||
+          (frequency as number) < this.policy.min_auto_proposal_frequency ||
+          confidence < this.policy.min_auto_proposal_confidence
+        ) {
           counts.skipped += 1
           results.push({
             source_ref: sourceRef,
@@ -1722,6 +1926,16 @@ export class EvolutionRuntime {
       detail,
       required: true,
     })
+    const levelBoundary = candidate.evolution_level === undefined || candidate.evolution_level === "L2"
+    cases.push({
+      case_id: "evolution-level-boundary",
+      category: "safety",
+      passed: levelBoundary,
+      score: levelBoundary ? 1.0 : 0.0,
+      baseline_score: 1.0,
+      detail: levelBoundary ? "candidate remains an isolated L2 artifact" : "candidate escaped the L2 boundary",
+      required: true,
+    })
     const rendered =
       "## Governed Evolution Context\n" +
       "<untrusted_evolution_context>" +
@@ -1761,7 +1975,8 @@ export class EvolutionRuntime {
     // Native port of the self-correction contract probe: the isolated
     // evaluation workspace must be discarded and the materialized artifact
     // must stay digest-bound to the candidate.
-    const isolationClean = !existsSync(join(workspace, ".retained")) && materialized.artifact_digest === candidate.artifact_digest
+    const isolationClean =
+      !existsSync(join(workspace, ".retained")) && materialized.artifact_digest === candidate.artifact_digest
     cases.push({
       case_id: "self-correction-contracts",
       category: "regression",
@@ -1789,7 +2004,9 @@ export class EvolutionRuntime {
     allowInactive: boolean
     idempotentEvidence: boolean
   }): Record<string, unknown> {
-    const cleanCohort = String(input.cohort ?? "").trim().toLowerCase()
+    const cleanCohort = String(input.cohort ?? "")
+      .trim()
+      .toLowerCase()
     if (cleanCohort !== "candidate" && cleanCohort !== "control") throw new Error("cohort must be candidate or control")
     const cleanRef = this.evidenceRefs([input.evidenceRef])[0]
     const numericScore = input.score === undefined ? (input.success ? 1.0 : 0.0) : Number(input.score)
@@ -1805,7 +2022,10 @@ export class EvolutionRuntime {
     }
     let prior: ObservationRecord | null = null
     if (input.idempotentEvidence) {
-      prior = this.loadObservations(input.candidateId, candidate.artifact_digest).find((item) => item.evidence_ref === cleanRef) ?? null
+      prior =
+        this.loadObservations(input.candidateId, candidate.artifact_digest).find(
+          (item) => item.evidence_ref === cleanRef,
+        ) ?? null
     }
     if (prior !== null) {
       if (
@@ -2008,6 +2228,7 @@ export class EvolutionRuntime {
     const updated: Record<string, unknown> = jsonCopy(state as unknown as Record<string, unknown>)
     Object.assign(updated, changes)
     updated.status = status
+    updated.evolution_level = status === "canary" ? "L3" : status === "promoted" ? "L4" : "L2"
     updated.revision = Number(state.revision) + 1
     updated.updated_at = utcNow()
     return updated as unknown as CandidateState
@@ -2078,7 +2299,10 @@ export class EvolutionRuntime {
     return records
   }
 
-  private activeExposureCounts(records: Array<[ExposureTicket, ExposureReceipt | null]>): { pending: number; recorded: number } {
+  private activeExposureCounts(records: Array<[ExposureTicket, ExposureReceipt | null]>): {
+    pending: number
+    recorded: number
+  } {
     const recorded = records.filter(([, receipt]) => receipt !== null).length
     return { pending: records.length - recorded, recorded }
   }
@@ -2176,7 +2400,11 @@ export class EvolutionRuntime {
         const exposureId = String(item.exposure_id)
         for (const [source, destination, expected] of [
           [this.exposurePath(exposureId), join(evidenceDir, `${exposureId}.json`), String(item.ticket_file_digest)],
-          [this.exposureReceiptPath(exposureId), join(evidenceDir, `${exposureId}.outcome.json`), String(item.receipt_file_digest)],
+          [
+            this.exposureReceiptPath(exposureId),
+            join(evidenceDir, `${exposureId}.outcome.json`),
+            String(item.receipt_file_digest),
+          ],
         ] as Array<[string, string, string]>) {
           let payload: Buffer
           try {
@@ -2216,7 +2444,10 @@ export class EvolutionRuntime {
     }
   }
 
-  private loadExposureArchiveManifest(archivePath: string, expectedId?: string): Record<string, unknown> & {
+  private loadExposureArchiveManifest(
+    archivePath: string,
+    expectedId?: string,
+  ): Record<string, unknown> & {
     plan_digest: string
     archive_id: string
     manifest_digest: string
@@ -2262,7 +2493,9 @@ export class EvolutionRuntime {
       typeof counts !== "object" ||
       Object.keys(counts).length !== 3 ||
       !("pending" in counts && "recorded" in counts && "retained_recorded" in counts) ||
-      Object.values(counts).some((value) => typeof value === "boolean" || !Number.isInteger(value) || (value as number) < 0) ||
+      Object.values(counts).some(
+        (value) => typeof value === "boolean" || !Number.isInteger(value) || (value as number) < 0,
+      ) ||
       Number(counts.recorded) !== items.length + Number(counts.retained_recorded) ||
       Number(counts.retained_recorded) > Number(keepRecorded)
     ) {
@@ -2281,7 +2514,8 @@ export class EvolutionRuntime {
         throw new IntegrityError("evolution exposure archive item is invalid")
       }
       for (const key of ["ticket_digest", "receipt_digest", "ticket_file_digest", "receipt_file_digest"]) {
-        if (!SHA256_HEX.test(String(item[key] ?? ""))) throw new IntegrityError("evolution exposure archive item is invalid")
+        if (!SHA256_HEX.test(String(item[key] ?? "")))
+          throw new IntegrityError("evolution exposure archive item is invalid")
       }
       if ("source" in item) {
         try {
@@ -2321,7 +2555,9 @@ export class EvolutionRuntime {
     if (actualNames.size !== expectedNames.size || [...actualNames].some((name) => !expectedNames.has(name))) {
       throw new IntegrityError("evolution exposure archive evidence set mismatch")
     }
-    return { ...manifest, manifest_digest: manifestDigest } as ReturnType<EvolutionRuntime["loadExposureArchiveManifest"]>
+    return { ...manifest, manifest_digest: manifestDigest } as ReturnType<
+      EvolutionRuntime["loadExposureArchiveManifest"]
+    >
   }
 
   private validateArchivedExposureFile(
@@ -2355,7 +2591,10 @@ export class EvolutionRuntime {
     }
   }
 
-  private loadExposureArchiveCompletion(archivePath: string, manifest: Record<string, unknown>): Record<string, unknown> & { result: Record<string, unknown> } {
+  private loadExposureArchiveCompletion(
+    archivePath: string,
+    manifest: Record<string, unknown>,
+  ): Record<string, unknown> & { result: Record<string, unknown> } {
     let completion: Record<string, unknown>
     try {
       completion = parseJsonTracking<Record<string, unknown>>(readFileSync(join(archivePath, "complete.json"), "utf8"))
@@ -2401,8 +2640,16 @@ export class EvolutionRuntime {
     for (const item of manifest.items as Array<Record<string, unknown>>) {
       const exposureId = String(item.exposure_id)
       for (const [live, archived, expected] of [
-        [this.exposureReceiptPath(exposureId), join(archivePath, "evidence", `${exposureId}.outcome.json`), String(item.receipt_file_digest)],
-        [this.exposurePath(exposureId), join(archivePath, "evidence", `${exposureId}.json`), String(item.ticket_file_digest)],
+        [
+          this.exposureReceiptPath(exposureId),
+          join(archivePath, "evidence", `${exposureId}.outcome.json`),
+          String(item.receipt_file_digest),
+        ],
+        [
+          this.exposurePath(exposureId),
+          join(archivePath, "evidence", `${exposureId}.json`),
+          String(item.ticket_file_digest),
+        ],
       ] as Array<[string, string, string]>) {
         if (!existsSync(live)) continue
         let liveDigest: string
@@ -2459,13 +2706,19 @@ export class EvolutionRuntime {
   }
 
   private recoverIncompleteExposureArchives(): void {
+    if (this.readOnly) return
     const archiveRoot = join(this.root, "exposure-archives")
     if (!existsSync(archiveRoot)) return
     for (const entry of readdirSync(archiveRoot, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue
       if (!ARCHIVE_ID.test(entry.name)) throw new IntegrityError("evolution exposure archive directory is invalid")
       if (existsSync(join(archiveRoot, entry.name, "complete.json"))) continue
-      this.completeExposureArchive(join(archiveRoot, entry.name), "system:recovery", "completed an interrupted exposure archive journal", true)
+      this.completeExposureArchive(
+        join(archiveRoot, entry.name),
+        "system:recovery",
+        "completed an interrupted exposure archive journal",
+        true,
+      )
     }
   }
 
@@ -2514,7 +2767,9 @@ export class EvolutionRuntime {
       items,
     }
     const planDigest = digest(core)
-    return { ...core, plan_digest: planDigest, restore_id: `xr-${planDigest.slice(0, 24)}` } as ReturnType<EvolutionRuntime["buildExposureRestorePlan"]>
+    return { ...core, plan_digest: planDigest, restore_id: `xr-${planDigest.slice(0, 24)}` } as ReturnType<
+      EvolutionRuntime["buildExposureRestorePlan"]
+    >
   }
 
   private exposureLiveStatus(item: Record<string, unknown>): "missing" | "identical" | "conflict" {
@@ -2531,7 +2786,9 @@ export class EvolutionRuntime {
     } catch {
       return "conflict"
     }
-    return ticketDigest === item.ticket_file_digest && receiptDigest === item.receipt_file_digest ? "identical" : "conflict"
+    return ticketDigest === item.ticket_file_digest && receiptDigest === item.receipt_file_digest
+      ? "identical"
+      : "conflict"
   }
 
   private archiveSummaryProjection(plan: Record<string, unknown>): Record<string, unknown> {
@@ -2662,7 +2919,10 @@ export class EvolutionRuntime {
     }
   }
 
-  private loadExposureRestoreJournal(restorePath: string, expectedId?: string): Record<string, unknown> & { journal_digest: string; plan: Record<string, unknown> } {
+  private loadExposureRestoreJournal(
+    restorePath: string,
+    expectedId?: string,
+  ): Record<string, unknown> & { journal_digest: string; plan: Record<string, unknown> } {
     let journal: Record<string, unknown>
     try {
       journal = parseJsonTracking<Record<string, unknown>>(readFileSync(join(restorePath, "plan.json"), "utf8"))
@@ -2690,7 +2950,10 @@ export class EvolutionRuntime {
     return { ...journal, journal_digest: journalDigest } as ReturnType<EvolutionRuntime["loadExposureRestoreJournal"]>
   }
 
-  private loadExposureRestoreCompletion(restorePath: string, journal: Record<string, unknown>): Record<string, unknown> {
+  private loadExposureRestoreCompletion(
+    restorePath: string,
+    journal: Record<string, unknown>,
+  ): Record<string, unknown> {
     let completion: Record<string, unknown>
     try {
       completion = parseJsonTracking<Record<string, unknown>>(readFileSync(join(restorePath, "complete.json"), "utf8"))
@@ -2717,7 +2980,12 @@ export class EvolutionRuntime {
     return { ...completion, completion_digest: completionDigest }
   }
 
-  private completeExposureRestore(restorePath: string, auditActor: string, auditReason: string, recovery: boolean): Record<string, unknown> {
+  private completeExposureRestore(
+    restorePath: string,
+    auditActor: string,
+    auditReason: string,
+    recovery: boolean,
+  ): Record<string, unknown> {
     const journal = this.loadExposureRestoreJournal(restorePath)
     const completionPath = join(restorePath, "complete.json")
     if (existsSync(completionPath)) return this.loadExposureRestoreCompletion(restorePath, journal)
@@ -2736,8 +3004,16 @@ export class EvolutionRuntime {
     for (const item of plan.items as Array<Record<string, unknown>>) {
       const exposureId = this.validateExposureId(String(item.exposure_id ?? ""))
       for (const [source, destination, expected] of [
-        [join(archivePath, "evidence", `${exposureId}.json`), this.exposurePath(exposureId), String(item.ticket_file_digest)],
-        [join(archivePath, "evidence", `${exposureId}.outcome.json`), this.exposureReceiptPath(exposureId), String(item.receipt_file_digest)],
+        [
+          join(archivePath, "evidence", `${exposureId}.json`),
+          this.exposurePath(exposureId),
+          String(item.ticket_file_digest),
+        ],
+        [
+          join(archivePath, "evidence", `${exposureId}.outcome.json`),
+          this.exposureReceiptPath(exposureId),
+          String(item.receipt_file_digest),
+        ],
       ] as Array<[string, string, string]>) {
         let payload: Buffer
         try {
@@ -2810,13 +3086,19 @@ export class EvolutionRuntime {
   }
 
   private recoverIncompleteExposureRestores(): void {
+    if (this.readOnly) return
     const restoreRoot = join(this.root, "exposure-restores")
     if (!existsSync(restoreRoot)) return
     for (const entry of readdirSync(restoreRoot, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue
       if (!RESTORE_ID.test(entry.name)) throw new IntegrityError("evolution exposure restore directory is invalid")
       if (existsSync(join(restoreRoot, entry.name, "complete.json"))) continue
-      this.completeExposureRestore(join(restoreRoot, entry.name), "system:recovery", "completed an interrupted exposure restore journal", true)
+      this.completeExposureRestore(
+        join(restoreRoot, entry.name),
+        "system:recovery",
+        "completed an interrupted exposure restore journal",
+        true,
+      )
     }
   }
 
@@ -2825,7 +3107,9 @@ export class EvolutionRuntime {
   // ------------------------------------------------------------------
 
   private validateArchiveId(archiveId: string): string {
-    const cleanId = String(archiveId ?? "").trim().toLowerCase()
+    const cleanId = String(archiveId ?? "")
+      .trim()
+      .toLowerCase()
     if (!ARCHIVE_ID.test(cleanId)) throw new Error("invalid evolution exposure archive ID")
     return cleanId
   }
@@ -2835,7 +3119,9 @@ export class EvolutionRuntime {
   }
 
   private exposureRestorePath(restoreId: string): string {
-    const cleanId = String(restoreId ?? "").trim().toLowerCase()
+    const cleanId = String(restoreId ?? "")
+      .trim()
+      .toLowerCase()
     if (!RESTORE_ID.test(cleanId)) throw new Error("invalid evolution exposure restore ID")
     return join(this.root, "exposure-restores", cleanId)
   }
@@ -2859,7 +3145,11 @@ export class EvolutionRuntime {
     }
     const ticketDigest = String(exposure.ticket_digest ?? "")
     delete exposure.ticket_digest
-    if (exposure.schema_version !== this.schemaVersion || exposure.exposure_id !== this.validateExposureId(exposureId) || digest(exposure) !== ticketDigest) {
+    if (
+      exposure.schema_version !== this.schemaVersion ||
+      exposure.exposure_id !== this.validateExposureId(exposureId) ||
+      digest(exposure) !== ticketDigest
+    ) {
       throw new IntegrityError("evolution exposure ticket digest mismatch")
     }
     const assignments = exposure.assignments
@@ -2892,7 +3182,8 @@ export class EvolutionRuntime {
     const assignmentIds = new Set<string>()
     const candidateCohortIds = new Set<string>()
     for (const assignment of assignments as Array<Record<string, unknown>>) {
-      if (!assignment || typeof assignment !== "object") throw new IntegrityError("evolution exposure assignment is invalid")
+      if (!assignment || typeof assignment !== "object")
+        throw new IntegrityError("evolution exposure assignment is invalid")
       const candidateId = this.validateCandidateId(String(assignment.candidate_id ?? ""))
       if (assignment.candidate_digest !== this.getCandidate(candidateId).artifact_digest) {
         throw new IntegrityError("exposure candidate digest mismatch")
@@ -2976,13 +3267,17 @@ export class EvolutionRuntime {
   }
 
   private validateCandidateId(candidateId: string): string {
-    const cleaned = String(candidateId ?? "").trim().toLowerCase()
+    const cleaned = String(candidateId ?? "")
+      .trim()
+      .toLowerCase()
     if (!CANDIDATE_ID.test(cleaned)) throw new Error("invalid evolution candidate ID")
     return cleaned
   }
 
   private validateExposureId(exposureId: string): string {
-    const cleaned = String(exposureId ?? "").trim().toLowerCase()
+    const cleaned = String(exposureId ?? "")
+      .trim()
+      .toLowerCase()
     if (!EXPOSURE_ID.test(cleaned)) throw new Error("invalid evolution exposure ID")
     return cleaned
   }
@@ -3085,7 +3380,13 @@ export class EvolutionRuntime {
     return map[String(patternType ?? "").toLowerCase()] ?? null
   }
 
-  private audit(subjectId: string, action: string, actor: string, reason: string, metadata?: Record<string, unknown>): void {
+  private audit(
+    subjectId: string,
+    action: string,
+    actor: string,
+    reason: string,
+    metadata?: Record<string, unknown>,
+  ): void {
     const path = join(this.root, "audit.jsonl")
     let previous = ""
     let sequence = 1
@@ -3112,7 +3413,13 @@ export class EvolutionRuntime {
     fsyncDirectory(dirname(path))
   }
 
-  private verifyAuditUnlocked(): { schema_version: number; valid: boolean; events: number; issue: string; head_hash?: string } {
+  private verifyAuditUnlocked(): {
+    schema_version: number
+    valid: boolean
+    events: number
+    issue: string
+    head_hash?: string
+  } {
     const path = join(this.root, "audit.jsonl")
     if (!existsSync(path)) return { schema_version: 1, valid: true, events: 0, issue: "" }
     let previous = ""
@@ -3147,7 +3454,8 @@ export function defaultEvolutionRoot(): string {
 }
 
 function normalizeCase(caseItem: EvaluationCase): EvaluationCase {
-  if (!caseItem || typeof caseItem !== "object") throw new TypeError("evaluation runners must return EvaluationCase values")
+  if (!caseItem || typeof caseItem !== "object")
+    throw new TypeError("evaluation runners must return EvaluationCase values")
   const caseId = String(caseItem.case_id ?? "")
   const category = String(caseItem.category ?? "")
   if (!caseId.trim() || !category.trim()) throw new Error("evaluation case ID and category are required")
@@ -3173,8 +3481,4 @@ function sha256Buffer(buffer: Buffer): string {
 
 function sha256File(path: string): string {
   return sha256Buffer(readFileSync(path))
-}
-
-function round4(value: number): number {
-  return Math.round(value * 10_000) / 10_000
 }

@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "records": [
+    {
+      "id": "SELF-CORRECT-FAILED-REPEAT",
+      "behavior": "同一用户周期内，已发布失败结果的工具调用不得在输入不变时自动再次执行；错误提示进入已有会话日志和下一轮请求。",
+      "aliases": ["capability-eval/sc2-repeat-call-block"],
+      "classification": "merge-differences",
+      "legacy": [{ "path": "arforge/core/capability_eval.py", "symbol": "_eval_self_correct_repeat_block" }],
+      "owner": { "path": "packages/core/src/session/repeat-guard.ts", "symbol": "make / recordOutcome" },
+      "scenarios": [
+        {
+          "id": "failure-block-and-correction",
+          "kind": "recovery",
+          "test_path": "packages/core/test/session-repeat-guard.test.ts",
+          "selector": "blocks the next unchanged call after a confirmed failure, but allows a corrected input",
+          "expected": "一次已确认失败后相同规范输入立即 blocked；变更输入后允许，成功调用仍沿用原次数限制。"
+        },
+        {
+          "id": "runner-no-second-execution",
+          "kind": "error",
+          "test_path": "packages/core/test/session-runner.test.ts",
+          "selector": "blocks an unchanged failed tool before its second execution and persists actionable feedback",
+          "expected": "类型化失败与 defect 两类：executor=1；第二调用发布 error，下一请求看到 previous execution failed，会话投影及审计保存原因。"
+        }
+      ],
+      "limitations": [
+        "结果在现有 Runner 有序发布之后反馈给同一 Guard，不新建 ToolRegistry、executor 或持久状态源。",
+        "没有声称整个旧自纠错引擎等价；同一批尚未观察到结果的并发调用仍按既有次数阈值处理。",
+        "Guard 在当前用户周期内维护；steer/queued cycle 重置行为保留，未实现真实冷恢复后的失败指纹重建。",
+        "本批实测 TS Runner 的类型化失败及 defect 分支，旧 sc2 依据实码要求定位，未在本批执行旧 Python 工具循环。",
+        "完整输入/环境 receipt 尚未生成；R08 所有来源及真实进程恢复仍待验收。"
+      ]
+    },
+    {
+      "id": "SELF-CORRECT-TRANSIENT-RETRY",
+      "behavior": "旧 sc11 的工具错误文本分类与 TS Provider 类型化重试的差分；两者作用域不同，不以同名 retry 认定等价。",
+      "aliases": ["capability-eval/sc11-transient-retry"],
+      "classification": "merge-differences",
+      "legacy": [
+        { "path": "arforge/core/capability_eval.py", "symbol": "_eval_self_correct_transient_retry" },
+        { "path": "arforge/core/self_correct.py", "symbol": "is_transient / retry_config" }
+      ],
+      "owner": {
+        "path": "packages/core/src/runtime/retry.ts",
+        "symbol": "RuntimeRetry (Provider 重试既有 owner，非完整工具自纠错 owner)"
+      },
+      "scenarios": [
+        {
+          "id": "legacy-examples",
+          "kind": "normal",
+          "test_path": "packages/core/test/runtime/legacy-retry-differential.test.ts",
+          "selector": "executes the six legacy sc11 classification examples, not merely their Golden names",
+          "expected": "执行真实 Python is_transient/retry_config 得到六条分类与默认值；TS 类型化对应输入在安全边界前给出重试/停止。"
+        },
+        {
+          "id": "text-is-not-authority",
+          "kind": "error",
+          "test_path": "packages/core/test/runtime/legacy-retry-differential.test.ts",
+          "selector": "same text alone does not authorize provider retry; typed metadata owns the decision",
+          "expected": "旧文本分类为 transient 的相同文字，TS 普通 Error 仍 unknown/stop；InvalidRequest 不因 try again 字样而重试。"
+        },
+        {
+          "id": "no-duplicate-work",
+          "kind": "recovery",
+          "test_path": "packages/core/test/runtime/legacy-retry-differential.test.ts",
+          "selector": "transient classification cannot override visible output or executable tool boundaries",
+          "expected": "文本输出或工具调用已经开始时，即使瞬态错误且 fallback 可用也 stop，不自动重复工作。"
+        },
+        {
+          "id": "runtime-budget",
+          "kind": "recovery",
+          "test_path": "packages/core/test/runtime/legacy-retry-differential.test.ts",
+          "selector": "TS uses the supplied runtime budget, not the legacy global five-retry setting",
+          "expected": "TS 按显式运行时重试额度 stop/fallback，不硬移植旧全局五次配置。"
+        }
+      ],
+      "limitations": [
+        "实际执行的是旧纯函数与 TS Retry 决策函数，不是运行完整 sc11 runner、工具调用循环、Provider 网络或退避计时。",
+        "TS typed 错误由测试显式构造，没有证明产品适配器正确分类网络错误；六例对照不是两个作用域完全等价。",
+        "保留 RuntimeRetry 安全边界；工具错误分类/反馈/重试须接既有工具管线、授权和幂等约束，待 R07/R08/R20 按实码融合，不能将任意错误文本变成重试授权。",
+        "本批测试证据见 plan-v2-r01-retry-differential-20260905.md；环境/传递依赖完整 receipt 未建立，维持 accepted=false。"
+      ]
+    },
+    {
+      "id": "CLI-UNKNOWN-BOUNDARY",
+      "behavior": "迁移期 Python 转发入口与 TS CLI 对未知命令保持相同 stderr、空 stdout 和退出码 2；不恢复 Python parser。",
+      "aliases": ["python main.py <unknown>", "arforge <unknown>"],
+      "classification": "equivalent-needs-verification",
+      "legacy": [{ "path": "arforge/cli_bridge.py", "symbol": "main" }],
+      "owner": { "path": "packages/arforge/src/cli-main.ts", "symbol": "CLI bootstrap" },
+      "scenarios": [
+        {
+          "id": "unknown-command-error",
+          "kind": "error",
+          "test_path": "tests/test_cli_ts_bridge.py",
+          "selector": "test_root_python_launcher_matches_ts_unknown_command_boundary",
+          "expected": "两入口 returncode=2、stdout 为空、stderr 相同，显示未知命令而非 TTY 诊断。"
+        }
+      ],
+      "limitations": [
+        "仅错误边界，不代表全部 CLI 命令、参数、取消或平台已验收。",
+        "历史 R02 测试通过，但未为此行为生成完整输入集合绑定的 receipt，因此这里保持缺证据。",
+        "symbol 为人工定位说明，不是 AST 解析或 inventory 叶唯一性证明；入口引导、依赖与环境仍需补入正式证据。"
+      ]
+    },
+    {
+      "id": "CLI-CAPABILITY-EVALUATION",
+      "behavior": "核对旧 capability-eval 的基础设施合同报告与 TS 现有能力审计/评估 owner 的保留语义，不能仅用命令更名判等价。",
+      "aliases": ["arforge capability-eval --json", "arforge capabilities evaluate --json"],
+      "classification": "merge-differences",
+      "legacy": [{ "path": "arforge/cli.py", "symbol": "_run_capability_eval" }],
+      "owner": { "path": "packages/arforge/src/cli/cmd/capabilities.ts", "symbol": "CapabilitiesCommand" },
+      "scenarios": [
+        {
+          "id": "static-audit-only",
+          "kind": "normal",
+          "test_path": "tests/test_ci_quality_contract.py",
+          "selector": "CI contract tests",
+          "expected": "CI 明确静态合同审计而非真实任务执行；仅此测试不能证明旧报告字段和评估行为等价。"
+        }
+      ],
+      "limitations": [
+        "旧 _run_capability_eval 自述为不调用模型的确定性基础设施合同；需下钻 run_capability_eval 各项行为，不能先假定它等于真实模型任务评测。",
+        "现有 TS evaluate 不执行 handler，--execute 拒绝；差异应融入既有 CapabilityAnalysis/Evaluation/Golden，不建立第二评估运行时。",
+        "此条仅登记差异与已有 CI 测试入口；正常/异常/恢复的完整差分测试、叶关联与消费者图尚未完成。"
+      ]
+    }
+  ]
+}

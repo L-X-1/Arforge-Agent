@@ -2,6 +2,9 @@ import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import type { Prompt, PromptStore } from "@/context/prompt"
 import type { ModelSelection } from "@/context/local"
+import { Worktree as WorktreeState } from "@/utils/worktree"
+import { ServerScope } from "@/utils/server-scope"
+import { listPendingControlOperations } from "@/utils/control-operation-intent"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 let durableFollowupPrompt: typeof import("./submit").durableFollowupPrompt
@@ -26,12 +29,14 @@ const optimistic: Array<{
 const optimisticSeeded: boolean[] = []
 const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
-const sentShell: Array<{ sessionID: string; id?: string; command: string }> = []
+const sentShell: Array<{ sessionID: string; messageID?: string; command: string }> = []
 const syncedDirectories: string[] = []
 const promotedDrafts: Array<{ draftID: string; server: string; sessionId: string }> = []
 const sentPrompts: string[] = []
 const promptInputs: unknown[] = []
 const sentCommands: unknown[] = []
+const worktreeCreateInputs: unknown[] = []
+const controlOperationStatusInputs: unknown[] = []
 const commands: Array<{ name: string }> = []
 let serverSessionSyncs = 0
 
@@ -41,6 +46,7 @@ let selected = "/repo/worktree-a"
 let variant: string | undefined
 let permissionServer = "server-a"
 let createSessionGate: Promise<void> | undefined
+let worktreeCreateStatus: "pending" | "pending_then_completed" | "completed" | undefined
 
 let promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const [promptStore, setPromptStore] = createStore<PromptStore>({
@@ -101,7 +107,7 @@ const clientFor = (directory: string) => {
         command: async (input: unknown) => {
           sentCommands.push(input)
         },
-        shell: async (input: { sessionID: string; id?: string; command: string }) => {
+        shell: async (input: { sessionID: string; messageID?: string; command: string }) => {
           sentShell.push(input)
         },
       },
@@ -111,7 +117,73 @@ const clientFor = (directory: string) => {
       abort: async () => ({ data: undefined }),
     },
     worktree: {
-      create: async () => ({ data: { directory: `${directory}/new` } }),
+      create: async (input: unknown) => {
+        worktreeCreateInputs.push(input)
+        if (worktreeCreateStatus) {
+          const requestID = (input as { worktreeCreateControlInput: { requestID: string } }).worktreeCreateControlInput
+            .requestID
+          const worktreeDirectory = `${directory}/new`
+          if (worktreeCreateStatus === "completed") WorktreeState.ready(ServerScope.local, worktreeDirectory)
+          return {
+            data: {
+              runID: "run_create_pending",
+              actionID: "act_create_pending",
+              requestID,
+              operation: "worktree.create",
+              phase: worktreeCreateStatus === "completed" ? "completed" : "waiting_for_confirmation",
+              recovery: worktreeCreateStatus === "completed" ? "none" : "awaiting_authorization",
+              canApprove: worktreeCreateStatus !== "completed",
+              ...(worktreeCreateStatus === "completed"
+                ? {
+                    result: {
+                      kind: "worktree.create",
+                      name: "new",
+                      directory: worktreeDirectory,
+                      branch: "arforge/new",
+                    },
+                  }
+                : {}),
+            },
+          }
+        }
+        const worktreeDirectory = `${directory}/new`
+        // The submit flow waits for a real worktree-ready event before it
+        // queues the first prompt. This focused client contract test supplies
+        // that event after the mocked control-plane response.
+        WorktreeState.ready(ServerScope.local, worktreeDirectory)
+        return { data: { directory: worktreeDirectory } }
+      },
+    },
+    experimental: {
+      controlOperation: {
+        status: async (input: { requestID: string; directory: string; operation: "worktree.create" }) => {
+          controlOperationStatusInputs.push(input)
+          const completed = worktreeCreateStatus === "pending_then_completed"
+          const worktreeDirectory = `${directory}/new`
+          if (completed) WorktreeState.ready(ServerScope.local, worktreeDirectory)
+          return {
+            data: {
+              runID: "run_create_status",
+              actionID: "act_create_status",
+              requestID: input.requestID,
+              operation: input.operation,
+              phase: "completed",
+              recovery: "none",
+              canApprove: false,
+              ...(completed
+                ? {
+                    result: {
+                      kind: "worktree.create",
+                      name: "new",
+                      directory: worktreeDirectory,
+                      branch: "arforge/new",
+                    },
+                  }
+                : {}),
+            },
+          }
+        },
+      },
     },
   }
 }
@@ -299,6 +371,8 @@ beforeEach(() => {
   sentPrompts.length = 0
   promptInputs.length = 0
   sentCommands.length = 0
+  worktreeCreateInputs.length = 0
+  controlOperationStatusInputs.length = 0
   commands.length = 0
   promptValue = [{ type: "text", content: "ls", start: 0, end: 2 }]
   params = {}
@@ -309,7 +383,9 @@ beforeEach(() => {
   variant = undefined
   permissionServer = "server-a"
   createSessionGate = undefined
+  worktreeCreateStatus = undefined
   serverSessionSyncs = 0
+  localStorage.clear()
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -393,8 +469,8 @@ describe("prompt submit worktree selection", () => {
       },
     ])
     expect(sentShell).toEqual([
-      expect.objectContaining({ sessionID: "session-1", id: expect.stringMatching(/^evt_/), command: "ls" }),
-      expect.objectContaining({ sessionID: "session-2", id: expect.stringMatching(/^evt_/), command: "ls" }),
+      expect.objectContaining({ sessionID: "session-1", messageID: expect.stringMatching(/^msg_/), command: "ls" }),
+      expect.objectContaining({ sessionID: "session-2", messageID: expect.stringMatching(/^msg_/), command: "ls" }),
     ])
     expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
     expect(serverSessionSyncs).toBe(0)
@@ -403,6 +479,144 @@ describe("prompt submit worktree selection", () => {
       { directory: "/repo/worktree-b", sessionID: "session-2" },
     ])
     expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
+  })
+
+  test("mints one first-party control-plane request ID when creating a worktree", async () => {
+    selected = "create"
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(worktreeCreateInputs).toEqual([
+      {
+        directory: "/repo/main",
+        worktreeCreateControlInput: { requestID: expect.stringMatching(/^cpr_/) },
+      },
+    ])
+  })
+
+  test("does not create a session when the worktree endpoint returns only accepted status", async () => {
+    selected = "create"
+    worktreeCreateStatus = "pending"
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(createdSessions).toEqual([])
+    expect(sentShell).toEqual([])
+    expect(controlOperationStatusInputs).toEqual([
+      {
+        requestID: expect.stringMatching(/^cpr_/),
+        directory: "/repo/main",
+        operation: "worktree.create",
+      },
+    ])
+    const pending = await listPendingControlOperations(undefined, "local")
+    expect(pending.intents).toHaveLength(1)
+    expect(pending.intents[0]?.requestID).toBe(
+      (worktreeCreateInputs[0] as { worktreeCreateControlInput: { requestID: string } }).worktreeCreateControlInput
+        .requestID,
+    )
+  })
+
+  test("polls read-only status and continues after a matching terminal create result", async () => {
+    selected = "create"
+    worktreeCreateStatus = "pending_then_completed"
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(worktreeCreateInputs).toHaveLength(1)
+    expect(controlOperationStatusInputs).toHaveLength(1)
+    expect(createdSessions).toEqual(["/repo/main/new"])
+    expect(sentShell).toHaveLength(1)
+    expect((await listPendingControlOperations(undefined, "local")).intents).toEqual([])
+  })
+
+  test("continues session creation only for completed status with a matching create result", async () => {
+    selected = "create"
+    worktreeCreateStatus = "completed"
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(createdSessions).toEqual(["/repo/main/new"])
+    expect(sentShell).toEqual([
+      expect.objectContaining({ sessionID: "session-1", messageID: expect.stringMatching(/^msg_/), command: "ls" }),
+    ])
+    expect((await listPendingControlOperations(undefined, "local")).intents).toEqual([])
   })
 
   test("applies auto-accept to newly created sessions", async () => {
@@ -642,4 +856,47 @@ describe("prompt submit worktree selection", () => {
     expect(storedSessions["/repo/worktree-a"]?.[0]).toMatchObject({ id: "session-1", title: "New session 1" })
     expect(optimisticSeeded).toEqual([true])
   })
+})
+
+describe("unavailable injected draft model", () => {
+  for (const mode of ["normal", "shell"] as const) {
+    test("blocks " + mode + " before creating a session, history, queue or request", async () => {
+      let historyWrites = 0
+      let queueWrites = 0
+      const original = promptValue
+      const model = {
+        current: () => undefined,
+        variant: { current: () => undefined },
+      } as unknown as ModelSelection
+      const submit = createPromptSubmit({
+        prompt,
+        model,
+        info: () => undefined,
+        imageAttachments: () => [],
+        commentCount: () => 0,
+        autoAccept: () => false,
+        mode: () => mode,
+        working: () => false,
+        editor: () => undefined,
+        queueScroll: () => undefined,
+        promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+        addToHistory: () => { historyWrites++ },
+        resetHistoryNavigation: () => undefined,
+        setMode: () => undefined,
+        setPopover: () => undefined,
+        shouldQueue: () => true,
+        onQueue: () => { queueWrites++ },
+      })
+      await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+      expect(promptValue).toBe(original)
+      expect(createdSessions).toHaveLength(0)
+      expect(worktreeCreateInputs).toHaveLength(0)
+      expect(sentPrompts).toHaveLength(0)
+      expect(sentCommands).toHaveLength(0)
+      expect(sentShell).toHaveLength(0)
+      expect(optimistic).toHaveLength(0)
+      expect(historyWrites).toBe(0)
+      expect(queueWrites).toBe(0)
+    })
+  }
 })

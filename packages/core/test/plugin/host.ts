@@ -5,8 +5,13 @@ import { Credential } from "@arforge-ai/core/credential"
 import { Integration } from "@arforge-ai/core/integration"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ProviderV2 } from "@arforge-ai/core/provider"
-import type { IntegrationEnvMethod, IntegrationKeyMethod, IntegrationOAuthMethod } from "@arforge-ai/sdk/v2/types"
-import { Effect } from "effect"
+import type {
+  IntegrationEnvMethod,
+  IntegrationKeyMethod,
+  IntegrationOAuthMethod,
+  ModelV2Info,
+} from "@arforge-ai/sdk/v2/types"
+import { Effect, Schema } from "effect"
 
 type Overrides = Partial<Omit<PluginContext, "options">>
 
@@ -277,27 +282,34 @@ function providerInfo(value: ProviderV2.MutableInfo) {
   }
 }
 
-function modelInfo(value: ModelV2.Info | ModelV2.MutableInfo) {
+function modelInfo(value: ModelV2.Info | ModelV2.MutableInfo): ModelV2Info {
+  const encoded = Schema.encodeSync(ModelV2.Info)(value) as unknown as ModelV2Info
   return {
-    ...value,
-    api: { ...value.api, settings: value.api.settings && { ...value.api.settings } },
+    ...encoded,
+    api:
+      encoded.api.type === "native"
+        ? { ...encoded.api, settings: { ...encoded.api.settings } }
+        : {
+            ...encoded.api,
+            ...(encoded.api.settings ? { settings: { ...encoded.api.settings } } : {}),
+          },
     capabilities: {
-      ...value.capabilities,
-      input: [...value.capabilities.input],
-      output: [...value.capabilities.output],
+      ...encoded.capabilities,
+      input: [...encoded.capabilities.input],
+      output: [...encoded.capabilities.output],
     },
     request: {
-      ...value.request,
-      headers: { ...value.request.headers },
-      body: { ...value.request.body },
+      ...encoded.request,
+      headers: { ...encoded.request.headers },
+      body: { ...encoded.request.body },
     },
-    variants: value.variants.map((variant) => ({
+    variants: encoded.variants.map((variant) => ({
       ...variant,
       headers: { ...variant.headers },
       body: { ...variant.body },
     })),
-    time: { ...value.time },
-    cost: value.cost.map((cost) => ({ ...cost, tier: cost.tier && { ...cost.tier }, cache: { ...cost.cache } })),
-    limit: { ...value.limit },
+    time: { ...encoded.time },
+    cost: encoded.cost.map((cost) => ({ ...cost, tier: cost.tier && { ...cost.tier }, cache: { ...cost.cache } })),
+    limit: { ...encoded.limit },
   }
 }

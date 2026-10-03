@@ -1,9 +1,14 @@
-# Non-interactive print mode
+# Non-interactive print mode (TypeScript owner)
 
 Print mode runs prompts through the same `SessionRuntime`, model routing,
 reasoning-effort selection, tool registry, permission checks, compaction and
 conversation history used by interactive Arforge sessions. It is intended for
 shell scripts, CI jobs and editor integrations that need stable output.
+
+The implementation lives in the TypeScript `RunCommand` and its
+`PrintModeRenderer`. `python -m arforge`, the Python console script and the
+historical `--print` spelling are only compatibility launchers/argv aliases;
+they never start a second Python execution loop.
 
 ## Text input and output
 
@@ -14,7 +19,8 @@ arforge --quiet -p "Return only the final answer."
 ```
 
 `--quiet` is the final-answer-only text shortcut. Without it, answer tokens are
-streamed to stdout and tool progress is written to stderr.
+streamed to stdout and tool progress is written to stderr. `arforge print` and
+`arforge --print` are equivalent spellings of the same `run` owner.
 
 ## JSONL streaming
 

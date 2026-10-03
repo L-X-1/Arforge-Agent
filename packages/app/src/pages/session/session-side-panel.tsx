@@ -31,6 +31,7 @@ import { useDialog } from "@arforge-ai/ui/context/dialog"
 import FileTree from "@/components/file-tree"
 import { normalizeFileTreeV2Path } from "@/components/file-tree-v2-model"
 import { SessionContextUsage } from "@/components/session-context-usage"
+import { WorkbenchBrowserPanel } from "@/components/browser-workbench-panel"
 
 const reviewTabID = "session-side-panel-review-tab"
 const reviewTabPanelID = "session-side-panel-review-tabpanel"
@@ -42,7 +43,11 @@ import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { isDirty, textDraftKey, textDrafts } from "@/components/preview/text-document-draft"
+import "@/components/preview/workbench-review.css"
 import { useSettings } from "@/context/settings"
+import { textDocumentCloseGuard } from "@/components/preview/text-document-close-guard"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
 import {
@@ -88,6 +93,7 @@ export function SessionSidePanel(props: {
   const command = useCommand()
   const dialog = useDialog()
   const sdk = useSDK()
+  const server = useServerSDK()
   const { sessionKey, tabs, view, params } = useSessionLayout()
   const projectDirectory = createMemo(() => sdk().directory)
 
@@ -201,7 +207,35 @@ export function SessionSidePanel(props: {
   let fileFilter: HTMLInputElement | undefined
   let tabList: HTMLDivElement | undefined
   const temporaryTab = tabs().preview
+  const dirtyTab = (tab: string) => {
+    const path = file.pathFromTab(tab)
+    return path ? isDirty(textDrafts.restore(textDraftKey(server().scope, sdk().directory, path))) : false
+  }
+  const closeFileTab = (tab: string) => {
+    try {
+      if (dirtyTab(tab) && !window.confirm(language.locale().startsWith("zh")
+        ? "此文件有未保存的修改。关闭后草稿仍保留，可重新打开并点击编辑恢复。确定关闭？"
+        : "This file has unsaved changes. Its draft will be retained; reopen Edit file to restore it. Close this tab?")) return
+      const path = file.pathFromTab(tab)
+      if (path) {
+        textDocumentCloseGuard.withConfirmation(
+          { scope: server().scope, directory: sdk().directory, paths: [path] },
+          language.locale().startsWith("zh"),
+          () => tabs().close(tab),
+        )
+        return
+      }
+      tabs().close(tab)
+    } catch (error) {
+      setStore("closeError", error instanceof Error ? error.message : String(error))
+    }
+  }
   const previewTab = (value: string) => {
+    const previous = temporaryTab()
+    if (previous) {
+      try { if (dirtyTab(previous)) tabs().open(previous) }
+      catch (error) { setStore("closeError", String(error)); return }
+    }
     const next = normalizeTab(value)
     tabs().previewTab(next)
     const path = file.pathFromTab(next)
@@ -242,6 +276,7 @@ export function SessionSidePanel(props: {
   const closeTabKeybind = createMemo(() => command.keybindParts("tab.close"))
   const [store, setStore] = createStore({
     activeDraggable: undefined as string | undefined,
+    closeError: "",
   })
 
   const handleDragStart = (event: unknown) => {
@@ -292,7 +327,7 @@ export function SessionSidePanel(props: {
         aria-label={language.t("session.panel.reviewAndFiles")}
         aria-hidden={!open()}
         inert={!open()}
-        class="relative min-w-0 flex overflow-hidden"
+        class="arforge-review-workbench relative min-w-0 flex overflow-hidden"
         classList={{
           "bg-v2-background-bg-base": settings.general.newLayoutDesigns(),
           "bg-background-base": !settings.general.newLayoutDesigns(),
@@ -307,6 +342,16 @@ export function SessionSidePanel(props: {
         style={{ width: panelWidth() }}
       >
         <Show when={open()}>
+          <Show when={store.closeError}>
+            <div role="alert" class="absolute bottom-0 left-0 right-0 z-30 bg-background-base p-3 text-text-strong">
+              {store.closeError}
+              <button type="button" onClick={() => setStore("closeError", "")}>{language.t("common.close")}</button>
+            </div>
+          </Show>
+          <WorkbenchBrowserPanel
+            scope={params.id ? sessionKey() : undefined}
+            blocked={!!dialog.active || !!store.activeDraggable || props.size.active()}
+          >
           <div
             data-session-side-panel-body
             class="size-full flex"
@@ -400,7 +445,7 @@ export function SessionSidePanel(props: {
                                         <SortableTab
                                           tab={tab}
                                           temporary={temporaryTab() === tab}
-                                          onTabClose={tabs().close}
+                                          onTabClose={closeFileTab}
                                           onTabDoubleClick={temporaryTab() === tab ? openTab : undefined}
                                         />
                                       }
@@ -614,7 +659,7 @@ export function SessionSidePanel(props: {
                                       tab={tab}
                                       index={() => tabs().all().indexOf(tab)}
                                       temporary={temporaryTab() === tab}
-                                      onTabClose={tabs().close}
+                                      onTabClose={closeFileTab}
                                       onTabDoubleClick={temporaryTab() === tab ? openTab : undefined}
                                     />
                                   }
@@ -860,6 +905,7 @@ export function SessionSidePanel(props: {
               </div>
             </Show>
           </div>
+          </WorkbenchBrowserPanel>
         </Show>
       </aside>
     </Show>

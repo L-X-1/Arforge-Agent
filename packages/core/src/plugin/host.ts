@@ -14,8 +14,25 @@ import { ProviderV2 } from "../provider"
 import { Reference } from "../reference"
 import type { DeepMutable } from "../schema"
 import { SkillV2 } from "../skill"
+import type { ModelV2Info } from "@arforge-ai/sdk/v2/types"
 
 const mutable = <T>(value: T) => value as DeepMutable<T>
+const encodeModel = Schema.encodeSync(ModelV2.Info)
+const decodeModel = Schema.decodeUnknownSync(ModelV2.Info)
+
+/** Bridge the decoded core model contract to the JSON-shaped public plugin contract. */
+const pluginModel = (model: ModelV2.Info | ModelV2.MutableInfo): ModelV2Info =>
+  encodeModel(model) as unknown as ModelV2Info
+
+const syncModel = (target: ModelV2.Info | ModelV2.MutableInfo, source: ModelV2Info) => {
+  Object.assign(target, decodeModel(source))
+}
+
+const pluginProviderRecord = (record: Catalog.ProviderRecord) => {
+  const models = new Map<string, ModelV2Info>()
+  for (const [modelID, model] of record.models) models.set(modelID, pluginModel(model))
+  return { provider: mutable(record.provider), models }
+}
 
 export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Interface) {
   const agents = yield* AgentV2.Service
@@ -45,27 +62,37 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
       sdk: (callback) =>
         aisdk.hook.sdk((event) => {
           const output = {
-            model: mutable(event.model),
+            model: pluginModel(event.model),
             package: event.package,
             options: event.options,
             sdk: event.sdk,
           }
           const result = callback(output)
           return Effect.suspend(() => (Effect.isEffect(result) ? result : Effect.void)).pipe(
-            Effect.tap(() => Effect.sync(() => (event.sdk = output.sdk))),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                syncModel(event.model, output.model)
+                event.sdk = output.sdk
+              }),
+            ),
           )
         }),
       language: (callback) =>
         aisdk.hook.language((event) => {
           const output = {
-            model: mutable(event.model),
+            model: pluginModel(event.model),
             sdk: event.sdk,
             options: event.options,
             language: event.language,
           }
           const result = callback(output)
           return Effect.suspend(() => (Effect.isEffect(result) ? result : Effect.void)).pipe(
-            Effect.tap(() => Effect.sync(() => (event.language = output.language))),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                syncModel(event.model, output.model)
+                event.language = output.language
+              }),
+            ),
           )
         }),
     },
@@ -75,16 +102,25 @@ export const make = Effect.fn("PluginHost.make")(function* (plugin: PluginV2.Int
         catalog.transform((draft) =>
           callback({
             provider: {
-              list: () => mutable(draft.provider.list()),
-              get: (id) => mutable(draft.provider.get(ProviderV2.ID.make(id))),
+              list: () => draft.provider.list().map(pluginProviderRecord),
+              get: (id) => {
+                const record = draft.provider.get(ProviderV2.ID.make(id))
+                return record === undefined ? undefined : pluginProviderRecord(record)
+              },
               update: (id, update) => draft.provider.update(ProviderV2.ID.make(id), update),
               remove: (id) => draft.provider.remove(ProviderV2.ID.make(id)),
             },
             model: {
-              get: (providerID, modelID) =>
-                mutable(draft.model.get(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))),
+              get: (providerID, modelID) => {
+                const model = draft.model.get(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID))
+                return model === undefined ? undefined : pluginModel(model)
+              },
               update: (providerID, modelID, update) =>
-                draft.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID), update),
+                draft.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID), (model) => {
+                  const exposed = pluginModel(model)
+                  update(exposed)
+                  syncModel(model, exposed)
+                }),
               remove: (providerID, modelID) =>
                 draft.model.remove(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
               default: {

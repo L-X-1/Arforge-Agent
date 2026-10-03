@@ -1,4 +1,5 @@
 import { Location } from "@arforge-ai/core/location"
+import { Authorizer } from "@arforge-ai/core/authorizer"
 import { PermissionV2 } from "@arforge-ai/core/permission"
 import { PermissionSaved } from "@arforge-ai/core/permission/saved"
 import { Effect } from "effect"
@@ -11,13 +12,23 @@ function missingRequest(id: PermissionV2.ID) {
   return new PermissionNotFoundError({ requestID: id, message: `Permission request not found: ${id}` })
 }
 
+function isSessionRequest(
+  request: Authorizer.PendingRequest,
+  sessionID?: PermissionV2.Request["sessionID"],
+): request is PermissionV2.Request {
+  return "sessionID" in request && (sessionID === undefined || request.sessionID === sessionID)
+}
+
 export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", (handlers) =>
   Effect.gen(function* () {
     return handlers
       .handle(
         "permission.request.list",
         Effect.fn(function* () {
-          return yield* response((yield* PermissionV2.Service).list())
+          const authorizer = yield* Authorizer.Service
+          return yield* response(
+            authorizer.list().pipe(Effect.map((requests) => requests.filter((request) => isSessionRequest(request)))),
+          )
         }),
       )
       .handle(
@@ -52,25 +63,29 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "session.permission.list",
         Effect.fn(function* (ctx) {
-          const permission = yield* PermissionV2.Service
-          return { data: yield* permission.forSession(ctx.params.sessionID) }
+          const authorizer = yield* Authorizer.Service
+          return {
+            data: (yield* authorizer.list()).filter((request) => isSessionRequest(request, ctx.params.sessionID)),
+          }
         }),
       )
       .handle(
         "session.permission.get",
         Effect.fn(function* (ctx) {
-          const request = yield* (yield* PermissionV2.Service).get(ctx.params.requestID)
-          if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
+          const request = yield* (yield* Authorizer.Service).get(ctx.params.requestID)
+          if (!request || !isSessionRequest(request, ctx.params.sessionID))
+            return yield* missingRequest(ctx.params.requestID)
           return { data: request }
         }),
       )
       .handle(
         "session.permission.reply",
         Effect.fn(function* (ctx) {
-          const permission = yield* PermissionV2.Service
-          const request = yield* permission.get(ctx.params.requestID)
-          if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
-          yield* permission
+          const authorizer = yield* Authorizer.Service
+          const request = yield* authorizer.get(ctx.params.requestID)
+          if (!request || !isSessionRequest(request, ctx.params.sessionID))
+            return yield* missingRequest(ctx.params.requestID)
+          yield* authorizer
             .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
             .pipe(Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
           return HttpApiSchema.NoContent.make()

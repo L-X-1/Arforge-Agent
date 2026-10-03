@@ -6,6 +6,7 @@ execute_by_name 按名执行 + 参数校验 + 类型强转 / execute_calls 并�
 
 import arforge.tools.basic_tools  # noqa: F401  导入触发工具注册
 import arforge.tools.file_tools  # noqa: F401
+import arforge.tools.office_tools  # noqa: F401  旧 Python Office 兼容 seam，显式 opt-in
 import arforge.tools.task_tools  # noqa: F401
 from arforge.tool_registry import REGISTRY, adapt_docx_request
 
@@ -157,7 +158,13 @@ def test_all_registered_tool_contracts_are_consistent():
     assert load_builtin_tools() == {}
     report = REGISTRY.audit_contracts()
 
-    assert report["registered"] >= 98
+    # The Python compatibility registry intentionally no longer includes the
+    # retired duplicate owners (LSP, symbols, wait, delivery, trigger, plan,
+    # notebook, question, MCP client, and unsafe asset wrappers). TS/Core owns
+    # those product capabilities; explicit legacy imports remain covered
+    # separately. The default bootstrap is intentionally measured on its own
+    # (compatibility imports in other tests must not raise this floor).
+    assert report["registered"] >= 85
     assert report["exported"] == report["registered"]
     assert report["passed"], report["issues"]
     assert report["duplicate_keywords"] == {}

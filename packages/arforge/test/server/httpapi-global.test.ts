@@ -5,6 +5,7 @@ import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unst
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
+import { buildLocationServiceMap } from "@arforge-ai/core/location-services"
 import { Installation } from "../../src/installation"
 import { MoveSession } from "@arforge-ai/core/control-plane/move-session"
 import { ServerAuth } from "../../src/server/auth"
@@ -32,6 +33,7 @@ const apiLayer = HttpRouter.serve(
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provide(Layer.mock(Auth.Service)({})),
   Layer.provide(Layer.mock(Config.Service)({})),
+  Layer.provide(buildLocationServiceMap()),
   Layer.provide(Layer.mock(MoveSession.Service)({})),
   Layer.provide(
     Layer.mock(Installation.Service)({

@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "세션 변경 사항",
   "ui.sessionReview.title.lastTurn": "마지막 턴 변경 사항",
   "ui.sessionReview.diffStyle.unified": "통합 보기",
@@ -71,6 +74,7 @@ export const dict = {
 
   "ui.messagePart.questions.dismissed": "질문 무시됨",
   "ui.messagePart.compaction": "세션 압축됨",
+  "ui.messagePart.reasoningSummary": "추론 요약",
   "ui.messagePart.context.read.one": "{{count}}개 읽음",
   "ui.messagePart.context.read.other": "{{count}}개 읽음",
   "ui.messagePart.context.search.one": "{{count}}개 검색",

@@ -44,6 +44,55 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  for (const scenario of ["unchanged", "renamed", "child"] as const) {
+    it.effect(`generated title projection preserves session fields scenario=${scenario}`, () =>
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const events = yield* EventV2.Service
+        const expectedTitle = "新会话 - 2026-09-08T00:00:00.000Z"
+        const title = scenario === "renamed" ? "My chosen title" : expectedTitle
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+          .run()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "title-test",
+            directory: "/project",
+            title,
+            version: "test",
+            parent_id: scenario === "child" ? SessionV2.ID.make("ses_parent") : null,
+            metadata: { preserved: true },
+            cost: 7,
+          })
+          .run()
+        const before = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+        if (!before) return yield* Effect.die("Title fixture session is missing")
+        const data = {
+          sessionID,
+          timestamp: created,
+          messageID: SessionMessage.ID.make("msg_title_source"),
+          expectedTitle,
+          title: "Cache investigation",
+        }
+        yield* events.publish(SessionEvent.TitleGenerated, data)
+        const after = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+        expect(after).toEqual({ ...before, title: scenario === "unchanged" ? data.title : title })
+        expect(yield* db.select().from(SessionMessageTable).all()).toEqual([])
+        const stored = yield* EventV2.latest(db, sessionID)
+        if (!stored) return yield* Effect.die("Generated title event was not persisted")
+        yield* events.replay(stored)
+        expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all()).toHaveLength(1)
+        expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()).toEqual(after)
+        yield* events.publish(SessionEvent.TitleGenerated, { ...data, title: "Late duplicate" })
+        expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get()).toEqual(after)
+      }),
+    )
+  }
+
   it.effect("replaces provisional text with the durable primary delivery metadata", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -529,8 +578,8 @@ describe("SessionProjector", () => {
         timestamp: DateTime.makeUnsafe(1),
         assistantMessageID: SessionMessage.ID.make("msg_assistant_2"),
         finish: "stop",
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 0.125,
+        tokens: { input: 7, output: 3, reasoning: 2, cache: { read: 1, write: 4 } },
       })
 
       const rows = yield* db
@@ -548,6 +597,16 @@ describe("SessionProjector", () => {
         type: "assistant",
         finish: "stop",
         time: { completed: DateTime.makeUnsafe(1) },
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        cost: 0.125,
+        tokens_input: 7,
+        tokens_output: 3,
+        tokens_reasoning: 2,
+        tokens_cache_read: 1,
+        tokens_cache_write: 4,
       })
     }),
   )

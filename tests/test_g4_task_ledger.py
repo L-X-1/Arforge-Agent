@@ -163,3 +163,11 @@ def test_update_plan_tool_registered_as_read_category():
     assert tool is not None
     assert tool.schema.category == "read"  # 三模式权限下均放行
     assert tool.schema.risk_level == "low"
+
+
+def test_python_builtin_registry_excludes_legacy_update_plan_wrapper():
+    """TS/Core ``todowrite`` is the default owner; Python stays opt-in."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+
+    assert "arforge.tools.plan_tools" not in BUILTIN_TOOL_MODULES

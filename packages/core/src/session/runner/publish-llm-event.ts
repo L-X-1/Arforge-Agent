@@ -1,13 +1,17 @@
 import { ToolOutput, type LLMEvent, type ProviderMetadata, type ToolResultValue, type Usage } from "@arforge-ai/llm"
 import { DateTime, Effect } from "effect"
+import type { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { EventV2 } from "../../event"
 import { ModelV2 } from "../../model"
 import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
+import type { ToolOutputStore } from "../../tool-output-store"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
+  readonly runID?: AgentRuntime.RunID
+  readonly requestDigest?: string
   readonly agent: string
   readonly model: ModelV2.Ref
   readonly snapshot?: string
@@ -63,6 +67,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       settled: boolean
       providerExecuted: boolean
       providerMetadata?: ProviderMetadata
+      interruptedOutput?: ToolOutputStore.BoundResult
     }
   >()
   const timestamp = DateTime.now
@@ -70,7 +75,9 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   let assistantActive = false
   let assistantFailed = false
   let providerFailed = false
-  let stepSettlement: { readonly finish: string; readonly tokens: ReturnType<typeof tokens> } | undefined
+  let stepSettlement:
+    | { readonly finish: string; readonly tokens: ReturnType<typeof tokens>; readonly usage?: Usage }
+    | undefined
 
   const startAssistant = Effect.fnUntraced(function* () {
     if (assistantMessageID !== undefined) return assistantMessageID
@@ -225,6 +232,17 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         assistantMessageID: tool.assistantMessageID,
         callID,
         error: { type: "unknown", message },
+        ...(tool.interruptedOutput
+          ? {
+              content: tool.interruptedOutput.output.content,
+              structured: record(tool.interruptedOutput.output.structured),
+              ...(tool.interruptedOutput.artifactRefs?.length
+                ? { artifactRefs: tool.interruptedOutput.artifactRefs }
+                : tool.interruptedOutput.outputPaths.length
+                  ? { outputPaths: tool.interruptedOutput.outputPaths }
+                  : {}),
+            }
+          : {}),
         provider: {
           executed: tool.providerExecuted,
           ...(tool.providerMetadata === undefined ? {} : { metadata: tool.providerMetadata }),
@@ -241,6 +259,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   const publish = Effect.fn("SessionRunner.publishLLMEvent")(function* (
     event: LLMEvent,
     outputPaths: ReadonlyArray<string> = [],
+    artifactRefs: ReadonlyArray<AgentRuntime.OpaqueArtifactRef> = [],
   ) {
     if (input.textSuppressed?.() && event.type.startsWith("text-")) {
       text.discard()
@@ -373,7 +392,10 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
           ...result,
-          outputPaths,
+          ...(artifactRefs.length > 0 ? { artifactRefs } : {}),
+          // Once an opaque receipt exists it is the sole transport identity;
+          // never carry the legacy filesystem path alongside it.
+          ...(artifactRefs.length === 0 && outputPaths.length > 0 ? { outputPaths } : {}),
           ...(provider.executed ? { result: event.result } : {}),
           provider,
         })
@@ -403,9 +425,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         yield* flush()
         assistantActive = false
         if (stepSettlement) return yield* Effect.die("Duplicate step finish")
-        stepSettlement = { finish: event.reason, tokens: tokens(event.usage) }
+        stepSettlement = { finish: event.reason, tokens: tokens(event.usage), usage: event.usage }
+        if (event.reason === "content-filter")
+          yield* failAssistant("The response was blocked by the provider's content filter")
         return
       case "finish":
+        if (stepSettlement && stepSettlement.usage === undefined && event.usage !== undefined)
+          stepSettlement = { ...stepSettlement, tokens: tokens(event.usage), usage: event.usage }
         return
       case "provider-error":
         providerFailed = true
@@ -415,6 +441,10 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
   })
 
   return {
+    retainInterruptedOutput: (callID: string, output: ToolOutputStore.BoundResult) => {
+      const tool = tools.get(callID)
+      if (tool && !tool.settled) tool.interruptedOutput = output
+    },
     publish,
     flush,
     failAssistant,

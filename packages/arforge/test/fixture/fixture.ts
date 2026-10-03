@@ -7,6 +7,7 @@ import { Effect, Context, Layer } from "effect"
 import type * as PlatformError from "effect/PlatformError"
 import type * as Scope from "effect/Scope"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
+import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { Config } from "@/config/config"
@@ -19,7 +20,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { TestLLMServer } from "../lib/llm-server"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
-export const testInstanceStoreLayer = LayerNode.compile(InstanceStore.node, [
+export const testInstanceStoreLayer = LayerNode.compile(LayerNode.group([InstanceStore.node, Database.node]), [
   [InstanceStore.bootstrapNode, noopBootstrap],
 ])
 
@@ -152,10 +153,7 @@ export function tmpdirScoped<E = never, R = never>(options?: {
     if (options?.config) {
       const resolved = typeof options.config === "function" ? options.config() : options.config
       yield* Effect.promise(() =>
-        fs.writeFile(
-          path.join(dir, "arforge.json"),
-          JSON.stringify({ $schema: "urn:arforge:config", ...resolved }),
-        ),
+        fs.writeFile(path.join(dir, "arforge.json"), JSON.stringify({ $schema: "urn:arforge:config", ...resolved })),
       )
     }
 
@@ -208,7 +206,13 @@ export const withTmpdirInstance =
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped(options)
       return yield* self.pipe(Effect.provideService(TestInstance, { directory }), provideInstanceEffect(directory))
-    }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node)))
+    }).pipe(
+      // A single provider keeps the database and child-process services in the
+      // same construction/runtime context. Stacking `Effect.provide` calls
+      // lets the later layer replace the context that owns scoped instance
+      // resources, which makes teardown depend on an incidental caller fiber.
+      Effect.provide(Layer.mergeAll(testInstanceStoreLayer, AppNodeBuilder.build(CrossSpawnSpawner.node))),
+    )
 
 export function provideTmpdirServer<A, E, R>(
   self: (input: { dir: string; llm: TestLLMServer["Service"] }) => Effect.Effect<A, E, R>,

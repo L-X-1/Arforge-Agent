@@ -1,10 +1,11 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
-import { ToolRegistry } from "@/tool/registry"
+import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { partitionCustomTools, ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -56,9 +57,9 @@ const replacements = [
   [RuntimeFlags.node, RuntimeFlags.layer()],
 ] as const
 
-const it = testEffect(LayerNode.compile(root, replacements))
+const it = testEffect(AppNodeBuilder.build(root, replacements))
 const withCodeMode = testEffect(
-  LayerNode.compile(root, [
+  AppNodeBuilder.build(root, [
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
     [
@@ -70,7 +71,12 @@ const withCodeMode = testEffect(
               def: {
                 name: "current",
                 description: "current weather",
-                inputSchema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] },
+                inputSchema: {
+                  type: "object",
+                  properties: { city: { type: "string" } },
+                  required: ["city"],
+                  additionalProperties: false,
+                },
               } as MCPToolDef,
               client: {} as MCP.McpTool["client"],
             },
@@ -81,7 +87,7 @@ const withCodeMode = testEffect(
   ]),
 )
 const withEmptyCodeMode = testEffect(
-  LayerNode.compile(root, [
+  AppNodeBuilder.build(root, [
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
     [
@@ -93,13 +99,90 @@ const withEmptyCodeMode = testEffect(
     ],
   ]),
 )
-const withBrokenPlugin = testEffect(LayerNode.compile(root, [...replacements, [Plugin.node, brokenPluginLayer]]))
+const materializedMcp = testEffect(
+  AppNodeBuilder.build(root, [
+    [Config.node, configLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer()],
+    [
+      MCP.node,
+      Layer.mock(MCP.Service, {
+        tools: () =>
+          Effect.succeed({
+            weather_current: {
+              def: {
+                name: "current",
+                description: "current weather",
+                inputSchema: {
+                  type: "object",
+                  properties: { city: { type: "string" } },
+                  required: ["city"],
+                  additionalProperties: false,
+                },
+              } as MCPToolDef,
+              client: { callTool: async () => ({ content: [{ type: "text", text: "sunny" }] }) } as any,
+              generation: 7,
+            },
+          }),
+        clients: () => Effect.succeed({ weather: {} as any }),
+        prompts: () =>
+          Effect.succeed({
+            "weather:brief": {
+              name: "brief",
+              description: "Build a weather brief",
+              arguments: [{ name: "city", required: true }],
+              client: "weather",
+              generation: 7,
+            },
+          }),
+        resources: () =>
+          Effect.succeed({
+            "weather:docs://readme": {
+              name: "readme",
+              uri: "docs://readme",
+              client: "weather",
+              generation: 7,
+            },
+          }),
+        resourceTemplates: () =>
+          Effect.succeed({
+            "weather:docs://item/{id}": {
+              name: "item",
+              uriTemplate: "docs://item/{id}",
+              client: "weather",
+              generation: 7,
+            },
+          }),
+        declaredScope: () =>
+          Effect.succeed({
+            endpoint: "https://weather.example/mcp",
+            networkScope: ["https://weather.example"],
+            secretScope: [],
+            externalServices: [],
+          }),
+        assertCapability: () => Effect.void,
+      }),
+    ],
+  ]),
+)
+const withBrokenPlugin = testEffect(AppNodeBuilder.build(root, [...replacements, [Plugin.node, brokenPluginLayer]]))
 
 afterEach(async () => {
   await disposeAllInstances()
 })
 
 describe("tool.registry", () => {
+  test("rejects third-party tools that shadow built-ins or an earlier plugin", () => {
+    const read = { id: "read", source: "plugin" }
+    const first = { id: "custom", source: "first" }
+    const duplicate = { id: "custom", source: "second" }
+    const unique = { id: "unique", source: "plugin" }
+
+    expect(partitionCustomTools([read, first, duplicate, unique], [{ id: "read" }])).toEqual({
+      accepted: [first, unique],
+      rejected: [read, duplicate],
+    })
+  })
+
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
@@ -133,6 +216,37 @@ describe("tool.registry", () => {
       expect(ids).toContain("execute")
       expect(tools.map((tool) => tool.id)).toContain("execute")
       expect(execute?.description).toContain("tools.weather.current(input: {\n  city: string,\n})")
+    }),
+  )
+
+  materializedMcp.instance("materializes MCP tools through the native ToolRegistry", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tool = (yield* registry.tools({
+        providerID: ProviderV2.ID.arforge,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })).find((item) => item.id === "weather_current")
+      if (!tool) throw new Error("MCP tool was not materialized")
+      expect(tool.description).toBe("current weather")
+      expect(tool.jsonSchema).toMatchObject({
+        type: "object",
+        properties: { city: { type: "string" } },
+        additionalProperties: false,
+      })
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.arforge,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const ids = tools.map((item) => item.id)
+      expect(ids.some((id) => id.startsWith("mcp_prompt_weather_brief_"))).toBe(true)
+      expect(ids.some((id) => id.startsWith("mcp_resource_weather_docs___readme_"))).toBe(true)
+      expect(ids.some((id) => id.startsWith("mcp_resource_template_weather_docs___item__id__"))).toBe(true)
+      expect(ids).toContain("list_mcp_prompts")
+      expect(ids).toContain("list_mcp_resources")
+      expect(ids).toContain("list_mcp_resource_templates")
     }),
   )
 

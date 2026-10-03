@@ -27,36 +27,12 @@ const provideContext = <A, E, R>(effect: Effect.Effect<A, E, R>, context: Worksp
 
 export const WorktreeAdapter: WorkspaceAdapter = {
   name: "Worktree",
-  description: "Create a git worktree",
-  async configure(info, context) {
-    const { AppRuntime, Worktree } = await loadWorktree()
-    const next = await AppRuntime.runPromise(
-      provideContext(
-        Worktree.Service.use((svc) => svc.makeWorktreeInfo({ detached: true })),
-        context,
-      ),
-    )
-    return {
-      ...info,
-      name: next.name,
-      directory: next.directory,
-    }
+  description: "Worktree creation is disabled until this legacy adapter uses the control-plane Action Gateway",
+  async configure(_info, _context) {
+    throw new Error("Legacy Worktree adapter configuration is blocked by the Trust Kernel")
   },
-  async create(info, _env, _from, context) {
-    const { AppRuntime, Worktree } = await loadWorktree()
-    const config = decodeWorktreeConfig(info)
-    await AppRuntime.runPromise(
-      provideContext(
-        Worktree.Service.use((svc) =>
-          svc.createFromInfo({
-            name: config.name,
-            directory: config.directory,
-            ...(config.branch ? { branch: config.branch } : {}),
-          }),
-        ),
-        context,
-      ),
-    )
+  async create(_info, _env, _from, _context) {
+    throw new Error("Legacy Worktree adapter creation is blocked by the Trust Kernel")
   },
   async list(context) {
     const { AppRuntime, Worktree } = await loadWorktree()
@@ -76,15 +52,8 @@ export const WorktreeAdapter: WorkspaceAdapter = {
       projectID: ctx.project.id,
     }))
   },
-  async remove(info, context) {
-    const { AppRuntime, Worktree } = await loadWorktree()
-    const config = decodeWorktreeConfig(info)
-    await AppRuntime.runPromise(
-      provideContext(
-        Worktree.Service.use((svc) => svc.remove({ directory: config.directory })),
-        context,
-      ),
-    )
+  async remove(_info, _context) {
+    throw new Error("Legacy Worktree adapter removal is blocked by the Trust Kernel")
   },
   target(info) {
     const config = decodeWorktreeConfig(info)

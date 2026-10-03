@@ -1,0 +1,989 @@
+{
+  "schema_version": "1.0",
+  "captured_at_utc": "2026-08-24T08:43:26.9939557Z",
+  "repository_root": "%ARFORGE_REPO%",
+  "branch": "codex/phase-0-checkpoint",
+  "head_commit": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "status_digest": "bd6513550c5856fabac53ba5fbad0632002f33240068ce1d845c536834351d43",
+  "entry_count": 102,
+  "entries": [
+    {
+      "path": ".oxlintrc.json",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "2cefd4bcac575dcf6150df8eb00f8d16b6e6f6186e7fb050d57254f9a062b6c3",
+      "size": 2057
+    },
+    {
+      "path": "AGENTS.md",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "222238b11e196a2e600af2631d6ec49f3db309d2657fc9e24e8f6c670616d21d",
+      "size": 2412
+    },
+    {
+      "path": "ARFORGE.md",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "c044cc45c62558e4461fa95d4e49fb605a215cd5afab87cdee96029d168b297f",
+      "size": 8646
+    },
+    {
+      "path": "arforge/bundled_skills/agent_skills/skills/vision-tools/SKILL.md",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "426223efda3a9b870f10f2c38dd5a31f2b5880368ff718fc47357fb58ace77c3",
+      "size": 3118
+    },
+    {
+      "path": "arforge/core/agent_core.py",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "8670f3190c19060b1d571c50fcc822d604fb6856a1eec1d4d4b6c7f52e671be6",
+      "size": 41330
+    },
+    {
+      "path": "docs/evidence/phase-0-7-independent-review-20260814.md",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "54bfbaf6e5140621bceba8b1622c49fc02fcebc7c58ae3f8dcabf9702f6f85fa",
+      "size": 9507
+    },
+    {
+      "path": "packages/app/src/capabilities/control-center-map.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "f43434006d4e1eeddca24ecb04f7f3edb2bd4d8bd41cd552042d637d57b940bb",
+      "size": 2437
+    },
+    {
+      "path": "packages/app/src/capabilities/ui-capability-review.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "7ee8e7c83b15f271d859d9b5866fabf2fa97b886047a9ba9acad93a60c4c9526",
+      "size": 7477
+    },
+    {
+      "path": "packages/app/src/i18n/en.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "aa626dc0e58b19315c135f1ea8155325b1a3fd29df1bfb16a7559b194b8bc614",
+      "size": 78935
+    },
+    {
+      "path": "packages/app/src/i18n/zht.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "05c25594d8cee39bb16406f8ad5f5d2d8bac512a86adc12e563c51241cfc38ea",
+      "size": 76288
+    },
+    {
+      "path": "packages/app/src/pages/layout/helpers.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "c92f37acf3777c51369c4b8f98385545c8c31ce8649b02e8ed7bcfdbf8ceed2c",
+      "size": 11826
+    },
+    {
+      "path": "packages/app/src/pages/layout/helpers.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "e3f15303c073d9ca959610116dad69bc9dda292b5701dd74fd762f910775e116",
+      "size": 5396
+    },
+    {
+      "path": "packages/arforge/src/agent/agent.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "45254c8dbbdb00e5493ba1fe55ea3bd6af39ea915180545092c1c850993db0ed",
+      "size": 16808
+    },
+    {
+      "path": "packages/arforge/src/cli/cmd/run.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "2a6a8dba67fe79baf0741919ce06a79096e54f0efbc12cf9e09f4ab5b0e1cc59",
+      "size": 33427
+    },
+    {
+      "path": "packages/arforge/src/cli/cmd/tui.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "19a6449d343a3b1ae219c0dd2c113e71173b9183c021c2fb3e1738984c32a999",
+      "size": 10218
+    },
+    {
+      "path": "packages/arforge/src/control-operation/worktree-worker.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "b7dcafe29594586da549d6fd86f44a470681c297ef62ee87f12a9b183f18efbc",
+      "size": 24735
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/event.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "4434a3dd9d3a474de4d944a71e17115c30fc89e8a2f1d65dcdfe7e6cb6c799f2",
+      "size": 3717
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/session.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "bc892d5eae4a21f8aea68911d327d1604c92e99f1e8faf13558d3352ca7b98d6",
+      "size": 18004
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/handlers/sync.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "cd38b6ae0a9e1be9039016ba54b0654202ea1a9478b2637f05cef4b2d02d387b",
+      "size": 3707
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/middleware/error.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "74219f5d2932dcfb43c455646dc5c80517be0c69c81dc82d64a8b3339797cc66",
+      "size": 1755
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/server.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d2e97b4d7f443450aec68b6fa73d36ee3e150f09de4ebbf4a259c4d78d7a65ca",
+      "size": 15389
+    },
+    {
+      "path": "packages/arforge/src/session/message-v2.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "3ca2f4c1785954936e3b6c73658f1683480d48552a7dd6234b3ef212c762d084",
+      "size": 26109
+    },
+    {
+      "path": "packages/arforge/src/session/system.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "afde7975d190176c8af980821a2c89aab1d6748f78e7be4d8d1a19c90919d293",
+      "size": 6951
+    },
+    {
+      "path": "packages/arforge/src/session/tools.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "9ca73ee921de51ce99720238f1c00dfb2aa5124db5ac9f18c96f1815bc77e451",
+      "size": 42715
+    },
+    {
+      "path": "packages/arforge/src/tool/tool.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5cd71ace22d9004cb9015a91ea0cca67356b39439b73b07cda6aec65183ada52",
+      "size": 6905
+    },
+    {
+      "path": "packages/arforge/test/cli/run/run-process.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "403b860f6acb2b22cc7097429e392e8858dfe2b5cfd5ecb29070c86bf011d85d",
+      "size": 12610
+    },
+    {
+      "path": "packages/arforge/test/lib/cli-process.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "ed07a67adc7508d68ca2a16c1f229b622b43bc252288463254af5a50e1c27a4f",
+      "size": 23016
+    },
+    {
+      "path": "packages/arforge/test/lib/test-provider.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "a9983707ccd5f984bd27da98a6b72ccfb57899de6941340d95a2e61a5b256a28",
+      "size": 1248
+    },
+    {
+      "path": "packages/arforge/test/server/httpapi-agent-capability.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "72be61b4fa4b0dc669f1bd1c4e833c3206a263fb10630ccdb91fd6186129de08",
+      "size": 7976
+    },
+    {
+      "path": "packages/arforge/test/server/httpapi-exercise/index.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "43ee2a09ec3bb5655a826e88adb3964966d965d3a6c7d9b2ee503e6a93ace060",
+      "size": 211243
+    },
+    {
+      "path": "packages/arforge/test/server/httpapi-promptasync-context.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "ce3ddcbfad21e7f712fd5d9199934fd53f24f808f4e0d05fa57527459f80f559",
+      "size": 9764
+    },
+    {
+      "path": "packages/arforge/test/server/httpapi-public-openapi.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "b21a860357ad899118b5b3ca2590ebc4df0bef04784ea5f3ad541ad965cc1489",
+      "size": 13776
+    },
+    {
+      "path": "packages/arforge/test/session/message-v2.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "9f508efbb21beaea96053ead0cd7b4dfad9e7248b98d423d4d2608ee53957cd2",
+      "size": 47423
+    },
+    {
+      "path": "packages/arforge/test/session/prompt.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "e350b8cd519d7afe82497ee30235be9a1ca38332a70f5689ba9c9b52a01e744e",
+      "size": 117005
+    },
+    {
+      "path": "packages/arforge/test/session/tools-guard.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "1795abd64c5f4f02302cbe609e506995f049414d60986559d9a69746c5b1554c",
+      "size": 13755
+    },
+    {
+      "path": "packages/arforge/test/tool/__snapshots__/parameters.test.ts.snap",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5bfd77ad15e0166963bb377cf1dd14b69b018533ef398d6afc9b5aadb239ad3d",
+      "size": 12366
+    },
+    {
+      "path": "packages/arforge/test/tool/code-mode-integration.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d0d181f0f85b564f75afcec773ea5c13a66f756ea32baf76ca54cdcf72ea0152",
+      "size": 14026
+    },
+    {
+      "path": "packages/arforge/test/tool/skill.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "7b29634a3077c8cd0e590531df3870f29be7f63b78a5fcd3d83727f5e895fc9c",
+      "size": 5162
+    },
+    {
+      "path": "packages/cli/src/commands/handlers/serve.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "a7ee4e54902c7cd825f03569729508bf0a70d7e8f4498efd900d148f45bf8b48",
+      "size": 2406
+    },
+    {
+      "path": "packages/client/src/generated/types.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "c62ea4669d598be18c76d29d611d963b672446b9c4e43c804b7f60f81b3c3ae1",
+      "size": 495338
+    },
+    {
+      "path": "packages/core/src/action-gateway.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "b6369a52e7c9eb79b1d773144a80dfb5141df43f7817e135c83a0175ea767d2b",
+      "size": 129712
+    },
+    {
+      "path": "packages/core/src/analysis/durable-workflow.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "99ef8a3e2a41620f0d86bf59a385cae88002d154f9c260d35b921e7baee3fc0e",
+      "size": 68945
+    },
+    {
+      "path": "packages/core/src/analysis/plugins.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "025ecb1594efa2db4f348aceb5d8090bfdaf02dfd836b8f8d00f41c87a8600f5",
+      "size": 48268
+    },
+    {
+      "path": "packages/core/src/authorizer.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "4f4679e6cd94431af4527b6c736183c26a7cbc21b26072a48a48b4e5b1af693d",
+      "size": 27035
+    },
+    {
+      "path": "packages/core/src/config/plugin/provider.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "0a4c5cca1a0d09287a041e1710c1dd703bc5cd9c7758c8cfadba22c4edc3a966",
+      "size": 5695
+    },
+    {
+      "path": "packages/core/src/config/provider.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "a88f2f2678b0bbfc772282dd73b0ce457b349401ad1c2b15cd8da55b1d1b1d44",
+      "size": 2566
+    },
+    {
+      "path": "packages/core/src/database/database.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5b52a8ecef17d75705e4f9f8b6792cf623602aee6494f822149d9360a069f501",
+      "size": 9902
+    },
+    {
+      "path": "packages/core/src/effect/app-node-builder.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "0b25272ed3d00ecced56338683a41ab17a49450b9cf7f688aabd43417d02d3b0",
+      "size": 1189
+    },
+    {
+      "path": "packages/core/src/evolution/exposure.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "9f0c49088d09e07352308b266f3ba7fb5599d270db0678423abd8d8d96c5c1cf",
+      "size": 87768
+    },
+    {
+      "path": "packages/core/src/experience-store.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "243ed0c9450db6d270b3ca1a3e3b3da28fe8db8acc173b10ddd2fe2ed56750ca",
+      "size": 58930
+    },
+    {
+      "path": "packages/core/src/file-guard.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "585d3af628e988998bb6adcc7c537d18b8e47cee7a7edf420e3c1d8613b06db9",
+      "size": 4972
+    },
+    {
+      "path": "packages/core/src/location-services.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "e62838ad5ad6ba8e551dca6a69c3dfb377aab06c707bf513883aaafdf802bafb",
+      "size": 7216
+    },
+    {
+      "path": "packages/core/src/model.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "8cf72b302e77f468aaac6e396abc384f7d6b5099832e2c7f4b93600528664a28",
+      "size": 1280
+    },
+    {
+      "path": "packages/core/src/permission.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "fb8efc8654417f3bef32500c38bce75841352fd58309d1670f9f9c77b6a6b1ab",
+      "size": 16150
+    },
+    {
+      "path": "packages/core/src/plugin-control.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "150e36d9c6ebc45ee65897fcd9075cfbd5cf30de2ef7b1c6077aeb0e048d3e8d",
+      "size": 8964
+    },
+    {
+      "path": "packages/core/src/plugin/skill.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "4165bccd58ef46cb488dfe8f50d3c6d73556bb44033accb4d0be714c4587dda7",
+      "size": 4661
+    },
+    {
+      "path": "packages/core/src/plugin/skill/vision-tools.md",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "6ee350cf36a8a03d8326166efca4c3da8e06f4e337efbe11487660436cf09213",
+      "size": 2760
+    },
+    {
+      "path": "packages/core/src/primary-delivery.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "619ddbd60d7afe19fd5dd5c998ef7d32e2e9b203790bd3331aac1c8f08a06655",
+      "size": 11141
+    },
+    {
+      "path": "packages/core/src/ripgrep/binary.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "e404131de1145737b96fa1357a9e8f5839f661f28a25e64909df205f536ff7cb",
+      "size": 6719
+    },
+    {
+      "path": "packages/core/src/session/runner/llm.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "50fd4b0b2195c09e6aa9240bdbb54551f24c52c251a608ddd628c7c0a643c250",
+      "size": 65510
+    },
+    {
+      "path": "packages/core/src/system-context/builtins.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5b31c1e1ba54b99016ea269431d9cada6d5fd2292b8f3cd97ea0cb81e230cc11",
+      "size": 3098
+    },
+    {
+      "path": "packages/core/src/tool/authorization-plan.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "3930b59b5391c122274f1c8d94110613e7b0d4a2394b3b9beabdc5f6f62e1c64",
+      "size": 19248
+    },
+    {
+      "path": "packages/core/src/tool/primary-delivery.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "bed357dd93d2bded7a940ea0440684735ee5692f6417579400c6cd1126064940",
+      "size": 3665
+    },
+    {
+      "path": "packages/core/test/cooperative-wait.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "b232bf380a09d9acf69f0e231a2291460e13a7dca4341622c06be93c4256b418",
+      "size": 7295
+    },
+    {
+      "path": "packages/core/test/durable-action.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "a72fbd030ccc0e41c4a823e3201e94f75cf2f32fd6b47a67efa492444994043c",
+      "size": 29327
+    },
+    {
+      "path": "packages/core/test/durable-workflow.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "adad7a6bb97f65430c28cef2dbb267b5a2314268092f9e7933af9f2358e2c4c4",
+      "size": 22100
+    },
+    {
+      "path": "packages/core/test/evolution-exposure.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "4e8fae7f021f44798f95ef2ed99f39a4f6964c45f1bec956170d3c1a7b1aa0e9",
+      "size": 15989
+    },
+    {
+      "path": "packages/core/test/mailbox.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d4f34326531b219abeb82a41806a0a594e7ccc15b1d8495aaee190e82d1c52aa",
+      "size": 12976
+    },
+    {
+      "path": "packages/core/test/memory-migration.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "663befd7eec24c881dc05a82b4ea71f857dc428050e393e9c7fe102e3cbf7595",
+      "size": 7012
+    },
+    {
+      "path": "packages/core/test/multimodal-diagnosis.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "6ea23caecca60d6fbefe8abad9723c7a8dd2cbc2956e351539c6873bfe754f0a",
+      "size": 6151
+    },
+    {
+      "path": "packages/core/test/plugins.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "4bc1783a38334a3439626feb608f273c7f490128bc30a9b8424d502d2c7a9ca3",
+      "size": 9669
+    },
+    {
+      "path": "packages/core/test/primary-delivery.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5198197c9a87ca8853655de90c426977fc57f64076df0162bc6552ac60c1bc8c",
+      "size": 11277
+    },
+    {
+      "path": "packages/core/test/session-runner-recorded.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "9dd6dffc8edf0174ad2744e22b837857d85981e0fc6137a97f82e914da781995",
+      "size": 8883
+    },
+    {
+      "path": "packages/core/test/session-runner.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "ad087444d542b55268fe1639eb5daa8a29b220f54820c4ed6314ea03f78c268b",
+      "size": 159636
+    },
+    {
+      "path": "packages/core/test/system-context/builtins.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "32a7e0151f862a072de2e8c5b04fe9834276db8c65702ff5890b9f85c8b8c2a5",
+      "size": 5253
+    },
+    {
+      "path": "packages/core/test/tool-webfetch.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "33430568e062ace62d4afe34cb796b06658f6277deda04bd6ebcbb36ec116aaa",
+      "size": 13085
+    },
+    {
+      "path": "packages/core/test/trigger.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d909e374422028273247fd8e44b5a368fbb2228ece91094ebb214721f5c5e402",
+      "size": 15017
+    },
+    {
+      "path": "packages/desktop/src/main/ipc.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d394a07c80f9f5e5c50133d3c39e8286f35c8499a2a60fe7b7826b7a10ba7a13",
+      "size": 21826
+    },
+    {
+      "path": "packages/desktop/src/renderer/index.tsx",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "32248ca10c47b81b99bca86e53e6bedebec6242071a163413877c3ed27a64788",
+      "size": 12616
+    },
+    {
+      "path": "packages/desktop/src/renderer/storage-queue.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "f322bd9d9c717a50826d0c2bec27942b05c9ff23eafaa9c21a075ac8c05bcc85",
+      "size": 2613
+    },
+    {
+      "path": "packages/desktop/src/renderer/storage-queue.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "f71ab0b37aa52e74291fe4aab30c9a8a1ae7e668d4e730a22ad8917a3a779b8e",
+      "size": 1923
+    },
+    {
+      "path": "packages/protocol/src/groups/agent-capability.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "cce628def1125e136e52f2ab36c2f864ee48df3b3159a73ceaebfbabd3365c3c",
+      "size": 45625
+    },
+    {
+      "path": "packages/schema/src/model.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "88a7e2eaaa9c97f97e615737a8bc86773ed15efbe052d4ba39e4382167651fef",
+      "size": 8179
+    },
+    {
+      "path": "packages/sdk-next/test/memory-learning.test.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "e55b28d7dca32f8ee2bbe34b5aafe60840416079ed2fda23a362895db83e8cec",
+      "size": 4534
+    },
+    {
+      "path": "packages/sdk/js/src/v2/gen/sdk.gen.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "20fb9783070573b7a28ae12a4ea814914bf520d89748456836ae78602778a7d2",
+      "size": 381911
+    },
+    {
+      "path": "packages/sdk/js/src/v2/gen/types.gen.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "3598f943684355151bc8ba0040c5a2fd97ba945a6c8d6775046600aebade811d",
+      "size": 608284
+    },
+    {
+      "path": "packages/sdk/js/tsconfig.tsbuildinfo",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "fa308256b7cacdf8db74bd2f1c63a25ba97795abf4bf4dafceb4ee27a9fd8b2d",
+      "size": 53397
+    },
+    {
+      "path": "packages/sdk/openapi.json",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "da27d89150df82be4d8dc7f76cb94061437674e50becb56bb3e7747d93f9b627",
+      "size": 2487206
+    },
+    {
+      "path": "packages/server/src/identity-context.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "9e1a9d8a1ab582d6e250df288a68c39137b0268facdb3f89588b1bd9a54f51e3",
+      "size": 659
+    },
+    {
+      "path": "packages/server/src/middleware/authorization.ts",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "b3db18c2611387e9976c969d4e95d8f75542d851b946bc0e6c83359d22279b41",
+      "size": 4875
+    },
+    {
+      "path": "specs/brand-baseline.json",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "0bed6c6d2e3489a1ca796b631262619069e553e87a7739b502e84a65e8f9a53c",
+      "size": 337
+    },
+    {
+      "path": "tests/test_brand_policy.py",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "5b3d5bf6c1390860c326908ccb82ac5ea72c9833fbfa188bd7eb587ec5d50b1c",
+      "size": 691
+    },
+    {
+      "path": "tests/test_project_rules_runtime.py",
+      "status": ".M",
+      "kind": "file",
+      "content_digest": "d951e2c071491c137745a7d4d0ab0cafc5c972c0e71863c2c8fc2479db9f93ed",
+      "size": 7446
+    },
+    {
+      "path": ".codex-analysis/",
+      "status": "untracked",
+      "kind": "directory",
+      "content_digest": null,
+      "size": null
+    },
+    {
+      "path": "docs/evidence/arforge-test-shards-2-4-20260814.md",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "a6eb5a473c247b8a5f7c5c0c129c2cca2e905d826ff774fe66d099f65cf9b987",
+      "size": 1406
+    },
+    {
+      "path": "docs/evidence/functional-delivery-review-20260814.md",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "94d0f7192c8cbb8582854c533250b9248d4b370c0b7b36cfd2e261c861f8712a",
+      "size": 3468
+    },
+    {
+      "path": "docs/evidence/implementation/",
+      "status": "untracked",
+      "kind": "directory",
+      "content_digest": null,
+      "size": null
+    },
+    {
+      "path": "packages/arforge/src/server/routes/instance/httpapi/authorized-background.ts",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "d8a3a7ba199bd5a7d0c9929b1f763c522887bbb42a6bbbd220d2a67d635888ff",
+      "size": 2020
+    },
+    {
+      "path": "packages/core/test/database-principal.test.ts",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "9e178948a132c825ec3c790cf7bcccfdeda140ce896f44207d4bae647924630e",
+      "size": 544
+    },
+    {
+      "path": "packages/desktop/src/main/native-input.test.ts",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "c8b398d9f65d8765144df7e15bb1e8b6d3f419f02d326c819e1f5a2e39399bdc",
+      "size": 897
+    },
+    {
+      "path": "packages/desktop/src/main/native-input.ts",
+      "status": "untracked",
+      "kind": "file",
+      "content_digest": "166f5b891b25ac692bbe442d54cbfc89ffb1dd6d79743ed8c60d2f774dd444c3",
+      "size": 400
+    },
+    {
+      "path": "tmp/",
+      "status": "untracked",
+      "kind": "directory",
+      "content_digest": null,
+      "size": null
+    }
+  ],
+  "initial_capture": {
+    "captured_at_utc": "2026-08-24T08:39:51.0964935Z",
+    "status_digest_before_dispatcher_card": "25e33864342645d1597a28626f1da0b592f60acbca07af67c34264f3bbd0c385",
+    "entry_count_before_dispatcher_card": 101,
+    "head_commit": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+    "note": "The task card was created by the Dispatcher after this capture and is recorded separately; all remaining entries must retain their digests."
+  },
+  "dispatcher_artifacts": [
+    {
+      "path": "docs/evidence/implementation/bootstrap/status-porcelain-v2.v1.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "950b6fcf10fa13ee91c39dce0f60593d622a4905ce4d4f1e6667b2b5c42e946c",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "63c261f726853414ddb7e38ffe5c4fffbf38dd989e509d14aee8601f5ccab208",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/status-porcelain-v2.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "30fb00f409b2e29140f14699b0e61e71cc76fdcff61105217b88912e6073b06f",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/fresh-validation-bundle.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "d0606d64607f2ad6ac135932d55efad5ce3dad05f639fdb51aa1e0be54529c90",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/owner-registry.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "5ce7c3da7f9392337b350f41b69111955584ee16538dd3247ca6dc0fd557efc1",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/python-ledger.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "87325370d15c008f560095f5af82117bd0bd67668f6d375fca79ae6a9f3b75ef",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/python-tests.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "2a097c602dd4444aa580dd1ac9fd8737ab78cc7ece637c1d8dd622c3d693b1f3",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/python-dependencies.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "43898ae6dc0f474299000e0611a10eca1cc32d6821c94e4ba2c740b8f5ac350d",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/owner-registry.v1.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "8dfe00fc3afabac2a709a8f7393f368e0338c5823c11eb26bcadd37d09a20116",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/legacy-python-capabilities.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "769d493c0aefb8413869bbc0ffa08624cd659e4dd8d34c53fe18dea114000a40",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/legacy-python-files.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "104baa500cfc3c999232eba4f988ee43d7de342247c30be1fbfea6b47401600e",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/legacy-python-tests.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "75a69df54bcc925a4f2453e36cdc475fe92ba3a42e22360091b1ed1c8e5d962b",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/legacy-python-dependencies.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "5dcf9ad9deebf3d2188fd8a691c4c87b60b02abb949781f3dce7b6fc09338c1c",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/BOOTSTRAP-PROTOCOL-001.md",
+      "kind": "task-card",
+      "content_digest": "0d4fa63843472c91f4773f412c65d49f2091df309e5a7cba7fe65593fceb3b0e",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/PY-001-OWNER-REGISTRY-001.md",
+      "kind": "task-card",
+      "content_digest": "fa490f661e3dfe5716082905befa6b96a1763c34700dc21b37aca88beac97896",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/PY-002-CAPABILITY-LEDGER-001.md",
+      "kind": "task-card",
+      "content_digest": "f219a39943a72ffbb6a645b0a5ce129892621287c94f453b9a1c48242d5ebde3",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/PY-005-TEST-FIXTURE-LEDGER-001.md",
+      "kind": "task-card",
+      "content_digest": "57cf7c5518746fe56aefe7f769ba83d123ef380f8b6e6d49349c1c9d3a151c77",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.md",
+      "kind": "task-card",
+      "content_digest": "0005e9daa9f498fbec258a1ac79e4363a6806db364f730d0037d01b66422ed72",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/BOOTSTRAP-PROTOCOL-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "3a74ae1b5e34c629f23c96cc72c27afb20221822537f60c3aaac37ff5e29c9d6",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/PY-001-OWNER-REGISTRY-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "1e9f4994be45f532587efd97d46bfd849f6d12811db0f40a41a5c6a9522e8721",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/PY-002-CAPABILITY-LEDGER-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "842bb98df58480cce4b0659d2eff667c3bc2513b5d481fe3d5d4e9cc7886c740",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/PY-005-TEST-FIXTURE-LEDGER-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "664913966ddb4f7e302b71a76fec9eebd656852bc902b951b1db74b1e88a9f14",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "caf2416942926b4e7a29323cc2e1719d2b585206d64278c0676546ae46572245",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-governance.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "b2814672f7719c44a2ade8d77769df62aa94053c097bb8e77a193da1438f7061",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-governance.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "6574083d247be79bda1c781c34add2c893d4579c97be883f03c703515d7a4285",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-owner-registry.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "46e645b6c3cff0fbfc3b11c6a28d5aa22b58120bd8d230f8d0267c92d06c072a",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-owner-registry.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "4a53ca4fe7acd91328beda40dc99f5784770187cd63493a2084fa36cb757eb0b",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-ledger.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "31338aeb274fad025f57cd5b326a7da3165cf13991ce2ea3895bc6b65e3dc961",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-ledger.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "8a44cb6bbf0b2501fec00b6dd4e0262a38aace52be5548a0abf093334212744b",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-tests-ledger.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "2340e434aa74c8a0299f04b4b8b64e338d7a2bf49179b85ae7f5317397bf49e4",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-tests-ledger.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "5bca7488e17f73827488404773ca6132016cac6c4539a5144d273cfd7abbf581",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-dependencies-ledger.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "d8a9516a3e1620316f4d207a0d63afad0e77af778118177072b9afd263144fd8",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-python-dependencies-ledger.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "fcf3063f23ba2e2643efc06328c8b67fac475626dcb76b5ff6731e773d3deced",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/bunfig.toml",
+      "kind": "ledger-or-claim",
+      "content_digest": "48546933aaec5dd28afa16121f39d664cf7a35f57622b661c0d2981e620b3d05",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/attestations/ts-session-composition.v1.sha256",
+      "kind": "source-or-attestation",
+      "content_digest": "e12d69616b0680b8e7ab93fb8dab4507921401c2d90a1ae6b209f9b7f3e9257d",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/ts-session-composition.v1.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "049fe5ce8418b7dde1a0c46930a5fadd3acc9c7ab5a83f77c3d6feb1f78d3612",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/cards/PY-101-TS-COMPOSITION-001.md",
+      "kind": "task-card",
+      "content_digest": "b609f576c4fa2a831f0662fcd1d6c40c8dd61f44324d321b99135fb19cb9a8b9",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "docs/evidence/implementation/claims/PY-101-TS-COMPOSITION-001.json",
+      "kind": "ledger-or-claim",
+      "content_digest": "764e3746b5e64ae4b1f8aa440f13caa81ea8305aac75a31837c98a675859fa1d",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-ts-composition-ledger.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "853f2d12bf6ca0cc8deac8b2169cf229d376b20beab8a02b360bc085f2db4baa",
+      "created_after_initial_capture": true
+    },
+    {
+      "path": "script/arforge-ts-composition-ledger.test.ts",
+      "kind": "source-or-attestation",
+      "content_digest": "72746de77f3ce8b381126e139788d780d2c1b6740be50c12ee02464a2db21d2b",
+      "created_after_initial_capture": true
+    }
+  ],
+  "target_paths": [
+    "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+    "docs/evidence/implementation/protocol-bootstrap.v1.json",
+    "docs/evidence/implementation/state.json",
+    "docs/evidence/implementation/claims/BOOTSTRAP-PROTOCOL-001.json",
+    "docs/evidence/implementation/bootstrap/status-porcelain-v2.v1.json",
+    "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json",
+    "docs/evidence/implementation/attestations/protocol-bootstrap.v1.sha256",
+    "docs/evidence/implementation/attestations/status-porcelain-v2.v1.sha256",
+    "docs/evidence/implementation/attestations/fresh-validation-bundle.v1.sha256",
+    "script/arforge-governance.ts",
+    "script/arforge-governance.test.ts",
+    "script/bunfig.toml"
+  ],
+  "target_paths_preflight": "all paths except the Dispatcher-created task card were clean at initial capture; no user-owned path overlaps the allowlist"
+}

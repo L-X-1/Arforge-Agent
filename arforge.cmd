@@ -1,11 +1,10 @@
 @echo off
-set ARFORGE_ROOT=%~dp0
-set ARFORGE_ROOT=%ARFORGE_ROOT:~0,-1%
-set VENV_PYTHON=%ARFORGE_ROOT%\.venv\Scripts\python.exe
-set MAIN_PY=%ARFORGE_ROOT%\main.py
+setlocal
 
-if exist "%VENV_PYTHON%" (
-    "%VENV_PYTHON%" -X utf8 "%MAIN_PY%" %*
-) else (
-    python -X utf8 "%MAIN_PY%" %*
-)
+rem Canonical Windows entrypoint: delegate to the unified TypeScript CLI.
+rem bin\arforge.js resolves the repository Bun runtime and starts
+rem packages\arforge\src\index.ts. The legacy Python CLI is migration-only.
+set "ARFORGE_ROOT=%~dp0"
+node "%ARFORGE_ROOT%bin\arforge.js" %*
+set "ARFORGE_EXIT=%ERRORLEVEL%"
+endlocal & exit /b %ARFORGE_EXIT%

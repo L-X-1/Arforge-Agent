@@ -262,9 +262,8 @@ describe("Todo.Info", () => {
 })
 
 describe("SessionPrompt input schemas", () => {
-  test("LoopInput is just sessionID", () => {
-    const decode = decodeUnknown(SessionPrompt.LoopInput)
-    expect(decode({ sessionID })).toEqual({ sessionID })
+  test("does not export a legacy LoopInput contract", () => {
+    expect(Object.hasOwn(SessionPrompt, "LoopInput")).toBe(false)
   })
 
   test("ShellInput requires agent + command", () => {

@@ -1,0 +1,11 @@
+R13 MCP rich result Artifact/trust projection（2026-09-15）
+
+结论：带有既有 source=mcp-capability-registry 标记的 MCP prompt/resource/tool 富结果复用 Core ToolOutputStore 写入 OpaqueArtifactRef；模型内联投影保持兼容，普通工具媒体行为不变。handle 由 owner/session/tool call/server/kind/URI/附件序号/内容 digest 确定；重复结算验证并复用 receipt，非法非内联 URL fail-closed。
+
+验收：
+- ToolOutputStore 全量：38 pass / 0 fail / 205 assertions，exit 0。
+- MCP resource projection：11 pass / 0 fail / 48 assertions，exit 0。
+- Core typecheck：exit 0。
+- Prettier 通过，限定 git diff --check 通过，修改文件 Oxlint 0 errors（warning 为既有规则命中）。
+
+未关闭：HTTP/CLI catalog control Action/Gateway、MCP 本地四类生命周期与代际冷恢复、真实外部服务矩阵；full sandbox 仍按 R30 后执行。测试不访问用户数据、不发送网络请求。

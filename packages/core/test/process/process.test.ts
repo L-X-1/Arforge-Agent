@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { Effect, Exit, Fiber, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { AppProcess } from "@arforge-ai/core/process"
@@ -28,6 +28,67 @@ const waitForFile = (file: string) =>
 
 describe("AppProcess", () => {
   describe("run", () => {
+    it.live(
+      "combined output observer sees bytes before capture bounding",
+      Effect.gen(function* () {
+        const svc = yield* AppProcess.Service
+        const chunks: Buffer[] = []
+        const result = yield* svc.run(cmd("-e", "process.stdout.write('0123456789')"), {
+          combineOutput: true,
+          maxOutputBytes: 5,
+          onCombinedOutput: (chunk) =>
+            Effect.sync(() => {
+              chunks.push(Buffer.from(chunk))
+            }),
+        })
+        expect(Buffer.concat(chunks).toString()).toBe("0123456789")
+        expect(result.output?.toString()).toBe("01234")
+        expect(result.outputTruncated).toBe(true)
+      }),
+    )
+
+    it.live(
+      "combined output observer preserves interruption after published readiness",
+      Effect.gen(function* () {
+        const svc = yield* AppProcess.Service
+        const ready = yield* Deferred.make<void>()
+        const chunks: Buffer[] = []
+        const fiber = yield* svc
+          .run(cmd("-e", "process.stdout.write('ready');setInterval(()=>{},1000)"), {
+            combineOutput: true,
+            onCombinedOutput: (chunk) =>
+              Effect.sync(() => {
+                chunks.push(Buffer.from(chunk))
+              }).pipe(Effect.andThen(Deferred.succeed(ready, undefined)), Effect.asVoid),
+          })
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(ready).pipe(Effect.timeout("5 seconds"))
+        yield* Fiber.interrupt(fiber)
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        expect(Buffer.concat(chunks).toString()).toBe("ready")
+      }),
+    )
+
+    it.live(
+      "combined output observer defects are not translated into process success",
+      Effect.gen(function* () {
+        const svc = yield* AppProcess.Service
+        const defect = new Error("observer defect")
+        const exit = yield* svc
+          .run(cmd("-e", "process.stdout.write('ready');setInterval(()=>{},1000)"), {
+            combineOutput: true,
+            onCombinedOutput: () => Effect.die(defect),
+          })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(exit.cause.reasons.some((reason) => reason._tag === "Die" && reason.defect === defect)).toBe(true)
+        }
+      }),
+    )
+
     it.effect(
       "captures stdout and exit code zero",
       Effect.gen(function* () {

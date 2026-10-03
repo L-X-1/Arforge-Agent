@@ -14,6 +14,8 @@ import { containsPath } from "@/project/instance-context"
 import { NonNegativeInt } from "@arforge-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LspEvent } from "@arforge-ai/schema/lsp-event"
+import { Database } from "@arforge-ai/core/database/database"
+import * as LSPFallback from "./fallback"
 
 export const Event = LspEvent
 
@@ -113,6 +115,7 @@ interface State {
   clients: LSPClient.Info[]
   servers: Record<string, LSPServer.Info>
   broken: Set<string>
+  failures: Map<string, { serverID: string; root: string }>
   spawning: Map<string, Promise<LSPClient.Info | undefined>>
 }
 
@@ -192,6 +195,7 @@ const layer = Layer.effect(
           clients: [],
           servers,
           broken: new Set(),
+          failures: new Map(),
           spawning: new Map(),
         }
 
@@ -215,14 +219,18 @@ const layer = Layer.effect(
         let updated = 0
 
         async function schedule(server: LSPServer.Info, root: string, key: string) {
+          const markBroken = () => {
+            s.broken.add(key)
+            s.failures.set(key, { serverID: server.id, root })
+          }
           const handle = await server
             .spawn(root, ctx, flags)
             .then((value) => {
-              if (!value) s.broken.add(key)
+              if (!value) markBroken()
               return value
             })
             .catch(() => {
-              s.broken.add(key)
+              markBroken()
               return undefined
             })
 
@@ -234,13 +242,14 @@ const layer = Layer.effect(
             directory: ctx.directory,
             instance: ctx,
           }).catch(async () => {
-            s.broken.add(key)
+            markBroken()
             await Process.stop(handle.process)
             return undefined
           })
 
           if (!client) return undefined
 
+          s.failures.delete(key)
           const existing = s.clients.find((x) => x.root === root && x.serverID === server.id)
           if (existing) {
             await Process.stop(handle.process)
@@ -306,6 +315,15 @@ const layer = Layer.effect(
       return yield* Effect.promise(() => Promise.all(s.clients.map((x) => fn(x))))
     })
 
+    const fallback = Effect.fnUntraced(function* (
+      operation: LSPFallback.Operation,
+      input: LSPFallback.PositionInput,
+      query = "",
+    ) {
+      const ctx = yield* InstanceState.context
+      return yield* Effect.promise(() => LSPFallback.query(operation, input, ctx.directory, query))
+    })
+
     const init = Effect.fn("LSP.init")(function* () {
       yield* InstanceState.get(state)
     })
@@ -314,12 +332,25 @@ const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const s = yield* InstanceState.get(state)
       const result: Status[] = []
+      const seen = new Set<string>()
       for (const client of s.clients) {
+        seen.add(`${client.serverID}\u0000${client.root}`)
         result.push({
           id: client.serverID,
           name: s.servers[client.serverID].id,
           root: path.relative(ctx.directory, client.root),
           status: "connected",
+        })
+      }
+      for (const failure of s.failures.values()) {
+        const key = `${failure.serverID}\u0000${failure.root}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        result.push({
+          id: failure.serverID,
+          name: s.servers[failure.serverID]?.id ?? failure.serverID,
+          root: path.relative(ctx.directory, failure.root),
+          status: "error",
         })
       }
       return result
@@ -362,6 +393,11 @@ const layer = Layer.effect(
     })
 
     const diagnostics = Effect.fn("LSP.diagnostics")(function* () {
+      const ctx = yield* InstanceState.context
+      const s = yield* InstanceState.get(state)
+      if (s.clients.length === 0) {
+        return yield* Effect.promise(() => LSPFallback.workspaceDiagnostics(ctx.directory))
+      }
       const results: Record<string, LSPClient.Diagnostic[]> = {}
       const all = yield* runAll(async (client) => client.diagnostics)
       for (const result of all) {
@@ -375,6 +411,8 @@ const layer = Layer.effect(
     })
 
     const hover = Effect.fn("LSP.hover")(function* (input: LocInput) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) return yield* fallback("hover", input)
       return yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/hover", {
@@ -386,6 +424,8 @@ const layer = Layer.effect(
     })
 
     const definition = Effect.fn("LSP.definition")(function* (input: LocInput) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) return (yield* fallback("goToDefinition", input)) as any[]
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/definition", {
@@ -398,6 +438,8 @@ const layer = Layer.effect(
     })
 
     const references = Effect.fn("LSP.references")(function* (input: LocInput) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) return (yield* fallback("findReferences", input)) as any[]
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/references", {
@@ -411,6 +453,8 @@ const layer = Layer.effect(
     })
 
     const implementation = Effect.fn("LSP.implementation")(function* (input: LocInput) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) return (yield* fallback("goToImplementation", input)) as any[]
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/implementation", {
@@ -424,6 +468,8 @@ const layer = Layer.effect(
 
     const documentSymbol = Effect.fn("LSP.documentSymbol")(function* (uri: string) {
       const file = fileURLToPath(uri)
+      const clients = yield* getClients(file)
+      if (clients.length === 0) return (yield* fallback("documentSymbol", { file, line: 0, character: 0 })) as any[]
       const results = yield* run(file, (client) =>
         client.connection.sendRequest("textDocument/documentSymbol", { textDocument: { uri } }).catch(() => []),
       )
@@ -431,6 +477,14 @@ const layer = Layer.effect(
     })
 
     const workspaceSymbol = Effect.fn("LSP.workspaceSymbol")(function* (query: string) {
+      const s = yield* InstanceState.get(state)
+      if (s.clients.length === 0) {
+        const ctx = yield* InstanceState.context
+        const result = yield* Effect.promise(() =>
+          LSPFallback.query("workspaceSymbol", { file: ctx.directory, line: 0, character: 0 }, ctx.directory, query),
+        )
+        return (Array.isArray(result) ? result : []) as Symbol[]
+      }
       const results = yield* runAll((client) =>
         client.connection
           .sendRequest<Symbol[]>("workspace/symbol", { query })
@@ -441,6 +495,8 @@ const layer = Layer.effect(
     })
 
     const prepareCallHierarchy = Effect.fn("LSP.prepareCallHierarchy")(function* (input: LocInput) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) return (yield* fallback("prepareCallHierarchy", input)) as any[]
       const results = yield* run(input.file, (client) =>
         client.connection
           .sendRequest("textDocument/prepareCallHierarchy", {
@@ -456,6 +512,13 @@ const layer = Layer.effect(
       input: LocInput,
       direction: "callHierarchy/incomingCalls" | "callHierarchy/outgoingCalls",
     ) {
+      const clients = yield* getClients(input.file)
+      if (clients.length === 0) {
+        return (yield* fallback(
+          direction.endsWith("incomingCalls") ? "incomingCalls" : "outgoingCalls",
+          input,
+        )) as any[]
+      }
       const results = yield* run(input.file, async (client) => {
         const items = await client.connection
           .sendRequest<unknown[] | null>("textDocument/prepareCallHierarchy", {
@@ -501,7 +564,7 @@ export * as Diagnostic from "./diagnostic"
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, RuntimeFlags.node, FSUtil.node, EventV2Bridge.node],
+  deps: [Config.node, RuntimeFlags.node, FSUtil.node, EventV2Bridge.node, Database.node],
 })
 
 export * as LSP from "./lsp"

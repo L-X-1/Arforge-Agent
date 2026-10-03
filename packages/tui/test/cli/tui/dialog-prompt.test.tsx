@@ -31,7 +31,7 @@ async function mountPrompt(input: {
   const [
     { DialogProvider },
     { DialogPrompt },
-    { KVProvider },
+    { KVProvider, useKV },
     { ThemeProvider },
     { TuiConfigProvider },
     { ToastProvider },
@@ -45,6 +45,14 @@ async function mountPrompt(input: {
     import("../../../src/ui/toast"),
     import("../../../src/keymap"),
   ])
+
+  let kvReady = () => false
+
+  function KVReady() {
+    const kv = useKV()
+    kvReady = () => kv.ready
+    return null
+  }
 
   function Harness() {
     const renderer = useRenderer()
@@ -68,6 +76,7 @@ async function mountPrompt(input: {
         <ArforgeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={resolvedConfig}>
             <KVProvider>
+              <KVReady />
               <ThemeProvider mode="dark">
                 <ToastProvider>
                   <DialogProvider>
@@ -83,6 +92,12 @@ async function mountPrompt(input: {
   }
 
   const app = await testRender(() => <Harness />, { kittyKeyboard: true })
+  try {
+    await wait(() => kvReady())
+  } catch (error) {
+    app.renderer.destroy()
+    throw error
+  }
   return {
     app,
     async cleanup() {

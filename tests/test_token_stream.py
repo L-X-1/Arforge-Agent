@@ -580,6 +580,7 @@ def test_agent_loop_repairs_empty_write_docx_arguments_before_execution():
     from arforge.models.model_adapter import ToolCall, ToolCallResponse
     from arforge.tool_registry import REGISTRY
     from arforge.tools import load_builtin_tools
+    import arforge.tools.office_tools  # noqa: F401 - explicit Python compatibility seam
 
     load_builtin_tools()
     executed = []

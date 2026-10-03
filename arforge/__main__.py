@@ -1,6 +1,6 @@
-"""Allow ``python -m arforge`` to behave like the installed CLI command."""
+"""Allow ``python -m arforge`` to enter the unified TypeScript CLI."""
 
-from arforge.cli import main
+from arforge.cli_bridge import main
 
 
 if __name__ == "__main__":

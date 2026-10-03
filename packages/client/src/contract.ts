@@ -23,6 +23,8 @@ export const groupNames = {
   "server.session": "sessions",
   "server.goal": "goals",
   "server.scheduledPrompt": "scheduledPrompts",
+  "server.personalJob": "personalJobs",
+  "server.personalWorkspace": "personalWorkspace",
   "server.taskGraph": "tasks",
   "server.team": "teams",
   "server.cooperativeWait": "waits",
@@ -34,6 +36,8 @@ export const groupNames = {
   "server.agentCapability": "agentCapabilities",
   "server.mcp": "mcp",
   "server.privateOperation": "privateOperations",
+  "server.runtimeInsight": "runtimeInsight",
+  "server.subagentControl": "subagentControl",
   "server.message": "messages",
   "server.model": "models",
   "server.provider": "providers",
@@ -48,6 +52,8 @@ export const groupNames = {
   "server.question": "questions",
   "server.reference": "references",
   "server.projectCopy": "projectCopies",
+  "server.tenantPlatform": "tenantPlatform",
+  "server.artifact": "artifacts",
 } as const
 
 export const endpointNames = {
@@ -62,6 +68,9 @@ export const endpointNames = {
   "permission.saved.remove": "removeSaved",
   "question.request.list": "listRequests",
   "mcp.resource.catalog": "resourceCatalog",
+  "mcp.capabilities": "capabilities",
+  "mcp.action.reconciliation": "actionReconciliation",
+  "mcp.action.reconciliationRecord": "recordReconciliation",
 } as const
 
 export const omitEndpoints = new Set(["fs.read", "pty.connect", "pty.connectToken"])

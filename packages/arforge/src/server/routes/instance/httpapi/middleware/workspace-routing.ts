@@ -74,9 +74,10 @@ function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): Wor
 function selectedV2WorkspaceID(
   url: URL,
   sessionWorkspaceID?: WorkspaceV2.ID,
+  headerWorkspaceID?: string,
 ): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
   if (sessionWorkspaceID) return sessionWorkspaceID
-  const workspaceParam = url.searchParams.get("workspace")
+  const workspaceParam = url.searchParams.get("location[workspace]") ?? url.searchParams.get("workspace") ?? headerWorkspaceID
   if (!workspaceParam) return undefined
   const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspaceParam)
   if (Option.isNone(workspaceID)) return InvalidWorkspaceID
@@ -84,6 +85,9 @@ function selectedV2WorkspaceID(
 }
 
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
+  if (url.pathname.startsWith("/api/")) {
+    return url.searchParams.get("location[directory]") ?? url.searchParams.get("directory") ?? request.headers["x-arforge-directory"] ?? process.cwd()
+  }
   return url.searchParams.get("directory") || request.headers["x-arforge-directory"] || process.cwd()
 }
 
@@ -165,7 +169,7 @@ function planRequest(
     const url = requestURL(request)
     const envWorkspaceID = configuredWorkspaceID()
     const workspaceID = url.pathname.startsWith("/api/")
-      ? selectedV2WorkspaceID(url, session?.workspaceID)
+      ? selectedV2WorkspaceID(url, session?.workspaceID, request.headers["x-arforge-workspace"])
       : selectedWorkspaceID(url, session?.workspaceID)
     if (workspaceID === InvalidWorkspaceID) return RequestPlan.InvalidWorkspace()
     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)

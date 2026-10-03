@@ -23,9 +23,11 @@ import { useSettings } from "@/context/settings"
 import { useTerminal } from "@/context/terminal"
 import { useSDK } from "@/context/sdk"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
+import { terminalPanelOperationPending, terminalPanelOperationText, type TerminalPanelAction, type TerminalPanelOperation } from "./terminal-panel-operations"
 import { createSizing, focusTerminalById } from "@/pages/session/helpers"
 import { getTerminalHandoff, setTerminalHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import "@/components/preview/workbench-review.css"
 
 export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   const layout = useLayout()
@@ -50,6 +52,8 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   const [store, setStore] = createStore({
     autoCreated: false,
     recovered: {} as Record<string, boolean>,
+    errors: {} as Record<string, string>,
+    connections: {} as Record<string, number>,
     view: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight),
   })
 
@@ -61,6 +65,12 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   )
   const contentHeight = createMemo(() => (isDesktop() ? (stacked() ? `${pane()}px` : "100%") : `${pane()}px`))
   const newTerminalKeybind = createMemo(() => command.keybindParts("terminal.new"))
+  const operationBusy = (action: TerminalPanelAction, id = terminal.active()) => terminalPanelOperationPending(terminal.pending, action, id)
+  const activeOperation = createMemo(() => {
+    const id = terminal.active()
+    return (["create", "close", "clone", "update"] as const).find((operation) =>
+      operation === "create" ? terminal.pending(operation) : !!id && terminal.pending(operation, id))
+  })
 
   onMount(() => {
     if (typeof window === "undefined") return
@@ -79,9 +89,11 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
       return
     }
 
-    if (!terminal.ready() || terminal.all().length !== 0 || store.autoCreated) return
-    terminal.new()
+    if (!terminal.ready() || store.autoCreated) return
+    // Opening an existing PTY also consumes this one-shot creation opportunity.
+    // Closing its final tab must not automatically start a replacement process.
     setStore("autoCreated", true)
+    if (terminal.all().length === 0 && !terminal.pending("create")) void terminal.new()
   })
 
   createEffect(
@@ -141,17 +153,18 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   const ids = createMemo(() => all().map((pty) => pty.id))
 
   const recoverTerminal = (key: string, id: string, clone: (id: string) => Promise<void>) => {
-    if (store.recovered[key]) return
+    if (store.recovered[key] || operationBusy("reconnect", id)) return
     setStore("recovered", key, true)
     void clone(id)
   }
 
   const terminalRecoveryKey = (pty: { id: string; title: string; titleNumber: number }) => {
-    return String(pty.titleNumber || pty.title || pty.id)
+    return workspaceKey() + "\u0000" + String(pty.titleNumber || pty.title || pty.id)
   }
 
   const markTerminalConnected = (key: string, id: string, trim: (id: string) => void) => {
     setStore("recovered", key, false)
+    setStore("errors", key, "")
     trim(id)
   }
 
@@ -172,7 +185,7 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
       aria-label={language.t("terminal.title")}
       aria-hidden={!opened()}
       inert={!opened()}
-      class="relative shrink-0 overflow-hidden bg-v2-background-bg-base"
+      class="arforge-review-workbench relative shrink-0 overflow-hidden bg-v2-background-bg-base"
       classList={{
         "w-full": !isDesktop() || stacked(),
         "min-w-0 h-full flex-1": isDesktop() && opened() && !stacked(),
@@ -290,7 +303,8 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                             icon="plus-small"
                             variant="ghost"
                             iconSize="large"
-                            onClick={() => terminal.new({ focus: true })}
+                            disabled={operationBusy("create")}
+                            onClick={() => { if (!operationBusy("create")) void terminal.new({ focus: true }) }}
                             aria-label={language.t("command.terminal.new")}
                           />
                         </TooltipKeybind>
@@ -312,7 +326,8 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                           icon="plus-small"
                           variant="ghost"
                           iconSize="large"
-                          onClick={() => terminal.new({ focus: true })}
+                          disabled={operationBusy("create")}
+                            onClick={() => { if (!operationBusy("create")) void terminal.new({ focus: true }) }}
                           aria-label={language.t("command.terminal.new")}
                         />
                       </TooltipV2>
@@ -320,23 +335,68 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                   </div>
                 </Tabs.List>
               </Tabs>
+              <Show when={terminal.operationError()}>
+                {(error) => (
+                  <div role="alert" data-slot="terminal-operation-error" class="flex shrink-0 items-center gap-2 border-b border-border-weaker-base px-3 py-2 text-12-regular text-text-strong">
+                    <span class="min-w-0 flex-1">{terminalPanelOperationText(error().operation, language.locale().startsWith("zh"))}</span>
+                    <button type="button" onClick={() => terminal.dismissOperationError()}>{language.t("common.close")}</button>
+                  </div>
+                )}
+              </Show>
+              <Show when={activeOperation()}>
+                {(operation) => <div role="status" aria-live="polite" class="shrink-0 px-3 py-1 text-12-regular text-text-weak">{terminalPanelOperationText(operation() as TerminalPanelOperation, language.locale().startsWith("zh"), false)}</div>}
+              </Show>
+              <div data-slot="terminal-workbench-actions">
+                <span class="min-w-0 flex-1 truncate text-12-regular text-text-weak" title={sdk().directory}>{sdk().directory}</span>
+                <button type="button" disabled={operationBusy("reconnect")} onClick={() => {
+                  const id = terminal.active()
+                  if (!id || operationBusy("reconnect", id)) return
+                  setStore("connections", id, (store.connections[id] ?? 0) + 1)
+                  terminal.requestFocus(id)
+                }}>{language.locale().startsWith("zh") ? "重新连接" : "Reconnect"}</button>
+                <button type="button" disabled={operationBusy("close")} onClick={() => {
+                  const id = terminal.active()
+                  if (!id || operationBusy("close", id) || !window.confirm(language.locale().startsWith("zh") ? "停止并关闭当前终端？此终端中运行的进程可能会结束，其他终端不受影响。" : "Stop and close this terminal? Its running process may end. Other terminals are unaffected.")) return
+                  void terminal.bind().close(id)
+                }}>{language.locale().startsWith("zh") ? "停止当前终端" : "Stop current terminal"}</button>
+              </div>
+              <Show when={all().find((pty) => pty.id === terminal.active())}>{(pty) =>
+                <Show when={store.errors[terminalRecoveryKey(pty())]}>{(error) => <p role="alert" class="px-3 py-2 text-12-regular text-text-weak">{error()}</p>}</Show>
+              }</Show>
+              <Show when={all().length === 0}>
+                <div role="status" class="p-4 text-13-regular text-text-weak">
+                  {language.locale().startsWith("zh") ? "尚无可用终端。可使用新建终端按钮重试；连接和权限由当前服务器处理。" : "No terminal is available yet. Use New terminal to retry; connection and permissions are handled by the current server."}
+                </div>
+              </Show>
               <div class="flex-1 min-h-0 relative">
                 <Show when={opened() && terminal.active()} keyed>
                   {(id) => {
                     const ops = terminal.bind()
+                    const connectionWorkspace = workspaceKey()
                     return (
                       <Show when={all().find((pty) => pty.id === id)}>
                         {(pty) => (
                           <div id={`terminal-wrapper-${id}`} class="absolute inset-0">
+                            <Show when={(store.connections[id] ?? 0) + 1} keyed>{(_connection) =>
                             <Terminal
                               pty={pty()}
                               autoFocus={terminal.focusRequested(id)}
                               onAutoFocus={() => terminal.consumeFocus(id)}
                               class="!px-[14px]"
-                              onConnect={() => markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)}
+                              onConnect={() => {
+                                if (workspaceKey() !== connectionWorkspace) return
+                                markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)
+                              }}
                               onCleanup={ops.update}
-                              onConnectError={() => recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)}
+                              onConnectError={() => {
+                                if (workspaceKey() !== connectionWorkspace) return
+                                setStore("errors", terminalRecoveryKey(pty()), language.locale().startsWith("zh")
+                                  ? "终端连接失败。请检查连接和权限后重连。"
+                                  : "Terminal connection failed. Check the connection and permissions before reconnecting.")
+                                recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)
+                              }}
                             />
+                            }</Show>
                           </div>
                         )}
                       </Show>

@@ -17,6 +17,8 @@ import { Glob } from "@arforge-ai/core/util/glob"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
+import { Database } from "@arforge-ai/core/database/database"
+import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
 
 const CLAUDE_EXTERNAL_DIR = ".claude"
 const AGENTS_EXTERNAL_DIR = ".agents"
@@ -84,6 +86,13 @@ type State = {
   dirs: Set<string>
 }
 
+export interface Snapshot {
+  readonly revision: number
+  readonly digest: string
+  readonly skills: ReadonlyArray<Info>
+  readonly dirs: ReadonlyArray<string>
+}
+
 type DiscoveryState = {
   matches: string[]
   dirs: string[]
@@ -100,6 +109,8 @@ export interface Interface {
   readonly all: () => Effect.Effect<Info[]>
   readonly dirs: () => Effect.Effect<string[]>
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
+  readonly reload: () => Effect.Effect<void>
+  readonly snapshot: () => Effect.Effect<Snapshot>
 }
 
 const add = Effect.fnUntraced(function* (state: State, match: string, events: EventV2Bridge.Service["Service"]) {
@@ -286,35 +297,64 @@ const layer = Layer.effect(
       }),
     )
 
+    let revision = 0
+    const immutableInfo = (info: Info): Info => Object.freeze({ ...info })
+    const reload = Effect.fn("Skill.reload")(function* () {
+      // Invalidate the materialized skills before the discovery cache so the
+      // next lookup always rebuilds from one coherent directory revision.
+      yield* InstanceState.invalidate(state)
+      yield* InstanceState.invalidate(discovered)
+      revision += 1
+    })
+
     const get = Effect.fn("Skill.get")(function* (name: string) {
       const s = yield* InstanceState.get(state)
-      return s.skills[name]
+      const info = s.skills[name]
+      return info ? immutableInfo(info) : undefined
     })
 
     const require = Effect.fn("Skill.require")(function* (name: string) {
       const s = yield* InstanceState.get(state)
       const info = s.skills[name]
-      if (info) return info
+      if (info) return immutableInfo(info)
       return yield* new NotFoundError({ name, available: Object.keys(s.skills).toSorted() })
     })
 
     const all = Effect.fn("Skill.all")(function* () {
       const s = yield* InstanceState.get(state)
-      return Object.values(s.skills)
+      return Object.values(s.skills).map(immutableInfo)
     })
 
     const dirs = Effect.fn("Skill.dirs")(function* () {
-      return (yield* InstanceState.get(discovered)).dirs
+      return [...(yield* InstanceState.get(discovered)).dirs].toSorted()
     })
 
     const available = Effect.fn("Skill.available")(function* (agent?: Agent.Info) {
       const s = yield* InstanceState.get(state)
-      const list = Object.values(s.skills).toSorted((a, b) => a.name.localeCompare(b.name))
+      const list = Object.values(s.skills)
+        .map(immutableInfo)
+        .toSorted((a, b) => a.name.localeCompare(b.name))
       if (!agent) return list
       return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
     })
 
-    return Service.of({ get, require, all, dirs, available })
+    const snapshot = Effect.fn("Skill.snapshot")(function* () {
+      const skills = Object.freeze([...(yield* all())].sort((a, b) => a.name.localeCompare(b.name)))
+      const skillDirs = yield* dirs()
+      const digest = canonicalHash({
+        skills: skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          location: skill.location,
+          content: skill.content,
+        })),
+        dirs: skillDirs,
+      })
+      if (!digest) return yield* Effect.die(new Error("skill snapshot is not canonicalizable"))
+      return Object.freeze({ revision, digest, skills, dirs: skillDirs })
+    })
+
+    return Service.of({ get, require, all, dirs, available, reload, snapshot })
   }),
 )
 
@@ -348,7 +388,7 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, Global.node, RuntimeFlags.node],
+  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, Global.node, RuntimeFlags.node, Database.node],
 })
 
 export * as Skill from "."

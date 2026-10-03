@@ -30,7 +30,15 @@ export function sessionPermissionRules(mode: SessionPermissionMode): SessionPerm
   ]
 }
 
-export function permissionModeAutoRespond(mode: SessionPermissionMode, permission: string) {
+export function permissionModeAutoRespond(
+  mode: SessionPermissionMode,
+  permission: string,
+  requiresHumanConfirmation = false,
+) {
+  // A trusted L3 request always needs a fresh click, even in Full Access.
+  // This guard deliberately lives with the policy helper so every caller
+  // (event listener, mode switch, and pending-list sweep) has one rule.
+  if (requiresHumanConfirmation) return false
   if (mode === "fullAccess") return true
   return mode === "acceptEdits" && permission === "edit"
 }

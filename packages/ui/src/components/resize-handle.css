@@ -10,8 +10,14 @@
   }
 
   &:hover::after,
+  &:focus-visible::after,
   &:active::after {
     opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--border-strong-base, currentColor);
+    outline-offset: -2px;
   }
 
   &[data-direction="horizontal"] {

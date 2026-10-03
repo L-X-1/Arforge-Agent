@@ -7,15 +7,40 @@ import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionMessage } from "@arforge-ai/core/session/message"
 import { AgentV2 } from "@arforge-ai/core/agent"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
+import { PermissionV2 } from "@arforge-ai/core/permission"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
 import { Tools } from "@arforge-ai/core/tool/tools"
-import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
+import { location } from "./fixture/location"
+import { ActionGateway } from "@arforge-ai/core/action-gateway"
+
+const permission = Layer.succeed(
+  PermissionV2.Service,
+  PermissionV2.Service.of({
+    assert: () => Effect.void,
+    ask: () => Effect.die("unused"),
+    reply: () => Effect.die("unused"),
+    get: () => Effect.die("unused"),
+    forSession: () => Effect.die("unused"),
+    list: () => Effect.die("unused"),
+  }),
+)
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, ToolRegistry.node, ToolRegistry.toolsNode]), [
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+    [PermissionV2.node, permission],
+    [Location.node, current],
   ]),
 )
 
@@ -39,6 +64,71 @@ const contextual = (contexts: Tool.Context[]) =>
   })
 
 describe("ApplicationTools", () => {
+  it.effect("keeps an external JSON Schema exact and binds one canonical child-action context", () =>
+    Effect.gen(function* () {
+      const tools = yield* Tools.Service
+      const registry = yield* ToolRegistry.Service
+      const contexts: Tool.Context[] = []
+      const exactSchema = {
+        type: "object",
+        properties: {
+          city: { type: "string", minLength: 1 },
+          units: { enum: ["metric", "imperial"] },
+        },
+        required: ["city"],
+        additionalProperties: false,
+      }
+      yield* tools.register({
+        external_weather: Tool.make({
+          description: "External weather",
+          input: Schema.Unknown,
+          inputJsonSchema: exactSchema,
+          output: Schema.String,
+          execute: (_input, context) =>
+            Effect.sync(() => {
+              contexts.push(context)
+              return "sunny"
+            }),
+        }),
+      })
+      exactSchema.properties.city.minLength = 99
+      const materialized = yield* registry.materialize()
+      expect(materialized.definitions.find((item) => item.name === "external_weather")?.inputSchema).toEqual(
+        {
+          ...exactSchema,
+          properties: {
+            ...exactSchema.properties,
+            city: { ...exactSchema.properties.city, minLength: 1 },
+          },
+        },
+      )
+      expect(
+        yield* materialized.settle({
+          sessionID,
+          agent,
+          assistantMessageID,
+          call: {
+            type: "tool-call",
+            id: "call-external-schema",
+            name: "external_weather",
+            input: { city: "Shanghai" },
+          },
+        }),
+      ).toMatchObject({ result: { type: "text", value: "sunny" } })
+      expect(contexts).toHaveLength(1)
+      expect(contexts[0]?.abort).toBeInstanceOf(AbortSignal)
+      expect(contexts[0]?.abort?.aborted).toBe(false)
+      expect(contexts[0]?.childActions?.parentActionID).toBe(
+        ActionGateway.stableActionID({
+          sessionID,
+          assistantMessageID,
+          toolCallID: "call-external-schema",
+        }),
+      )
+      expect(contexts[0]?.childActions?.execute).toBeTypeOf("function")
+    }),
+  )
+
   it.effect("keeps the Core carrier opaque and executes its single handler", () =>
     Effect.gen(function* () {
       const applications = yield* ApplicationTools.Service
@@ -62,7 +152,14 @@ describe("ApplicationTools", () => {
           { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "result.png" },
         ],
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-opaque" }])
+      expect(
+        contexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-opaque" }])
     }),
   )
 
@@ -83,7 +180,7 @@ describe("ApplicationTools", () => {
     }),
   )
 
-  it.effect("filters an application tool by its name without adding execution authorization", () =>
+  it.effect("filters an application tool catalog entry independently from runtime authorization", () =>
     Effect.gen(function* () {
       const applications = yield* ApplicationTools.Service
       const registry = yield* ToolRegistry.Service
@@ -101,7 +198,14 @@ describe("ApplicationTools", () => {
           call: { type: "tool-call", id: "call-denied", name: "application_context", input: { query: "hello" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-denied" }])
+      expect(
+        contexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-denied" }])
     }),
   )
 
@@ -139,7 +243,14 @@ describe("ApplicationTools", () => {
           ],
         },
       })
-      expect(contexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-context" }])
+      expect(
+        contexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-context" }])
     }),
   )
 
@@ -252,8 +363,22 @@ describe("ApplicationTools", () => {
         call: { type: "tool-call", id: "call-first", name: "contextual", input: { query: "first" } },
       })
 
-      expect(secondContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-second" }])
-      expect(firstContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-first" }])
+      expect(
+        secondContexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-second" }])
+      expect(
+        firstContexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-first" }])
     }),
   )
 
@@ -280,7 +405,14 @@ describe("ApplicationTools", () => {
           call: { type: "tool-call", id: "call-shared", name: "shared", input: { query: "location" } },
         }),
       ).toMatchObject({ result: { type: "content" } })
-      expect(locationContexts).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
+      expect(
+        locationContexts.map(({ sessionID, agent, assistantMessageID, toolCallID }) => ({
+          sessionID,
+          agent,
+          assistantMessageID,
+          toolCallID,
+        })),
+      ).toEqual([{ sessionID, agent, assistantMessageID, toolCallID: "call-shared" }])
       expect(applicationContexts).toEqual([])
     }),
   )

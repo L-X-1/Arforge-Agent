@@ -94,6 +94,24 @@ describe("FSUtil", () => {
     )
   })
 
+  describe("writeJson", () => {
+    it(
+      "atomically replaces an existing JSON file without leaving temporary files",
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const filesys = yield* FileSystem.FileSystem
+        const tmp = yield* filesys.makeTempDirectoryScoped()
+        const file = path.join(tmp, "credentials.json")
+
+        yield* fs.writeJson(file, { version: 1 })
+        yield* fs.writeJson(file, { version: 2, protected: true })
+
+        expect(yield* fs.readJson(file)).toEqual({ version: 2, protected: true })
+        expect(yield* filesys.readDirectory(tmp)).toEqual(["credentials.json"])
+      }),
+    )
+  })
+
   describe("readJson / writeJson", () => {
     it(
       "round-trips JSON data",

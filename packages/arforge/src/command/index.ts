@@ -1,4 +1,5 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { Database } from "@arforge-ai/core/database/database"
 import path from "path"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectBridge } from "@/effect/bridge"
@@ -6,6 +7,7 @@ import type { InstanceContext } from "@/project/instance-context"
 import { Effect, Layer, Context, Schema } from "effect"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
+import { McpCatalog } from "../mcp/catalog"
 import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
@@ -108,23 +110,42 @@ const layer = Layer.effect(
           source: "mcp",
           description: prompt.description,
           get template() {
+            const args = prompt.arguments
+              ? Object.fromEntries(prompt.arguments.map((argument, i) => [argument.name, `$${i + 1}`]))
+              : {}
+            const lease =
+              prompt.generation === undefined
+                ? Effect.succeed<MCP.McpCapabilityLease | undefined>(undefined)
+                : mcp.leaseForCapability
+                  ? mcp.leaseForCapability({
+                      id: `${McpCatalog.sanitize(prompt.client)}:${McpCatalog.sanitize(prompt.name)}`,
+                      server: prompt.client,
+                      generation: prompt.generation,
+                      kind: "prompt",
+                      reference: prompt.name,
+                    })
+                  : Effect.succeed<MCP.McpCapabilityLease>({
+                      id: `${McpCatalog.sanitize(prompt.client)}:${McpCatalog.sanitize(prompt.name)}`,
+                      server: prompt.client,
+                      generation: prompt.generation,
+                      kind: "prompt",
+                    })
             return bridge.promise(
-              mcp
-                .getPrompt(
-                  prompt.client,
-                  prompt.name,
-                  prompt.arguments
-                    ? Object.fromEntries(prompt.arguments.map((argument, i) => [argument.name, `$${i + 1}`]))
-                    : {},
-                )
-                .pipe(
-                  Effect.map(
-                    (template) =>
-                      template?.messages
-                        .map((message) => (message.content.type === "text" ? message.content.text : ""))
-                        .join("\n") || "",
-                  ),
+              (prompt.generation === undefined
+                ? mcp.getPrompt(prompt.client, prompt.name, args, undefined)
+                : lease.pipe(
+                    Effect.flatMap((current) =>
+                      current ? mcp.getPrompt(prompt.client, prompt.name, args, current) : Effect.succeed(undefined),
+                    ),
+                  )
+              ).pipe(
+                Effect.map(
+                  (template) =>
+                    template?.messages
+                      .map((message) => (message.content.type === "text" ? message.content.text : ""))
+                      .join("\n") || "",
                 ),
+              ),
             )
           },
           hints: prompt.arguments?.map((_, i) => `$${i + 1}`) ?? [],
@@ -172,6 +193,14 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [Config.node, MCP.node, Skill.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  // Command state materializes MCP/skill-backed resources and may be closed
+  // after an instance request has pruned its context. Pin the durable
+  // database dependency at construction so its cache finalizer has a stable
+  // owner context.
+  deps: [Config.node, MCP.node, Skill.node, Database.node],
+})
 
 export * as Command from "."

@@ -4,6 +4,8 @@ import { TextField } from "@arforge-ai/ui/text-field"
 import { For, Show, createEffect, on } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { OperationsApi } from "@/utils/server"
+import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
+import { agentExtensionPublicError, isRetiredAgentCapabilityError } from "./agent-extension-error"
 type LocationInput = {
   location: {
     directory: string
@@ -35,69 +37,111 @@ export function AgentExtensionInsights(props: {
     workflowRunID: "",
     workflowEvents: undefined as WorkflowEvents | undefined,
   })
-  const action = async (run: () => Promise<void>, notice: string) => {
-    if (state.loading) return
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  const action = async (
+    run: (location: LocationInput, request: ScopeRequestToken) => Promise<void>,
+    notice: string,
+    unavailable?: string,
+  ) => {
+    if (state.loading || !props.ready()) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
     setState({ loading: true, error: "", notice: "" })
     try {
-      await run()
-      setState("notice", notice)
+      await run(requestedLocation, request)
+      if (scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      setState("error", publicError(error, t("Unknown Agent extension error")))
+      if (scopeGuard.isCurrent(request)) {
+        if (unavailable && isRetiredAgentCapabilityError(error)) {
+          setState("notice", unavailable)
+        } else {
+          setState("error", agentExtensionPublicError(error, t("Unknown Agent extension error")))
+        }
+      }
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const loadCustomizations = () =>
-    action(async () => {
-      const result = await props.api().agentCapabilities.customizationList(props.location())
-      setState("customizations", result.data)
-    }, t("\u81EA\u5B9A\u4E49\u547D\u4EE4\u548C Hook \u6E05\u5355\u5DF2\u5237\u65B0\u3002"))
+    action(
+      async (location, request) => {
+        const result = await props.api().agentCapabilities.customizationList(location)
+        if (scopeGuard.isCurrent(request)) setState("customizations", result.data)
+      },
+      t("\u81EA\u5B9A\u4E49\u547D\u4EE4\u548C Hook \u6E05\u5355\u5DF2\u5237\u65B0\u3002"),
+      t("当前运行时不提供自定义命令和钩子（Hook）检查；技能（Skill）与工作流（Workflow）功能仍可正常使用。"),
+    )
   const readSkill = () =>
-    action(async () => {
+    action(async (location, request) => {
       const result = await props.api().agentCapabilities.skillRead({
-        ...props.location(),
+        ...location,
         skillID: state.skillID.trim(),
         maxChars: 60000,
       })
-      setState("skill", result.data)
+      if (scopeGuard.isCurrent(request)) setState("skill", result.data)
     }, t("Skill \u5185\u5BB9\u5DF2\u901A\u8FC7\u53EA\u8BFB\u8FB9\u754C\u52A0\u8F7D\u3002"))
   const routeSkills = () =>
-    action(async () => {
+    action(async (location, request) => {
       const result = await props.api().agentCapabilities.skillRoute({
-        ...props.location(),
+        ...location,
         request: state.routeRequest.trim(),
       })
-      setState("route", result.data)
+      if (scopeGuard.isCurrent(request)) setState("route", result.data)
     }, t("Skill \u8DEF\u7531\u9884\u89C8\u5DF2\u751F\u6210\uFF1B\u6CA1\u6709\u6267\u884C\u4EFB\u4F55 Skill\u3002"))
   const renderCommand = () =>
-    action(async () => {
+    action(async (location, request) => {
       const result = await props.api().agentCapabilities.customizationRender({
-        ...props.location(),
+        ...location,
         name: state.commandName.trim(),
         args: state.commandArgs,
       })
-      setState("rendered", result.data.rendered)
+      if (scopeGuard.isCurrent(request)) setState("rendered", result.data.rendered)
     }, t("\u81EA\u5B9A\u4E49\u547D\u4EE4\u6A21\u677F\u5DF2\u53EA\u8BFB\u6E32\u67D3\u3002"))
   const loadWorkflowEvents = () =>
-    action(async () => {
+    action(async (location, request) => {
       const result = await props.api().agentCapabilities.workflowRunEvents({
-        ...props.location(),
+        ...location,
         runID: state.workflowRunID.trim(),
         after: 0,
         limit: 200,
       })
-      setState("workflowEvents", result.data)
+      if (scopeGuard.isCurrent(request)) setState("workflowEvents", result.data)
     }, t("Workflow \u4E8B\u4EF6\u9875\u5DF2\u52A0\u8F7D\u3002"))
+  let previousScopeKey: string | undefined
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => {
-        if (ready) void loadCustomizations()
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged) {
+          setState({
+            loading: false,
+            error: "",
+            notice: "",
+            customizations: undefined,
+            skill: undefined,
+            route: undefined,
+            rendered: "",
+            workflowEvents: undefined,
+          })
+        }
+        void loadCustomizations()
       },
     ),
   )
   return (
-    <section class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4">
+    <section
+      class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
+      data-testid="agent-extension-insights"
+      aria-busy={state.loading}
+    >
       <header>
         <h2 class="text-14-medium text-text-strong">{t("Agent \u6269\u5C55\u8BED\u4E49\u5C42")}</h2>
         <p class="mt-1 text-12-regular text-text-weak">
@@ -265,13 +309,4 @@ function skillContent(value: SkillRead) {
 }
 function skillError(value: SkillRead) {
   return value.ok ? "" : value.error
-}
-function publicError(error: unknown, fallback: string) {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return fallback
-  }
 }

@@ -14,6 +14,16 @@ import { Option } from "effect"
 const AUTH_TOKEN_QUERY = "auth_token"
 const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
 
+/** Private mode is a server-owned owner principal, never a request-derived identity. */
+const LocalIdentityPrincipal = IdentityContext.LocalPrincipal
+
+function localAuthorized<A, E, R>(effect: Effect.Effect<A, E, R>, database: Database.Interface) {
+  return database.runAsPrincipal(
+    LocalIdentityPrincipal,
+    Effect.provideService(effect, IdentityContext.Current, LocalIdentityPrincipal),
+  )
+}
+
 function emptyCredential() {
   return { username: "", password: Redacted.make("") }
 }
@@ -69,13 +79,14 @@ export const authorizationLayer = Layer.effect(
         }),
       )
     }
-    if (!ServerAuth.required(config)) return Authorization.of((effect) => effect)
+    if (!ServerAuth.required(config)) return Authorization.of((effect) => localAuthorized(effect, database))
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         // Browsers cannot set headers on WebSocket upgrades, so a ticketed PTY connect skips
         // credential checks here; the connect handler consumes and validates the ticket.
-        if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost"))) return yield* effect
+        if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost")))
+          return yield* localAuthorized(effect, database)
         if (
           SessionAuth.requestAuthorized(
             {
@@ -87,9 +98,9 @@ export const authorizationLayer = Layer.effect(
             config,
           )
         )
-          return yield* effect
+          return yield* localAuthorized(effect, database)
         const credential = yield* credentialFromRequest(request)
-        if (ServerAuth.authorized(credential, config)) return yield* effect
+        if (ServerAuth.authorized(credential, config)) return yield* localAuthorized(effect, database)
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
           Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),
         )

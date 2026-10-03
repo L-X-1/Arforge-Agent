@@ -35,6 +35,11 @@ import { makeAgentCapabilityGroup } from "./groups/agent-capability"
 import { makeMcpGroup } from "./groups/mcp"
 import { makePrivateOperationGroup } from "./groups/private-operation"
 import { makeRuntimeInsightGroup } from "./groups/runtime-insight"
+import { makePersonalJobGroup } from "./groups/personal-job"
+import { makePersonalWorkspaceGroup } from "./groups/personal-workspace"
+import { TenantPlatformGroup } from "./groups/tenant-platform"
+import { makeArtifactGroup } from "./groups/artifact"
+import { makeSubagentControlGroup } from "./groups/subagent-control"
 
 // Protocol owns middleware placement, while Server injects concrete keys so Core service identities stay downstream.
 const makeApiFromGroup = <
@@ -53,6 +58,8 @@ const makeApiFromGroup = <
     .add(LocationGroup.middleware(locationMiddleware))
     .add(AgentGroup.middleware(locationMiddleware))
     .add(makeSessionGroup(sessionLocationMiddleware))
+    .add(makeArtifactGroup(sessionLocationMiddleware))
+    .add(makeSubagentControlGroup(locationMiddleware))
     .add(makeGoalGroup(sessionLocationMiddleware))
     .add(makeScheduledPromptGroup(sessionLocationMiddleware))
     .add(makeTaskGraphGroup(sessionLocationMiddleware))
@@ -81,6 +88,9 @@ const makeApiFromGroup = <
     .add(makeQuestionGroup(locationMiddleware, sessionLocationMiddleware))
     .add(ReferenceGroup.middleware(locationMiddleware))
     .add(ProjectCopyGroup.middleware(locationMiddleware))
+    .add(makePersonalJobGroup(sessionLocationMiddleware))
+    .add(makePersonalWorkspaceGroup(locationMiddleware))
+    .add(TenantPlatformGroup)
     .annotateMerge(
       OpenApi.annotations({
         title: "arforge HttpApi",

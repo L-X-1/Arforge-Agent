@@ -8,15 +8,17 @@ import { Flag } from "./flag/flag"
 import { makeGlobalNode } from "./effect/app-node"
 
 const app = "arforge"
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
-const tmp = path.join(os.tmpdir(), app)
+const configuredProfile = process.env.ARFORGE_HOME?.trim()
+const profile = configuredProfile ? path.resolve(configuredProfile) : undefined
+const data = profile ?? path.join(xdgData!, app)
+const cache = profile ? path.join(profile, "cache") : path.join(xdgCache!, app)
+const config = profile ? path.join(profile, "config") : path.join(xdgConfig!, app)
+const state = profile ? path.join(profile, "state") : path.join(xdgState!, app)
+const tmp = profile ? path.join(profile, "tmp") : path.join(os.tmpdir(), app)
 
 const paths = {
   get home() {
-    return process.env.ARFORGE_TEST_HOME ?? os.homedir()
+    return process.env.ARFORGE_TEST_HOME ?? profile ?? os.homedir()
   },
   data,
   bin: path.join(cache, "bin"),
@@ -31,16 +33,6 @@ const paths = {
 export const Path = paths
 
 Flock.setGlobal({ state })
-
-await Promise.all([
-  fs.mkdir(Path.data, { recursive: true }),
-  fs.mkdir(Path.config, { recursive: true }),
-  fs.mkdir(Path.state, { recursive: true }),
-  fs.mkdir(Path.tmp, { recursive: true }),
-  fs.mkdir(Path.log, { recursive: true }),
-  fs.mkdir(Path.bin, { recursive: true }),
-  fs.mkdir(Path.repos, { recursive: true }),
-])
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/Global") {}
 
@@ -83,5 +75,19 @@ export const layerWith = (input: Partial<Interface>) =>
     Service,
     Effect.sync(() => Service.of(make(input))),
   )
+
+// Keep the node binding initialized before awaiting filesystem setup. Several
+// location-scoped modules refer to Global.node while their dependency graph is
+// being evaluated; a top-level await before the export leaves that binding in
+// the temporal dead zone under Bun's test loader.
+await Promise.all([
+  fs.mkdir(Path.data, { recursive: true }),
+  fs.mkdir(Path.config, { recursive: true }),
+  fs.mkdir(Path.state, { recursive: true }),
+  fs.mkdir(Path.tmp, { recursive: true }),
+  fs.mkdir(Path.log, { recursive: true }),
+  fs.mkdir(Path.bin, { recursive: true }),
+  fs.mkdir(Path.repos, { recursive: true }),
+])
 
 export * as Global from "./global"

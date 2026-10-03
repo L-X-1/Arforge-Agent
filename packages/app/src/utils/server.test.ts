@@ -33,6 +33,67 @@ describe("operations API", () => {
     expect(api.scheduledPrompts.list).toBeFunction()
     expect(api.tasks.list).toBeFunction()
     expect(api.agentCapabilities.list).toBeFunction()
+    expect(api.controlledSessions.revert).toBeFunction()
+  })
+
+  test("sends controlled session revert through the authenticated server adapter", async () => {
+    let captured: Request | undefined
+    const fetcher = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        captured = input instanceof Request ? input : new Request(input, init)
+        return Response.json({
+          runID: "run_1",
+          actionID: "act_1",
+          requestID: "cpr_1",
+          operation: "session.revert",
+          phase: "waiting_for_confirmation",
+          recovery: "awaiting_authorization",
+          canApprove: true,
+        })
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    )
+    const api = createOperationsApiForServer({
+      server: { url: "http://localhost:4096", username: "operator", password: "secret" },
+      fetch: fetcher,
+    })
+
+    const result = await api.controlledSessions.revert({
+      sessionID: "ses /1",
+      directory: "C:\\workspace",
+      workspace: "ws_1",
+      requestID: "cpr_1",
+      messageID: "msg_1",
+    })
+
+    const url = new URL(captured?.url ?? "")
+    expect(result).toMatchObject({ operation: "session.revert", phase: "waiting_for_confirmation" })
+    expect(url.pathname).toBe("/experimental/session/ses%20%2F1/revert")
+    expect(url.searchParams.get("directory")).toBe("C:\\workspace")
+    expect(url.searchParams.get("workspace")).toBe("ws_1")
+    expect(captured?.headers.get("authorization")).toBe(`Basic ${btoa("operator:secret")}`)
+    expect(await captured?.clone().json()).toEqual({ requestID: "cpr_1", messageID: "msg_1" })
+  })
+
+  test("surfaces the nested server explanation when a controlled session request is rejected", async () => {
+    const fetcher = Object.assign(
+      async () =>
+        Response.json(
+          { name: "WorktreeApiError", data: { message: "The session changed; review it and try again." } },
+          { status: 409 },
+        ),
+      { preconnect: globalThis.fetch.preconnect },
+    )
+    const api = createOperationsApiForServer({ server: { url: "http://localhost:4096" }, fetch: fetcher })
+
+    await expect(
+      api.controlledSessions.revert({
+        sessionID: "ses_1",
+        directory: "C:\\workspace",
+        requestID: "cpr_1",
+        messageID: "msg_1",
+      }),
+    ).rejects.toThrow("The session changed; review it and try again.")
   })
 
   test("sends the desktop repository-scale request through the generated Server contract", async () => {

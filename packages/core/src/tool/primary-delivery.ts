@@ -9,6 +9,7 @@ import { NonNegativeInt } from "../schema"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact } from "./effect-semantics"
 
 export const name = "deliver_user_message"
 
@@ -37,7 +38,7 @@ export const Output = Schema.Struct({
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const deliveries = yield* PrimaryDeliveryV2.Service
     yield* tools
       .register({
@@ -47,6 +48,9 @@ const layer = Layer.effectDiscard(
               "Deliver the primary message the user should see. Use proactive only for an unsolicited completion, blocker, or important background update. Optional attachments must be existing approved local files and are never uploaded.",
             input: Input,
             output: Output,
+            // The delivery service owns exact message and attachment
+            // assertions; retain the conservative L3 gateway declaration.
+            effects: majorImpact(),
             toModelOutput: ({ output }) => [
               {
                 type: "text",
@@ -63,6 +67,7 @@ const layer = Layer.effectDiscard(
                   message: input.message,
                   status: input.status,
                   attachments: input.attachments ?? [],
+                  authorize: context.permission.assert,
                 })
                 .pipe(
                   Effect.map((delivery) => ({
@@ -86,5 +91,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/primary-delivery",
   layer,
-  deps: [ToolRegistry.node, PrimaryDeliveryV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, PrimaryDeliveryV2.node],
 })

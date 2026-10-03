@@ -1,0 +1,6 @@
+{
+  "text-generation": { "outcome": "supported", "latencyMs": 4 },
+  "streaming": { "outcome": "supported", "latencyMs": 5 },
+  "tool-calling": { "outcome": "unsupported", "latencyMs": 3 },
+  "structured-output": { "outcome": "supported", "latencyMs": 7 }
+}

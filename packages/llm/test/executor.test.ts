@@ -73,6 +73,24 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("redacts URL userinfo and fragments as well as authentication query parameters", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const request = HttpClientRequest.post(
+        "https://fixture-user:fixture-password@provider.test/v1/chat?api_key=query-fixture&debug=1#fragment-fixture",
+      )
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+      const details = JSON.stringify(errorHttp(error))
+      for (const secret of ["fixture-user", "fixture-password", "query-fixture", "fragment-fixture"])
+        expect(details).not.toContain(secret)
+      expect(details).toContain("debug=1")
+    }).pipe(
+      Effect.provide(
+        responsesLayer([new Response("fixture-user fixture-password query-fixture fragment-fixture", { status: 400 })]),
+      ),
+    ),
+  )
+
   it.effect("classifies context overflow responses", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service

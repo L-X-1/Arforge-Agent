@@ -21,13 +21,17 @@ import { createSessionKeyReader, ensureSessionKey, pruneSessionKeys } from "./la
 import { requireServerKey } from "@/utils/session-route"
 import { type DraftTab, useTabs } from "./tabs"
 import { closeSessionTab, openSessionTab, previewSessionTab, type SessionTabs } from "./layout-tabs"
+import { useLanguage } from "./language"
+import { isDirty, textDraftKey, textDrafts } from "@/components/preview/text-document-draft"
+import { textDocumentCloseGuard } from "@/components/preview/text-document-close-guard"
+import { useTextDocumentNavigationGuard } from "@/components/preview/text-document-navigation-guard"
 
 export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
 
 export type { ProjectAvatarVariant }
 
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
-const DEFAULT_SIDEBAR_WIDTH = 260
+const DEFAULT_SIDEBAR_WIDTH = 216
 const DEFAULT_FILE_TREE_WIDTH = 200
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
@@ -166,6 +170,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     const tabs = useTabs()
     const platform = usePlatform()
     const location = useLocation()
+    const language = useLanguage()
+    useTextDocumentNavigationGuard()
     const route = createMemo(() => {
       const value = currentRoute(location.pathname, location.search)
       if (value.type === "home") return value
@@ -272,7 +278,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       { ...target, migrate },
       createStore({
         sidebar: {
-          opened: false,
+          opened: true,
           width: DEFAULT_SIDEBAR_WIDTH,
           workspaces: {} as Record<string, boolean>,
           workspacesDefault: false,
@@ -991,6 +997,36 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const tabs = createMemo(() => store.sessionTabs[key()] ?? { all: [] })
         const normalize = (tab: string) => normalizeSessionTab(path(), tab)
         const normalizeAll = (all: string[]) => normalizeSessionTabList(path(), all)
+        const closeTarget = (values: string[]) => {
+          const paths = values.flatMap((value) => {
+            const file = path()?.pathFromTab(value)
+            return file ? [file] : []
+          })
+          const session = key()
+          const directory = decode64(SessionStateKey.route(session).split("/")[0] ?? "")
+          return { scope: SessionStateKey.scope(session), directory, paths }
+        }
+        const canClose = (values: string[]) => {
+          const target = closeTarget(values)
+          if (target.paths.length === 0) return true
+          return textDocumentCloseGuard.confirm(target, language.locale().startsWith("zh"))
+        }
+        const retainDirtyPreview = (session: string) => {
+          const preview = ephemeral.sessionTabPreview[session]
+          if (!preview) return true
+          const target = closeTarget([preview])
+          const file = target.paths[0]
+          if (!file || !target.directory) return true
+          try {
+            if (isDirty(textDrafts.restore(textDraftKey(target.scope, target.directory, file)))) {
+              setEphemeral("sessionTabPreview", session, undefined)
+            }
+            return true
+          } catch {
+            // Reuse the fail-closed, localized storage-error feedback.
+            return canClose([preview])
+          }
+        }
         const apply = (session: string, next: ReturnType<typeof openSessionTab>) => {
           batch(() => {
             setStore("sessionTabs", session, next.tabs)
@@ -1014,6 +1050,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setAll(all: string[]) {
             const session = key()
             const next = normalizeAll(all).filter((tab) => tab !== "review")
+            if (!canClose((store.sessionTabs[session]?.all ?? []).filter((tab) => !next.includes(tab)))) return
             batch(() => {
               if (!store.sessionTabs[session]) {
                 setStore("sessionTabs", session, { all: next, active: undefined })
@@ -1026,6 +1063,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           },
           async open(tab: string) {
             const session = key()
+            if (!retainDirtyPreview(session)) return
             apply(
               session,
               openSessionTab(
@@ -1036,6 +1074,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           },
           previewTab(tab: string) {
             const session = key()
+            if (!retainDirtyPreview(session)) return
             apply(
               session,
               previewSessionTab(
@@ -1047,7 +1086,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           close(tab: string) {
             const session = key()
             const current = store.sessionTabs[session]
-            if (!current) return
+            if (!current || !canClose([normalize(tab)])) return
             apply(
               session,
               closeSessionTab({ tabs: current, preview: ephemeral.sessionTabPreview[session] }, normalize(tab)),

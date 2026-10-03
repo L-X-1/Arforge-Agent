@@ -3,6 +3,8 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { Config } from "../../src/config/config"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
@@ -32,7 +34,7 @@ const browserLayer = Layer.succeed(
 )
 
 const mcpTest = testEffect(
-  LayerNode.compile(LayerNode.group([MCP.node, McpAuth.node, EventV2Bridge.node, Config.node]), [
+  AppNodeBuilder.build(LayerNode.group([MCP.node, LocationServiceMap.node, McpAuth.node, EventV2Bridge.node, Config.node]), [
     [McpBrowser.node, browserLayer],
   ]),
 )

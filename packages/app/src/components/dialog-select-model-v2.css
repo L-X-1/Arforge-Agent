@@ -1,0 +1,106 @@
+.arforge-model-picker {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(480px, calc(var(--model-viewport-height, 100dvh) - 24px), var(--kb-popper-content-available-height, 480px));
+  padding: 12px;
+  gap: 8px;
+  overflow: hidden;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 16px;
+  background: var(--v2-background-bg-layer-01);
+  color: var(--v2-text-text-base);
+  box-shadow: var(--v2-elevation-floating);
+  font-family: var(--arforge-review-font-sans, var(--v2-font-family-sans));
+  z-index: 100;
+  outline: none;
+}
+
+.arforge-model-picker[data-touch='true'] {
+  position: fixed;
+  width: min(360px, calc(var(--model-viewport-width, 100vw) - 24px));
+  left: calc(var(--model-viewport-left, 0px) + var(--model-viewport-width, 100vw) / 2);
+  top: calc(var(--model-viewport-top, 0px) + var(--model-viewport-height, 100dvh) - 12px - env(safe-area-inset-bottom, 0px));
+  transform: translate(-50%, -100%);
+  max-height: min(480px, calc(var(--model-viewport-height, 100dvh) - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)));
+}
+
+.arforge-model-picker :where(button, input) { font: inherit; }
+.arforge-model-picker button { cursor: pointer; }
+.arforge-model-picker :where(button, input):focus-visible {
+  outline: 2px solid var(--v2-text-text-base);
+  outline-offset: -2px;
+}
+.arforge-model-picker button:disabled { cursor: default; opacity: 0.6; }
+.arforge-model-picker__search {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 40px;
+  gap: 8px;
+  padding-left: 10px;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 8px;
+  color: var(--v2-text-text-muted);
+}
+.arforge-model-picker__search input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  flex: 1;
+  background: transparent;
+  color: var(--v2-text-text-base);
+  border: 0;
+  font-size: 14px;
+}
+.arforge-model-picker__clear { display: grid; place-items: center; width: 40px; min-height: 40px; flex: none; }
+.arforge-model-picker__scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.arforge-model-picker__group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px;
+  text-align: left;
+  color: var(--v2-text-text-muted);
+  font-size: var(--arforge-review-model-group-size, 11px) !important;
+  font-weight: 500 !important;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+}
+.arforge-model-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px;
+  border-radius: 8px;
+  text-align: left;
+  scroll-margin: 8px;
+}
+.arforge-model-picker__row[data-selected-model='true'],
+.arforge-model-picker__row[data-active='true'],
+.arforge-model-picker__row:hover,
+.arforge-model-picker__group:hover,
+.arforge-model-picker__action:hover { background: var(--v2-overlay-simple-overlay-hover); }
+.arforge-model-picker__labels { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.arforge-model-picker__name { font-size: 14px; font-weight: 400; line-height: 20px; overflow-wrap: anywhere; }
+.arforge-model-picker__id {
+  color: var(--v2-text-text-muted);
+  font-family: var(--arforge-review-font-mono, var(--font-family-mono, 'JetBrains Mono', monospace));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+.arforge-model-picker__tags { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.arforge-model-picker__footer { display: flex; flex-wrap: wrap; flex: none; gap: 4px; border-top: 1px solid var(--v2-border-border-muted); padding-top: 4px; }
+.arforge-model-picker__action { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; flex: 1; padding: 6px 8px; border-radius: 8px; font-size: 12px !important; }
+.arforge-model-picker__notice { flex: none; padding: 8px; border-radius: 8px; background: var(--v2-background-bg-layer-02); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.arforge-model-picker__empty { padding: 16px 8px; font-size: 13px; color: var(--v2-text-text-muted); }
+.arforge-model-picker[data-touch='true'] :where(.arforge-model-picker__group, .arforge-model-picker__action, .arforge-model-picker__clear) { min-height: 44px; }
+.arforge-model-picker[data-touch='true'] .arforge-model-picker__clear { min-width: 44px; }
+.arforge-model-picker[data-touch='true'] .arforge-model-picker__search input { font-size: 16px; min-height: 44px; }

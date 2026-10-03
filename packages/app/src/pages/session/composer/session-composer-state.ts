@@ -9,6 +9,7 @@ import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import { isPermissionRequestGone } from "./permission-reply-error"
 
 export const todoState = (input: {
   count: number
@@ -84,6 +85,22 @@ export function createSessionComposerController(options?: { closeMs?: number | (
     sdk()
       .api.permission.reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
       .catch((err: unknown) => {
+        if (isPermissionRequestGone(err, perm.id)) {
+          const pending = sync().data.permission[perm.sessionID] ?? []
+          sync().set(
+            "permission",
+            perm.sessionID,
+            pending.filter((item) => item.id !== perm.id),
+          )
+          const description =
+            language.locale() === "zh"
+              ? "这项授权请求已由其他窗口或运行流程处理，界面已自动刷新。"
+              : language.locale() === "zht"
+                ? "這項授權要求已由其他視窗或執行流程處理，介面已自動重新整理。"
+                : "This permission request was already handled elsewhere. The prompt has been refreshed."
+          showToast({ title: language.t("notification.permission.title"), description })
+          return
+        }
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })
       })

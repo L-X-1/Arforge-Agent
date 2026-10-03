@@ -10,6 +10,7 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { errorMessage } from "@/util/error"
 import * as Formatter from "./formatter"
+import { Database } from "@arforge-ai/core/database/database"
 
 export const Status = Schema.Struct({
   name: Schema.String,
@@ -197,7 +198,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, AppProcess.node, RuntimeFlags.node],
+  deps: [Config.node, AppProcess.node, RuntimeFlags.node, Database.node],
 })
 
 export * as Format from "."

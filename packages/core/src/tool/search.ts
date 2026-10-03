@@ -8,6 +8,7 @@ import { DeferredTools } from "./deferred"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead } from "./effect-semantics"
 
 export const name = "tool_search"
 
@@ -31,7 +32,7 @@ export type Output = typeof Output.Type
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const registry = yield* ToolRegistry.Service
     const deferred = yield* DeferredTools.Service
     if (!deferred.enabled()) return
@@ -41,6 +42,7 @@ const layer = Layer.effectDiscard(
         [name]: Tool.make({
           description:
             "Search available tool schemas by keywords, +required terms, an exact name, or select:name_a,name_b. Matching tools become available on the next model step.",
+          effects: automaticRead({ successCriteria: ["matching authorized tool definitions are activated"] }),
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
@@ -61,5 +63,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/search",
   layer,
-  deps: [ToolRegistry.node, DeferredTools.node, DeferredTools.configNode],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, DeferredTools.node, DeferredTools.configNode],
 })

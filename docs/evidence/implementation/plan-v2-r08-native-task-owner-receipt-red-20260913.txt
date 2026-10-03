@@ -1,0 +1,98 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent/packages/core
+Command: bun test --rerun-every --timeout 60000 test/action-gateway.test.ts test/session-runner.test.ts -t 'receipt.*preserves the original effect|repairs a scheduled.*write failure'
+FIXTURE CAVEAT: early failure/defect matrix included an invalid typed-error projector; the defect cancellation also independently failed. Final matrix uses valid defect/interrupt projectors.
+Exit code: 1
+Raw captured output:
+
+bun test v1.3.14 (0d9b296a)
+
+test\action-gateway.test.ts:
+(pass) ActionGateway > durable projection started receipt failure preserves the original effect and cancellation [153.10ms]
+(pass) ActionGateway > durable projection started receipt defect preserves the original effect and cancellation [72.66ms]
+(pass) ActionGateway > durable projection completed receipt failure preserves the original effect and cancellation [69.98ms]
+(pass) ActionGateway > durable projection completed receipt defect preserves the original effect and cancellation [68.58ms]
+(pass) ActionGateway > durable projection failed receipt failure preserves the original effect and cancellation [74.81ms]
+(pass) ActionGateway > durable projection failed receipt defect preserves the original effect and cancellation [64.28ms]
+[01:00:53.227] ERROR (#1142): 2643 |               return Effect.succeed("display")
+2644 |             },
+2645 |           }
+2646 |           const result = yield* gateway.execute(action, operation).pipe(Effect.exit)
+2647 |           if (state === "interrupted")
+2648 |             expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
+       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at %ARFORGE_REPO%\packages\core\test\action-gateway.test.ts:2648:85
+
+2643 |               return Effect.succeed("display")
+2644 |             },
+2645 |           }
+2646 |           const result = yield* gateway.execute(action, operation).pipe(Effect.exit)
+2647 |           if (state === "interrupted")
+2648 |             expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
+       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at %ARFORGE_REPO%\packages\core\test\action-gateway.test.ts:2648:85
+      at ~effect/Effect/successCont (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:910:23)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:653:9
+      at runTasks (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:150:15)
+      at afterScheduled (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:140:10)
+(fail) ActionGateway > durable projection interrupted receipt failure preserves the original effect and cancellation [58.30ms]
+[01:00:53.285] ERROR (#1332): 2643 |               return Effect.succeed("display")
+2644 |             },
+2645 |           }
+2646 |           const result = yield* gateway.execute(action, operation).pipe(Effect.exit)
+2647 |           if (state === "interrupted")
+2648 |             expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
+       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at %ARFORGE_REPO%\packages\core\test\action-gateway.test.ts:2648:85
+
+2643 |               return Effect.succeed("display")
+2644 |             },
+2645 |           }
+2646 |           const result = yield* gateway.execute(action, operation).pipe(Effect.exit)
+2647 |           if (state === "interrupted")
+2648 |             expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
+       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at toBe (unknown:1:1)
+      at %ARFORGE_REPO%\packages\core\test\action-gateway.test.ts:2648:85
+      at ~effect/Effect/successCont (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:910:23)
+      at runLoop (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:420:66)
+      at evaluate (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:380:20)
+      at %ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\internal\effect.js:653:9
+      at runTasks (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:150:15)
+      at afterScheduled (%ARFORGE_REPO%\node_modules\.bun\effect@4.0.0-beta.83\node_modules\effect\dist\Scheduler.js:140:10)
+(fail) ActionGateway > durable projection interrupted receipt defect preserves the original effect and cancellation [58.74ms]
+
+test\session-runner.test.ts:
+(pass) SessionRunnerLLM > repairs a scheduled receipt write failure from the original Action without replaying the task [810.46ms]
+(pass) SessionRunnerLLM > repairs a scheduled presentation write failure from the original Action without replaying the task [668.37ms]
+
+ 8 pass
+ 361 filtered out
+ 2 fail
+ 97 expect() calls
+Ran 10 tests across 2 files. [3.40s]

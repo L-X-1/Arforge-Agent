@@ -15,6 +15,7 @@ import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { SessionStore } from "@arforge-ai/core/session/store"
+import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { eq } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -75,6 +76,18 @@ function setRules(rules: PermissionV2.Ruleset) {
   })
 }
 
+function setSessionRules(rules: PermissionV1.Ruleset) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .update(SessionTable)
+      .set({ permission: rules })
+      .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+      .run()
+      .pipe(Effect.orDie)
+  })
+}
+
 function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   return {
     id: PermissionV2.ID.create("per_test"),
@@ -85,7 +98,7 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   } satisfies PermissionV2.AssertInput
 }
 
-function waitForRequest() {
+function waitForRequest(input: Partial<PermissionV2.AssertInput> = {}) {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
     const events = yield* EventV2.Service
@@ -96,13 +109,64 @@ function waitForRequest() {
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion()).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(assertion(input)).pipe(Effect.forkScoped)
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
 }
 
 describe("PermissionV2", () => {
+  it.effect("reads legacy session rules and deterministically maps their fields", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const rules: PermissionV1.Ruleset = [{ permission: "read", pattern: "src/*", action: "allow" }]
+      yield* setSessionRules(rules)
+
+      const sessions = yield* SessionStore.Service
+      expect(yield* sessions.permissions(SessionV2.ID.make("ses_test"))).toEqual(rules)
+      expect(PermissionV2.fromV1Rules(rules)).toEqual([{ action: "read", resource: "src/*", effect: "allow" }])
+      expect(yield* sessions.permissions(SessionV2.ID.make("ses_missing"))).toBeUndefined()
+    }),
+  )
+
+  it.effect("applies session allow and ask after agent rules while preserving deny boundaries", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "ask" }])
+      const service = yield* PermissionV2.Service
+
+      yield* setSessionRules([{ permission: "read", pattern: "*", action: "allow" }])
+      expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "allow" })
+
+      yield* setRules([{ action: "read", resource: "*", effect: "allow" }])
+      yield* setSessionRules([{ permission: "read", pattern: "*", action: "ask" }])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_session_ask") }))).toEqual({
+        id: PermissionV2.ID.create("per_session_ask"),
+        effect: "ask",
+      })
+
+      yield* setRules([{ action: "read", resource: "*", effect: "allow" }])
+      yield* setSessionRules([{ permission: "read", pattern: "*", action: "deny" }])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_session_deny") }))).toEqual({
+        id: PermissionV2.ID.create("per_session_deny"),
+        effect: "deny",
+      })
+
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      yield* setSessionRules([{ permission: "read", pattern: "*", action: "allow" }])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_agent_deny") }))).toEqual({
+        id: PermissionV2.ID.create("per_agent_deny"),
+        effect: "deny",
+      })
+
+      yield* setRules([])
+      yield* setSessionRules([])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_no_rules") }))).toEqual({
+        id: PermissionV2.ID.create("per_no_rules"),
+        effect: "ask",
+      })
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
@@ -247,6 +311,123 @@ describe("PermissionV2", () => {
         id: PermissionV2.ID.create("per_test"),
         effect: "deny",
       })
+    }),
+  )
+
+  it.effect("forces a fresh L3 confirmation even when an allow rule was previously saved", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      const service = yield* PermissionV2.Service
+
+      expect(yield* service.ask(assertion({ action: "bash", resources: ["git push"], forceAsk: true }))).toEqual({
+        id: PermissionV2.ID.create("per_test"),
+        effect: "ask",
+      })
+      expect(yield* service.get(PermissionV2.ID.create("per_test"))).toMatchObject({
+        requiresHumanConfirmation: true,
+      })
+    }),
+  )
+
+  it.effect(
+    "normalizes an API-client L3 always reply to one-time approval without saving or unlocking other prompts",
+    () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+        const { service, fiber, request } = yield* waitForRequest({
+          action: "bash",
+          resources: ["opaque-shell"],
+          save: ["opaque-shell"],
+          forceAsk: true,
+        })
+        expect(request.requiresHumanConfirmation).toBe(true)
+        yield* service.reply({ requestID: request.id, reply: "always" })
+        yield* Fiber.join(fiber)
+        const saved = yield* PermissionSaved.Service
+        expect(yield* saved.list()).toEqual([])
+      }),
+  )
+
+  it.effect("keeps an L3 force-ask pending when a matching L2 always reply is saved", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      const events = yield* EventV2.Service
+      const bothAsked = yield* Deferred.make<ReadonlyArray<PermissionV2.Request>>()
+      const requests: PermissionV2.Request[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        event.type !== PermissionV2.Event.Asked.type
+          ? Effect.void
+          : Effect.sync(() => {
+              requests.push(event.data as PermissionV2.Request)
+            }).pipe(
+              Effect.andThen(() =>
+                requests.length === 2 ? Deferred.succeed(bothAsked, [...requests]).pipe(Effect.asVoid) : Effect.void,
+              ),
+            ),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const l2 = yield* service
+        .assert(
+          assertion({ id: PermissionV2.ID.create("per_l2"), action: "bash", resources: ["same"], save: ["same"] }),
+        )
+        .pipe(Effect.forkScoped)
+      const l3 = yield* service
+        .assert(
+          assertion({
+            id: PermissionV2.ID.create("per_l3"),
+            action: "bash",
+            resources: ["same"],
+            forceAsk: true,
+          }),
+        )
+        .pipe(Effect.forkScoped)
+      const asked = yield* Deferred.await(bothAsked)
+      const ordinary = asked.find((request) => request.id === PermissionV2.ID.create("per_l2"))
+      const trusted = asked.find((request) => request.id === PermissionV2.ID.create("per_l3"))
+      if (!ordinary || !trusted) throw new Error("expected both permission requests")
+      yield* service.reply({ requestID: ordinary.id, reply: "always" })
+      yield* Fiber.join(l2)
+      expect(yield* service.get(trusted.id)).toMatchObject({ requiresHumanConfirmation: true })
+      yield* service.reply({ requestID: trusted.id, reply: "once" })
+      yield* Fiber.join(l3)
+    }),
+  )
+
+  it.effect("rejecting one request does not reject unrelated pending work in the same session", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      const events = yield* EventV2.Service
+      const bothAsked = yield* Deferred.make<ReadonlyArray<PermissionV2.Request>>()
+      const requests: PermissionV2.Request[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        event.type !== PermissionV2.Event.Asked.type
+          ? Effect.void
+          : Effect.sync(() => {
+              requests.push(event.data as PermissionV2.Request)
+            }).pipe(
+              Effect.andThen(() =>
+                requests.length === 2 ? Deferred.succeed(bothAsked, [...requests]).pipe(Effect.asVoid) : Effect.void,
+              ),
+            ),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const first = yield* service
+        .assert(assertion({ id: PermissionV2.ID.create("per_first"), resources: ["one"] }))
+        .pipe(Effect.forkScoped)
+      const second = yield* service
+        .assert(assertion({ id: PermissionV2.ID.create("per_second"), resources: ["two"] }))
+        .pipe(Effect.forkScoped)
+      const asked = yield* Deferred.await(bothAsked)
+      const firstRequest = asked.find((request) => request.id === PermissionV2.ID.create("per_first"))
+      const secondRequest = asked.find((request) => request.id === PermissionV2.ID.create("per_second"))
+      if (!firstRequest || !secondRequest) throw new Error("expected both permission requests")
+      yield* service.reply({ requestID: firstRequest.id, reply: "reject" })
+      expect((yield* Fiber.await(first))._tag).toBe("Failure")
+      expect(yield* service.get(secondRequest.id)).toBeDefined()
+      yield* service.reply({ requestID: secondRequest.id, reply: "once" })
+      yield* Fiber.join(second)
     }),
   )
 

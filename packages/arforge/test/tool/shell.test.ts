@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
+import { readFile, writeFile } from "node:fs/promises"
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer } from "effect"
@@ -7,10 +8,9 @@ import os from "os"
 import path from "path"
 import { Config } from "@/config/config"
 import { Shell } from "@arforge-ai/core/shell"
-import { ShellTool } from "../../src/tool/shell"
+import { ShellTool, UnknownEffectError } from "../../src/tool/shell"
 import { Filesystem } from "@/util/filesystem"
-import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
-import type { Permission } from "../../src/permission"
+import { provideInstance, TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -21,6 +21,7 @@ import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
+import { SandboxRunner } from "@/sandbox/runner"
 
 const shellLayer = Layer.mergeAll(
   LayerNode.compile(
@@ -32,11 +33,33 @@ const shellLayer = Layer.mergeAll(
       Config.node,
       Agent.node,
       RuntimeFlags.node,
+      SandboxRunner.node,
     ]),
   ),
   testInstanceStoreLayer,
 )
 const it = testEffect(shellLayer)
+const durableCmdBarrierLayer = Layer.mergeAll(
+  LayerNode.compile(
+    LayerNode.group([
+      CrossSpawnSpawner.node,
+      FSUtil.node,
+      Plugin.node,
+      Truncate.node,
+      Agent.node,
+      RuntimeFlags.node,
+      SandboxRunner.node,
+    ]),
+  ),
+  Layer.mock(Config.Service, {
+    // cmd.exe is a supported execution shell, but intentionally has no
+    // complete pure effect parser. The durable Session path must stop before
+    // it reaches the child-process spawner.
+    get: () => Effect.succeed({ shell: "cmd" } as never),
+  }),
+  testInstanceStoreLayer,
+)
+const durableCmdIt = testEffect(durableCmdBarrierLayer)
 type ShellTestServices =
   | (typeof shellLayer extends Layer.Layer<infer ROut, infer _E, infer _RIn> ? ROut : never)
   | InstanceStore.Service
@@ -90,7 +113,9 @@ const bin = quote(process.execPath.replaceAll("\\", "/"))
 const bash = (() => {
   const shell = Shell.acceptable()
   if (Shell.name(shell) === "bash") return shell
-  return Shell.gitbash()
+  const gitbash = Shell.gitbash()
+  if (!gitbash) throw new Error("bash or Git Bash is required for shell tests")
+  return gitbash
 })()
 const shells = (() => {
   if (process.platform !== "win32") {
@@ -190,7 +215,143 @@ describe("tool.shell", () => {
         })
         expect(result.metadata.exit).toBe(0)
         expect(result.metadata.output).toContain("test")
+        expect(result.metadata.sandbox).toMatchObject({
+          profile: "workspace-write",
+        })
       }),
+    ),
+  )
+
+  it.live("reports Git Bash/MSYS compatibility as partial and blocks automatic downgrade", () => {
+    if (process.platform !== "win32") return Effect.void
+    const backend = SandboxRunner.detectBackend("win32")
+    if (backend.kind !== "windows-native" || backend.baseContainer.status !== "available") return Effect.void
+    return withShell(
+      { label: "bash", shell: bash },
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const result = yield* run({ command: "echo msys-compatible" })
+          expect(result.metadata.exit).toBe(0)
+          expect(result.metadata.sandbox).toMatchObject({
+            backend: "windows-native",
+            enforcement: "partial",
+            capabilities: {
+              processBoundary: "host",
+              fileSystem: "host",
+              processTree: "job-kill-on-close",
+            },
+          })
+          expect((result.metadata.sandbox as { reason?: string }).reason).toContain("Git Bash/MSYS")
+
+          const error = yield* fail(
+            { command: "echo automatic-msys-must-not-downgrade" },
+            {
+              ...ctx,
+              parentAction: {
+                actionID: "act_msys_automatic" as never,
+                authority: "automatic",
+              },
+            },
+          )
+          expect(error.message).toContain("Git Bash/MSYS")
+        }),
+      ),
+    )
+  })
+
+  each("uses the session sandbox preset in the execution report", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({ command: "echo preset" }, { ...ctx, sandboxProfile: "unrestricted" })
+        expect(result.metadata.exit).toBe(0)
+        expect(result.metadata.sandbox).toMatchObject({
+          profile: "unrestricted",
+          enforcement: "partial",
+        })
+      }),
+    ),
+  )
+
+  it.live("fails closed for automatic read-only execution when enforcement is partial", () => {
+    if (process.platform !== "win32") return Effect.void
+    return withShell(
+      { label: "bash", shell: bash },
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const error = yield* fail(
+            { command: "echo should-not-run" },
+            {
+              ...ctx,
+              sandboxProfile: "read-only",
+              parentAction: { actionID: "act_read_only_backend" as never, authority: "automatic" },
+            },
+          )
+          expect(error.message).toContain("path ACL")
+        }),
+      ),
+    )
+  })
+
+  it.live("uses the native Windows read-only boundary for a human invocation", () => {
+    if (process.platform !== "win32" || !cmdShell) return Effect.void
+    const backend = SandboxRunner.detectBackend("win32")
+    if (backend.kind !== "windows-native") return Effect.void
+    return withShell(
+      cmdShell,
+      Effect.gen(function* () {
+        const directory = yield* tmpdirScoped()
+        yield* runIn(
+          directory,
+          Effect.gen(function* () {
+            const target = path.join(directory, "read-only-protected.txt")
+            yield* Effect.promise(() => writeFile(target, "before", "utf8"))
+            const result = yield* run(
+              { command: `echo blocked > "${target}"` },
+              { ...ctx, sandboxProfile: "read-only" },
+            )
+            expect(result.metadata.exit).not.toBe(0)
+            expect(result.output.toLowerCase()).toContain("access is denied")
+            expect(yield* Effect.promise(() => readFile(target, "utf8"))).toBe("before")
+          }),
+        )
+      }),
+    )
+  })
+
+  each("settles when a successful command produces no output", (item) =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({
+          command: PS.has(item.label) ? "$null = Get-ChildItem -LiteralPath . | Select-Object -First 0" : ":",
+          timeout: 5_000,
+        })
+        expect(result.metadata.exit).toBe(0)
+        expect(result.output).toBe("(no output)")
+      }),
+    ),
+  )
+
+  it.live("blocks possible network effects in a durable shell without process egress", () =>
+    withShell(
+      { label: "bash", shell: bash },
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const error = yield* fail(
+            { command: "git status" },
+            {
+              ...ctx,
+              parentAction: { actionID: "act_durable_network_barrier" as never },
+            },
+          )
+          expect(error).toBeInstanceOf(UnknownEffectError)
+          expect(error.message).toContain("process egress scope")
+        }),
+      ),
     ),
   )
 
@@ -218,6 +379,85 @@ describe("tool.shell", () => {
     }),
   )
 })
+
+if (process.platform === "win32") {
+  describe("tool.shell durable preflight barrier", () => {
+    durableCmdIt.instance("blocks an unknown cmd effect before spawn or a legacy ask", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const sentinel = path.join(test.directory, "must-not-exist.txt")
+        const asks: unknown[] = []
+        const info = yield* ShellTool
+        const shell = yield* info.init()
+        const result = yield* shell
+          .execute(
+            { command: `echo unsafe > "${sentinel}"` },
+            {
+              ...ctx,
+              parentAction: { actionID: "act_durable_shell_barrier" as never },
+              ask: (request) =>
+                Effect.sync(() => {
+                  asks.push(request)
+                }),
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBeInstanceOf(UnknownEffectError)
+        expect(asks).toEqual([])
+        expect(yield* Effect.promise(() => Bun.file(sentinel).exists())).toBe(false)
+      }),
+    )
+
+    durableCmdIt.instance("executes the exact unknown cmd command after fresh human approval", () =>
+      Effect.gen(function* () {
+        const info = yield* ShellTool
+        const shell = yield* info.init()
+        const result = yield* shell.execute(
+          { command: "echo human-approved" },
+          {
+            ...ctx,
+            parentAction: {
+              actionID: "act_human_approved_shell" as never,
+              authority: "human",
+            },
+          },
+        )
+
+        expect(result.output).toContain("human-approved")
+        expect(result.metadata.exit).toBe(0)
+      }),
+    )
+
+    durableCmdIt.instance("executes an exact compound cmd command without reopening leaf authorization", () =>
+      Effect.gen(function* () {
+        const info = yield* ShellTool
+        const shell = yield* info.init()
+        let asked = false
+        const result = yield* shell.execute(
+          { command: "echo first & echo second" },
+          {
+            ...ctx,
+            ask: () =>
+              Effect.sync(() => {
+                asked = true
+              }),
+            parentAction: {
+              actionID: "act_human_approved_compound_shell" as never,
+              authority: "human",
+            },
+          },
+        )
+
+        expect(asked).toBe(false)
+        expect(result.output).toContain("first")
+        expect(result.output).toContain("second")
+        expect(result.metadata.exit).toBe(0)
+      }),
+    )
+  })
+}
 
 describe("tool.shell permissions", () => {
   each("asks for bash permission with correct pattern", () =>

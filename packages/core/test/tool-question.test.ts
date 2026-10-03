@@ -4,12 +4,22 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { PermissionV2 } from "@arforge-ai/core/permission"
 import { QuestionV2 } from "@arforge-ai/core/question"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { QuestionTool } from "@arforge-ai/core/tool/question"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
+
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 const sessionID = SessionV2.ID.make("ses_question_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -48,6 +58,7 @@ const it = testEffect(
     [PermissionV2.node, permission],
     [QuestionV2.node, question],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+    [Location.node, current],
   ]),
 )
 
@@ -65,7 +76,7 @@ describe("QuestionTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-question-denied", name: "question", input: { questions: [] } },
         }),
-      ).toEqual({ result: { type: "error", value: "Permission denied: question" } })
+      ).toEqual({ result: { type: "error", value: "Permission denied for question: *" } })
       expect(capturedInput()).toBeUndefined()
       deny = false
     }),

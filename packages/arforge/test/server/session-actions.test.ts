@@ -90,6 +90,47 @@ describe("session action routes", () => {
   )
 
   it.instance(
+    "persists the session sandbox preset without replacing unrelated metadata",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "Content-Type": "application/json" }
+        const created = yield* requestInDirectory("/session", test.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ metadata: { source: "preset-test" } }),
+        })
+        expect(created.status).toBe(200)
+        const session = (yield* created.json) as SessionNs.Info
+
+        const updated = yield* requestInDirectory(`/session/${session.id}`, test.directory, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ sandboxProfile: "read-only" }),
+        })
+        expect(updated.status).toBe(200)
+        expect(((yield* updated.json) as SessionNs.Info).metadata).toEqual({
+          source: "preset-test",
+          sandboxProfile: "read-only",
+        })
+
+        const changed = yield* requestInDirectory(`/session/${session.id}`, test.directory, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ sandboxProfile: "unrestricted" }),
+        })
+        expect(changed.status).toBe(200)
+        expect(((yield* changed.json) as SessionNs.Info).metadata).toMatchObject({
+          source: "preset-test",
+          sandboxProfile: "unrestricted",
+        })
+
+        yield* SessionNs.Service.use((svc) => svc.remove(session.id).pipe(Effect.ignore))
+      }),
+    { git: true },
+  )
+
+  it.instance(
     "experimental background route is a no-op without synchronous subagents",
     () =>
       Effect.gen(function* () {

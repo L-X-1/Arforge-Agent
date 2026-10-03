@@ -11,17 +11,9 @@
  */
 
 import type { ContextLayerReport } from "./insight"
+import { ContextContract } from "../context-contract"
 
-export const CONTEXT_LAYER_ORDER = [
-  "L0",
-  "L1",
-  "L2",
-  "L3",
-  "L4",
-  "L5",
-  "L6",
-  "L7",
-] as const
+export const CONTEXT_LAYER_ORDER = ["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7"] as const
 
 export const CONTEXT_LAYER_NAMES: Readonly<Record<string, string>> = {
   L0: "宪法与安全约束",
@@ -38,6 +30,16 @@ export interface LayerInput {
   readonly layer: string
   readonly name: string
   readonly text: string
+  /** Canonical Context OS metadata; legacy callers are normalized below. */
+  readonly origin?: ContextContract.Origin
+  readonly contextLayer?: ContextContract.ContextLayer
+  readonly authority?: ContextContract.Authority
+  readonly trust?: ContextContract.Trust
+  readonly mandatory?: boolean
+  readonly priority?: number
+  readonly unitID?: string
+  readonly sourceDigest?: string
+  readonly instructionAllowed?: boolean
 }
 
 export interface CompiledContext {
@@ -63,6 +65,15 @@ type MutableLayerReport = {
   layer: string
   name: string
   source: string
+  unitID: string
+  origin: ContextContract.Origin
+  contextLayer: ContextContract.ContextLayer
+  authority: ContextContract.Authority
+  trust: ContextContract.Trust
+  mandatory: boolean
+  priority: number
+  sourceDigest?: string
+  instructionAllowed?: boolean
   tokens: number
   chars: number
   kept: boolean
@@ -72,11 +83,24 @@ export function compileContext(inputs: ReadonlyArray<LayerInput>, maxTokens: num
   // Keep the caller's order verbatim: layering is an annotation, not a reorder.
   const ordered = [...inputs]
   const layers: MutableLayerReport[] = ordered.map((input) => {
+    const origin = input.origin ?? ContextContract.originForLegacy(input.layer, input.name)
+    const contextLayer = input.contextLayer ?? ContextContract.contextLayerForLegacy(input.layer)
+    const authority = input.authority ?? ContextContract.authorityForOrigin(origin)
+    const trust = input.trust ?? ContextContract.trustForOrigin(origin)
     const chars = input.text.length
     return {
       layer: input.layer,
       name: input.name,
       source: CONTEXT_LAYER_NAMES[input.layer] ?? input.layer,
+      unitID: input.unitID ?? `${origin}:${input.name}`,
+      origin,
+      contextLayer,
+      authority,
+      trust,
+      mandatory: input.mandatory ?? false,
+      priority: input.priority ?? 0,
+      ...(input.sourceDigest === undefined ? {} : { sourceDigest: input.sourceDigest }),
+      ...(input.instructionAllowed === undefined ? {} : { instructionAllowed: input.instructionAllowed }),
       tokens: estimateTokens(input.text),
       chars,
       kept: true,
@@ -93,7 +117,7 @@ export function compileContext(inputs: ReadonlyArray<LayerInput>, maxTokens: num
       .toSorted((a, b) => b.priority - a.priority)
     for (const { index, priority } of indices) {
       if (deficit <= 0) break
-      if (PROTECTED_LAYERS.has(ordered[index].layer)) continue
+      if (layers[index].mandatory || PROTECTED_LAYERS.has(ordered[index].layer)) continue
       if (layers[index].tokens <= deficit) {
         deficit -= layers[index].tokens
         layers[index].kept = false

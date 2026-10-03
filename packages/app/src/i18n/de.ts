@@ -3,6 +3,7 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  ...en,
   "command.category.suggested": "Vorgeschlagen",
   "command.category.view": "Ansicht",
   "command.category.project": "Projekt",
@@ -302,6 +303,8 @@ export const dict = {
   "mcp.status.connected": "verbunden",
   "mcp.status.failed": "fehlgeschlagen",
   "mcp.status.needs_auth": "benötigt Authentifizierung",
+  "mcp.status.needs_client_registration": "Client-Registrierung erforderlich",
+  "mcp.status.needs_approval": "Genehmigung erforderlich",
   "mcp.auth.clickToAuthenticate": "Zum Authentifizieren klicken",
   "mcp.status.disabled": "deaktiviert",
   "dialog.fork.empty": "Keine Nachrichten zum Abzweigen vorhanden",
@@ -1248,7 +1251,7 @@ export const dict = {
   "controlCenter.m174": "Wiederherstellen",
   "controlCenter.m175": "Permanenter Ausführungsverlauf",
   "controlCenter.m176":
-    "Lesen Sie die Python Core-Transaktions-, Trace- und Nachrichtenartefakte über das gemeinsam genutzte typisierte Server API. Berichte sind schreibgeschützt und verbleiben im Besitz einer Persistenzquelle.",
+    "Lesen Sie die Arforge Core-Transaktions-, Trace- und Nachrichtenartefakte über das gemeinsam genutzte typisierte Server API. Berichte sind schreibgeschützt und verbleiben im Besitz einer Persistenzquelle.",
   "controlCenter.m177": "Begrenzen",
   "controlCenter.m178": "Aktualisieren",
   "controlCenter.m179": "Dateien ·",
@@ -1302,6 +1305,19 @@ export const dict = {
   "controlCenter.m222": "Unbekannter Tiefendiagnosefehler",
   "controlCenter.m223": "Kontrollierte Evolution",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Prüfen Sie aus Lernnachweisen abgeleitete Richtlinienkandidaten und steuern Sie Fähigkeitsänderungen durch isolierte Evaluierung, menschliche Freigabe, stufenweise Einführung und Rollback.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Prüfen Sie aus Lernnachweisen abgeleitete Richtlinienkandidaten und steuern Sie Fähigkeitsänderungen durch isolierte Evaluierung, menschliche Freigabe, stufenweise Einführung und Rollback.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 } satisfies Partial<Record<Keys, string>>

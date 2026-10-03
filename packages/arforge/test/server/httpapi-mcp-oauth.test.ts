@@ -19,6 +19,23 @@ const testMcpHandlers = HttpApiBuilder.group(TestHttpApi, "mcp", (handlers) =>
   Effect.succeed(
     handlers
       .handle("status", () => Effect.die("unexpected MCP status"))
+      .handle("health", () =>
+        Effect.succeed({
+          demo: {
+            server: "demo",
+            desiredGeneration: 1,
+            observedGeneration: 1,
+            phase: "ready" as const,
+            health: "healthy" as const,
+            failureCount: 0,
+            nextRetryAt: null,
+            circuitOpenedAt: null,
+            drainDeadline: null,
+            lastFailure: null,
+            safeMessage: "MCP server is connected and healthy.",
+          },
+        }),
+      )
       .handle("add", () => Effect.die("unexpected MCP add"))
       .handle("authStart", () =>
         Effect.succeed({ authorizationUrl: "https://auth.example/start", oauthState: "state-123" }),
@@ -59,6 +76,29 @@ const it = testEffect(
 )
 
 describe("mcp HttpApi OAuth", () => {
+  it.live("exposes redacted supervisor health for troubleshooting", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.get(McpPaths.health).pipe(HttpClient.execute)
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({
+        demo: {
+          server: "demo",
+          desiredGeneration: 1,
+          observedGeneration: 1,
+          phase: "ready",
+          health: "healthy",
+          failureCount: 0,
+          nextRetryAt: null,
+          circuitOpenedAt: null,
+          drainDeadline: null,
+          lastFailure: null,
+          safeMessage: "MCP server is connected and healthy.",
+        },
+      })
+    }),
+  )
+
   it.live("preserves oauth state when starting OAuth", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(McpPaths.auth.replace(":name", "demo")).pipe(HttpClient.execute)

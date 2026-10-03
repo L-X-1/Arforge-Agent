@@ -1,6 +1,6 @@
 export * as SessionV1 from "./session"
 
-import { Effect, Schema, Types } from "effect"
+import { Schema, Types } from "effect"
 import { define, inventory } from "../event"
 import { FileDiff } from "../file-diff"
 import { Project } from "../project"
@@ -11,6 +11,11 @@ import { ascending } from "../identifier"
 import { SessionID } from "../session-id"
 import { WorkspaceID } from "../workspace-id"
 import { PermissionV1 } from "./permission"
+import {
+  OutputFormat as CanonicalOutputFormat,
+  OutputFormatJsonSchema as CanonicalOutputFormatJsonSchema,
+  OutputFormatText as CanonicalOutputFormatText,
+} from "../prompt"
 
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 
@@ -62,20 +67,17 @@ export const ContentFilterError = namedError("ContentFilterError", {
   message: Schema.String,
 })
 
-export class OutputFormatText extends Schema.Class<OutputFormatText>("OutputFormatText")({
-  type: Schema.Literal("text"),
-}) {}
-
-export class OutputFormatJsonSchema extends Schema.Class<OutputFormatJsonSchema>("OutputFormatJsonSchema")({
-  type: Schema.Literal("json_schema"),
-  schema: Schema.Record(Schema.String, Schema.Any).annotate({ identifier: "JSONSchema" }),
-  retryCount: NonNegativeInt.pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed(2))),
-}) {}
-
-export const Format = Schema.Union([OutputFormatText, OutputFormatJsonSchema]).annotate({
-  discriminator: "type",
-  identifier: "OutputFormat",
+// V1 transport names are retained for generated-client compatibility, but
+// decoding, JSON safety and retry defaults come from the one shared Prompt
+// contract. This prevents the mature adapter and Core runner from accepting
+// different structured-output formats.
+export const OutputFormatText = CanonicalOutputFormatText.annotate({ identifier: "OutputFormatText" })
+export type OutputFormatText = Schema.Schema.Type<typeof OutputFormatText>
+export const OutputFormatJsonSchema = CanonicalOutputFormatJsonSchema.annotate({
+  identifier: "OutputFormatJsonSchema",
 })
+export type OutputFormatJsonSchema = Schema.Schema.Type<typeof OutputFormatJsonSchema>
+export const Format = CanonicalOutputFormat.annotate({ identifier: "OutputFormat" })
 export type OutputFormat = Schema.Schema.Type<typeof Format>
 
 const partBase = {

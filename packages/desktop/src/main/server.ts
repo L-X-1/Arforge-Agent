@@ -42,17 +42,19 @@ export function setDefaultServerUrl(url: string | null) {
   getStore().delete(DEFAULT_SERVER_URL_KEY)
 }
 
-export function preferAppEnv(userDataPath: string) {
-  const shell = process.platform === "win32" ? null : getUserShell()
+export function preferAppEnv(userDataPath: string, options: { readonly isolated?: boolean } = {}) {
+  const shell = options.isolated || process.platform === "win32" ? null : getUserShell()
   if (shell) Object.assign(process.env, loadShellEnv(shell, getLogger()))
 
   // The desktop launcher is an interactive product boundary. Its selected
   // private env file must replace stale variables inherited from terminals,
   // IDEs, or an earlier development session.
-  const productEnv = loadProductEnv({
-    workspaceRoot: app.isPackaged ? undefined : resolve(app.getAppPath(), "../.."),
-    override: true,
-  })
+  const productEnv = options.isolated
+    ? undefined
+    : loadProductEnv({
+        workspaceRoot: app.isPackaged ? undefined : resolve(app.getAppPath(), "../.."),
+        override: true,
+      })
   Object.assign(process.env, {
     ARFORGE_EXPERIMENTAL_ICON_DISCOVERY: "true",
     ARFORGE_EXPERIMENTAL_FILEWATCHER: "true",

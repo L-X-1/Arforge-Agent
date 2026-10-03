@@ -4,6 +4,7 @@ import { mockArforgeServer } from "../../utils/mock-server"
 import { expectAppVisible, expectSessionTitle } from "../../utils/waits"
 import { expect } from "../benchmark"
 import { playwrightScenarioServer } from "../playwright-server"
+import { createTimelineStreamTransport } from "./session-timeline-stream-transport"
 
 const directory = "C:/Arforge/TimelineStateRegression"
 const projectID = "proj_timeline_state_regression"
@@ -104,8 +105,10 @@ export async function setupTimelineBenchmark(
     turnDiffs?: unknown[]
   },
 ) {
-  const events: EventPayload[] = []
-  let eventBatch = options.eventBatch
+  const transport = await createTimelineStreamTransport({ eventBatch: options.eventBatch })
+  page.once("close", () => {
+    void transport.close().catch((error) => console.error("Timeline stream cleanup failed", error))
+  })
   const currentUserMessage = options.turnDiffs
     ? { ...userMessage, info: { ...userMessage.info, summary: { diffs: options.turnDiffs } } }
     : userMessage
@@ -114,6 +117,9 @@ export async function setupTimelineBenchmark(
     project: project(),
     provider: provider(),
     sessions: [session()],
+    // The unfinished assistant turn is streaming. Idle sessions intentionally
+    // retain their reading position instead of following late row measurements.
+    sessionStatus: { [sessionID]: { type: "busy" } },
     vcsDiff: options.vcsDiff,
     pageMessages: () => ({
       items: [
@@ -122,8 +128,7 @@ export async function setupTimelineBenchmark(
         assistantMessage,
       ],
     }),
-    events: () => events.splice(0, eventBatch),
-    eventRetry: 16,
+    eventStreamURL: transport.url,
   })
   await page.addInitScript(
     (input) => {
@@ -153,17 +158,7 @@ export async function setupTimelineBenchmark(
   return {
     scroller,
     text,
-    transport: {
-      enqueue(payload: EventPayload | EventPayload[]) {
-        events.push(...(Array.isArray(payload) ? payload : [payload]))
-      },
-      pendingCount() {
-        return events.length
-      },
-      releaseAll() {
-        eventBatch = events.length
-      },
-    },
+    transport,
     async scrollToBottom() {
       await scroller.evaluate((element) => {
         element.scrollTop = element.scrollHeight
@@ -212,6 +207,7 @@ export function buildStreamDeltaEvents(deltaCount: number): EventPayload[] {
     payload: {
       type: "message.part.delta",
       properties: {
+        sessionID,
         messageID: assistantMessageID,
         partID: textPartID,
         field: "text",

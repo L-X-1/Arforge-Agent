@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import path from "path"
+import { pathToFileURL } from "url"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Effect } from "effect"
 import { LSP } from "@/lsp/lsp"
@@ -92,6 +93,28 @@ describe("LSP service lifecycle", () => {
         expect(result.length).toBe(0)
       }),
     ),
+  )
+
+  it.instance(
+    "uses the TypeScript index fallback when no language server is available",
+    () =>
+      LSP.Service.use((lsp) =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = path.join(dir, "fallback.py")
+          yield* Effect.promise(() => Bun.write(file, "def target():\n    return 1\n\ntarget()\n"))
+
+          const symbols = yield* lsp.documentSymbol(pathToFileURL(file).href)
+          const definitions = yield* lsp.definition({ file, line: 0, character: 4 })
+          const references = yield* lsp.references({ file, line: 0, character: 4 })
+
+          expect(symbols).toHaveLength(1)
+          expect(symbols[0]).toMatchObject({ name: "target", kind: 12 })
+          expect(definitions[0]).toMatchObject({ name: "target", file: "fallback.py" })
+          expect(references).toHaveLength(2)
+        }),
+      ),
+    { config: { lsp: false } },
   )
 
   it.instance("definition() returns empty array for unknown file", () =>

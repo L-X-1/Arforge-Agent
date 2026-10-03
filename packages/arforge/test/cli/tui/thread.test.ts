@@ -88,6 +88,9 @@ describe("tui thread", () => {
       arforge.expectExit(result, 1)
       expect(result.stderr).toContain("--mini requires a TTY stdout")
     }),
+    // Cold Bun startup on Windows can exceed the default 5s test budget even
+    // though the attached-session validation itself is immediate.
+    15_000,
   )
 
   cliIt.live("rejects network options in mini mode", ({ arforge }) =>

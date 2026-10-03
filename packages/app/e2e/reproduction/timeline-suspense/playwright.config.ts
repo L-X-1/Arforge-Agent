@@ -1,6 +1,8 @@
 import { defineConfig, devices } from "@playwright/test"
+import { resolveBrowserLaunchOptions } from "../../performance/playwright-browser"
 
 const port = Number(process.env.PLAYWRIGHT_TIMELINE_SUSPENSE_PORT ?? 4317)
+const browserLaunchOptions = resolveBrowserLaunchOptions()
 
 export default defineConfig({
   testDir: ".",
@@ -24,6 +26,7 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    ...browserLaunchOptions,
   },
   projects: [
     {

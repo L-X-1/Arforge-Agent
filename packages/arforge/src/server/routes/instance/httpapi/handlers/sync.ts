@@ -11,23 +11,25 @@ import { eq } from "drizzle-orm"
 import { lte } from "drizzle-orm"
 import { not } from "drizzle-orm"
 import { or } from "drizzle-orm"
-import { Effect, Scope } from "effect"
+import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { HistoryPayload, ReplayPayload, SessionPayload } from "../groups/sync"
+import { IdentityContext } from "@arforge-ai/server/identity-context"
+import { makeAuthorizedBackground } from "../authorized-background"
 
 export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handlers) =>
   Effect.gen(function* () {
     const workspace = yield* Workspace.Service
     const session = yield* Session.Service
-    const scope = yield* Scope.Scope
+    const background = yield* makeAuthorizedBackground
     const events = yield* EventV2Bridge.Service
     const { db } = yield* Database.Service
 
     const start = Effect.fn("SyncHttpApi.start")(function* () {
-      yield* workspace
-        .startWorkspaceSyncing((yield* InstanceState.context).project.id)
-        .pipe(Effect.ignore, Effect.forkIn(scope))
+      const principal = yield* IdentityContext.Current
+      const task = workspace.startWorkspaceSyncing((yield* InstanceState.context).project.id).pipe(Effect.ignore)
+      yield* background.launch(principal, task)
       return true
     })
 

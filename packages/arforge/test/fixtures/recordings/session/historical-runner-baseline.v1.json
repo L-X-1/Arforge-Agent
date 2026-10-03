@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 1,
+  "source": "mature-runner-recorded.test.ts historical six-scenario baseline v1; captured 2026-09-08",
+  "scenarios": [
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 2
+      },
+      "checkpoint": {
+        "digest": "5b1fd9a2a51fdffb04a47cd58d668071f7c52b52e5955e2cef7bc391d086ad8c",
+        "needsContinuation": false,
+        "nextStep": 2,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 1
+      },
+      "scenario": "queue",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": false,
+          "nextStep": 2,
+          "phase": "idle"
+        },
+        "compactionCount": 0,
+        "requestCount": 1,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": false,
+            "finish": "stop",
+            "hasReasoning": false,
+            "hasText": true,
+            "structured": false,
+            "tools": []
+          }
+        ],
+        "terminalStatus": "completed",
+        "traceDigest": "65f62810b9b582646949d964d040c0aec3faf03f1f27534e095f8b6f19512e17",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "0499327548eb15e6c00b957f8132de5f55198473a4dac39031184971ab989eea"
+    },
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 2
+      },
+      "checkpoint": {
+        "digest": "5b1fd9a2a51fdffb04a47cd58d668071f7c52b52e5955e2cef7bc391d086ad8c",
+        "needsContinuation": false,
+        "nextStep": 2,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 1
+      },
+      "scenario": "steer",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": false,
+          "nextStep": 2,
+          "phase": "idle"
+        },
+        "compactionCount": 0,
+        "requestCount": 2,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": false,
+            "finish": "tool-calls",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": false,
+            "tools": [
+              {
+                "name": "inject_steer",
+                "status": "completed"
+              }
+            ]
+          },
+          {
+            "failed": false,
+            "finish": "stop",
+            "hasReasoning": false,
+            "hasText": true,
+            "structured": false,
+            "tools": []
+          }
+        ],
+        "terminalStatus": "completed",
+        "traceDigest": "80ba0be0ca0ee9474e1b274e79554829ebc22667d13097079b88994ca6592012",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "24a7bd6006047e6fe7f73cd6e4f213a269d429e307d63c1838d85a0e9edf1efd"
+    },
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 0
+      },
+      "checkpoint": {
+        "digest": "b9b10f308003a3e1e2e3cfefab7be469c903f1b54b8117a9df3e3703ce2b67b9",
+        "needsContinuation": true,
+        "nextStep": 2,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 1
+      },
+      "scenario": "cancel",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": true,
+          "nextStep": 2,
+          "phase": "continuation"
+        },
+        "compactionCount": 0,
+        "requestCount": 1,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": true,
+            "finish": "error",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": false,
+            "tools": [
+              {
+                "name": "hold_for_cancel",
+                "status": "failed"
+              }
+            ]
+          }
+        ],
+        "terminalStatus": "paused",
+        "traceDigest": "9e33f52584bddfa68051c5a8d6ccaf0c53b68dfb3cb5ff424b3b420e0a86d725",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "85424282ce4e2a798b48d031ca77632beebe069ca37fec2ffd1f6e64eb6b3627"
+    },
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 4
+      },
+      "checkpoint": {
+        "digest": "5b1fd9a2a51fdffb04a47cd58d668071f7c52b52e5955e2cef7bc391d086ad8c",
+        "needsContinuation": false,
+        "nextStep": 2,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 1
+      },
+      "scenario": "compaction",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": false,
+          "nextStep": 2,
+          "phase": "idle"
+        },
+        "compactionCount": 0,
+        "requestCount": 2,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": false,
+            "finish": "stop",
+            "hasReasoning": false,
+            "hasText": true,
+            "structured": false,
+            "tools": []
+          }
+        ],
+        "terminalStatus": "completed",
+        "traceDigest": "1ad5b1540256a047012baca3aa77125b9837b6a5fe02e1c646bb8bfee67aff2e",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "78e9015c5e2126b7c9827b80f07bebc96fc59d87ea8cf3a5d326d928288a5e5c"
+    },
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 0
+      },
+      "checkpoint": {
+        "digest": "5c26c3a2de66d7f0631edb6bcdb0f9e64dd23cca8413c77f2fc87b504e190bf6",
+        "needsContinuation": false,
+        "nextStep": 3,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 2
+      },
+      "scenario": "structured-output",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": false,
+          "nextStep": 3,
+          "phase": "idle"
+        },
+        "compactionCount": 0,
+        "requestCount": 2,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": true,
+            "finish": "error",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": false,
+            "tools": [
+              {
+                "name": "StructuredOutput",
+                "status": "failed"
+              }
+            ]
+          },
+          {
+            "failed": false,
+            "finish": "stop",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": true,
+            "tools": [
+              {
+                "name": "StructuredOutput",
+                "status": "completed"
+              }
+            ]
+          }
+        ],
+        "terminalStatus": "completed",
+        "traceDigest": "fd47135d0bc9481f76ea9e86cf7bb42ded697aa2ce06717425850a884d9c6888",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "2640c70b4ca0dffccbdfb21a22f84a280e40eed8b353ae1af433a647f42167f0"
+    },
+    {
+      "budget": {
+        "attemptsUsed": 1,
+        "costMicrosUsed": 0,
+        "maxAttempts": 3,
+        "maxCostMicros": 5000000,
+        "maxDurationMs": 3600000,
+        "maxTokens": 1000000,
+        "tokensUsed": 2
+      },
+      "checkpoint": {
+        "digest": "43e1ed47a628d377da1d23348bec5cef357f509623f46d12acfb696083ae4597",
+        "needsContinuation": false,
+        "nextStep": 4,
+        "phase": "mature-session-loop"
+      },
+      "requestCursor": {
+        "attempt": 1,
+        "schemaVersion": 1,
+        "turnStep": 3
+      },
+      "scenario": "action-replay",
+      "trace": {
+        "actionStatusCounts": {
+          "authorized": 0,
+          "executing": 0,
+          "failed": 0,
+          "observed": 0,
+          "outcomeUnknown": 0,
+          "proposed": 0,
+          "settled": 0
+        },
+        "adapter": "mature-prompt",
+        "checkpoint": {
+          "needsContinuation": false,
+          "nextStep": 4,
+          "phase": "idle"
+        },
+        "compactionCount": 0,
+        "requestCount": 3,
+        "schemaVersion": 1,
+        "steps": [
+          {
+            "failed": false,
+            "finish": "tool-calls",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": false,
+            "tools": [
+              {
+                "name": "apply_durable_marker",
+                "status": "completed"
+              }
+            ]
+          },
+          {
+            "failed": false,
+            "finish": "tool-calls",
+            "hasReasoning": false,
+            "hasText": false,
+            "structured": false,
+            "tools": [
+              {
+                "name": "apply_durable_marker",
+                "status": "completed"
+              }
+            ]
+          },
+          {
+            "failed": false,
+            "finish": "stop",
+            "hasReasoning": false,
+            "hasText": true,
+            "structured": false,
+            "tools": []
+          }
+        ],
+        "terminalStatus": "completed",
+        "traceDigest": "fcc6172f9f72b6ad0fd90a17b2397db6727bf04f5ceb1550266646f22a847299",
+        "transportRetryCount": 0
+      },
+      "transportRequestDigest": "9d1f3623b1dc2265bdf032bb286a885447e8c6928b791b57a18c069cd5aa5021"
+    }
+  ]
+}

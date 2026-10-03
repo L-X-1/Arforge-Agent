@@ -23,7 +23,7 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
     await expect(output).toBeVisible()
     await timeline.settle()
 
-    const geometry = await row.evaluate((element) => {
+    await row.evaluate((element) => {
       const output = element.querySelector<HTMLElement>('[data-component="bash-output"]')
       if (!output) throw new Error("Shell output is unavailable")
       const rowRect = element.getBoundingClientRect()
@@ -33,6 +33,13 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
       element.style.transform = "translateY(0.25px)"
       output.style.setProperty("--v2-border-border-base", "rgb(255, 0, 255)")
       output.style.setProperty("background", "rgb(0, 0, 0)", "important")
+    })
+    await timeline.settle()
+
+    const geometry = await row.evaluate((element) => {
+      const output = element.querySelector<HTMLElement>('[data-component="bash-output"]')
+      if (!output) throw new Error("Shell output is unavailable")
+      const outputRect = output.getBoundingClientRect()
       const style = getComputedStyle(output)
       return {
         outputWidth: outputRect.width,
@@ -42,7 +49,6 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
         clipMargin: getComputedStyle(element).overflowClipMargin,
       }
     })
-    await timeline.settle()
 
     const clipped = await row.evaluate((element) => {
       const output = element.querySelector<HTMLElement>('[data-component="bash-output"]')!
@@ -91,23 +97,28 @@ test("keeps the patch card inside a fractionally short virtual row", async ({ pa
   await expect(card).toBeVisible()
   await timeline.settle()
 
-  const geometry = await row.evaluate((element) => {
+  await row.evaluate((element) => {
     const card = element.querySelector<HTMLElement>('[data-component="accordion"][data-scope="apply-patch"]')
     if (!card) throw new Error("Patch card is unavailable")
     const rowRect = element.getBoundingClientRect()
     const cardRect = card.getBoundingClientRect()
     element.style.height = `${cardRect.bottom - rowRect.top - 0.49}px`
+  })
+  await timeline.settle()
+
+  const geometry = await row.evaluate((element) => {
+    const card = element.querySelector<HTMLElement>('[data-component="accordion"][data-scope="apply-patch"]')
+    if (!card) throw new Error("Patch card is unavailable")
     const clipMargin = getComputedStyle(element).overflowClipMargin
     const bottom = element.getBoundingClientRect().bottom
     return {
       overflow: card.getBoundingClientRect().bottom - bottom,
       paintOverflow: card.getBoundingClientRect().bottom - bottom - Number.parseFloat(clipMargin),
       clipMargin,
-      cardWidth: cardRect.width,
-      cardHeight: cardRect.height,
+      cardWidth: card.getBoundingClientRect().width,
+      cardHeight: card.getBoundingClientRect().height,
     }
   })
-  await timeline.settle()
 
   expect(geometry.overflow).toBeCloseTo(0.49, 1)
   expect(geometry.paintOverflow).toBeLessThanOrEqual(0)

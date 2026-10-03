@@ -7,6 +7,10 @@ import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import * as Truncate from "./truncate"
 import { Agent } from "@/agent/agent"
+import type { ActionGateway } from "@arforge-ai/core/action-gateway"
+import type { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import type { Egress } from "@arforge-ai/core/egress"
+import type { SandboxPolicy } from "@arforge-ai/core/sandbox/policy"
 
 interface Metadata {
   [key: string]: any
@@ -14,6 +18,17 @@ interface Metadata {
 
 // TODO: remove this hack
 export type DynamicDescription = (agent: Agent.Info) => Effect.Effect<string>
+
+/**
+ * Transitional source provenance used only while mature Arforge definitions
+ * are projected into the canonical Core ToolRegistry. It does not own an
+ * executor or registry; the Core bridge consumes it to choose permission and
+ * scheduling metadata, then registers one `CoreTool.make` value.
+ */
+export type Origin =
+  | { readonly kind: "plugin"; readonly permission: string }
+  | { readonly kind: "mcp"; readonly permission: string; readonly server: string }
+  | { readonly kind: "code-mode"; readonly permission: string }
 
 /**
  * Raised when the LLM calls a tool with arguments that fail the parameter
@@ -37,12 +52,28 @@ export type Context<M extends Metadata = Metadata> = {
   sessionID: SessionID
   messageID: MessageID
   agent: string
+  /** Effective session preset, resolved from the authoritative Session metadata. */
+  sandboxProfile?: SandboxPolicy.Profile
   abort: AbortSignal
   callID?: string
   extra?: { [key: string]: unknown }
   messages: SessionV1.WithParts[]
   metadata(input: { title?: string; metadata?: M }): Effect.Effect<void>
   ask(input: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">): Effect.Effect<void>
+  /**
+   * The durable parent action this tool call runs inside. Set by the session
+   * tool guard whenever the tool is executed through the Action Gateway;
+   * used by nested real MCP calls to bind one child durable action per call.
+   */
+  gateway?: Pick<ActionGateway.Interface, "execute" | "recordMutationIntent">
+  /** Optional leaf-only HTTP egress guard supplied by the durable tool runner. */
+  egress?: Egress.Authorizer
+  parentAction?: {
+    actionID: AgentRuntime.ActionID
+    runID?: AgentRuntime.RunID
+    /** Verified authority from the gateway-issued capability. */
+    authority?: AgentRuntime.Authority
+  }
 }
 
 export interface ExecuteResult<M extends Metadata = Metadata> {
@@ -60,6 +91,8 @@ export interface Def<
   description: string
   parameters: Parameters
   jsonSchema?: JSONSchema7
+  /** Non-built-in source metadata consumed by the Core registration bridge. */
+  origin?: Origin
   execute(args: Schema.Schema.Type<Parameters>, ctx: Context): Effect.Effect<ExecuteResult<M>>
   formatValidationError?(error: unknown): string
 }

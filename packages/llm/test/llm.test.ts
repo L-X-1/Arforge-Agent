@@ -2,7 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { CacheHint, LLM, LLMResponse } from "../src"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import * as OpenAIResponses from "../src/protocols/openai-responses"
-import { LLMRequest, Message, Model, ToolCallPart, ToolChoice, ToolDefinition, ToolResultPart } from "../src/schema"
+import {
+  LLMRequest,
+  Message,
+  Model,
+  ToolCallPart,
+  ToolChoice,
+  ToolDefinition,
+  ToolResultPart,
+  TokenizerRegistry,
+  makeUpperBoundTokenizer,
+} from "../src/schema"
 
 const chatRoute = OpenAIChat.route
 const responsesRoute = OpenAIResponses.route
@@ -106,6 +116,57 @@ describe("llm constructors", () => {
     expect(updatedInput.compatibility).toBe(updated.compatibility)
     expect(String(updatedInput.provider)).toBe("fake")
     expect(Model.update(updated, {})).toBe(updated)
+  })
+
+  test("preserves provider tokenizer metadata without serializing executable counters", () => {
+    const tokenizer = { revision: "chars-v1", count: (input: string) => input.length }
+    const model = Model.make({
+      id: "tokenized-model",
+      provider: "fake",
+      route: chatRoute,
+      tokenizer,
+    })
+    const updated = Model.update(model, { route: responsesRoute })
+
+    expect(updated.tokenizer).toBe(tokenizer)
+    expect(Model.input(updated).tokenizer).toBe(tokenizer)
+    expect(updated.tokenizer?.count("hello")).toBe(5)
+    expect(JSON.stringify(Model.input(updated))).not.toContain("count")
+  })
+
+  test("resolves exact model tokenizer registrations before provider fallbacks", () => {
+    const providerTokenizer = { revision: "fake-provider-v1", count: (input: string) => input.length }
+    const exactTokenizer = { revision: "fake-special-v2", count: (input: string) => input.trim().split(/\s+/u).length }
+    const registry = new TokenizerRegistry([
+      { provider: "fake", tokenizer: providerTokenizer, source: "catalog:fake" },
+      { provider: "fake", model: "special", tokenizer: exactTokenizer, source: "catalog:fake-special" },
+    ])
+    const route = chatRoute.with({ provider: "fake", tokenizerRegistry: registry })
+
+    expect(route.model({ id: "ordinary" }).tokenizer).toBe(providerTokenizer)
+    expect(route.model({ id: "special" }).tokenizer).toBe(exactTokenizer)
+    expect(registry.resolve({ provider: "fake", model: "special" })).toMatchObject({
+      match: "model",
+      source: "catalog:fake-special",
+    })
+    expect(JSON.stringify(registry)).not.toContain("count")
+    expect(() => registry.register({ provider: "fake", model: "special", tokenizer: exactTokenizer })).toThrow(
+      "Duplicate tokenizer registration",
+    )
+  })
+
+  test("creates an explicitly labelled conservative upper-bound tokenizer", () => {
+    const tokenizer = makeUpperBoundTokenizer({
+      revision: "upper-bound-v1",
+      maxTokensPerCharacter: 0.5,
+      overheadTokens: 1,
+    })
+    expect(tokenizer.kind).toBe("upper-bound")
+    expect(tokenizer.count("abcd")).toBe(3)
+    expect(() => makeUpperBoundTokenizer({ revision: "", maxTokensPerCharacter: 1 })).toThrow("revision")
+    expect(() => makeUpperBoundTokenizer({ revision: "bad", maxTokensPerCharacter: 0 })).toThrow(
+      "maxTokensPerCharacter",
+    )
   })
 
   test("carries model defaults and compatibility through route model selection", () => {

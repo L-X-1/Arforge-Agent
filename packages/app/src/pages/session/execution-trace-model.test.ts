@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part, SessionStatus } from "@arforge-ai/sdk/v2"
-import { buildExecutionTrace, executionMascotForm } from "./execution-trace-model"
+import { buildExecutionTrace, executionMascotForm, executionStepText } from "./execution-trace-model"
 
 const sessionID = "ses_1"
 const user = {
@@ -35,6 +35,23 @@ function trace(parts: Part[], status: SessionStatus = { type: "idle" }) {
 }
 
 describe("execution trace model", () => {
+  test("retains complete output, input and source identity beyond the summary limit", () => {
+    const output = "full output ".repeat(3000) + "END-OF-OUTPUT"
+    const parts = [{ id: "long", sessionID, messageID: assistant.id, type: "tool", callID: "call_long", tool: "bash",
+      state: { status: "completed", input: { command: "inspect" }, output, title: "inspect", metadata: {}, time: { start: 1, end: 2 } } }] as Part[]
+    const step = trace(parts).steps[0]!
+    expect(step.sections?.find((section) => section.kind === "output")?.content).toBe(output)
+    expect(executionStepText(step)).toContain("END-OF-OUTPUT")
+    expect(executionStepText(step)).toContain("[long] input")
+  })
+  test("keeps each grouped command's inputs and errors independently inspectable", () => {
+    const parts = ["one", "two"].map((id) => ({ id, sessionID, messageID: assistant.id, type: "tool", callID: id, tool: "bash",
+      state: { status: "error", input: { command: id }, error: id + " failed", time: { start: 1, end: 2 } } })) as Part[]
+    const step = trace(parts).steps[0]!
+    expect(step.count).toBe(2)
+    expect(step.sections?.filter((section) => section.kind === "error").map((section) => section.source)).toEqual(["one", "two"])
+    expect(executionStepText(step)).toContain("two failed")
+  })
   test("maps reasoning depth rather than tool kind onto the three mascot forms", () => {
     expect(executionMascotForm()).toBe(1)
     expect(executionMascotForm("medium")).toBe(1)

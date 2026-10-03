@@ -86,10 +86,14 @@ async function writeProtocolStream(session: CDPSession, handle: string, file: st
   try {
     while (true) {
       const chunk = await session.send("IO.read", { handle })
-      await output.write(chunk.base64Encoded ? Buffer.from(chunk.data, "base64") : chunk.data)
+      await output.write(chromeTraceChunkBytes(chunk))
       if (chunk.eof) break
     }
   } finally {
     await Promise.allSettled([output.close(), session.send("IO.close", { handle })])
   }
+}
+
+export function chromeTraceChunkBytes(chunk: { data: string; base64Encoded?: boolean }) {
+  return Buffer.from(chunk.data, chunk.base64Encoded ? "base64" : "utf8")
 }

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "service": "arforge-platform-test",
+  "window": {
+    "startAt": 1700000000000,
+    "endAt": 1700000360000,
+    "api": {
+      "totalRequests": 10000,
+      "goodRequests": 9995,
+      "p95LatencyMs": 420
+    },
+    "tenantIsolation": {
+      "probeCount": 38,
+      "crossScopeViolations": 0,
+      "policyBypasses": 0
+    },
+    "backupRestore": {
+      "attempts": 1,
+      "successful": 1,
+      "mismatchCount": 0,
+      "temporaryDatabaseCleanup": true
+    },
+    "migrationIntegrity": {
+      "attempts": 1,
+      "successful": 1,
+      "rowCountMismatch": 0,
+      "rlsChecksPassed": true,
+      "schemaRevision": "20260814091000"
+    }
+  }
+}

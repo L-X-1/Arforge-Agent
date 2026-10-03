@@ -3,11 +3,11 @@ export * as TriggerTools from "./trigger"
 import { ToolFailure } from "@arforge-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
-import { PermissionV2 } from "../permission"
 import { TriggerV2 } from "../trigger"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead, majorImpact } from "./effect-semantics"
 
 export const ProfilesInput = Schema.Struct({})
 export const ManageInput = Schema.Struct({
@@ -32,9 +32,8 @@ const ManageOutput = Schema.Union([TriggerV2.Result, ManageError])
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const triggers = yield* TriggerV2.Service
-    const permission = yield* PermissionV2.Service
 
     const source = (context: Tool.Context) => ({
       type: "tool" as const,
@@ -46,9 +45,14 @@ const layer = Layer.effectDiscard(
       description: "List host-configured local and HTTP trigger profiles without returning authentication values.",
       input: ProfilesInput,
       output: TriggerV2.Profiles,
+      effects: automaticRead({
+        externalServices: ["host-configured-trigger-profiles"],
+        expectedArtifacts: ["trigger profiles without credentials"],
+        successCriteria: ["configured trigger profiles are listed without authentication values"],
+      }),
       toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
       execute: (_input, context) =>
-        permission
+        context.permission
           .assert({
             action: "trigger_profiles",
             resources: ["*"],
@@ -59,7 +63,9 @@ const layer = Layer.effectDiscard(
           })
           .pipe(
             Effect.andThen(Effect.sync(() => triggers.profiles())),
-            Effect.mapError(() => new ToolFailure({ message: "Unable to list trigger profiles" })),
+            Effect.mapError(
+              (error) => Tool.toToolFailure(error) ?? new ToolFailure({ message: "Unable to list trigger profiles" }),
+            ),
           ),
     })
 
@@ -69,11 +75,23 @@ const layer = Layer.effectDiscard(
           "Manage local or authenticated HTTP agent triggers through a host-configured profile. Supports list, get, create, update, and run. URLs and credentials are host-owned and never accepted as tool parameters.",
         input: ManageInput,
         output: ManageOutput,
+        effects: (input) => {
+          const profile = input.profile ?? "local"
+          const common = {
+            externalServices: [`trigger-profile:${profile}`],
+            networkScope: [`trigger-profile:${profile}`],
+            secretScope: ["host-managed trigger credentials"],
+            successCriteria: [`trigger ${input.action} completes against host profile ${profile}`],
+          }
+          return input.action === "list" || input.action === "get"
+            ? automaticRead({ ...common, expectedArtifacts: ["bounded trigger result"] })
+            : majorImpact({ ...common, expectedArtifacts: ["trigger mutation result"] })
+        },
         toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
         execute: (input, context) =>
           Effect.gen(function* () {
             const profile = input.profile ?? TriggerV2.ProfileName.make("local")
-            yield* permission.assert({
+            yield* context.permission.assert({
               action: "trigger_manage",
               resources: [profile],
               save: ["*"],
@@ -105,7 +123,12 @@ const layer = Layer.effectDiscard(
               }
             }
             return result
-          }).pipe(Effect.mapError(() => new ToolFailure({ message: "Trigger operation was not approved" }))),
+          }).pipe(
+            Effect.mapError(
+              (error) =>
+                Tool.toToolFailure(error) ?? new ToolFailure({ message: "Trigger operation was not approved" }),
+            ),
+          ),
       }),
       "trigger_manage",
     )
@@ -117,5 +140,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/trigger",
   layer,
-  deps: [ToolRegistry.node, TriggerV2.node, PermissionV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, TriggerV2.node],
 })

@@ -3445,6 +3445,10 @@ export type McpAuthStartResponses = {
      * URL to open in browser for authorization
      */
     authorizationUrl: string
+    /**
+     * OAuth attempt capability required by the callback endpoint
+     */
+    oauthState: string
   }
 }
 
@@ -3456,6 +3460,10 @@ export type McpAuthCallbackData = {
      * Authorization code from OAuth callback
      */
     code: string
+    /**
+     * OAuth attempt capability returned by the start endpoint
+     */
+    oauthState: string
   }
   path: {
     name: string

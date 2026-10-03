@@ -10,15 +10,32 @@ Supported operations:
 - prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
 - incomingCalls: Find all functions/methods that call the function at a position
 - outgoingCalls: Find all functions/methods called by the function at a position
+- diagnostics: Read current diagnostics for a document
+- status: List currently connected language-service clients
 
-All operations require:
+Position-based operations require:
 - filePath: The file to operate on
 - line: The line number (1-based, as shown in editors)
 - character: The character offset (1-based, as shown in editors)
 
+documentSymbol and diagnostics require filePath but do not require a cursor.
+status does not require a file or cursor. workspaceSymbol requires filePath to
+select and start the matching workspace language server, but does not require a
+cursor.
+
 workspaceSymbol also accepts:
 - query: A query string to filter symbols by. Empty string requests all symbols.
 
-For workspaceSymbol, filePath is not sent in the LSP workspace/symbol request. It is used by arforge to select and start the matching LSP server.
+For workspaceSymbol, filePath is used only to select and start the matching
+workspace language server; it is not sent in the LSP workspace/symbol request.
 
-Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.
+Note: LSP servers are preferred when configured. If no server is available for a
+supported Python, JavaScript/TypeScript, Go, or Rust file, the same TypeScript
+owner uses a bounded index/lexical fallback. Unsupported extensions, unreadable
+files, workspace escapes, and oversized files fail closed; the tool never starts
+a second language-service process or a user-supplied command. Python fallback
+diagnostics include deterministic compile-compatible syntax errors for unclosed
+delimiters/strings and common block-colon or indentation mistakes; they do not
+claim Python type or semantic checking. If a configured server exits during cold
+initialization, status reports a safe error and subsequent requests use the
+fallback without retrying that server in the same instance.

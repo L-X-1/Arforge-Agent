@@ -6,7 +6,9 @@ import { TooltipV2 } from "@arforge-ai/ui/v2/tooltip-v2"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useTheme } from "@arforge-ai/ui/theme"
 import { createMemo, onCleanup, onMount, type Component, For, Show } from "solid-js"
-import { useLocal } from "@/context/local"
+import { useLocal, type ModelSelection } from "@/context/local"
+import type { ModelSelectionBinding } from "./dialog-select-model"
+import { createModelDialogSelection } from "./dialog-select-model-controller"
 import { useProviders } from "@/hooks/use-providers"
 import { decode64 } from "@/utils/base64"
 import { useLanguage } from "@/context/language"
@@ -16,33 +18,33 @@ type ModelState = ReturnType<typeof useLocal>["model"]
 const featuredProviders = ["openai", "anthropic", "google"]
 const displayModelName = (name: string) => name.replace(/\s+(?:\(free\)|free)$/i, "")
 
-export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (props) => {
+export const DialogSelectModelUnpaidV2: Component<{ model?: ModelSelection; binding?: ModelSelectionBinding }> = (props) => {
   const local = useLocal()
-  const model = props.model ?? local.model
   const dialog = useDialog()
+  const selection = createModelDialogSelection({
+    get model() { return props.model },
+    get binding() { return props.binding },
+    onSelect: () => dialog.close(),
+  })
+  const model = selection.model
   const theme = useTheme()
   const directory = () => decode64(local.slug())
   const providers = useProviders(directory)
   const language = useLanguage()
   const modelKey = (item: ReturnType<ModelState["list"]>[number]) => `${item.provider.id}:${item.id}`
-  const currentKey = createMemo(() => {
-    const c = model.current()
-    return c ? `${c.provider.id}:${c.id}` : undefined
-  })
+  const currentKey = selection.currentKey
   const isFree = (item: ReturnType<ModelState["list"]>[number]) => !item.cost || item.cost.input === 0
-  const freeModels = createMemo(() => model.list().filter(isFree))
+  const freeModels = createMemo(() => model().list().filter(isFree))
 
   const openProviders = (provider?: string) => {
+    if (!selection.active() || selection.busy()) return
+    const targetDirectory = directory()
     void import("./dialog-connect-provider").then((x) => {
+      if (!selection.active() || selection.busy()) return
       const controller = x.useProviderConnectController()
       controller.select(provider)
-      void dialog.show(() => <x.DialogConnectProvider controller={controller} directory={directory} />)
+      void dialog.show(() => <x.DialogConnectProvider controller={controller} directory={() => targetDirectory} />)
     })
-  }
-
-  const selectModel = (item: ReturnType<ModelState["list"]>[number]) => {
-    model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
-    dialog.close()
   }
 
   // Focus starts on the dialog's close button, outside the list, so listen at the
@@ -52,7 +54,7 @@ export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (pro
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return
       if (!listEl) return
-      const buttons = Array.from(listEl.querySelectorAll<HTMLButtonElement>("button"))
+      const buttons = Array.from(listEl.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"))
       if (buttons.length === 0) return
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
       const next =
@@ -74,7 +76,23 @@ export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (pro
         <DialogTitle>{language.t("dialog.model.select.title")}</DialogTitle>
       </DialogHeader>
       <DialogBody class="max-h-[calc(100vh_-_68px)] min-h-0 flex-none gap-0 overflow-y-auto px-2 pb-2">
-        <div ref={listEl} class="flex min-h-0 flex-col">
+        <Show when={selection.unavailable()}>{(reason) => <div class="px-3 py-2 text-[13px] text-v2-text-text-base" role="status">
+          <div>{selection.copy()[reason()]}</div>
+          <div class="break-all font-mono text-[12px]">{selection.currentChoice()?.providerID} / {selection.currentChoice()?.modelID}</div>
+        </div>}</Show>
+        <Show when={selection.state.error || selection.state.catalogError}>
+          <div class="px-3 py-2 text-[13px] text-v2-text-text-base" role="alert">{selection.state.error || selection.copy().stale}</div>
+        </Show>
+        <Show when={!selection.ready() && !selection.state.stale}>
+          <div class="px-3 py-2 text-[13px] text-v2-text-text-muted" role="status">{language.t("common.loading")}</div>
+        </Show>
+        <Show when={selection.unavailable() || selection.state.error || selection.state.catalogError}>
+          <button type="button" class="self-start rounded-md px-3 py-2 text-[13px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
+            disabled={selection.busy() || selection.state.stale} onClick={() => void selection.refresh()}>
+            {selection.state.refreshing ? language.t("common.loading") : selection.copy().retry}
+          </button>
+        </Show>
+        <div ref={listEl} class="flex min-h-0 flex-col" aria-busy={selection.busy()}>
           <div class="flex w-full flex-col items-start pb-3">
             <div class="flex h-8 w-full flex-none select-none flex-row items-center px-3 pb-2">
               <div class="flex h-5 items-center text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted [font-family:var(--v2-font-family-sans)] [font-variant-numeric:tabular-nums] [font-variation-settings:'slnt'_0]">
@@ -101,7 +119,10 @@ export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (pro
                   <button
                     type="button"
                     class="flex w-full scroll-my-3.5 flex-row items-center gap-1.5 rounded-md px-3 py-2 text-left text-[13px] font-[530] leading-5 tracking-[-0.04px] text-v2-text-text-base [font-family:var(--v2-font-family-sans)] [font-variation-settings:'slnt'_0] hover:bg-v2-overlay-simple-overlay-hover focus:bg-v2-overlay-simple-overlay-hover focus:outline-none"
-                    onClick={() => selectModel(item)}
+                    data-model-key={modelKey(item)}
+                    aria-pressed={currentKey() === modelKey(item)}
+                    disabled={!selection.ready() || selection.busy()}
+                    onClick={() => void selection.select(item)}
                   >
                     <span class="min-w-0 truncate">{displayModelName(item.name)}</span>
                     <Tag class="shrink-0">{language.t("model.tag.free")}</Tag>
@@ -139,6 +160,7 @@ export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (pro
                           theme.mode() !== "dark",
                         "border-[0.5px] border-v2-border-border-strong": theme.mode() === "dark",
                       }}
+                      disabled={selection.busy() || selection.state.stale}
                       onClick={() => openProviders(provider.id)}
                     >
                       <ProviderIcon id={provider.id} class="mt-0.5 size-4 shrink-0 text-v2-icon-icon-base" />
@@ -151,6 +173,7 @@ export const DialogSelectModelUnpaidV2: Component<{ model?: ModelState }> = (pro
                 <button
                   type="button"
                   class="col-span-full flex h-8 w-full scroll-my-3.5 items-center justify-start rounded-md px-3 text-left text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted [font-family:var(--v2-font-family-sans)] [font-variation-settings:'slnt'_0] hover:bg-v2-overlay-simple-overlay-hover focus:bg-v2-overlay-simple-overlay-hover focus:outline-none"
+                  disabled={selection.busy() || selection.state.stale}
                   onClick={() => openProviders()}
                 >
                   {language.t("dialog.model.unpaid.viewMoreProviders")}

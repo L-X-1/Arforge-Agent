@@ -6,6 +6,9 @@ import DESCRIPTION from "./websearch.txt"
 import { checksum } from "@arforge-ai/core/util/encode"
 import { InstallationVersion } from "@arforge-ai/core/installation/version"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
+import { Egress } from "@arforge-ai/core/egress"
+import { redactSecrets } from "@arforge-ai/core/redact"
 
 export const Parameters = Schema.Struct({
   query: Schema.String.annotate({ description: "Websearch query" }),
@@ -64,6 +67,7 @@ function callProvider(
   ctx: Tool.Context,
 ) {
   if (provider === "parallel") {
+    const apiKey = process.env.PARALLEL_API_KEY
     return McpWebSearch.call(
       http,
       McpWebSearch.PARALLEL_URL,
@@ -77,12 +81,21 @@ function callProvider(
       },
       "25 seconds",
       parallelAuthHeaders(),
+      ctx.egress ??
+        Egress.make({
+          action: "websearch",
+          networkScope: [McpWebSearch.PARALLEL_URL],
+          secretScope: apiKey ? ["PARALLEL_API_KEY"] : [],
+          allowedMethods: ["POST"],
+        }),
+      apiKey ? ["PARALLEL_API_KEY"] : [],
     )
   }
 
+  const apiKey = process.env.EXA_API_KEY
   return McpWebSearch.call(
     http,
-    McpWebSearch.EXA_URL,
+    McpWebSearch.exaUrl(),
     "web_search_exa",
     McpWebSearch.SearchArgs,
     {
@@ -93,6 +106,15 @@ function callProvider(
       contextMaxCharacters: params.contextMaxCharacters,
     },
     "25 seconds",
+    undefined,
+    ctx.egress ??
+      Egress.make({
+        action: "websearch",
+        networkScope: [McpWebSearch.EXA_URL],
+        secretScope: apiKey ? ["EXA_API_KEY"] : [],
+        allowedMethods: ["POST"],
+      }),
+    apiKey ? ["EXA_API_KEY"] : [],
   )
 }
 
@@ -132,8 +154,13 @@ export const WebSearchTool = Tool.define(
 
           const result = yield* callProvider(http, provider, params, ctx)
 
+          const secret = provider === "parallel" ? process.env.PARALLEL_API_KEY : process.env.EXA_API_KEY
           return {
-            output: result ?? "No search results found. Please try a different query.",
+            output: ContextFirewall.untrusted(
+              "web",
+              redactSecrets(result ?? "No search results found. Please try a different query.",
+                secret === undefined ? [] : [secret]),
+            ),
             title: `${title}: ${params.query}`,
             metadata: { provider },
           }

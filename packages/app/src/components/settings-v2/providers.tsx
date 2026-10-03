@@ -1,3 +1,6 @@
+import { createStore } from "solid-js/store"
+import { ManagementStatus } from "./management-status"
+import { managementCopy, managementErrorText } from "./management-state"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
 import { Tag } from "@arforge-ai/ui/v2/badge-v2"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
@@ -34,6 +37,7 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void }> = (props) =
   const serverSync = useServerSync()
   const providers = useProviders()
   const providerConnect = useProviderConnectController({ onBack: props.onBack })
+  const [request, setRequest] = createStore({ busy: "", error: "", notice: "" })
 
   const connect = (provider?: string) => {
     providerConnect.select(provider)
@@ -102,12 +106,26 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void }> = (props) =
       })
       .catch((err: unknown) => {
         serverSync().set("config", "disabled_providers", before)
-        const message = err instanceof Error ? err.message : String(err)
+        const message = managementErrorText(err, language.t("common.requestFailed"))
+        setRequest("error", message)
         showToast({ title: language.t("common.requestFailed"), description: message })
       })
   }
 
   const disconnect = async (providerID: string, name: string) => {
+    if (request.busy || !window.confirm(`${name}\n\n${managementCopy(language.locale()).disconnect}`)) return
+    setRequest({ busy: providerID, error: "", notice: "" })
+    try {
+      await performDisconnect(providerID, name)
+      if (!request.error) setRequest("notice", language.t("provider.disconnect.toast.disconnected.title", { provider: name }))
+    } catch (error) {
+      setRequest("error", managementErrorText(error, language.t("common.requestFailed")))
+    } finally {
+      setRequest("busy", "")
+    }
+  }
+
+  const performDisconnect = async (providerID: string, name: string) => {
     if (isConfigCustom(providerID)) {
       await serverSdk()
         .client.auth.remove({ providerID })
@@ -127,7 +145,8 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void }> = (props) =
         })
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
+        const message = managementErrorText(err, language.t("common.requestFailed"))
+        setRequest("error", message)
         showToast({ title: language.t("common.requestFailed"), description: message })
       })
   }
@@ -138,14 +157,15 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void }> = (props) =
         <h2 class="settings-v2-tab-title">{language.t("settings.providers.title")}</h2>
       </div>
 
-      <div class="settings-v2-tab-body settings-v2-providers">
+      <div class="settings-v2-tab-body settings-v2-providers" aria-busy={!!request.busy}>
+        <ManagementStatus saving={!!request.busy} error={request.error} notice={request.notice} />
         <div class="settings-v2-section" data-component="connected-providers-section">
           <h3 class="settings-v2-section-title">{language.t("settings.providers.section.connected")}</h3>
           <SettingsListV2>
             <Show
               when={connected().length > 0}
               fallback={
-                <div class="settings-v2-provider-empty">{language.t("settings.providers.connected.empty")}</div>
+                <div class="settings-v2-provider-empty" role="status">{language.t("settings.providers.connected.empty")}</div>
               }
             >
               <For each={connected()}>
@@ -171,7 +191,7 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void }> = (props) =
                         </span>
                       }
                     >
-                      <ButtonV2 size="normal" variant="ghost-muted" onClick={() => void disconnect(item.id, item.name)}>
+                      <ButtonV2 size="normal" variant="ghost-muted" disabled={!!request.busy} onClick={() => void disconnect(item.id, item.name)}>
                         {language.t("common.disconnect")}
                       </ButtonV2>
                     </Show>

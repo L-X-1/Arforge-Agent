@@ -22,7 +22,11 @@ if (migrationIDs.length === 0) throw new Error("No PostgreSQL migrations found")
 const migrations = await Promise.all(
   migrationIDs.map(async (id) => ({
     id,
+    // Keep generated SQL stable across Windows and Unix checkouts. Migration
+    // text is embedded as a string literal, so preserving CRLF here would
+    // create a noisy generated diff for every older migration.
     statements: (await Bun.file(path.join(migrationRoot, id, "migration.sql")).text())
+      .replaceAll("\r\n", "\n")
       .split("--> statement-breakpoint")
       .map((item) => item.trim())
       .filter(Boolean),

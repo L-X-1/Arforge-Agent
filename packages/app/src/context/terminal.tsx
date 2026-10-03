@@ -1,6 +1,6 @@
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@arforge-ai/ui/context"
-import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createRoot, on, onCleanup, untrack } from "solid-js"
 import { useParams } from "@solidjs/router"
 import { useSDK, type DirectorySDK } from "./sdk"
 import type { Platform } from "./platform"
@@ -20,6 +20,9 @@ export type LocalPTY = {
   scrollY?: number
   cursor?: number
 }
+
+export type TerminalOperation = "create" | "clone" | "update" | "close"
+export type TerminalOperationError = { operation: TerminalOperation; terminalID?: string; sequence: number }
 
 const WORKSPACE_KEY = "__workspace__"
 const MAX_TERMINAL_SESSIONS = 20
@@ -143,7 +146,7 @@ export function clearWorkspaceTerminals(
   }
 }
 
-function createWorkspaceTerminalSession(
+export function createWorkspaceTerminalSession(
   sdk: DirectorySDK,
   dir: string,
   scope: ServerScopeValue,
@@ -164,10 +167,45 @@ function createWorkspaceTerminalSession(
       all: [],
     }),
   )
-  const [ui, setUi] = createStore({
-    focus: undefined as { request: number; id?: string; pending: boolean } | undefined,
-  })
+  const [ui, setUi] = createStore<{
+    focus?: { request: number; id?: string; pending: boolean }
+    operationError?: TerminalOperationError
+    pending: Record<string, number | undefined>
+  }>({ pending: {} })
   const focus = { request: 0 }
+  let sequence = 0
+  const latest = new Map<string, number>()
+  const exitedWhileClosing = new Set<string>()
+  const operationKey = (operation: TerminalOperation, terminalID?: string) => `${operation}:${terminalID ?? ""}`
+  const operationPending = (operation: TerminalOperation, terminalID?: string) =>
+    (ui.pending[operationKey(operation, terminalID)] ?? 0) > 0
+  const beginOperation = (operation: TerminalOperation, terminalID?: string) => untrack(() => {
+    const ticket = { operation, terminalID, sequence: ++sequence }
+    const key = operationKey(operation, terminalID)
+    latest.set(key, ticket.sequence)
+    batch(() => {
+      setUi("pending", key, (count) => (count ?? 0) + 1)
+      if (ui.operationError?.operation === operation && ui.operationError.terminalID === terminalID) {
+        setUi("operationError", undefined)
+      }
+    })
+    return ticket
+  })
+  const isLatest = (ticket: TerminalOperationError) =>
+    latest.get(operationKey(ticket.operation, ticket.terminalID)) === ticket.sequence
+  const finishOperation = (ticket: TerminalOperationError, failed: boolean) => untrack(() => {
+    const key = operationKey(ticket.operation, ticket.terminalID)
+    const remaining = Math.max(0, (ui.pending[key] ?? 1) - 1)
+    batch(() => {
+      setUi("pending", key, remaining || undefined)
+      if (failed && isLatest(ticket)) setUi("operationError", ticket)
+    })
+    if (!remaining) latest.delete(key)
+  })
+  const removePTY = async (id: string) => {
+    if ((await sdk.protocol) === "v1") return sdk.client.pty.remove({ ptyID: id })
+    return sdk.api.pty.remove({ ptyID: id, location })
+  }
 
   const requestFocus = (id?: string, pending = false) => {
     focus.request += 1
@@ -220,11 +258,12 @@ function createWorkspaceTerminalSession(
     )
   }
 
-  const removeExited = (id: string) => {
+  const removeExited = (id: string, previous = false) => {
     const all = store.all
     const index = all.findIndex((x) => x.id === id)
     if (index === -1) return
-    const active = store.active === id ? (index === 0 ? all[1]?.id : all[0]?.id) : store.active
+    const next = previous ? (index > 0 ? all[index - 1]?.id : all[1]?.id) : (index === 0 ? all[1]?.id : all[0]?.id)
+    const active = store.active === id ? next : store.active
     batch(() => {
       setStore("active", active)
       setStore(
@@ -237,13 +276,19 @@ function createWorkspaceTerminalSession(
   }
 
   const unsub = sdk.event.on("pty.exited", (event: { properties: { id: string } }) => {
+    if (operationPending("close", event.properties.id)) exitedWhileClosing.add(event.properties.id)
     removeExited(event.properties.id)
   })
   onCleanup(unsub)
 
   const update = (pty: Partial<LocalPTY> & { id: string }) => {
     const index = store.all.findIndex((x) => x.id === pty.id)
-    const previous = index >= 0 ? store.all[index] : undefined
+    const previous = index >= 0 ? { ...store.all[index] } : undefined
+    const rollback = previous ? Object.fromEntries(
+      (Object.keys(pty) as Array<keyof LocalPTY>).filter((key) => key !== "id").map((key) => [key, previous[key]]),
+    ) as Partial<LocalPTY> : undefined
+    const ticket = beginOperation("update", pty.id)
+    let failed = false
     if (index >= 0) {
       setStore("all", index, (item) => ({ ...item, ...pty }))
     }
@@ -263,56 +308,60 @@ function createWorkspaceTerminalSession(
         })
       }
     }
-    doUpdate().catch((error: unknown) => {
-      if (previous) {
+    return doUpdate().catch((error: unknown) => {
+      failed = true
+      if (rollback && isLatest(ticket)) {
         const currentIndex = store.all.findIndex((item) => item.id === pty.id)
-        if (currentIndex >= 0) setStore("all", currentIndex, previous)
+        if (currentIndex >= 0) setStore("all", currentIndex, (item) => ({ ...item, ...rollback }))
       }
       console.error("Failed to update terminal", error)
-    })
+    }).finally(() => finishOperation(ticket, failed))
   }
 
   const clone = async (id: string) => {
-    const index = store.all.findIndex((x) => x.id === id)
-    const pty = store.all[index]
-    if (!pty) return
-    const data = await (async () => {
-      if ((await sdk.protocol) === "v1") {
-        return (await sdk.client.pty.create({ title: pty.title })).data
+    if (operationPending("clone", id)) return
+    const original = store.all.find((item) => item.id === id)
+    if (!original) return
+    const pty = { ...original }
+    const ticket = beginOperation("clone", id)
+    let failed = false
+    try {
+      const data = (await sdk.protocol) === "v1"
+        ? (await sdk.client.pty.create({ title: pty.title })).data
+        : (await sdk.api.pty.create({ location, title: pty.title })).data
+      if (!data?.id) throw new Error("Terminal creation returned no identifier")
+      const index = store.all.findIndex((item) => item.id === id)
+      if (index < 0) {
+        await removePTY(data.id)
+        return
       }
-      return (
-        await sdk.api.pty.create({
-          location,
-          title: pty.title,
+      const active = store.active === id
+      batch(() => {
+        setStore("all", index, {
+          id: data.id,
+          title: data.title ?? pty.title,
+          titleNumber: pty.titleNumber,
+          buffer: undefined,
+          cursor: undefined,
+          scrollY: undefined,
+          rows: undefined,
+          cols: undefined,
         })
-      ).data
-    })().catch((error: unknown) => {
-      console.error("Failed to clone terminal", error)
-      return undefined
-    })
-    if (!data?.id) return
-
-    const active = store.active === pty.id
-
-    batch(() => {
-      setStore("all", index, {
-        id: data.id,
-        title: data.title ?? pty.title,
-        titleNumber: pty.titleNumber,
-        buffer: undefined,
-        cursor: undefined,
-        scrollY: undefined,
-        rows: undefined,
-        cols: undefined,
+        if (active) setStore("active", data.id)
       })
-      if (active) {
-        setStore("active", data.id)
-      }
-    })
+    } catch (error) {
+      failed = true
+      console.error("Failed to clone terminal", error)
+    } finally {
+      finishOperation(ticket, failed)
+    }
   }
 
   return {
     ready,
+    operationError: () => ui.operationError,
+    pending: operationPending,
+    dismissOperationError: () => setUi("operationError", undefined),
     all: createMemo(() => store.all),
     active: createMemo(() => store.active),
     clear() {
@@ -321,43 +370,40 @@ function createWorkspaceTerminalSession(
         setStore("all", [])
       })
     },
-    new(options?: { focus?: boolean }) {
+    async new(options?: { focus?: boolean }) {
+      if (operationPending("create")) return
+      const ticket = beginOperation("create")
       const nextNumber = pickNextTerminalNumber()
       const focusRequest = options?.focus ? requestFocus(undefined, true) : undefined
-
-      const doCreate = async () => {
-        if ((await sdk.protocol) === "v1") {
-          return (await sdk.client.pty.create({ title: defaultTitle(nextNumber) })).data
+      let failed = false
+      try {
+        const data = (await sdk.protocol) === "v1"
+          ? (await sdk.client.pty.create({ title: defaultTitle(nextNumber) })).data
+          : (await sdk.api.pty.create({ location, title: defaultTitle(nextNumber) })).data
+        const id = data?.id
+        if (!id) throw new Error("Terminal creation returned no identifier")
+        const newTerminal = {
+          id,
+          title: data.title ?? defaultTitle(nextNumber),
+          titleNumber: nextNumber,
         }
-        return (await sdk.api.pty.create({ location, title: defaultTitle(nextNumber) })).data
+        batch(() => {
+          setStore("all", store.all.length, newTerminal)
+          setStore("active", id)
+          if (focusRequest !== undefined && ui.focus?.request === focusRequest) {
+            setUi("focus", { request: focusRequest, id, pending: false })
+          }
+        })
+      } catch (error) {
+        failed = true
+        if (focusRequest !== undefined) cancelFocus(focusRequest)
+        console.error("Failed to create terminal", error)
+      } finally {
+        finishOperation(ticket, failed)
       }
-      doCreate()
-        .then((data) => {
-          const id = data?.id
-          if (!id) {
-            if (focusRequest !== undefined) cancelFocus(focusRequest)
-            return
-          }
-          const newTerminal = {
-            id,
-            title: data?.title ?? defaultTitle(nextNumber),
-            titleNumber: nextNumber,
-          }
-          batch(() => {
-            setStore("all", store.all.length, newTerminal)
-            setStore("active", id)
-            if (focusRequest !== undefined && ui.focus?.request === focusRequest) {
-              setUi("focus", { request: focusRequest, id, pending: false })
-            }
-          })
-        })
-        .catch((error: unknown) => {
-          if (focusRequest !== undefined) cancelFocus(focusRequest)
-          console.error("Failed to create terminal", error)
-        })
     },
     update(pty: Partial<LocalPTY> & { id: string }) {
-      update(pty)
+      return update(pty)
     },
     trim(id: string) {
       const index = store.all.findIndex((x) => x.id === id)
@@ -417,29 +463,19 @@ function createWorkspaceTerminalSession(
       setStore("active", store.all[prevIndex]?.id)
     },
     async close(id: string) {
-      const index = store.all.findIndex((f) => f.id === id)
-      if (index !== -1) {
-        batch(() => {
-          if (store.active === id) {
-            const next = index > 0 ? store.all[index - 1]?.id : store.all[1]?.id
-            setStore("active", next)
-          }
-          setStore(
-            "all",
-            produce((all) => {
-              all.splice(index, 1)
-            }),
-          )
-        })
+      if (operationPending("close", id)) return
+      const ticket = beginOperation("close", id)
+      let failed = false
+      try {
+        await removePTY(id)
+        removeExited(id, true)
+      } catch (error) {
+        failed = !exitedWhileClosing.has(id)
+        if (failed) console.error("Failed to close terminal", error)
+      } finally {
+        exitedWhileClosing.delete(id)
+        finishOperation(ticket, failed)
       }
-
-      const removePromise =
-        (await sdk.protocol) === "v1"
-          ? sdk.client.pty.remove({ ptyID: id })
-          : sdk.api.pty.remove({ ptyID: id, location })
-      await removePromise.catch((error: unknown) => {
-        console.error("Failed to close terminal", error)
-      })
     },
     move(id: string, to: number) {
       const index = store.all.findIndex((f) => f.id === id)
@@ -524,6 +560,9 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
 
     return {
       ready: () => workspace().ready(),
+      operationError: () => workspace().operationError(),
+      pending: (operation: TerminalOperation, terminalID?: string) => workspace().pending(operation, terminalID),
+      dismissOperationError: () => workspace().dismissOperationError(),
       all: () => workspace().all(),
       active: () => workspace().active(),
       new: (options?: { focus?: boolean }) => workspace().new(options),

@@ -1,4 +1,15 @@
-"""Interactive question tool for clarifying choices during agent execution."""
+"""Explicit Python compatibility wrapper for the legacy ``ask_user`` tool.
+
+The TypeScript/Core ``question`` tool is the canonical product owner for
+session-bound prompts, answer arrays, permission checks, lifecycle events, and
+Desktop/Bridge settlement. This module remains importable for legacy Python
+callers and fixtures, but is excluded from the default Python registry so it
+cannot become a second interactive-question state machine.
+
+The old ``multi_select`` and text-answer shape is intentionally retained only
+at this compatibility boundary; new product code must use the TS/Core
+``multiple`` and array-answer contract.
+"""
 
 from __future__ import annotations
 

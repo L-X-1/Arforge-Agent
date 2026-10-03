@@ -1,11 +1,11 @@
 import * as InstanceState from "@/effect/instance-state"
 import { FileSystem } from "@arforge-ai/core/filesystem"
-import { LocationServiceMap, locationServiceMapLayer } from "@arforge-ai/core/location-services"
+import { LocationServiceMap } from "@arforge-ai/core/location-services"
 import { Ripgrep } from "@arforge-ai/core/ripgrep"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import { Location } from "@arforge-ai/core/location"
 import { AbsolutePath, RelativePath } from "@arforge-ai/core/schema"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Option } from "effect"
 import ignore from "ignore"
 import path from "path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -113,7 +113,9 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
         ),
         Effect.map(({ item, text }) =>
           Option.isSome(text)
-            ? { type: "text" as const, content: text.value.trim() }
+            // Preview revisions and source offsets refer to the complete
+            // decoded file. Trimming here changes both without a disk edit.
+            ? { type: "text" as const, content: text.value }
             : {
                 type: "binary" as const,
                 content: Buffer.from(item.content).toString("base64"),
@@ -136,4 +138,4 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("content", content)
       .handle("status", status)
   }),
-).pipe(Layer.provide(locationServiceMapLayer))
+)

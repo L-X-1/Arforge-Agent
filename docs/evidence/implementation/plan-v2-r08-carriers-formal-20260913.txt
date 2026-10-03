@@ -1,0 +1,14 @@
+bun test v1.3.14 (0d9b296a)
+
+test\session\prompt.test.ts:
+R05 scheduled child execution recording {"parentCoreAssistants":2,"parentLegacyAssistants":0,"childCoreAssistants":1,"childLegacyAssistants":0,"providerCalls":2,"childRunCount":1,"childAttempts":1,"childTokens":7}
+(pass) integrated Formal drain executes an admitted automatic subtask once before the parent request [9472.02ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=false [6388.40ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=true [7832.59ms]
+(pass) Formal scheduled subtask recovery reuses the persisted assistant, call identity, and action [8097.68ms]
+
+ 4 pass
+ 196 filtered out
+ 0 fail
+ 63 expect() calls
+Ran 4 tests across 1 file. [36.88s]

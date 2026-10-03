@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Duration, Effect, Exit, Fiber, Scope, Stream } from "effect"
+import { Deferred, Duration, Effect, Exit, Fiber, Scope, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { Credential } from "@arforge-ai/core/credential"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
@@ -11,6 +11,116 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventV2.node])))
 
 describe("Integration", () => {
+  for (const change of ["replace", "remove"] as const)
+    it.effect(`does not commit stale OAuth refresh after credential ${change}`, () =>
+      Effect.gen(function* () {
+        const integrations = yield* Integration.Service
+        const credentials = yield* Credential.Service
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const integrationID = Integration.ID.make("refresh-race-fixture")
+        const methodID = Integration.MethodID.make("refresh-race-oauth")
+        yield* integrations.transform((editor) =>
+          editor.method.update({
+            integrationID,
+            method: { id: methodID, type: "oauth", label: "Refresh race fixture" },
+            authorize: () => Effect.die("unexpected authorization"),
+            refresh: () =>
+              Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(
+                  Credential.OAuth.make({
+                    type: "oauth",
+                    methodID,
+                    access: "fixture-stale-refresh",
+                    refresh: "fixture-refresh",
+                    expires: Number.MAX_SAFE_INTEGER,
+                  }),
+                ),
+              ),
+          }),
+        )
+        const created = yield* credentials.create({
+          integrationID,
+          value: Credential.OAuth.make({
+            type: "oauth",
+            methodID,
+            access: "fixture-old",
+            refresh: "fixture-refresh",
+            expires: 0,
+          }),
+        })
+        const resolver = yield* integrations.connection
+          .resolveSnapshot({ type: "credential", id: created.id, label: created.label })
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        if (change === "replace")
+          yield* credentials.update(created.id, {
+            value: Credential.Key.make({ type: "key", key: "fixture-user-replacement" }),
+          })
+        else yield* credentials.remove(created.id)
+        const expected = yield* credentials.get(created.id)
+        yield* Deferred.succeed(release, undefined)
+        expect(Exit.isFailure(yield* Fiber.await(resolver))).toBe(true)
+        expect(yield* credentials.get(created.id)).toEqual(expected)
+      }),
+    )
+
+  for (const refresh of [false, true])
+    it.effect(`resolves a credential value with its authenticated stored revision: refresh=${refresh}`, () =>
+      Effect.gen(function* () {
+        const integrations = yield* Integration.Service
+        const credentials = yield* Credential.Service
+        const integrationID = Integration.ID.make("revision-fixture")
+        const methodID = Integration.MethodID.make("revision-oauth")
+        let refreshes = 0
+        const refreshed = Credential.OAuth.make({
+          type: "oauth",
+          methodID,
+          access: "fixture-new-access",
+          refresh: "fixture-refresh",
+          expires: Number.MAX_SAFE_INTEGER,
+        })
+        yield* integrations.transform((editor) =>
+          editor.method.update({
+            integrationID,
+            method: { id: methodID, type: "oauth", label: "Revision fixture" },
+            authorize: () => Effect.die("unexpected authorization"),
+            refresh: () =>
+              Effect.sync(() => {
+                refreshes++
+                return refreshed
+              }),
+          }),
+        )
+        const created = yield* credentials.create({
+          integrationID,
+          value: refresh
+            ? Credential.OAuth.make({
+                type: "oauth",
+                methodID,
+                access: "fixture-old-access",
+                refresh: "fixture-refresh",
+                expires: 0,
+              })
+            : Credential.Key.make({ type: "key", key: "fixture-key" }),
+        })
+        const connection = { type: "credential" as const, id: created.id, label: created.label }
+        const snapshot = yield* integrations.connection.resolveSnapshot(connection)
+        const stored = yield* credentials.get(created.id)
+        if (!stored) throw new Error("Expected the resolved credential to remain stored")
+        expect(snapshot).toEqual({ value: stored.value, identity: { id: created.id, version: stored.version } })
+        expect(snapshot?.value).toEqual(refresh ? refreshed : created.value)
+        expect(snapshot?.identity?.version === created.version).toBe(!refresh)
+        expect(JSON.stringify(snapshot?.identity)).not.toContain("fixture-key")
+        expect(JSON.stringify(snapshot?.identity)).not.toContain("fixture-new-access")
+        expect(yield* integrations.connection.resolve(connection)).toEqual(snapshot?.value)
+        expect(refreshes).toBe(refresh ? 1 : 0)
+        yield* credentials.remove(created.id)
+        expect(yield* integrations.connection.resolveSnapshot(connection)).toBeUndefined()
+      }),
+    )
+
   it.effect("registers integrations through the editor", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

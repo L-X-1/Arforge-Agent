@@ -1,8 +1,14 @@
 import { useCommand, type CommandOption } from "@/context/command"
 import { useLanguage } from "@/context/language"
-import { useLocal, type ModelSelection } from "@/context/local"
+import { useLocal } from "@/context/local"
+import { showToast } from "@/utils/toast"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
-import { getCursorPosition, setCursorPosition } from "@/components/prompt-input/editor-dom"
+import {
+  captureModelComposerFocus,
+  captureModelEntry,
+  resolveModelBinding,
+  type BoundModelSelection,
+} from "@/components/prompt-input/model-binding"
 import { useSessionLayout } from "./session-layout"
 import { createSessionOwnership } from "./session-ownership"
 
@@ -13,36 +19,36 @@ const withCategory = (category: string) => {
   })
 }
 
-export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
+export const useComposerCommands = (input: { model?: BoundModelSelection } = {}) => {
   const command = useCommand()
   const dialog = useDialog()
   const language = useLanguage()
   const local = useLocal()
   const { sessionKey } = useSessionLayout()
   const sessionOwnership = createSessionOwnership(sessionKey)
-  const model = input.model ?? local.model
+  const model: BoundModelSelection = input.model ?? local.model
+  const modelBinding = () => resolveModelBinding(model, local.model, local.modelSelection)
   const modelCommand = withCategory(language.t("command.category.model"))
   const agentCommand = withCategory(language.t("command.category.agent"))
 
   const chooseModel = async () => {
     const owner = sessionOwnership.capture()
-    const editor = document.querySelector<HTMLElement>('[data-component="prompt-input"]')
-    const selection = window.getSelection()
-    const cursor =
-      editor && selection?.rangeCount && editor.contains(selection.anchorNode) ? getCursorPosition(editor) : null
+    const entry = captureModelEntry({ model: () => model, binding: modelBinding })
+    const restoreFocus = captureModelComposerFocus(
+      document.querySelector<HTMLElement>('[data-component="prompt-input"]'),
+      entry.current,
+    )
     const restoreComposer = () => {
-      // Kobalte restores focus during its teardown effect; defer past it so the
-      // composer keeps focus and the caret returns to where the user left it.
-      requestAnimationFrame(() => {
-        const editor = document.querySelector<HTMLElement>('[data-component="prompt-input"]')
-        if (!editor) return
-        editor.focus()
-        if (cursor !== null) setCursorPosition(editor, cursor)
-      })
+      // Defer past dialog teardown, then check both session ownership and binding scope.
+      requestAnimationFrame(() => owner.run(restoreFocus))
     }
     const { DialogSelectModel } = await import("@/components/dialog-select-model")
     owner.run(() => {
-      void dialog.show(() => <DialogSelectModel model={model} />, restoreComposer)
+      if (!entry.current()) return
+      void dialog.show(
+        () => <DialogSelectModel model={entry.model} binding={entry.binding} />,
+        restoreComposer,
+      )
     })
   }
 
@@ -60,7 +66,16 @@ export const useComposerCommands = (input: { model?: ModelSelection } = {}) => {
       title: language.t("command.model.variant.cycle"),
       description: language.t("command.model.variant.cycle.description"),
       keybind: "shift+mod+d",
-      onSelect: () => model.variant.cycle(),
+      onSelect: async () => {
+        try {
+          await model.variant.cycle()
+        } catch (error) {
+          showToast({
+            title: language.t("common.requestFailed"),
+            description: error instanceof Error ? error.message : String(error),
+          })
+        }
+      },
     }),
     agentCommand({
       id: "agent.cycle",

@@ -75,9 +75,12 @@ export function closeHomeProject(
   projects: { close: (directory: string) => void },
   directory: string,
 ) {
+  // Snapshot the next selection before closing. Closing synchronously unmounts
+  // the project row, so Solid development builds reject reads from any props or
+  // store values that belonged to the now-stale <Show> branch.
+  const next = selected?.server === server && selected.directory === directory ? { server } : selected
   projects.close(directory)
-  if (selected?.server === server && selected.directory === directory) return { server }
-  return selected
+  return next
 }
 
 export function homeProjectNavigation(active: ServerConnection.Key, server: ServerConnection.Key, href: string) {

@@ -1,8 +1,10 @@
 {
   "version": 1,
-  "totals": {},
+  "totals": {
+    "former-product": 8
+  },
   "categories": {
-    "product": 0,
+    "product": 8,
     "distribution": 0,
     "generated": 0,
     "fixture": 0,
@@ -10,8 +12,8 @@
     "legal": 0,
     "audit": 0
   },
-  "files": 0,
-  "visitedFiles": 6392,
-  "scannedTextFiles": 5786,
-  "generatedAt": "2026-07-27T16:03:28.935+08:00"
+  "files": 6,
+  "visitedFiles": 18738,
+  "scannedTextFiles": 14554,
+  "generatedAt": "2026-08-13T13:08:52.634+08:00"
 }

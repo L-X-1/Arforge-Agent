@@ -1,10 +1,11 @@
 import { Show, createEffect, createMemo, createResource, createSignal, onCleanup, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
-import { useSearchParams } from "@solidjs/router"
+import { useNavigate, useSearchParams } from "@solidjs/router"
 import { Tooltip } from "@arforge-ai/ui/tooltip"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
+import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
 import { TooltipV2 } from "@arforge-ai/ui/v2/tooltip-v2"
 import { NewSessionDesignView } from "@/components/session"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
@@ -31,10 +32,13 @@ import { useTitlebarRightMount } from "@/components/titlebar"
 import { useCommand } from "@/context/command"
 import { useProviders } from "@/hooks/use-providers"
 import { useSettingsCommand } from "@/components/settings-dialog"
+import { useTabs } from "@/context/tabs"
 import { Persist, persisted } from "@/utils/persist"
 import createPresence from "solid-presence"
 import { useLocal } from "@/context/local"
 import { createPromptModelSelection } from "@/pages/session/composer/prompt-model-selection"
+import { NewSessionPromptGuide } from "@/components/onboarding/home-first-run-guide"
+import { useOnboarding } from "@/context/onboarding"
 
 const workspaceBarEnabled = import.meta.env.VITE_ARFORGE_CHANNEL !== "prod"
 const providerTipDismissalDuration = 30 * 24 * 60 * 60 * 1000
@@ -55,6 +59,8 @@ export default function NewSessionPage() {
   const settings = useSettings()
   const dialog = useDialog()
   const command = useCommand()
+  const tabs = useTabs()
+  const navigate = useNavigate()
   const providers = useProviders(() => sdk().directory)
   const openProviders = () => {
     void import("@/components/dialog-connect-provider").then(({ DialogConnectProvider }) => {
@@ -66,6 +72,7 @@ export default function NewSessionPage() {
   const [searchParams, setSearchParams] = useSearchParams<{ draftId?: string; prompt?: string }>()
   const local = useLocal()
   const model = createPromptModelSelection({ agent: local.agent.current })
+  const onboarding = useOnboarding()
 
   useComposerCommands({ model })
 
@@ -112,6 +119,27 @@ export default function NewSessionPage() {
     onDone: promptInputV2Controller.restoreFocus,
   })
 
+  const closeDraft = () => {
+    const draftID = searchParams.draftId
+    if (!draftID) {
+      navigate("/")
+      return
+    }
+    const index = tabs.store.findIndex((tab) => tab.type === "draft" && tab.draftID === draftID)
+    if (index !== -1) {
+      tabs.closeTab(index)
+      return
+    }
+    navigate("/")
+  }
+
+  const closeDraftLabel = createMemo(() => {
+    const locale = language.locale()
+    if (locale === "zh") return "关闭会话"
+    if (locale === "zht") return "關閉會話"
+    return "Close session"
+  })
+
   command.register("new-session", () => [
     {
       id: "command.palette",
@@ -153,8 +181,21 @@ export default function NewSessionPage() {
   )
 
   return (
-    <div class="relative size-full overflow-hidden flex flex-col">
+    <div class="relative size-full overflow-hidden flex flex-col bg-v2-background-bg-deep">
       {suspendUntilPromptReady()}
+      <div class="pointer-events-none absolute inset-x-0 top-0 z-10 flex h-11 items-center justify-end">
+        <TooltipV2 placement="bottom" value={closeDraftLabel()}>
+          <IconButtonV2
+            type="button"
+            variant="ghost-muted"
+            size="large"
+            class="pointer-events-auto mr-2 shrink-0"
+            icon={<IconV2 name="xmark-small" />}
+            onClick={closeDraft}
+            aria-label={closeDraftLabel()}
+          />
+        </TooltipV2>
+      </div>
       <Show when={rightMount()}>
         {(mount) => (
           <Portal mount={mount()}>
@@ -168,11 +209,18 @@ export default function NewSessionPage() {
       </Show>
       <div class="flex-1 min-h-0 flex flex-col gap-2">
         <div class="@container relative flex flex-col min-h-0 h-full flex-1">
-          <div class="flex-1 min-h-0 overflow-hidden">
+          <div class="flex-1 min-h-0 overflow-hidden bg-v2-background-bg-deep">
             <NewSessionDesignView>
               <div class={NEW_SESSION_CONTENT_WIDTH}>
                 <div class="flex flex-col gap-8">
                   <PromptInputV2Composer controller={promptInputV2Controller} borderUnderlay />
+                  <NewSessionPromptGuide
+                    onUseExample={(text) => {
+                      prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+                      onboarding.dismiss()
+                      promptInputV2Controller.restoreFocus()
+                    }}
+                  />
                   <Show when={projectController.empty()}>
                     <PromptProjectAddButton controller={projectController} />
                   </Show>

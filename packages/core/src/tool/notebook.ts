@@ -5,10 +5,10 @@ import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { LocationMutation } from "../location-mutation"
 import { NotebookV2 } from "../notebook"
-import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { majorImpact, scopedChange } from "./effect-semantics"
 
 export const ReadInput = Schema.Struct({
   notebook_path: Schema.String.annotate({ description: "Notebook path inside the active Location" }),
@@ -43,10 +43,9 @@ export const EditInput = Schema.Struct({
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const notebooks = yield* NotebookV2.Service
     const mutation = yield* LocationMutation.Service
-    const permission = yield* PermissionV2.Service
 
     const resolve = (notebookPath: string, context: Tool.Context, action: "notebook_read" | "edit") =>
       Effect.gen(function* () {
@@ -57,13 +56,13 @@ const layer = Layer.effectDiscard(
         }
         const target = yield* mutation.resolve({ path: notebookPath, kind: "file" })
         if (target.externalDirectory)
-          yield* permission.assert({
+          yield* context.permission.assert({
             ...LocationMutation.externalDirectoryPermission(target.externalDirectory),
             sessionID: context.sessionID,
             agent: context.agent,
             source,
           })
-        yield* permission.assert({
+        yield* context.permission.assert({
           action,
           resources: [target.resource],
           save: ["*"],
@@ -79,6 +78,12 @@ const layer = Layer.effectDiscard(
         "Read a Jupyter nbformat 4 .ipynb file as bounded structured cells. Outputs are omitted by default. Returns the exact file SHA-256 required by notebook_edit.",
       input: ReadInput,
       output: NotebookV2.ReadResult,
+      effects: (input) =>
+        majorImpact({
+          filesystemScope: [input.notebook_path],
+          expectedArtifacts: ["bounded notebook cells", "notebook SHA-256"],
+          successCriteria: ["notebook is decoded and bounded without a write"],
+        }),
       toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
       execute: (input, context) =>
         Effect.gen(function* () {
@@ -98,6 +103,18 @@ const layer = Layer.effectDiscard(
           "Structurally replace, insert, or delete one Jupyter notebook cell. Requires the SHA-256 from notebook_read, preserves metadata, clears stale code outputs, and supports a no-write dry run.",
         input: EditInput,
         output: NotebookV2.EditResult,
+        effects: (input) =>
+          scopedChange({
+            filesystemScope: [input.notebook_path],
+            idempotency: "conditional",
+            retryability: "guarded",
+            reversibility: "reversible",
+            compensation: "restore the notebook snapshot identified by expected_sha256",
+            expectedArtifacts: input.dry_run ? ["bounded notebook edit preview"] : [input.notebook_path],
+            successCriteria: [
+              input.dry_run ? "preview validates against expected_sha256 without writing" : "notebook edit is persisted",
+            ],
+          }),
         toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output, null, 2) }],
         execute: (input, context) =>
           Effect.gen(function* () {
@@ -121,13 +138,16 @@ const layer = Layer.effectDiscard(
 )
 
 function toFailure(error: unknown) {
-  return new ToolFailure({
-    message: error instanceof NotebookV2.NotebookError ? error.message : "Notebook operation failed",
-  })
+  return (
+    Tool.toToolFailure(error) ??
+    new ToolFailure({
+      message: error instanceof NotebookV2.NotebookError ? error.message : "Notebook operation failed",
+    })
+  )
 }
 
 export const node = makeLocationNode({
   name: "tool/notebook",
   layer,
-  deps: [ToolRegistry.node, NotebookV2.node, LocationMutation.node, PermissionV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, NotebookV2.node, LocationMutation.node],
 })

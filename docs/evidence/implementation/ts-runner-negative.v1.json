@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "ledger_id": "ts-runner-negative",
+  "plan_revision": "v1.3",
+  "source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "work_package": "PY-105",
+  "status": "OPEN",
+  "disposition": "CONVERGE",
+  "topology_artifact_path": "docs/evidence/implementation/ts-session-composition.v1.json",
+  "topology_artifact_digest": "a9e70eff7dfc284da641b7a742c5f30a841f7659cb13ed0c025fdff64d5c6b37",
+  "selector_signals": [
+    {
+      "source_path": "packages/core/src/analysis/learning-dream.ts",
+      "line": 77,
+      "column": 5,
+      "marker": "executionMode",
+      "classification": "forbidden_option_selector"
+    }
+  ],
+  "transitional_signals": [],
+  "duplicate_provider_bindings": [],
+  "external_runner_service_uses": [],
+  "public_runner_entry_uses": [],
+  "invariants": {
+    "no_forbidden_option_selector": false,
+    "no_duplicate_session_execution_provider": true,
+    "no_external_runner_service_bypass": true,
+    "no_second_public_runner_entry": true
+  }
+}

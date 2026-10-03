@@ -32,6 +32,8 @@ export const Request = Schema.Struct({
   metadata: Schema.Record(Schema.String, Schema.Unknown),
   always: Schema.Array(Schema.String),
   tool: Schema.optional(Schema.Struct({ messageID: Schema.String, callID: Schema.String })),
+  /** Trusted V2/L3 presentation bit carried through dual-protocol servers. */
+  requiresHumanConfirmation: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "PermissionRequest" })
 export type Request = typeof Request.Type
 

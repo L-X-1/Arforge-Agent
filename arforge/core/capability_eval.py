@@ -24,6 +24,27 @@ class CapabilityEvalTask:
     category: str
     run: Callable[[Path], tuple[bool, str]]
 
+    @property
+    def migration_contract(self) -> dict[str, object]:
+        """Stable manifest fields consumed by the TS migration harness."""
+        return {
+            "objective": (
+                f"验证 capability-eval {self.id} ({self.category})：执行本地确定性基础设施合同，"
+                "必须通过且不调用模型。"
+            ),
+            "source": f"arforge/core/capability_eval.py::{self.id}",
+            "path": "arforge/core/capability_eval.py",
+            "content": f"CapabilityEvalTask id={self.id} category={self.category}\n",
+            "tests": (
+                f"run_capability_eval task={self.id}; assert success=true; "
+                "assert model_invoked=false\n"
+            ),
+            "expected_files": ["capability-eval-report.json"],
+            "timeout_steps": 1,
+            "positive_assertions": ["task_passed"],
+            "negative_assertions": ["model_invoked"],
+        }
+
 
 def builtin_capability_eval_tasks() -> list[CapabilityEvalTask]:
     return [

@@ -21,7 +21,7 @@ function authFile() {
           file.endsWith("mcp-auth.json")
             ? Effect.try({
                 try: () => {
-                  if (!raw) throw new Error("mcp-auth.json missing")
+                  if (!raw) return {}
                   return JSON.parse(raw)
                 },
                 catch: (cause) => new FSUtil.FileSystemError({ method: "readJson", cause }),
@@ -73,6 +73,8 @@ test("serializes concurrent auth file updates across service instances", async (
       expect(entry?.clientInfo?.clientId).toBe("client-id")
       expect(entry?.serverUrl).toBe("https://mcp.posthog.com/mcp")
       expect(() => JSON.parse(file.raw())).not.toThrow()
+      expect(file.raw()).not.toContain("access-token")
+      expect(JSON.parse(file.raw())).toMatchObject({ kind: "arforge-protected-json", schema_version: 1 })
     }),
   )
 })

@@ -1,4 +1,5 @@
 import { LearningV2 } from "@arforge-ai/core/learning"
+import { composeLearningDream } from "@arforge-ai/core/analysis/learning-dream"
 import { InvalidRequestError } from "@arforge-ai/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -6,6 +7,12 @@ import { Api } from "../api"
 
 export const LearningHandler = HttpApiBuilder.group(Api, "server.learning", (handlers) =>
   handlers
+    .handle(
+      "learning.dream",
+      Effect.fn(function* () {
+        return { data: composeLearningDream(yield* (yield* LearningV2.Service).status()) }
+      }),
+    )
     .handle(
       "learning.status",
       Effect.fn(function* () {

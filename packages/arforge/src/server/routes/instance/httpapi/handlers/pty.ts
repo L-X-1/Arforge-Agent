@@ -6,9 +6,10 @@ import { Pty } from "@arforge-ai/core/pty"
 import { PtyProtocol } from "@arforge-ai/core/pty/protocol"
 import { PtyID } from "@arforge-ai/core/pty/schema"
 import { PtyTicket } from "@arforge-ai/core/pty/ticket"
-import { LocationServiceMap, locationServiceMapLayer } from "@arforge-ai/core/location-services"
+import { LocationServiceMap } from "@arforge-ai/core/location-services"
 import { Location } from "@arforge-ai/core/location"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Database } from "@arforge-ai/core/database/database"
 import { Shell } from "@arforge-ai/core/shell"
 import { CorsConfig, isAllowedRequestOrigin, type CorsOptions } from "@arforge-ai/server/cors"
 import {
@@ -16,7 +17,7 @@ import {
   PTY_CONNECT_TOKEN_HEADER,
   PTY_CONNECT_TOKEN_HEADER_VALUE,
 } from "@/server/shared/pty-ticket"
-import { Effect, Layer, Option, Queue, Schema } from "effect"
+import { Context, Effect, Option, Queue, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -44,8 +45,16 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const cors = yield* CorsConfig
     const plugin = yield* Plugin.Service
     const locations = yield* LocationServiceMap.Service
-    const unregister = registerDisposer((directory) =>
-      Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+    const database = yield* Database.Service
+    const disposerContext = yield* Effect.context()
+    const unregister = registerDisposer((directory, runtimeContext) =>
+      locations
+        .invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))
+        .pipe(
+          Effect.provide(Context.merge(runtimeContext, disposerContext)),
+          Effect.provideService(Database.Service, database),
+        ),
+      database,
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
@@ -158,15 +167,23 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       .handle("remove", remove)
       .handle("connectToken", connectToken)
   }),
-).pipe(Layer.provide(locationServiceMapLayer))
+)
 
 export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
   Effect.gen(function* () {
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap.Service
-    const unregister = registerDisposer((directory) =>
-      Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+    const database = yield* Database.Service
+    const disposerContext = yield* Effect.context()
+    const unregister = registerDisposer((directory, runtimeContext) =>
+      locations
+        .invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))
+        .pipe(
+          Effect.provide(Context.merge(runtimeContext, disposerContext)),
+          Effect.provideService(Database.Service, database),
+        ),
+      database,
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
@@ -270,4 +287,4 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
       }),
     )
   }),
-).pipe(Layer.provide(locationServiceMapLayer))
+)

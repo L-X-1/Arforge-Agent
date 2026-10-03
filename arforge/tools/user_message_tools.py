@@ -1,4 +1,10 @@
-"""Primary user-visible message tool with local attachment metadata."""
+"""Explicit Python compatibility wrapper for primary message delivery.
+
+The product owner is the TypeScript/Core ``deliver_user_message`` tool.  This
+module remains importable for legacy Python loops and fixtures, but is excluded
+from the default Python registry so it cannot compete with the canonical
+permission, attachment, or durable-delivery contract.
+"""
 
 from __future__ import annotations
 

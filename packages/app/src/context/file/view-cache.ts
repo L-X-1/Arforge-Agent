@@ -2,7 +2,7 @@ import { createEffect, createRoot } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import { createScopedCache } from "@/utils/scoped-cache"
-import type { FileViewState, SelectedLineRange } from "./types"
+import { normalizeFilePreviewMode, type FilePreviewMode, type FileViewState, type SelectedLineRange } from "./types"
 import type { ServerScope } from "@/utils/server-scope"
 
 const WORKSPACE_KEY = "__workspace__"
@@ -74,6 +74,20 @@ function createViewSession(scope: ServerScope, dir: string, id: string | undefin
   const scrollTop = (path: string) => view.file[path]?.scrollTop
   const scrollLeft = (path: string) => view.file[path]?.scrollLeft
   const selectedLines = (path: string) => view.file[path]?.selectedLines
+  const previewMode = (path: string) => normalizeFilePreviewMode(view.file[path]?.previewMode)
+
+  const setPreviewMode = (path: string, mode: FilePreviewMode) => {
+    if (!ready() || !path) return
+    const next = normalizeFilePreviewMode(mode)
+    setView(
+      produce((draft) => {
+        const file = draft.file[path] ?? (draft.file[path] = {})
+        if (file.previewMode === next) return
+        file.previewMode = next
+      }),
+    )
+    pruneView(path)
+  }
 
   const setScrollTop = (path: string, top: number) => {
     setView(
@@ -114,6 +128,8 @@ function createViewSession(scope: ServerScope, dir: string, id: string | undefin
     scrollTop,
     scrollLeft,
     selectedLines,
+    previewMode,
+    setPreviewMode,
     setScrollTop,
     setScrollLeft,
     setSelectedLines,

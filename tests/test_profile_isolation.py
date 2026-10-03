@@ -12,7 +12,6 @@ def test_runtime_state_uses_active_profile_even_after_import(monkeypatch, tmp_pa
     import arforge
     import arforge.i18n as i18n
     import arforge.logger as logger
-    import arforge.trust_screen as trust
     from arforge.security import backup_manager
     from arforge.tools import basic_tools, task_tools
 
@@ -37,7 +36,10 @@ def test_runtime_state_uses_active_profile_even_after_import(monkeypatch, tmp_pa
 
     assert i18n.set_active_lang("en") == "en"
     assert (profile / ".arforge_lang").is_file()
-    trust._save_trusted({str(tmp_path)})
+    (profile / "trusted_workspaces.json").write_text(
+        json.dumps({"workspaces": [str(tmp_path)]}),
+        encoding="utf-8",
+    )
     assert (profile / "trusted_workspaces.json").is_file()
 
     original = tmp_path / "document.txt"

@@ -10,7 +10,7 @@ import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
 import PROMPT_GENERATE from "./generate.txt"
-import PROMPT_COMPACTION from "./prompt/compaction.txt"
+import { SYSTEM_PROMPT as PROMPT_COMPACTION } from "@arforge-ai/core/session/compaction"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
@@ -28,9 +28,19 @@ import { AbsolutePath, type DeepMutable } from "@arforge-ai/core/schema"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { LocationServiceMap, locationServiceMapLayer } from "@arforge-ai/core/location-services"
+import { Database } from "@arforge-ai/core/database/database"
 import { Reference } from "@arforge-ai/core/reference"
 import { Location } from "@arforge-ai/core/location"
 import { PluginV2 } from "@arforge-ai/core/plugin"
+import * as RuntimeInvariants from "@arforge-ai/core/runtime/invariants"
+import * as CustomAgentAdmissionInvariant from "@arforge-ai/core/runtime/custom-agent-admission-invariant"
+import {
+  customAgentRuntimeAdmission,
+  customAgentRuntimeMetadata,
+  loadEnabledCustomAgentProfiles,
+  projectCustomAgentRuntime,
+  type CustomAgentProfile,
+} from "@arforge-ai/core/custom-agent-profile"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -85,6 +95,24 @@ export class Service extends Context.Service<Service, Interface>()("@arforge/Age
 
 export const use = serviceUse(Service)
 
+/**
+ * Project profiles are a hard tool allow-list.  Global/user configuration may
+ * further deny a permission, but an `allow` rule from user config must never
+ * widen a profile beyond its declared tools.  The resulting ruleset is still
+ * consumed by the normal Permission/ActionGateway path; no profile-specific
+ * executor or registry is created.
+ */
+function customProfilePermission(profile: CustomAgentProfile, userRules: PermissionV1.Ruleset) {
+  const projection = projectCustomAgentRuntime(profile)
+  const profileRules: PermissionV1.Rule[] = [
+    { permission: "*", pattern: "*", action: "deny" },
+    ...projection.canonical_tools.map(
+      (permission): PermissionV1.Rule => ({ permission, pattern: "*", action: "allow" }),
+    ),
+  ]
+  return Permission.merge(profileRules, userRules.filter((rule) => rule.action === "deny"))
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -94,6 +122,8 @@ const layer = Layer.effect(
     const skill = yield* Skill.Service
     const provider = yield* Provider.Service
     const locations = yield* LocationServiceMap.Service
+    const runtimeInvariants = yield* RuntimeInvariants.Service
+    CustomAgentAdmissionInvariant.registerInvariants(runtimeInvariants)
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
@@ -293,6 +323,67 @@ const layer = Layer.effect(
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }
 
+        // Project-scoped profiles are admitted only after the explicit opt-in
+        // and independent workspace-trust checks in Core.  A profile is
+        // projected into the existing Agent pool as a subagent; unsupported
+        // historical tools remain visible to `custom-agents list` but are not
+        // executable until a canonical TS tool owner exists for them.
+        const customProfiles = loadEnabledCustomAgentProfiles(ctx.directory)
+        for (const error of customProfiles.errors) {
+          yield* Effect.logWarning("Ignoring invalid custom agent profile", {
+            path: error.path,
+            reason: error.error,
+          })
+        }
+        for (const profile of customProfiles.profiles) {
+          const admission = customAgentRuntimeAdmission(profile, ctx.directory)
+          const admissionReport = yield* CustomAgentAdmissionInvariant.inspect(runtimeInvariants, admission)
+          if (!admissionReport.passedAll) {
+            yield* Effect.logWarning("Ignoring custom agent profile with an invalid admission invariant", {
+              role: admission.role,
+              status: admission.status,
+              reason: admissionReport.results.map((result) => result.reason ?? "invariant failed").join("; "),
+            })
+            continue
+          }
+          if (!admission.ready) {
+            yield* Effect.logWarning("Ignoring custom agent profile with unsupported runtime tools", {
+              role: admission.role,
+              status: admission.status,
+              reason: admission.reason,
+              tools: admission.unsupported_tools,
+            })
+            continue
+          }
+          const metadata = customAgentRuntimeMetadata(profile, {
+            role: admission.role,
+            declared_tools: admission.declared_tools,
+            canonical_tools: admission.canonical_tools,
+            unsupported_tools: admission.unsupported_tools,
+            ready: admission.ready,
+          }, admission)
+          if (!metadata) continue
+          if (agents[profile.role_name]) {
+            const collision = customAgentRuntimeAdmission(profile, ctx.directory, { collision: true })
+            yield* Effect.logWarning("Ignoring custom agent profile that collides with an existing role", {
+              role: collision.role,
+              status: collision.status,
+              reason: collision.reason,
+            })
+            continue
+          }
+          agents[profile.role_name] = {
+            name: profile.role_name,
+            description: profile.description,
+            mode: "subagent",
+            native: false,
+            prompt: profile.system_prompt,
+            steps: profile.max_steps,
+            options: { custom_profile: metadata },
+            permission: customProfilePermission(profile, user),
+          }
+        }
+
         // Ensure Truncate.GLOB is allowed unless explicitly configured
         for (const name in agents) {
           const agent = agents[name]
@@ -441,13 +532,22 @@ const layer = Layer.effect(
 const locationServiceMapNode = LayerNode.make({
   service: LocationServiceMap.Service,
   layer: locationServiceMapLayer,
-  deps: [],
+  deps: [Database.node],
 })
 
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, locationServiceMapNode],
+  deps: [
+    Config.node,
+    Auth.node,
+    Plugin.node,
+    Skill.node,
+    Provider.node,
+    locationServiceMapNode,
+    Database.node,
+    RuntimeInvariants.node,
+  ],
 })
 
 export * as Agent from "./agent"

@@ -1,5 +1,6 @@
 import { Types } from "effect"
 import { Model } from "@arforge-ai/schema/model"
+import { Billing } from "@arforge-ai/schema/billing"
 import { ProviderV2 } from "./provider"
 
 export const ID = Model.ID
@@ -17,6 +18,9 @@ export type Capabilities = Model.Capabilities
 
 export const Cost = Model.Cost
 
+export const Profile = Model.Profile
+export type Profile = Model.Profile
+
 export const Ref = Model.Ref
 export type Ref = typeof Ref.Type
 
@@ -26,8 +30,10 @@ export type Api = Model.Api
 export const Info = Model.Info
 export type Info = Model.Info
 
-export type MutableInfo = Omit<Types.DeepMutable<Info>, "api"> & {
+export type MutableInfo = Omit<Types.DeepMutable<Info>, "api" | "profile"> & {
   api: ProviderV2.MutableApi<Api>
+  profile?: Profile
+  priceCatalog?: Billing.PriceCatalog
 }
 
 export function parse(input: string): { providerID: ProviderV2.ID; modelID: ID } {

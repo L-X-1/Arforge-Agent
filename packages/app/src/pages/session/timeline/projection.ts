@@ -1,6 +1,6 @@
 import type { SessionMessageInfo } from "@arforge-ai/client/promise"
 import type { AssistantMessage, Message, Part, SessionStatus, UserMessage } from "@arforge-ai/sdk/v2"
-import { createMemo, type Accessor } from "solid-js"
+import { createMemo, mapArray, type Accessor } from "solid-js"
 import { reuseTimelineRows } from "./row-reconciliation"
 import { Timeline, TimelineRow } from "./rows"
 
@@ -30,19 +30,41 @@ export function createTimelineProjection(input: {
     return result
   })
   const projection = createMemo(() =>
-    Timeline.constructSessionMessageRows(
+    Timeline.constructSessionTurns(
       input.sessionMessages(),
       (messageID) => messageByID().get(messageID) as UserMessage | AssistantMessage | undefined,
-      input.parts,
-      input.showReasoningSummaries(),
-      input.status().type,
-      input.inlineComments(),
       input.userMessages(),
     ),
   )
   const activeMessageID = createMemo(() => projection().activeMessageID)
+  const turnByID = createMemo(() => new Map(projection().turns.map((turn) => [turn.user.id, turn] as const)))
+  // Keyed owners survive membership refreshes and are disposed when turns leave.
+  // Each row memo tracks only its own parts instead of every historical part.
+  const turnRows = mapArray(
+    () => projection().turns.map((turn) => turn.user.id),
+    (userMessageID, index) => {
+      const turn = createMemo(() => turnByID().get(userMessageID), undefined, { equals: sameTurn })
+      const active = createMemo(() => activeMessageID() === userMessageID)
+      return createMemo((previous: TimelineRow.TimelineRow[] | undefined) => {
+        const current = turn()
+        // A removed turn can become unavailable before its keyed owner disposes.
+        if (!current) return []
+        return reuseTimelineRows(previous, Timeline.constructMessageRows(
+          current.user,
+          input.parts,
+          current.assistants,
+          index(),
+          input.showReasoningSummaries(),
+          input.status().type,
+          active(),
+          input.inlineComments(),
+          current.deliveries,
+        ))
+      })
+    },
+  )
   const rows = createMemo((previous: TimelineRow.TimelineRow[] | undefined) =>
-    reuseTimelineRows(previous, projection().rows),
+    reuseTimelineRows(previous, turnRows().flatMap((rows) => rows())),
   )
   const rowByKey = createMemo(() => new Map(rows().map((row) => [TimelineRow.key(row), row] as const)))
   const messageRowIndex = createMemo(() => {
@@ -78,4 +100,19 @@ export function createTimelineProjection(input: {
     rowByKey,
     rows,
   }
+}
+
+function sameTurn(a: Timeline.Turn | undefined, b: Timeline.Turn | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b || a.user !== b.user) return false
+  if (a.assistants.length !== b.assistants.length || a.deliveries.length !== b.deliveries.length) return false
+  for (let index = 0; index < a.assistants.length; index++) {
+    if (a.assistants[index] !== b.assistants[index]) return false
+  }
+  for (let index = 0; index < a.deliveries.length; index++) {
+    const left = a.deliveries[index]!
+    const right = b.deliveries[index]!
+    if (left.assistantMessageID !== right.assistantMessageID || left.delivery !== right.delivery) return false
+  }
+  return true
 }

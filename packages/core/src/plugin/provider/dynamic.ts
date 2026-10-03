@@ -1,7 +1,15 @@
 import { Effect } from "effect"
-import { pathToFileURL } from "url"
 import { define } from "../definition"
 import { Npm } from "../../npm"
+import {
+  createDynamicProviderSDK,
+  dynamicProviderEntrypoint,
+  dynamicProviderOptions,
+  selectDynamicProviderFactory,
+  validateDynamicProviderPackage,
+} from "./dynamic-contract"
+
+export * from "./dynamic-contract"
 
 export const DynamicProviderPlugin = define({
   id: "dynamic-provider",
@@ -11,20 +19,18 @@ export const DynamicProviderPlugin = define({
       Effect.fn(function* (evt) {
         if (evt.sdk) return
 
-        const installedPath = evt.package.startsWith("file://")
-          ? evt.package
-          : (yield* npm.add(evt.package).pipe(Effect.orDie)).entrypoint
-        if (!installedPath) throw new Error(`Package ${evt.package} has no import entrypoint`)
+        const packageSpec = validateDynamicProviderPackage(evt.package)
+        const installedPath = packageSpec.startsWith("file://")
+          ? packageSpec
+          : (yield* npm.add(packageSpec).pipe(Effect.orDie)).entrypoint
+        if (!installedPath) throw new Error("Dynamic provider package has no import entrypoint")
+        const importURL = dynamicProviderEntrypoint(installedPath)
 
         const mod = yield* Effect.promise(async () => {
-          return (await import(
-            installedPath.startsWith("file://") ? installedPath : pathToFileURL(installedPath).href
-          )) as Record<string, (options: any) => any>
+          return (await import(importURL)) as Record<string, unknown>
         }).pipe(Effect.orDie)
-        const match = Object.keys(mod).find((name) => name.startsWith("create"))
-        if (!match) throw new Error(`Package ${evt.package} has no provider factory export`)
-
-        evt.sdk = mod[match](evt.options)
+        const { factory } = selectDynamicProviderFactory(mod)
+        evt.sdk = createDynamicProviderSDK(factory, dynamicProviderOptions(evt.options))
       }),
     )
   }),

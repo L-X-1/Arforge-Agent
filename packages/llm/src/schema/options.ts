@@ -177,12 +177,155 @@ export namespace ModelCompatibility {
   export const make = (input: Input) => (input instanceof ModelCompatibility ? input : new ModelCompatibility(input))
 }
 
+/**
+ * Provider-owned token accounting is runtime-only metadata. It is deliberately
+ * kept outside the serializable model schema and request payloads. The Context
+ * Surface/checkpoint owner records the revision and digest, never the
+ * executable counter.
+ */
+export type ModelTokenizerKind = "provider" | "upper-bound"
+
+export type ModelTokenizer = Readonly<{
+  readonly revision: string
+  /** Defaults to an exact provider tokenizer for backwards compatibility. */
+  readonly kind?: ModelTokenizerKind
+  readonly count: (input: string) => number
+}>
+
+export type UpperBoundTokenizerInput = Readonly<{
+  /** Stable catalog revision included in Context Surface/checkpoint evidence. */
+  readonly revision: string
+  /** Maximum tokens per UTF-16 code unit; must be a finite positive number. */
+  readonly maxTokensPerCharacter: number
+  /** Fixed protocol/model overhead conservatively charged to every input. */
+  readonly overheadTokens?: number
+}>
+
+const tokenizerRevision = (revision: string): string => {
+  const normalized = revision.trim()
+  if (!normalized) throw new Error("Tokenizer revision is required")
+  return normalized
+}
+
+/**
+ * Build a deterministic conservative tokenizer for providers without a local
+ * tokenizer implementation. The caller supplies a measured upper bound; the
+ * result is explicitly classified as `upper-bound` so diagnostics never call
+ * it an exact provider count.
+ */
+export const makeUpperBoundTokenizer = (input: UpperBoundTokenizerInput): ModelTokenizer => {
+  const revision = tokenizerRevision(input.revision)
+  const maxTokensPerCharacter = input.maxTokensPerCharacter
+  if (!Number.isFinite(maxTokensPerCharacter) || maxTokensPerCharacter <= 0)
+    throw new Error("maxTokensPerCharacter must be a finite positive number")
+  const overheadTokens = input.overheadTokens ?? 0
+  if (!Number.isFinite(overheadTokens) || overheadTokens < 0 || !Number.isInteger(overheadTokens))
+    throw new Error("overheadTokens must be a non-negative integer")
+  return Object.freeze({
+    revision,
+    kind: "upper-bound" as const,
+    count: (text: string) => {
+      const value = Math.ceil(text.length * maxTokensPerCharacter + overheadTokens)
+      if (!Number.isSafeInteger(value)) throw new Error("upper-bound tokenizer result exceeds safe integer range")
+      return value
+    },
+  })
+}
+
+export type TokenizerRegistration = Readonly<{
+  readonly provider: string | ProviderID
+  /** Omit model to register a provider-wide fallback. */
+  readonly model?: string | ModelID
+  readonly tokenizer: ModelTokenizer
+  readonly source?: string
+}>
+
+export type TokenizerResolution = Readonly<{
+  readonly provider: string
+  readonly model: string
+  readonly match: "model" | "provider"
+  readonly source?: string
+  readonly tokenizer: ModelTokenizer
+}>
+
+const registrationKey = (provider: string, model?: string): string => `${provider}\u0000${model ?? "*"}`
+
+/**
+ * Immutable provider/model tokenizer catalog. Exact model registrations win
+ * over provider-wide fallbacks; duplicate keys fail closed instead of making
+ * request reconstruction depend on registration order.
+ */
+export class TokenizerRegistry {
+  readonly entries: ReadonlyArray<TokenizerRegistration>
+
+  constructor(entries: ReadonlyArray<TokenizerRegistration> = []) {
+    const normalized = entries.map((entry) => {
+      const provider = String(entry.provider).trim()
+      const model = entry.model === undefined ? undefined : String(entry.model).trim()
+      if (!provider) throw new Error("Tokenizer registration provider is required")
+      if (model !== undefined && !model) throw new Error("Tokenizer registration model must not be empty")
+      if (!entry.tokenizer.revision.trim()) throw new Error("Tokenizer registration revision is required")
+      if (
+        entry.tokenizer.kind !== undefined &&
+        entry.tokenizer.kind !== "provider" &&
+        entry.tokenizer.kind !== "upper-bound"
+      )
+        throw new Error("Tokenizer registration kind is invalid")
+      return Object.freeze({
+        ...entry,
+        provider: ProviderID.make(provider),
+        ...(model === undefined ? {} : { model: ModelID.make(model) }),
+        source: entry.source?.trim() || undefined,
+      })
+    })
+    const keys = new Set<string>()
+    for (const entry of normalized) {
+      const key = registrationKey(String(entry.provider), entry.model === undefined ? undefined : String(entry.model))
+      if (keys.has(key)) throw new Error(`Duplicate tokenizer registration: ${key.replace("\u0000", "/")}`)
+      keys.add(key)
+    }
+    this.entries = Object.freeze(
+      normalized.toSorted((left, right) => {
+        const leftModel = left.model === undefined ? 1 : 0
+        const rightModel = right.model === undefined ? 1 : 0
+        return leftModel - rightModel
+      }),
+    )
+  }
+
+  register(entry: TokenizerRegistration): TokenizerRegistry {
+    return new TokenizerRegistry([...this.entries, entry])
+  }
+
+  resolve(input: {
+    readonly provider: string | ProviderID
+    readonly model: string | ModelID
+  }): TokenizerResolution | undefined {
+    const provider = String(input.provider).trim()
+    const model = String(input.model).trim()
+    if (!provider || !model) return undefined
+    const entry = this.entries.find(
+      (candidate) =>
+        String(candidate.provider) === provider && (candidate.model === undefined || String(candidate.model) === model),
+    )
+    if (!entry) return undefined
+    return Object.freeze({
+      provider,
+      model,
+      match: entry.model === undefined ? ("provider" as const) : ("model" as const),
+      ...(entry.source === undefined ? {} : { source: entry.source }),
+      tokenizer: entry.tokenizer,
+    })
+  }
+}
+
 export class Model {
   readonly id: ModelID
   readonly provider: ProviderID
   readonly route: AnyRoute
   readonly defaults?: ModelDefaults
   readonly compatibility?: ModelCompatibility
+  readonly tokenizer?: ModelTokenizer
 
   constructor(input: Model.ConstructorInput) {
     this.id = input.id
@@ -190,6 +333,7 @@ export class Model {
     this.route = input.route
     this.defaults = input.defaults
     this.compatibility = input.compatibility
+    this.tokenizer = input.tokenizer
   }
 
   static make(input: Model.Input) {
@@ -199,6 +343,7 @@ export class Model {
       route: input.route,
       defaults: input.defaults === undefined ? undefined : ModelDefaults.make(input.defaults),
       compatibility: input.compatibility === undefined ? undefined : ModelCompatibility.make(input.compatibility),
+      tokenizer: input.tokenizer,
     })
   }
 
@@ -209,6 +354,7 @@ export class Model {
       route: model.route,
       defaults: model.defaults,
       compatibility: model.compatibility,
+      tokenizer: model.tokenizer,
     }
   }
 
@@ -228,6 +374,7 @@ export namespace Model {
     readonly route: AnyRoute
     readonly defaults?: ModelDefaults
     readonly compatibility?: ModelCompatibility
+    readonly tokenizer?: ModelTokenizer
   }
 
   export type Input = Omit<ConstructorInput, "id" | "provider" | "defaults" | "compatibility"> & {
@@ -235,6 +382,7 @@ export namespace Model {
     readonly provider: string | ProviderID
     readonly defaults?: ModelDefaults.Input
     readonly compatibility?: ModelCompatibility.Input
+    readonly tokenizer?: ModelTokenizer
   }
 }
 

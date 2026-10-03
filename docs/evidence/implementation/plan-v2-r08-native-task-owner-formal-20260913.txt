@@ -1,0 +1,25 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent/packages/arforge
+Command: bun test --timeout 60000 test/session/prompt.test.ts -t 'Formal scheduled subtask|integrated Formal drain executes an admitted automatic subtask|Formal failed subtask|Formal running task preserves|Formal scheduled cancellation'
+Exit code: 0
+Raw captured output:
+
+bun test v1.3.14 (0d9b296a)
+
+test\session\prompt.test.ts:
+(pass) Formal scheduled cancellation of parent settles the child without a legacy processor [8626.70ms]
+(pass) Formal scheduled cancellation of child settles the child without a legacy processor [7196.57ms]
+R05 scheduled child execution recording {"parentCoreAssistants":2,"parentLegacyAssistants":0,"childCoreAssistants":1,"childLegacyAssistants":0,"providerCalls":2,"childRunCount":1,"childAttempts":1,"childTokens":7}
+(pass) integrated Formal drain executes an admitted automatic subtask once before the parent request [7101.10ms]
+(pass) Formal failed subtask preserves metadata on error tool state [7054.60ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=false [5861.40ms]
+(pass) Formal scheduled subtask is durably authorized before the child task can start approved=true [6405.02ms]
+(pass) Formal scheduled subtask recovery reuses the persisted assistant, call identity, and action [6199.18ms]
+(pass) Formal running task preserves metadata and settles on cancellation scheduled=false [6925.65ms]
+(pass) Formal running task preserves metadata and settles on cancellation scheduled=true [7713.65ms]
+
+ 9 pass
+ 191 filtered out
+ 0 fail
+ 137 expect() calls
+Ran 9 tests across 1 file. [67.99s]

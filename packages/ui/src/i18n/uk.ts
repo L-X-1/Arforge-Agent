@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict: Record<string, string> = {
+  ...en,
   "ui.sessionReview.title": "Зміни сесії",
   "ui.sessionReview.title.git": "Зміни Git",
   "ui.sessionReview.title.branch": "Зміни гілки",
@@ -102,6 +105,7 @@ export const dict: Record<string, string> = {
   "ui.messagePart.review.title": "Перевірте свої відповіді",
   "ui.messagePart.questions.dismissed": "Питання відхилено",
   "ui.messagePart.compaction": "Сесію стиснуто",
+  "ui.messagePart.reasoningSummary": "Підсумок міркувань",
   "ui.messagePart.context.read.one": "{{count}} читання",
   "ui.messagePart.context.read.other": "{{count}} читань",
   "ui.messagePart.context.search.one": "{{count}} пошук",

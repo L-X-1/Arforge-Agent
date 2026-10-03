@@ -5,14 +5,7 @@ import { List } from "@arforge-ai/ui/list"
 import { Switch } from "@arforge-ai/ui/switch"
 import { useLanguage } from "@/context/language"
 import { useMcpToggle } from "@/context/mcp"
-
-const statusLabels = {
-  connected: "mcp.status.connected",
-  failed: "mcp.status.failed",
-  needs_auth: "mcp.status.needs_auth",
-  needs_client_registration: "mcp.status.needs_client_registration",
-  disabled: "mcp.status.disabled",
-} as const
+import { mcpStatusLabelKey } from "./mcp-status"
 
 export const DialogSelectMcp: Component = () => {
   const sync = useSync()
@@ -51,13 +44,14 @@ export const DialogSelectMcp: Component = () => {
           const mcpStatus = () => sync().data.mcp[i.name]
           const status = () => mcpStatus()?.status
           const statusLabel = () => {
-            const key = status() ? statusLabels[status() as keyof typeof statusLabels] : undefined
+            const key = mcpStatusLabelKey(status())
             if (!key) return
             return language.t(key)
           }
           const error = () => {
             const s = mcpStatus()
             if (s?.status === "failed" || s?.status === "needs_client_registration") return s.error
+            if (s?.status === "needs_approval") return s.reason
           }
           const enabled = () => status() === "connected"
           return (

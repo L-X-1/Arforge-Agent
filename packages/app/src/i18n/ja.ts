@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "おすすめ",
   "command.category.view": "表示",
   "command.category.project": "プロジェクト",
@@ -294,6 +297,8 @@ export const dict = {
   "mcp.status.connected": "接続済み",
   "mcp.status.failed": "失敗",
   "mcp.status.needs_auth": "認証が必要",
+  "mcp.status.needs_client_registration": "クライアント登録が必要",
+  "mcp.status.needs_approval": "承認が必要",
   "mcp.auth.clickToAuthenticate": "クリックして認証",
   "mcp.status.disabled": "無効",
   "dialog.fork.empty": "フォーク元のメッセージがありません",
@@ -1219,7 +1224,7 @@ export const dict = {
   "controlCenter.m174": "復元",
   "controlCenter.m175": "永続的な実行履歴",
   "controlCenter.m176":
-    "共有型付き Server API を通じて、Python コアのトランザクション、トレース、メッセージ アーティファクトを読み取ります。レポートは読み取り専用で、1 つの永続ソースによって所有されたままになります。",
+    "共有型付き Server API を通じて、Arforge Core のトランザクション、トレース、メッセージ アーティファクトを読み取ります。レポートは読み取り専用で、1 つの永続ソースによって所有されたままになります。",
   "controlCenter.m177": "限界",
   "controlCenter.m178": "リフレッシュ",
   "controlCenter.m179": "ファイル ·",
@@ -1271,6 +1276,19 @@ export const dict = {
   "controlCenter.m222": "不明な詳細診断エラー",
   "controlCenter.m223": "統制された進化",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "学習エビデンスから提案されたポリシー候補を確認し、隔離評価、人による承認、段階的展開、ロールバックによって能力変更を統制します。",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "学習エビデンスから提案されたポリシー候補を確認し、隔離評価、人による承認、段階的展開、ロールバックによって能力変更を統制します。",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

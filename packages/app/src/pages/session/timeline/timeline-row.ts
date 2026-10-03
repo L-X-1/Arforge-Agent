@@ -82,7 +82,47 @@ export namespace TimelineRow {
     }
   }
 
-  export function equals(a: TimelineRow, b: TimelineRow) {
-    return Equal.equals(a, b)
+  export function equals(a: TimelineRow, b: TimelineRow): boolean {
+    if (a === b) return true
+    if (a._tag !== b._tag || a.userMessageID !== b.userMessageID) return false
+
+    // Common rows contain identities and presentation flags, not message bodies.
+    // Avoid hashing each freshly projected tagged row on every stream update.
+    switch (a._tag) {
+      case "TurnGap":
+      case "CommentStrip":
+      case "Thinking":
+      case "Retry":
+        return true
+      case "UserMessage":
+        return b._tag === "UserMessage" && a.anchor === b.anchor
+      case "TurnDivider":
+        return b._tag === "TurnDivider" && a.label === b.label
+      case "AssistantPart":
+        return b._tag === "AssistantPart" &&
+          a.previousAssistantPart === b.previousAssistantPart && samePartGroup(a.group, b.group)
+      case "Error":
+        return b._tag === "Error" && a.text === b.text
+      case "PrimaryDelivery":
+        return b._tag === "PrimaryDelivery" && a.assistantMessageID === b.assistantMessageID &&
+          Equal.equals(a.delivery, b.delivery)
+      case "DiffSummary":
+        return b._tag === "DiffSummary" && Equal.equals(a.diffs, b.diffs)
+    }
   }
+}
+
+function samePartGroup(a: PartGroup, b: PartGroup): boolean {
+  if (a === b) return true
+  if (a.key !== b.key || a.type !== b.type) return false
+  if (a.type === "part") {
+    return b.type === "part" && a.ref.messageID === b.ref.messageID && a.ref.partID === b.ref.partID
+  }
+  if (b.type === "part" || a.refs.length !== b.refs.length) return false
+  for (let index = 0; index < a.refs.length; index++) {
+    const left = a.refs[index]!
+    const right = b.refs[index]!
+    if (left.messageID !== right.messageID || left.partID !== right.partID) return false
+  }
+  return true
 }

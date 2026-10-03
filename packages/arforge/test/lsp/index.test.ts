@@ -1,5 +1,6 @@
 import { describe, expect, spyOn } from "bun:test"
 import path from "path"
+import { readFile } from "node:fs/promises"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Deferred, Effect, Layer } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -118,6 +119,60 @@ describe("lsp.spawn", () => {
           fake: {
             command: [process.execPath, fakeServerPath],
             extensions: [".repro"],
+          },
+        },
+      },
+    },
+  )
+
+  it.instance(
+    "records a safe error after a cold server exits and does not retry it",
+    () =>
+      LSP.Service.use((lsp) =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const server = path.join(dir, "cold-exit-server.js")
+          const marker = path.join(dir, "cold-exit.marker")
+          const file = path.join(dir, "cold.ts")
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                server,
+                'require("node:fs").appendFileSync(process.env.ARFORGE_LSP_MARKER, "x"); process.exit(23)\n',
+              ),
+              Bun.write(marker, ""),
+              Bun.write(file, "export const cold = true\n"),
+            ]),
+          )
+
+          const fallback = () =>
+            lsp.hover({
+              file,
+              line: 0,
+              character: 13,
+            })
+          yield* fallback()
+          yield* fallback()
+
+          const status = yield* lsp.status()
+          expect(status).toContainEqual(
+            expect.objectContaining({ id: "typescript", name: "typescript", status: "error" }),
+          )
+          expect(JSON.stringify(status)).not.toContain("cold-exit-server")
+          expect(yield* Effect.promise(() => readFile(marker, "utf8"))).toBe("x")
+        }),
+      ),
+    {
+      config: {
+        lsp: {
+          deno: { disabled: true },
+          eslint: { disabled: true },
+          oxlint: { disabled: true },
+          biome: { disabled: true },
+          typescript: {
+            command: [process.execPath, "cold-exit-server.js"],
+            extensions: [".ts"],
+            env: { ARFORGE_LSP_MARKER: "cold-exit.marker" },
           },
         },
       },

@@ -26,16 +26,16 @@ unreviewed administrator.
 
 ## 2. Existing subsystem convergence
 
-| Existing subsystem | Retained role in the closed loop |
-|---|---|
-| `core/self_correct.py` | Classifies failures and supplies evidence fingerprints |
-| learning tables/engine | Supplies reviewed, repeated strategy opportunities |
-| Memory OS | Retains governed long-term facts and candidate provenance |
-| `core/dogfood.py` | Supplies privacy-bounded real-run failure groups |
-| Cognitive Runtime/run replay | Supplies inspectable run evidence and recovery references |
-| `core/capability_eval.py` | Runs existing deterministic self-correction regression contracts |
-| `core/run_transaction.py` | Continues to own source/workspace edit rollback |
-| `core/evolution_runtime.py` | Owns strategy candidate identity, gates, overlay, monitoring and rollback |
+| Existing subsystem           | Retained role in the closed loop                                          |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `core/self_correct.py`       | Classifies failures and supplies evidence fingerprints                    |
+| learning tables/engine       | Supplies reviewed, repeated strategy opportunities                        |
+| Memory OS                    | Retains governed long-term facts and candidate provenance                 |
+| `core/dogfood.py`            | Supplies privacy-bounded real-run failure groups                          |
+| Cognitive Runtime/run replay | Supplies inspectable run evidence and recovery references                 |
+| `core/capability_eval.py`    | Runs existing deterministic self-correction regression contracts          |
+| `core/run_transaction.py`    | Continues to own source/workspace edit rollback                           |
+| `core/evolution_runtime.py`  | Owns strategy candidate identity, gates, overlay, monitoring and rollback |
 
 There is no second learning database, evaluator framework, task journal or file
 rollback implementation. Evolution Runtime stores only lifecycle evidence that
@@ -43,14 +43,26 @@ those existing systems do not own.
 
 ## 3. Constitution Kernel
 
-The kernel is code-owned, versioned policy. Ordinary candidates cannot target:
+The v2.0 kernel is code-owned, versioned policy. Its allowlist, permanent
+protection list and human-actor classes are frozen runtime values; status APIs
+return copies rather than references to those values. Durable proposal writes
+bind the target and Constitution version to the candidate manifest, and reads
+fail closed if a stored manifest crosses the boundary.
 
-- authority, identity or ownership;
-- permission and approval behavior;
-- privacy and retention policy;
-- sandbox or security controls;
-- audit behavior;
-- evolution governance or the Constitution Kernel itself.
+Ordinary candidates cannot target or amend:
+
+- identity or ownership;
+- permission, policy, approval or authority behavior;
+- privacy, secret, credential or retention policy;
+- audit or event integrity;
+- evolution gates or the Constitution Kernel itself;
+- source-write or repository authority;
+- release or signing behavior;
+- rollback behavior;
+- hard budget limits.
+
+Sandbox, security, network and egress controls remain protected as part of the
+permission/policy boundary.
 
 Deployable targets in this foundation are:
 
@@ -62,6 +74,28 @@ Only `strategy_rule` candidates exist. Creation and evaluation may be
 automatic, but approval, canary start and promotion require an actor in the
 `user:` or `admin:` authority class. A `runtime:` actor cannot approve itself.
 Automatic rollback is allowed because it only removes capability.
+
+### Evolution capability levels
+
+Evolution capability levels are a separate contract from ActionGateway risk
+tiers. Every canonical proposal and candidate manifest declares its Evolution
+level, and lifecycle projections derive the effective level from durable
+status:
+
+| Level | Allowed boundary                                                      |
+| ----- | --------------------------------------------------------------------- |
+| L0    | Inert suggestions and reports only                                    |
+| L1    | Reversible, explicitly non-security-critical runtime parameters only  |
+| L2    | Prompt, workflow, or skill candidates and isolated offline evaluation |
+| L3    | Isolated sandbox or bounded, reversible canary                        |
+| L4    | Human/policy-approved controlled promotion with immediate rollback    |
+| L5    | Autonomous core source modification or publishing; always forbidden   |
+
+The level matrix is frozen and returned by the status API as a copy. Candidate
+creation cannot declare `code`, L2 evaluation must be isolated, L3 cannot skip
+the approved candidate state, and L4 cannot skip canary or controlled human
+governance. Rollback reduces the effective candidate level back to L2 while
+retaining immutable evidence.
 
 ## 4. Candidate integrity and state
 

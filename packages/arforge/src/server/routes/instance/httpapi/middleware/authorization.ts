@@ -9,6 +9,7 @@ import { UserAuth } from "@arforge-ai/server/user-auth"
 import { IdentityContext } from "@arforge-ai/server/identity-context"
 import { Database } from "@arforge-ai/core/database/database"
 import { Option } from "effect"
+import { HttpControlSubject } from "@/control-plane/http-control-subject"
 export {
   Authorization as ServerAuthorization,
   authorizationLayer as serverAuthorizationLayer,
@@ -17,6 +18,27 @@ export {
 const AUTH_TOKEN_QUERY = "auth_token"
 const UNAUTHORIZED = 401
 const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
+
+/**
+ * Private mode is one server-owned security principal. It is intentionally
+ * stable across password/session rotation and is never derived from a browser
+ * header or payload. User-auth mode always replaces it with the authenticated
+ * tenant member below.
+ */
+export const LocalIdentityPrincipal: IdentityContext.Principal = Object.freeze({
+  userID: HttpControlSubject.LocalPrincipal.userID,
+  tenantID: HttpControlSubject.LocalPrincipal.tenantID,
+  email: "local-private@arforge.invalid",
+  role: "owner",
+  sessionID: "aus_local_private_server",
+})
+
+function localAuthorized<A, E, R>(effect: Effect.Effect<A, E, R>, database: Database.Interface) {
+  return database.runAsPrincipal(
+    LocalIdentityPrincipal,
+    Effect.provideService(effect, IdentityContext.Current, LocalIdentityPrincipal),
+  )
+}
 
 function sessionAuthorized(request: HttpServerRequest.HttpServerRequest, config: ServerAuth.Info) {
   return SessionAuth.requestAuthorized(
@@ -181,16 +203,16 @@ export const authorizationRouterMiddleware = HttpRouter.middleware()(
           return yield* userAuthorizedRaw(effect, request, userConfig, database)
         })
     }
-    if (!ServerAuth.required(config)) return (effect) => effect
+    if (!ServerAuth.required(config)) return (effect) => localAuthorized(effect, database)
 
     return (effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const url = new URL(request.url, "http://localhost")
         if (isPublicUIPath(request.method, url.pathname)) return yield* effect
-        if (sessionAuthorized(request, config)) return yield* effect
+        if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
         return yield* credentialFromURL(url, request).pipe(
-          Effect.flatMap((credential) => validateRawCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateRawCredential(localAuthorized(effect, database), credential, config)),
         )
       })
   }),
@@ -210,13 +232,13 @@ export const authorizationLayer = Layer.effect(
         }),
       )
     }
-    if (!ServerAuth.required(config)) return Authorization.of((effect) => effect)
+    if (!ServerAuth.required(config)) return Authorization.of((effect) => localAuthorized(effect, database))
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        if (sessionAuthorized(request, config)) return yield* effect
+        if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
         return yield* credentialFromRequest(request).pipe(
-          Effect.flatMap((credential) => validateCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateCredential(localAuthorized(effect, database), credential, config)),
         )
       }),
     )
@@ -239,15 +261,15 @@ export const ptyConnectAuthorizationLayer = Layer.effect(
         }),
       )
     }
-    if (!ServerAuth.required(config)) return PtyConnectAuthorization.of((effect) => effect)
+    if (!ServerAuth.required(config)) return PtyConnectAuthorization.of((effect) => localAuthorized(effect, database))
     return PtyConnectAuthorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const url = new URL(request.url, "http://localhost")
-        if (hasPtyConnectTicketURL(url)) return yield* effect
-        if (sessionAuthorized(request, config)) return yield* effect
+        if (hasPtyConnectTicketURL(url)) return yield* localAuthorized(effect, database)
+        if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
         return yield* credentialFromURL(url, request).pipe(
-          Effect.flatMap((credential) => validateCredential(effect, credential, config)),
+          Effect.flatMap((credential) => validateCredential(localAuthorized(effect, database), credential, config)),
         )
       }),
     )

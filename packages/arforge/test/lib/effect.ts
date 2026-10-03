@@ -37,7 +37,16 @@ type Runner = <A, E, R, E2>(value: Body<A, E, R | Scope.Scope>, layer: Layer.Lay
 
 const isolatedRun: Runner = (value, layer) =>
   Effect.gen(function* () {
-    const exit = yield* body(value).pipe(Effect.scoped, Effect.provide(layer), Effect.exit)
+    // Build and close the test layer under the same captured context.  The
+    // default `Effect.scoped` runner closes provider scopes after the layer
+    // context has already been unwound, which can drop services needed by
+    // asynchronous finalizers (notably Database).  Keeping an explicit
+    // scope makes teardown deterministic and mirrors the production runtime.
+    const scope = yield* Scope.make()
+    const testMemoMap = Layer.makeMemoMapUnsafe()
+    const ctx = yield* Layer.buildWithMemoMap(layer, testMemoMap, scope)
+    const exit = yield* body(value).pipe(Effect.scoped, Effect.provide(ctx), Effect.exit)
+    yield* Scope.close(scope, Exit.void).pipe(Effect.provide(ctx))
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)
@@ -55,7 +64,7 @@ const sharedRun: Runner = (value, layer) =>
     const scope = yield* Scope.make()
     const ctx = yield* Layer.buildWithMemoMap(layer, memoMap, scope)
     const exit = yield* body(value).pipe(Effect.scoped, Effect.provide(ctx), Effect.exit)
-    yield* Scope.close(scope, Exit.void)
+    yield* Scope.close(scope, Exit.void).pipe(Effect.provide(ctx))
     if (Exit.isFailure(exit)) {
       for (const err of Cause.prettyErrors(exit.cause)) {
         yield* Effect.logError(err)
@@ -96,11 +105,7 @@ const make = <R, E>(
   ) => {
     const args = instanceArgs(options, opts)
     const instanceOptions = { ...defaultInstanceOptions, ...args.instanceOptions }
-    return test(
-      name,
-      () => run(body(value).pipe(withTmpdirInstance(instanceOptions)), liveLayer),
-      args.testOptions,
-    )
+    return test(name, () => run(body(value).pipe(withTmpdirInstance(instanceOptions)), liveLayer), args.testOptions)
   }
 
   instance.only = <A, E2, E3 = never>(

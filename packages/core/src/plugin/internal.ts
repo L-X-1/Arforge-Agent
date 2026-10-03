@@ -23,6 +23,7 @@ import { Location } from "../location"
 import { ModelsDev } from "../models-dev"
 import { Npm } from "../npm"
 import { PluginV2 } from "../plugin"
+import { PluginEvents } from "./events"
 import { Reference } from "../reference"
 import { SkillV2 } from "../skill"
 import { State } from "../state"
@@ -43,7 +44,7 @@ export type Requirements =
   | Catalog.Service
   | CommandV2.Service
   | Config.Service
-  | EventV2.Service
+  | PluginEvents.Service
   | FileSystem.Service
   | FSUtil.Service
   | Global.Service
@@ -67,6 +68,7 @@ const layer = Layer.effectDiscard(
     const modelsDev = yield* ModelsDev.Service
     const npm = yield* Npm.Service
     const events = yield* EventV2.Service
+    const eventObserver = PluginEvents.Service.of({ subscribe: events.subscribe })
     const fs = yield* FSUtil.Service
     const filesystem = yield* FileSystem.Service
     const global = yield* Global.Service
@@ -88,7 +90,7 @@ const layer = Layer.effectDiscard(
               Effect.provideService(Location.Service, location),
               Effect.provideService(ModelsDev.Service, modelsDev),
               Effect.provideService(Npm.Service, npm),
-              Effect.provideService(EventV2.Service, events),
+              Effect.provideService(PluginEvents.Service, eventObserver),
               Effect.provideService(FSUtil.Service, fs),
               Effect.provideService(FileSystem.Service, filesystem),
               Effect.provideService(Global.Service, global),

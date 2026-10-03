@@ -14,6 +14,13 @@
   background-color: var(--v2-overlay-simple-overlay-hover);
 }
 
+/* The V2 main surface begins on a fractional pixel below the titlebar. Keep
+   its dark underlay continuous through that boundary so rounded surfaces do
+   not expose the translucent titlebar material at their corner pixels. */
+[data-slot="titlebar-v2"] {
+  box-shadow: var(--arforge-inner-highlight), inset 0 -1px 0 var(--v2-background-bg-deep);
+}
+
 [data-slot="titlebar-tab-item"]
   [data-component="icon-button-v2"]:is(:focus-visible, [data-state="focus"]):not(:disabled) {
   opacity: 1;

@@ -6,4 +6,6 @@ import { PositiveInt } from "../schema"
 export class Info extends Schema.Class<Info>("ConfigV2.ToolOutput")({
   max_lines: PositiveInt.pipe(Schema.optional),
   max_bytes: PositiveInt.pipe(Schema.optional),
+  /** Profile-wide managed artifact occupancy cap; does not change inline preview limits. */
+  max_total_bytes: PositiveInt.pipe(Schema.optional),
 }) {}

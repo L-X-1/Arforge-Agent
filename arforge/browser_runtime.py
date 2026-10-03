@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import socket
@@ -12,6 +13,13 @@ import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+from arforge.browser_policy import (
+    BrowserPolicyError,
+    classify_browser_actions,
+    validate_browser_target_url,
+    validate_redirect,
+)
 
 
 def resolve_browser_target(value: str, workspace: Path) -> str:
@@ -179,12 +187,107 @@ def _selector_lookup_js(selector: str) -> str:
     )
 
 
-def _perform_action(cdp: _CDP, action: str) -> str:
+def _click_selector(cdp: _CDP, selector: str) -> str:
+    result = cdp.evaluate(
+        "(() => { const el = " + _selector_lookup_js(selector) + "; "
+        "if (!el) return 'missing'; "
+        "el.scrollIntoView({block:'center',inline:'center'}); const r=el.getBoundingClientRect(); "
+        "const init={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,"
+        "button:0,buttons:1,pointerId:1,pointerType:'mouse',isPrimary:true}; "
+        "if(typeof PointerEvent==='function')el.dispatchEvent(new PointerEvent('pointerdown',init)); "
+        "el.dispatchEvent(new MouseEvent('mousedown',init)); "
+        "if(typeof PointerEvent==='function')el.dispatchEvent(new PointerEvent('pointerup',{...init,buttons:0})); "
+        "el.dispatchEvent(new MouseEvent('mouseup',{...init,buttons:0})); "
+        "el.click(); return 'clicked'; })()"
+    )
+    return str(result)
+
+
+def _resolve_upload_path(value: str, workspace: Path) -> Path:
+    candidate = Path(str(value or "").strip())
+    resolved = (candidate if candidate.is_absolute() else workspace / candidate).resolve()
+    try:
+        resolved.relative_to(workspace.resolve())
+    except ValueError as exc:
+        raise BrowserPolicyError("upload path must stay inside the active workspace") from exc
+    if not resolved.is_file():
+        raise FileNotFoundError(f"upload file does not exist: {resolved}")
+    return resolved
+
+
+def _upload_file(cdp: _CDP, selector: str, path: Path) -> str:
+    document = cdp.call("DOM.getDocument", {"depth": -1})
+    root_id = document.get("root", {}).get("nodeId")
+    if not root_id:
+        raise RuntimeError("browser DOM root is unavailable for upload")
+    result = cdp.call("DOM.querySelector", {"nodeId": root_id, "selector": selector})
+    node_id = result.get("nodeId")
+    if not node_id:
+        raise ValueError(f"upload target not found: {selector}")
+    cdp.call("DOM.setFileInputFiles", {"nodeId": node_id, "files": [str(path)]})
+    return f"uploaded {selector}"
+
+
+def _collect_downloads(download_dir: Path) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    if not download_dir.is_dir():
+        return records
+    for path in sorted(download_dir.iterdir()):
+        if not path.is_file() or path.name.endswith(".crdownload"):
+            continue
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+        records.append({"name": path.name, "bytes": size, "sha256": digest.hexdigest()})
+    return records
+
+
+def _validate_navigation_events(
+    events: list[dict],
+    initial_url: str,
+    *,
+    workspace: Path,
+    allowed_origins: list[str] | tuple[str, ...] | None,
+) -> None:
+    for event in events:
+        if event.get("method") != "Page.frameNavigated":
+            continue
+        frame = event.get("params", {}).get("frame", {})
+        if frame.get("parentId"):
+            continue
+        candidate = str(frame.get("url") or "")
+        if candidate:
+            validate_redirect(
+                initial_url,
+                candidate,
+                workspace=workspace,
+                allowed_origins=allowed_origins,
+            )
+
+
+def _perform_action(
+    cdp: _CDP,
+    action: str,
+    *,
+    workspace: Path | None = None,
+) -> str:
     action = str(action or "").strip()
     if action.startswith("wait:"):
         milliseconds = max(0, min(10000, int(action.split(":", 1)[1])))
         cdp.evaluate(f"new Promise(resolve => setTimeout(resolve, {milliseconds}))", await_promise=True)
         return f"waited {milliseconds}ms"
+    if action.startswith("navigate:"):
+        target = action.split(":", 1)[1].strip()
+        if not target.startswith(("http://", "https://", "file://")):
+            if workspace is None:
+                raise BrowserPolicyError("navigate action requires a workspace context for local paths")
+            target = resolve_browser_target(target, workspace)
+        validate_browser_target_url(target)
+        cdp.call("Page.navigate", {"url": target}, timeout=15)
+        return f"navigated {target}"
     if action.startswith("press:"):
         requested = action.split(":", 1)[1]
         key, code, virtual = _KEY_CODES.get(
@@ -204,21 +307,21 @@ def _perform_action(cdp: _CDP, action: str) -> str:
         return f"pressed {requested}"
     if action.startswith("click:"):
         selector = action.split(":", 1)[1]
-        result = cdp.evaluate(
-            "(() => { const el = " + _selector_lookup_js(selector) + "; "
-            "if (!el) return 'missing'; "
-            "el.scrollIntoView({block:'center',inline:'center'}); const r=el.getBoundingClientRect(); "
-            "const init={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,"
-            "button:0,buttons:1,pointerId:1,pointerType:'mouse',isPrimary:true}; "
-            "if(typeof PointerEvent==='function')el.dispatchEvent(new PointerEvent('pointerdown',init)); "
-            "el.dispatchEvent(new MouseEvent('mousedown',init)); "
-            "if(typeof PointerEvent==='function')el.dispatchEvent(new PointerEvent('pointerup',{...init,buttons:0})); "
-            "el.dispatchEvent(new MouseEvent('mouseup',{...init,buttons:0})); "
-            "el.click(); return 'clicked'; })()"
-        )
+        result = _click_selector(cdp, selector)
         if result != "clicked":
             raise ValueError(f"click target not found: {selector}")
         return f"clicked {selector}"
+    if action.startswith("download:"):
+        selector = action.split(":", 1)[1]
+        result = _click_selector(cdp, selector)
+        if result != "clicked":
+            raise ValueError(f"download target not found: {selector}")
+        return f"download requested {selector}"
+    if action.startswith("upload:"):
+        parts = action.split(":", 2)
+        if len(parts) != 3 or not parts[1] or workspace is None:
+            raise BrowserPolicyError("upload action must be upload:<selector>:<workspace-file>")
+        return _upload_file(cdp, parts[1], _resolve_upload_path(parts[2], workspace))
     if action.startswith("fill:"):
         parts = action.split(":", 2)
         if len(parts) != 3 or not parts[1]:
@@ -280,9 +383,9 @@ def _perform_action(cdp: _CDP, action: str) -> str:
         cdp.call("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
         return f"touched {selector}"
     raise ValueError(
-        "unsupported browser action; use press:<key>, click:<selector>, touch:<selector>, "
+        "unsupported browser action; use navigate:<url>, press:<key>, click:<selector>, touch:<selector>, "
         "fill:<selector>:<text>, select:<selector>:<value>, check:<selector>, "
-        "uncheck:<selector>, or wait:<ms>"
+        "uncheck:<selector>, upload:<selector>:<workspace-file>, download:<selector>, or wait:<ms>"
     )
 
 
@@ -302,11 +405,14 @@ def run_browser_diagnostics(
     viewport_width: int = 1280,
     viewport_height: int = 720,
     actions: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
 ) -> dict:
     """Launch a real local Chromium process and collect runtime evidence through CDP."""
     from websockets.sync.client import connect
+    from arforge.security_guard import detect_injection
 
-    url = resolve_browser_target(target, workspace)
+    url = validate_browser_target_url(resolve_browser_target(target, workspace))
+    action_plans = classify_browser_actions(actions)
     width = max(320, min(3840, int(viewport_width)))
     height = max(320, min(2160, int(viewport_height)))
     delay = max(0, min(10000, int(wait_ms)))
@@ -332,6 +438,8 @@ def run_browser_diagnostics(
         creationflags=creationflags,
     )
     try:
+        download_dir = Path(profile.name) / "downloads"
+        download_dir.mkdir()
         pages = None
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
@@ -355,6 +463,15 @@ def run_browser_diagnostics(
             cdp = _CDP(websocket)
             for domain in ("Page.enable", "Runtime.enable", "Network.enable"):
                 cdp.call(domain)
+            if any(plan.kind == "upload" for plan in action_plans):
+                cdp.call("DOM.enable")
+            if any(plan.kind == "download" for plan in action_plans):
+                cdp.call(
+                    "Browser.setDownloadBehavior",
+                    {"behavior": "allow", "downloadPath": str(download_dir), "eventsEnabled": True},
+                )
+            elif action_plans:
+                cdp.call("Browser.setDownloadBehavior", {"behavior": "deny"})
             cdp.call(
                 "Emulation.setDeviceMetricsOverride",
                 {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": width <= 600},
@@ -366,9 +483,31 @@ def run_browser_diagnostics(
                 f"setTimeout(resolve, {max(3000, delay + 2000)}); }})",
                 await_promise=True,
             )
+            _validate_navigation_events(
+                cdp.events,
+                url,
+                workspace=workspace,
+                allowed_origins=allowed_origins,
+            )
             if delay:
                 cdp.evaluate(f"new Promise(resolve => setTimeout(resolve, {delay}))", await_promise=True)
-            action_results = [_perform_action(cdp, action) for action in (actions or [])]
+            initial_page_text = cdp.evaluate(
+                "String((document.body && document.body.innerText) || '').slice(0, 12000)"
+            )
+            prompt_injection = detect_injection(str(initial_page_text or ""))
+            if action_plans and not prompt_injection["clean"]:
+                raise BrowserPolicyError(
+                    "prompt injection detected in untrusted page content; browser actions were blocked"
+                )
+            action_results: list[str] = []
+            for plan in action_plans:
+                action_results.append(_perform_action(cdp, plan.raw, workspace=workspace))
+                _validate_navigation_events(
+                    cdp.events,
+                    url,
+                    workspace=workspace,
+                    allowed_origins=allowed_origins,
+                )
             if actions:
                 cdp.evaluate("new Promise(resolve => setTimeout(resolve, 250))", await_promise=True)
             raw_snapshot = cdp.evaluate(
@@ -406,6 +545,30 @@ def run_browser_diagnostics(
                 "value:(i.type==='password'||i.type==='hidden')?'[redacted]':String(i.value||'').slice(0,200),checked:!!i.checked,disabled:!!i.disabled}))}; })())"
             )
             snapshot = json.loads(str(raw_snapshot))
+            try:
+                screenshot_data = str(cdp.call("Page.captureScreenshot", {"format": "png"}).get("data") or "")
+                screenshot_observation = {
+                    "available": bool(screenshot_data),
+                    "sha256": hashlib.sha256(screenshot_data.encode("ascii")).hexdigest()
+                    if screenshot_data
+                    else None,
+                    "base64_bytes": len(screenshot_data),
+                }
+            except Exception as exc:
+                screenshot_observation = {
+                    "available": False,
+                    "sha256": None,
+                    "base64_bytes": 0,
+                    "error": str(exc)[:200],
+                }
+            snapshot["url"] = validate_redirect(
+                url,
+                str(snapshot.get("url") or ""),
+                workspace=workspace,
+                allowed_origins=allowed_origins,
+            )
+            prompt_injection = detect_injection(str(snapshot.get("bodyText") or ""))
+            downloads = _collect_downloads(download_dir)
             console_errors: list[str] = []
             page_errors: list[str] = []
             network_failures: list[str] = []
@@ -430,6 +593,21 @@ def run_browser_diagnostics(
                 "target": url,
                 "snapshot": snapshot,
                 "actions": action_results,
+                "action_plans": [
+                    {
+                        "action": plan.raw,
+                        "kind": plan.kind,
+                        "risk_level": plan.risk_level,
+                        "requires_confirmation": plan.requires_confirmation,
+                        "destructive": plan.destructive,
+                    }
+                    for plan in action_plans
+                ],
+                "downloads": downloads,
+                "screenshot_observation": screenshot_observation,
+                "credential_scope": "ephemeral-empty-profile",
+                "allowed_origins": list(allowed_origins or []),
+                "prompt_injection": prompt_injection,
                 "console_errors": console_errors,
                 "page_errors": page_errors,
                 "network_failures": network_failures,

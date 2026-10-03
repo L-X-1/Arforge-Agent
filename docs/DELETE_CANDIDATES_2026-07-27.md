@@ -2,7 +2,7 @@
 
 The owner approved option **A** on 2026-07-27. Every Tier 1 path listed below
 was then deleted after resolving its absolute path and proving it remained
-inside `E:\Arforge-Agent`. The historical sizes were measured before deletion.
+inside `%ARFORGE_REPO%`. The historical sizes were measured before deletion.
 Tier 2 remains untouched because it is architectural source, not generated
 output.
 

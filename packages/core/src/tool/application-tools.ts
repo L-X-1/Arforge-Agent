@@ -3,6 +3,7 @@ export * as ApplicationTools from "./application-tools"
 import { Context, Effect, Layer, Scope } from "effect"
 import { State } from "../state"
 import { Tool } from "./tool"
+import { isReservedBuiltInName } from "./authorization-plan"
 import { makeGlobalNode } from "../effect/app-node"
 
 type Data = {
@@ -44,6 +45,16 @@ const layer = Layer.effect(
         const entries = Object.entries(tools)
         if (entries.length === 0) return
         yield* Effect.forEach(entries, ([name]) => Tool.validateName(name), { discard: true })
+        // Process-global application registrations are never trusted: a
+        // reserved built-in name is rejected outright so it can never
+        // shadow a built-in or inherit name-based static plans.
+        for (const [name] of entries) {
+          if (isReservedBuiltInName(name))
+            return yield* new Tool.RegistrationError({
+              name,
+              message: `The built-in tool ${name} is reserved and cannot be registered as an application tool`,
+            })
+        }
         const registrations = entries.map(([name, tool]) => [name, { identity: {}, tool }] as const)
         yield* state.transform((draft) => {
           for (const [name, entry] of registrations) draft.set(name, entry)

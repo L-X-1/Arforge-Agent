@@ -2,18 +2,22 @@ export * as WebSearchTool from "./websearch"
 
 import { ToolFailure } from "@arforge-ai/llm"
 import { Context, Duration, Effect, Layer, Schema } from "effect"
-import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { makeLocationNode } from "../effect/app-node"
 import { LayerNodePlatform } from "../effect/app-node-platform"
+import { ContextFirewall } from "../context-firewall"
+import { Egress } from "../egress"
+import { SecretProvider } from "../secret-provider"
+import { redactSecrets } from "../redact"
 import { truthy } from "../flag/flag"
 import { InstallationVersion } from "../installation/version"
 import { PositiveInt } from "../schema"
-import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import { collectBoundedResponseBody } from "./http-body"
 import { checksum } from "../util/encode"
 import { ToolRegistry } from "./registry"
+import { scopedChange } from "./effect-semantics"
 
 export const name = "websearch"
 export const NO_RESULTS = "No search results found. Please try a different query."
@@ -78,8 +82,10 @@ export const defaultConfigLayer = Layer.sync(ConfigService, () =>
         : undefined,
     enableExa: truthy("ARFORGE_EXPERIMENTAL") || truthy("ARFORGE_ENABLE_EXA") || truthy("ARFORGE_EXPERIMENTAL_EXA"),
     enableParallel: truthy("ARFORGE_ENABLE_PARALLEL") || truthy("ARFORGE_EXPERIMENTAL_PARALLEL"),
-    exaApiKey: process.env.EXA_API_KEY,
-    parallelApiKey: process.env.PARALLEL_API_KEY,
+    // Runtime credentials are resolved by SecretProvider inside the executor;
+    // this configuration layer must never retain process environment values.
+    exaApiKey: undefined,
+    parallelApiKey: undefined,
   }),
 )
 
@@ -156,33 +162,55 @@ const callMcp = <F extends Schema.Struct.Fields>(
   args: Schema.Struct<F>,
   value: Schema.Struct.Type<F>,
   headers: Record<string, string> = {},
+  egress: Egress.Authorizer,
+  credentialScope: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const request = yield* HttpClientRequest.post(url).pipe(
-      HttpClientRequest.accept("application/json, text/event-stream"),
-      HttpClientRequest.setHeaders(headers),
-      HttpClientRequest.schemaBodyJson(McpRequest(args))({
-        jsonrpc: "2.0" as const,
-        id: 1 as const,
-        method: "tools/call" as const,
-        params: { name: tool, arguments: value },
-      }),
-    )
-    return yield* Effect.gen(function* () {
-      const response = yield* HttpClient.filterStatusOk(http).execute(request)
+    let target = url
+    let redirectFrom: string | undefined
+    for (let redirects = 0; ; redirects++) {
+      yield* egress.assert({
+        url: target,
+        method: "POST",
+        credentialScope,
+        ...(redirectFrom === undefined ? {} : { redirectFrom }),
+      })
+      const request = HttpClientRequest.post(target).pipe(
+        HttpClientRequest.accept("application/json, text/event-stream"),
+        HttpClientRequest.setHeaders(headers),
+        HttpClientRequest.bodyJsonUnsafe({
+          jsonrpc: "2.0" as const,
+          id: 1 as const,
+          method: "tools/call" as const,
+          params: { name: tool, arguments: value },
+        }),
+      )
+      const response = yield* http.execute(request)
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.location
+        if (!location) return yield* Effect.fail(new Error("HTTP redirect did not include a Location header"))
+        if (redirects >= 3) return yield* Effect.fail(new Error("HTTP redirect limit exceeded"))
+        redirectFrom = target
+        target = yield* Effect.try({
+          try: () => new URL(location, target).toString(),
+          catch: (error) => error,
+        })
+        continue
+      }
+      const ok = yield* HttpClientResponse.filterStatusOk(response)
       const body = yield* collectBoundedResponseBody(
-        response,
+        ok,
         MAX_RESPONSE_BYTES,
         () => new Error(`${tool} response exceeded ${MAX_RESPONSE_BYTES} bytes`),
       )
       return yield* parseResponse(body.toString("utf8"))
-    }).pipe(
+    }
+  }).pipe(
       Effect.timeoutOrElse({
         duration: Duration.seconds(25),
         orElse: () => Effect.fail(new Error(`${tool} request timed out`)),
       }),
     )
-  })
 
 const Output = Schema.Struct({
   provider: Provider,
@@ -191,22 +219,31 @@ const Output = Schema.Struct({
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const http = yield* HttpClient.HttpClient
     const config = yield* ConfigService
-    const permission = yield* PermissionV2.Service
+    const secrets = yield* SecretProvider.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description,
+          effects: scopedChange({
+            networkScope: [EXA_URL, PARALLEL_URL],
+            secretScope: ["EXA_API_KEY", "PARALLEL_API_KEY"],
+            externalServices: ["Exa", "Parallel"],
+            idempotency: "idempotent",
+            retryability: "safe",
+            reversibility: "not_applicable",
+            successCriteria: ["provider returns a bounded search response"],
+          }),
           input: Input,
           output: Output,
-          toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
+          toModelOutput: ({ output }) => [{ type: "text", text: ContextFirewall.untrusted("web", output.text) }],
           execute: (input, context) => {
             const provider = selectProvider(context.sessionID, config, config.provider)
             return Effect.gen(function* () {
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [input.query],
                 save: ["*"],
@@ -216,36 +253,62 @@ const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
+              let usedSecret: string | undefined
               const text =
                 provider === "exa"
-                  ? yield* callMcp(http, exaUrl(config.exaApiKey), "web_search_exa", ExaArgs, {
-                      query: input.query,
-                      type: input.type || "auto",
-                      numResults: input.numResults || 8,
-                      livecrawl: input.livecrawl || "fallback",
-                      contextMaxCharacters: input.contextMaxCharacters,
+                  ? yield* Effect.gen(function* () {
+                      const apiKey = config.exaApiKey ?? (yield* secrets.resolve("EXA_API_KEY"))
+                      usedSecret = apiKey
+                      return yield* callMcp(
+                        http,
+                        exaUrl(apiKey),
+                        "web_search_exa",
+                        ExaArgs,
+                        {
+                          query: input.query,
+                          type: input.type || "auto",
+                          numResults: input.numResults || 8,
+                          livecrawl: input.livecrawl || "fallback",
+                          contextMaxCharacters: input.contextMaxCharacters,
+                        },
+                        {},
+                        context.egress,
+                        apiKey ? ["EXA_API_KEY"] : [],
+                      )
                     })
-                  : yield* callMcp(
-                      http,
-                      PARALLEL_URL,
-                      "web_search",
-                      ParallelArgs,
-                      {
-                        objective: input.query,
-                        search_queries: [input.query],
-                        session_id: context.sessionID,
-                        // V2 invocation context does not safely expose the model yet.
-                      },
-                      {
-                        "User-Agent": `arforge/${InstallationVersion}`,
-                        ...(config.parallelApiKey ? { Authorization: `Bearer ${config.parallelApiKey}` } : {}),
-                      },
-                    )
+                  : yield* Effect.gen(function* () {
+                      const apiKey = config.parallelApiKey ?? (yield* secrets.resolve("PARALLEL_API_KEY"))
+                      usedSecret = apiKey
+                      return yield* callMcp(
+                        http,
+                        PARALLEL_URL,
+                        "web_search",
+                        ParallelArgs,
+                        {
+                          objective: input.query,
+                          search_queries: [input.query],
+                          session_id: context.sessionID,
+                          // V2 invocation context does not safely expose the model yet.
+                        },
+                        {
+                          "User-Agent": `arforge/${InstallationVersion}`,
+                          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+                        },
+                        context.egress,
+                        apiKey ? ["PARALLEL_API_KEY"] : [],
+                      )
+                    })
               return {
                 provider,
-                text: text ?? NO_RESULTS,
+                text: redactSecrets(text ?? NO_RESULTS, usedSecret === undefined ? [] : [usedSecret]),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` })))
+            }).pipe(
+              Effect.mapError(
+                (error) =>
+                  Tool.toToolFailure(error) ??
+                  new ToolFailure({ message: `Unable to search the web for ${input.query}` }),
+              ),
+            )
           },
         }),
       })
@@ -256,5 +319,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/websearch",
   layer,
-  deps: [ToolRegistry.node, PermissionV2.node, LayerNodePlatform.httpClient, configNode],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, LayerNodePlatform.httpClient, configNode, SecretProvider.node],
 })

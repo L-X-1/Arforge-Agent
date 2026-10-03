@@ -1,6 +1,7 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { BackgroundJob as CoreBackgroundJob } from "@arforge-ai/core/background-job"
 import { InstanceState } from "@/effect/instance-state"
+import { Database } from "@arforge-ai/core/database/database"
 import { Effect, Layer } from "effect"
 
 export {
@@ -28,10 +29,11 @@ const layer = Layer.effect(
       waitForPromotion: (id) => InstanceState.useEffect(state, (jobs) => jobs.waitForPromotion(id)),
       promote: (id) => InstanceState.useEffect(state, (jobs) => jobs.promote(id)),
       cancel: (id) => InstanceState.useEffect(state, (jobs) => jobs.cancel(id)),
+      cancelSession: (id) => InstanceState.useEffect(state, (jobs) => jobs.cancelSession(id)),
     })
   }),
 )
 
-export const node = LayerNode.make({ service: CoreBackgroundJob.Service, layer, deps: [] })
+export const node = LayerNode.make({ service: CoreBackgroundJob.Service, layer, deps: [Database.node] })
 
 export * as BackgroundJob from "./job"

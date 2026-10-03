@@ -29,7 +29,7 @@ import { createChildStoreManager } from "./global-sync/child-store"
 import { applyDirectoryEvent, applyGlobalEvent } from "./global-sync/event-reducer"
 import { estimateRootSessionTotal, loadRootSessions, loadRootSessionsV1 } from "./global-sync/session-load"
 import { trimSessions } from "./global-sync/session-trim"
-import type { ProjectMeta } from "./global-sync/types"
+import type { McpConnectionStatus, ProjectMeta } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
 import { formatServerError } from "@/utils/server-errors"
 import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/solid-query"
@@ -50,7 +50,6 @@ import { persisted } from "@/utils/persist"
 import type { ServerApi } from "@/utils/server"
 import type {
   McpListInput,
-  McpListOutput,
   McpResource,
   McpResourceCatalogInput,
   McpResourceCatalogOutput,
@@ -59,6 +58,7 @@ import type {
 } from "@arforge-ai/client/promise"
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession, type ServerSession } from "./server-session"
+import { createRequestLifetime } from "./request-lifetime"
 
 type GlobalStore = {
   ready: boolean
@@ -72,7 +72,9 @@ type GlobalStore = {
 }
 
 type McpListApi = {
-  readonly list: (input?: McpListInput) => Promise<McpListOutput>
+  readonly list: (input?: McpListInput) => Promise<{
+    readonly data: ReadonlyArray<{ readonly name: string; readonly status: McpConnectionStatus }>
+  }>
 }
 
 type McpResourceApi = {
@@ -96,11 +98,11 @@ export const loadMcpQuery = (
   api: McpListApi,
   legacy?: ArforgeClient,
   protocol?: Promise<"v1" | "v2">,
-): ApiQueryOptions<Record<string, McpServer["status"]>, readonly [ServerScope, string, "mcp"]> =>
+): ApiQueryOptions<Record<string, McpConnectionStatus>, readonly [ServerScope, string, "mcp"]> =>
   queryOptions<
-    Record<string, McpServer["status"]>,
+    Record<string, McpConnectionStatus>,
     Error,
-    Record<string, McpServer["status"]>,
+    Record<string, McpConnectionStatus>,
     readonly [ServerScope, string, "mcp"]
   >({
     queryKey: [scope, directory, "mcp"] as const,
@@ -254,6 +256,14 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   const language = useLanguage()
   const owner = getOwner()
   if (!owner) throw new Error("ServerSync must be created within owner")
+
+  const lifetime = createRequestLifetime(typeof window === "undefined" ? undefined : window, () => {
+    for (const directory of Object.keys(children.children)) {
+      if (!children.active(directory)) continue
+      void loadSessions(directory).catch((error) => console.error("Failed to resume session loading", error))
+    }
+  })
+  onCleanup(() => lifetime.dispose())
 
   const sdkCache = new Map<string, ArforgeClient>()
   const booting = new Map<string, Promise<void>>()
@@ -435,6 +445,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   })
 
   async function loadSessions(directory: string, options?: { limit?: number }) {
+    if (!lifetime.active()) return
     const key = directoryKey(directory)
     const pending = sessionLoads.get(key)
     if (pending) {
@@ -462,18 +473,22 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     }
 
     const limit = Math.max(retainedLimit + SESSION_RECENT_LIMIT, SESSION_RECENT_LIMIT)
+    const current = lifetime.capture()
     setStore("session_list_status", "loading")
     const promise = queryClient
       .fetchQuery({
         ...queryOptionsApi.sessions(key),
+        staleTime: 0,
         queryFn: () =>
           serverSDK.protocol
-            .then((protocol) =>
-              protocol === "v1"
+            .then((protocol) => {
+              if (!current()) return
+              return protocol === "v1"
                 ? loadRootSessionsV1({ client: sdkFor(directory), directory, limit })
-                : loadRootSessions({ api: serverSDK.api.session, directory, limit }),
-            )
+                : loadRootSessions({ api: serverSDK.api.session, directory, limit })
+            })
             .then((x) => {
+              if (!current() || !x) return
               const nonArchived = (x.data ?? [])
                 .filter((s) => !!s?.id)
                 .filter((s) => !s.time?.archived)
@@ -500,6 +515,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
               sessionMeta.set(key, { limit })
             })
             .catch((err) => {
+              if (!current()) return
               console.error("Failed to load sessions", err)
               setStore("session_list_status", "error")
             })

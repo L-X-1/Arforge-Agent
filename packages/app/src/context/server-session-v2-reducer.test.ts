@@ -140,6 +140,42 @@ describe("v2 session reducer", () => {
     })
   })
 
+  test("persists structured completion data from the live event stream", () => {
+    const reducer = createV2SessionReducer()
+    let messages: SessionMessageInfo[] = []
+    const apply = (input: object) => {
+      const result = reducer.reduce(messages, event(input))
+      if (result) messages = result.messages
+    }
+
+    apply({
+      ...base,
+      id: "evt_step",
+      type: "session.step.started",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    apply({
+      ...base,
+      id: "evt_done",
+      type: "session.step.ended",
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        structured: { answer: 42 },
+      },
+    })
+
+    expect(messages[0]).toEqual(expect.objectContaining({ structured: { answer: 42 } }))
+  })
+
   test("requests hydration when promotion admission was missed", () => {
     const result = createV2SessionReducer().reduce(
       [],

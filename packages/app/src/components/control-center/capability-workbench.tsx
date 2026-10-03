@@ -4,8 +4,17 @@ import { For, Show, createEffect, on } from "solid-js"
 import { createStore } from "solid-js/store"
 import { publicErrorMessage } from "@/utils/public-error"
 import type { OperationsApi } from "@/utils/server"
+import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
 import { conflictDisposition } from "./memory-conflict-model"
 import { useLanguage, type Locale } from "@/context/language"
+import {
+  diagnosisModeHint,
+  diagnosisModeLabel,
+  diagnosisSeverityLabel,
+  diagnosisStatusLabel,
+  type DiagnosisMode,
+  type DiagnosisSeverity,
+} from "./diagnostics-presentation"
 
 type LocationInput = {
   location: {
@@ -19,9 +28,41 @@ const copy = {
     diagnostics: "Diagnostics workbench",
     diagnosticsHelp: "Explicit read-only checks. No model call, file mutation, or release approval is performed.",
     multimodal: "Multimodal",
+    mode: "Check mode",
+    modeError: "Error / document",
+    modeFrontend: "Frontend HTML / Vue",
+    modeJavaScript: "JavaScript",
+    modeHelp: "Choose the check that matches the file. Every mode is local and read-only.",
     file: "Image or document path",
     extracted: "Extracted error text (optional)",
     run: "Run diagnosis",
+    cancelDiagnosis: "Cancel check",
+    diagnosisCancelled: "Check cancelled. No file was changed.",
+    diagnosisResult: "Diagnosis result",
+    diagnosisPath: "Path",
+    diagnosisSource: "Source",
+    diagnosisChecks: "Checks",
+    diagnosisSignals: "signals",
+    diagnosisIssues: "Findings",
+    diagnosisSuggestions: "Next steps",
+    diagnosisNoIssues: "No findings were reported by this deterministic check.",
+    diagnosisRaw: "Raw evidence (advanced)",
+    diagnosisLocalOnly: "Local only",
+    yes: "yes",
+    no: "no",
+    diagnosisModelCalls: "Model calls",
+    diagnosisNotChecked: "External references are listed but not fetched.",
+    assetPreviewTitle: "External asset localization preview",
+    assetPreviewHint:
+      "Read-only discovery shows the exact request fingerprint; no network request, file write, or approval is performed.",
+    assetPreviewReady: "Ready for a later explicit approval",
+    assetPreviewNone: "No external assets need localization",
+    assetPreviewBlocked: "Preview unavailable",
+    assetPreviewDigest: "Discovery fingerprint",
+    assetPreviewScope: "External requests",
+    assetPreviewReferences: "References",
+    assetPreviewNoExecution:
+      "This is only a preview. Fetching and writing remain closed until the same ActionGateway approval path is available.",
     repo: "Repo Scale",
     repoPath: "Repository path (relative to the current workspace)",
     repoPathHelp: "Use a project subdirectory instead of scanning a broad user-home folder.",
@@ -67,10 +108,10 @@ const copy = {
     actualRecallEvidence: "Actual Session recall evidence",
     actualRecallEvidenceHelp:
       "Immutable events written after context-size checks and immediately before the provider call. They contain IDs, scores, and digests—not message or memory content.",
-    contextFusionEvidence: "Actual dual-runtime context fusion",
+    contextFusionEvidence: "Actual context assembly evidence",
     contextFusionEvidenceHelp:
-      "One immutable provider-bound event proves whether TypeScript memory/learning and the Python Evolution Sidecar participated in the same model turn. Unavailable components are shown as degraded instead of being reported as success.",
-    fusionNoEvidence: "This Session has no recorded dual-runtime context preparation yet.",
+      "One immutable provider-bound event proves which TypeScript memory, learning, and governed-evolution contributions were assembled for the same model turn. Unavailable components are shown as degraded instead of being reported as success.",
+    fusionNoEvidence: "This Session has no recorded context assembly yet.",
     fusionHealthy: "All runtime contributions prepared",
     fusionDegraded: "Provider call continued with a degraded contribution",
     fusionMemory: "Memory",
@@ -80,7 +121,7 @@ const copy = {
     fusionCandidates: "Candidates",
     fusionActiveCandidates: "Active candidates",
     fusionInjectedCandidates: "Injected candidates",
-    fusionBridge: "Bridge protocol",
+    fusionBridge: "Assembly protocol",
     combinedDigest: "Combined context digest",
     recallNoSession: "Open Settings from a Session to inspect its actual recall evidence.",
     recallNoEvidence: "This Session has no recorded memory-context preparation yet.",
@@ -163,9 +204,39 @@ const copy = {
     diagnostics: "诊断工作台",
     diagnosticsHelp: "仅在明确点击后执行只读检查；不会调用模型、修改文件或生成发布批准。",
     multimodal: "Multimodal",
+    mode: "检查模式",
+    modeError: "错误 / 文档",
+    modeFrontend: "前端 HTML / Vue",
+    modeJavaScript: "JavaScript",
+    modeHelp: "选择与文件匹配的检查。所有模式均在本机只读执行。",
     file: "图片或文档路径",
     extracted: "已提取的错误文本（可选）",
     run: "运行诊断",
+    cancelDiagnosis: "取消检查",
+    diagnosisCancelled: "检查已取消，未修改任何文件。",
+    diagnosisResult: "诊断结果",
+    diagnosisPath: "路径",
+    diagnosisSource: "来源",
+    diagnosisChecks: "检查项",
+    diagnosisSignals: "条信号",
+    diagnosisIssues: "发现项",
+    diagnosisSuggestions: "下一步",
+    diagnosisNoIssues: "本次确定性检查没有报告发现项。",
+    diagnosisRaw: "原始证据（高级）",
+    diagnosisLocalOnly: "仅本机",
+    yes: "是",
+    no: "否",
+    diagnosisModelCalls: "模型调用",
+    diagnosisNotChecked: "外部引用仅列出，不会联网获取。",
+    assetPreviewTitle: "外部资源本地化预览",
+    assetPreviewHint: "只读发现会显示精确请求指纹；不会联网、写入文件或产生审批。",
+    assetPreviewReady: "可等待后续明确审批",
+    assetPreviewNone: "没有需要本地化的外部资源",
+    assetPreviewBlocked: "预览不可用",
+    assetPreviewDigest: "发现指纹",
+    assetPreviewScope: "外部请求",
+    assetPreviewReferences: "引用",
+    assetPreviewNoExecution: "这只是预览。只有同一 ActionGateway 审批路径可用后，才会开放获取与写入。",
     repo: "Repo Scale",
     repoPath: "仓库路径（相对于当前工作区）",
     repoPathHelp: "当前范围较大时请填写项目子目录，避免扫描整个用户主目录。",
@@ -211,10 +282,10 @@ const copy = {
     actualRecallEvidence: "真实 Session 召回证据",
     actualRecallEvidenceHelp:
       "上下文容量检查通过后、调用模型提供商前立即写入的不可变事件；仅保存 ID、分数和摘要，不复制消息或记忆正文。",
-    contextFusionEvidence: "真实双运行时上下文融合",
+    contextFusionEvidence: "真实上下文组装证据",
     contextFusionEvidenceHelp:
-      "一条绑定模型调用的不可变事件，证明 TypeScript 记忆/学习与 Python 进化 Sidecar 是否共同参与同一次模型 turn；不可用组件会明确标记为降级，不会伪装成功。",
-    fusionNoEvidence: "该 Session 尚无双运行时上下文准备记录。",
+      "一条绑定模型调用的不可变事件，证明 TypeScript 记忆、学习和受控进化为同一次模型调用实际组装了哪些内容；不可用组件会明确标记为降级，不会伪装成功。",
+    fusionNoEvidence: "该 Session 尚无上下文组装记录。",
     fusionHealthy: "全部运行时贡献均已准备",
     fusionDegraded: "模型调用在部分贡献降级后继续",
     fusionMemory: "记忆",
@@ -224,7 +295,7 @@ const copy = {
     fusionCandidates: "候选数",
     fusionActiveCandidates: "活动候选数",
     fusionInjectedCandidates: "已注入候选数",
-    fusionBridge: "Bridge 协议",
+    fusionBridge: "组装协议",
     combinedDigest: "融合上下文摘要",
     recallNoSession: "请从一个会话内打开设置，以查看该会话的真实召回证据。",
     recallNoEvidence: "当前会话尚无已记录的记忆上下文准备事件。",
@@ -305,9 +376,39 @@ const copy = {
     diagnostics: "診斷工作台",
     diagnosticsHelp: "僅在明確點擊後執行唯讀檢查；不會呼叫模型、修改檔案或產生發佈批准。",
     multimodal: "Multimodal",
+    mode: "檢查模式",
+    modeError: "錯誤 / 文件",
+    modeFrontend: "前端 HTML / Vue",
+    modeJavaScript: "JavaScript",
+    modeHelp: "選擇與文件匹配的檢查。所有模式均在本機唯讀執行。",
     file: "圖片或文件路徑",
     extracted: "已擷取的錯誤文字（可選）",
     run: "執行診斷",
+    cancelDiagnosis: "取消檢查",
+    diagnosisCancelled: "檢查已取消，未修改任何檔案。",
+    diagnosisResult: "診斷結果",
+    diagnosisPath: "路徑",
+    diagnosisSource: "來源",
+    diagnosisChecks: "檢查項",
+    diagnosisSignals: "個訊號",
+    diagnosisIssues: "發現項",
+    diagnosisSuggestions: "下一步",
+    diagnosisNoIssues: "本次確定性檢查沒有報告發現項。",
+    diagnosisRaw: "原始證據（進階）",
+    diagnosisLocalOnly: "僅本機",
+    yes: "是",
+    no: "否",
+    diagnosisModelCalls: "模型呼叫",
+    diagnosisNotChecked: "外部引用僅列出，不會聯網取得。",
+    assetPreviewTitle: "外部資源本地化預覽",
+    assetPreviewHint: "唯讀發現會顯示精確請求指紋；不會聯網、寫入檔案或產生審批。",
+    assetPreviewReady: "可等待後續明確審批",
+    assetPreviewNone: "沒有需要本地化的外部資源",
+    assetPreviewBlocked: "預覽不可用",
+    assetPreviewDigest: "發現指紋",
+    assetPreviewScope: "外部請求",
+    assetPreviewReferences: "引用",
+    assetPreviewNoExecution: "這只是預覽。只有同一 ActionGateway 審批路徑可用後，才會開放取得與寫入。",
     repo: "Repo Scale",
     repoPath: "儲存庫路徑（相對於目前工作區）",
     repoPathHelp: "目前範圍較大時請填寫專案子目錄，避免掃描整個使用者主目錄。",
@@ -353,10 +454,10 @@ const copy = {
     actualRecallEvidence: "真實 Session 召回證據",
     actualRecallEvidenceHelp:
       "上下文容量檢查通過後、呼叫模型提供商前立即寫入的不可變事件；僅儲存 ID、分數和摘要，不複製訊息或記憶正文。",
-    contextFusionEvidence: "真實雙執行時上下文融合",
+    contextFusionEvidence: "真實上下文組裝證據",
     contextFusionEvidenceHelp:
-      "一條綁定模型呼叫的不可變事件，證明 TypeScript 記憶/學習與 Python 進化 Sidecar 是否共同參與同一次模型 turn；不可用元件會明確標記為降級，不會偽裝成功。",
-    fusionNoEvidence: "此 Session 尚無雙執行時上下文準備記錄。",
+      "一條綁定模型呼叫的不可變事件，證明 TypeScript 記憶、學習與受控進化為同一次模型呼叫實際組裝了哪些內容；不可用元件會明確標記為降級，不會偽裝成功。",
+    fusionNoEvidence: "此 Session 尚無上下文組裝記錄。",
     fusionHealthy: "全部執行時貢獻均已準備",
     fusionDegraded: "模型呼叫在部分貢獻降級後繼續",
     fusionMemory: "記憶",
@@ -366,7 +467,7 @@ const copy = {
     fusionCandidates: "候選數",
     fusionActiveCandidates: "活動候選數",
     fusionInjectedCandidates: "已注入候選數",
-    fusionBridge: "Bridge 協定",
+    fusionBridge: "組裝協定",
     combinedDigest: "融合上下文摘要",
     recallNoSession: "請從一個 Session 內開啟設定，以查看該 Session 的真實召回證據。",
     recallNoEvidence: "目前 Session 尚無已記錄的記憶上下文準備事件。",
@@ -445,7 +546,7 @@ const copy = {
   },
 } as const
 
-type Copy = (typeof copy)["en"]
+type Copy = { readonly [Key in keyof (typeof copy)["en"]]: string }
 const useCopy = () => {
   const language = useLanguage()
   return () => copy[language.locale() as keyof typeof copy] ?? copy.en
@@ -459,43 +560,242 @@ function Result(props: { value: unknown }) {
   )
 }
 
+type DiagnosisResult = Awaited<ReturnType<OperationsApi["diagnostics"]["diagnose"]>>
+
+function DiagnosisResultView(props: { value: DiagnosisResult; locale: Locale; copy: Copy }) {
+  const result = props.value
+  const frontend = result.frontend
+  const issues = frontend?.issues ?? []
+  const mode = result.mode as DiagnosisMode
+  return (
+    <section
+      class="flex flex-col gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
+      data-testid="diagnostics-result"
+      aria-live="polite"
+    >
+      <header class="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 class="text-13-medium text-text-strong">{props.copy.diagnosisResult}</h4>
+          <p class="text-11-regular text-text-weak">{diagnosisModeLabel(mode, props.locale)}</p>
+        </div>
+        <span
+          class={
+            result.success
+              ? "rounded-full bg-icon-success-base px-2 py-1 text-11-medium text-text-on-success"
+              : "rounded-full bg-icon-warning-base px-2 py-1 text-11-medium text-text-on-warning"
+          }
+          data-testid="diagnostics-status"
+        >
+          {diagnosisStatusLabel(result.success, props.locale)}
+        </span>
+      </header>
+      <dl class="grid grid-cols-2 gap-x-3 gap-y-2 text-11-regular text-text-weak">
+        <div>
+          <dt class="text-text-subtle">{props.copy.diagnosisPath}</dt>
+          <dd class="break-all">{result.path}</dd>
+        </div>
+        <div>
+          <dt class="text-text-subtle">{props.copy.diagnosisSource}</dt>
+          <dd>{result.source.type}</dd>
+        </div>
+        <div>
+          <dt class="text-text-subtle">{props.copy.diagnosisChecks}</dt>
+          <dd>
+            {frontend
+              ? `${issues.length} ${props.copy.diagnosisIssues}`
+              : `${result.summary.signals} ${props.copy.diagnosisSignals}`}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-text-subtle">{props.copy.diagnosisLocalOnly}</dt>
+          <dd>{result.localOnly ? props.copy.yes : props.copy.no}</dd>
+        </div>
+        <div>
+          <dt class="text-text-subtle">{props.copy.diagnosisModelCalls}</dt>
+          <dd>{result.modelCalls}</dd>
+        </div>
+      </dl>
+      <Show when={result.source.error}>{(error) => <p class="text-11-regular text-text-danger">{error()}</p>}</Show>
+      <Show when={frontend}>
+        <div class="flex flex-col gap-2" data-testid="diagnostics-findings">
+          <h5 class="text-12-medium text-text-strong">
+            {props.copy.diagnosisIssues} ({issues.length})
+          </h5>
+          <Show
+            when={issues.length > 0}
+            fallback={<p class="text-11-regular text-text-weak">{props.copy.diagnosisNoIssues}</p>}
+          >
+            <ul class="flex flex-col gap-1">
+              <For each={issues.slice(0, 20)}>
+                {(issue) => (
+                  <li class="text-11-regular text-text-weak">
+                    <span class="text-text-strong">
+                      {diagnosisSeverityLabel(issue.severity as DiagnosisSeverity, props.locale)}:
+                    </span>{" "}
+                    {issue.message}
+                    <Show when={issue.line !== undefined}> · {issue.line}</Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+          <Show when={frontend?.externalAssets.length}>
+            <p class="text-11-regular text-text-weak">{props.copy.diagnosisNotChecked}</p>
+          </Show>
+          <Show when={frontend?.assetLocalizationPreview}>
+            {(preview) => (
+              <article
+                class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-stronger p-2"
+                data-testid="asset-localization-preview"
+              >
+                <div>
+                  <h5 class="text-12-medium text-text-strong">{props.copy.assetPreviewTitle}</h5>
+                  <p class="text-11-regular text-text-weak">{props.copy.assetPreviewHint}</p>
+                </div>
+                <dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-11-regular text-text-weak">
+                  <div>
+                    <dt class="text-text-subtle">{props.copy.status}</dt>
+                    <dd>
+                      {preview().status === "ready"
+                        ? props.copy.assetPreviewReady
+                        : preview().status === "none"
+                          ? props.copy.assetPreviewNone
+                          : props.copy.assetPreviewBlocked}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="text-text-subtle">{props.copy.assetPreviewScope}</dt>
+                    <dd>{preview().networkScopeCount}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-text-subtle">{props.copy.assetPreviewReferences}</dt>
+                    <dd>{preview().references.length}</dd>
+                  </div>
+                  <div>
+                    <dt class="text-text-subtle">{props.copy.diagnosisPath}</dt>
+                    <dd class="break-all">{preview().htmlResource}</dd>
+                  </div>
+                </dl>
+                <Show when={preview().discoveryDigest}>
+                  {(digest) => (
+                    <p class="break-all text-11-regular text-text-weak">
+                      <span class="text-text-subtle">{props.copy.assetPreviewDigest}: </span>
+                      <span title={digest()}>{digest()}</span>
+                    </p>
+                  )}
+                </Show>
+                <Show when={preview().references.length > 0}>
+                  <ul class="flex flex-col gap-1 text-11-regular text-text-weak">
+                    <For each={preview().references.slice(0, 8)}>
+                      {(reference) => (
+                        <li class="break-all">
+                          {reference.kind}: {reference.url}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+                <Show when={preview().reason}>
+                  {(reason) => <p class="text-11-regular text-text-weak">{reason()}</p>}
+                </Show>
+                <p class="text-11-regular text-text-subtle">{props.copy.assetPreviewNoExecution}</p>
+              </article>
+            )}
+          </Show>
+        </div>
+      </Show>
+      <Show when={result.suggestions.length > 0}>
+        <div class="text-11-regular text-text-weak">
+          <p class="text-text-subtle">{props.copy.diagnosisSuggestions}</p>
+          <ul class="list-disc pl-4">
+            <For each={result.suggestions.slice(0, 5)}>{(suggestion) => <li>{suggestion}</li>}</For>
+          </ul>
+        </div>
+      </Show>
+      <details>
+        <summary class="cursor-pointer text-11-medium text-text-weak">{props.copy.diagnosisRaw}</summary>
+        <div class="mt-2">
+          <Result value={result} />
+        </div>
+      </details>
+    </section>
+  )
+}
+
 export function DiagnosticsWorkbench(props: {
   api: () => OperationsApi
   location: () => LocationInput
   ready: () => boolean
 }) {
   const c = useCopy()
-  type Diagnosis = Awaited<ReturnType<OperationsApi["diagnostics"]["diagnose"]>>
   type Repo = Awaited<ReturnType<OperationsApi["agentCapabilities"]["repoScale"]>>["data"]
   type Quality = Awaited<ReturnType<OperationsApi["agentCapabilities"]["qualityAssess"]>>["data"]
+  const language = useLanguage()
+  const locale = () => language.locale() as Locale
   const [state, setState] = createStore({
     loading: "",
     error: "",
+    notice: "",
     repoPath: ".",
     filename: "",
     extractedText: "",
+    diagnosisMode: "error" as DiagnosisMode,
     repoQuery: "",
     qualityFiles: "",
     patchText: "",
-    diagnosis: undefined as Diagnosis | undefined,
+    diagnosis: undefined as DiagnosisResult | undefined,
     repo: undefined as Repo | undefined,
     quality: undefined as Quality | undefined,
   })
-  const run = async (kind: string, action: () => Promise<void>) => {
+  let activeController: AbortController | undefined
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  const run = async (
+    kind: string,
+    action: (location: LocationInput, request: ScopeRequestToken, signal: AbortSignal) => Promise<void>,
+  ) => {
     if (!props.ready() || state.loading) return
-    setState({ loading: kind, error: "" })
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    const controller = new AbortController()
+    activeController = controller
+    setState({ loading: kind, error: "", notice: "" })
     try {
-      await action()
+      await action(requestedLocation, request, controller.signal)
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) {
+        if (controller.signal.aborted) setState({ error: "", notice: c().diagnosisCancelled })
+        else setState("error", publicErrorMessage(error))
+      }
     } finally {
-      setState("loading", "")
+      if (activeController === controller) activeController = undefined
+      if (scopeGuard.isCurrent(request)) setState("loading", "")
     }
   }
+  const cancelActive = () => activeController?.abort()
+  let previousScopeKey: string | undefined
+  createEffect(
+    on(
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready() || !scopeChanged) return
+        activeController?.abort()
+        activeController = undefined
+        setState({ loading: "", error: "", notice: "", diagnosis: undefined, repo: undefined, quality: undefined })
+      },
+    ),
+  )
   return (
     <section
       class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
       data-testid="diagnostics-workbench"
+      aria-busy={!!state.loading}
     >
       <header>
         <h2 class="text-14-medium text-text-strong">{c().diagnostics}</h2>
@@ -506,9 +806,32 @@ export function DiagnosticsWorkbench(props: {
           {state.error}
         </div>
       </Show>
+      <Show when={state.notice}>
+        <div role="status" class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak">
+          {state.notice}
+        </div>
+      </Show>
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
           <h3 class="text-13-medium text-text-strong">{c().multimodal}</h3>
+          <label class="flex flex-col gap-1 text-11-regular text-text-weak">
+            <span>{c().mode}</span>
+            <select
+              class="rounded-md border border-border-weak-base bg-background-base p-2 text-12-regular text-text-strong"
+              aria-label={c().mode}
+              data-testid="diagnostics-mode"
+              value={state.diagnosisMode}
+              disabled={!!state.loading}
+              onChange={(event) => setState("diagnosisMode", event.currentTarget.value as DiagnosisMode)}
+            >
+              <option value="error">{c().modeError}</option>
+              <option value="frontend">{c().modeFrontend}</option>
+              <option value="javascript">{c().modeJavaScript}</option>
+            </select>
+          </label>
+          <p class="text-11-regular text-text-weak" data-testid="diagnostics-mode-help">
+            {c().modeHelp} {diagnosisModeHint(state.diagnosisMode, locale())}
+          </p>
           <TextField label={c().file} value={state.filename} onChange={(value) => setState("filename", value)} />
           <textarea
             class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
@@ -517,27 +840,38 @@ export function DiagnosticsWorkbench(props: {
             value={state.extractedText}
             onInput={(event) => setState("extractedText", event.currentTarget.value)}
           />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={!state.filename.trim() || !!state.loading}
-            onClick={() =>
-              void run("diagnosis", async () => {
-                setState(
-                  "diagnosis",
-                  await props.api().diagnostics.diagnose({
-                    ...props.location(),
-                    filename: state.filename.trim(),
-                    ...(state.extractedText ? { extractedText: state.extractedText } : {}),
-                    limit: 20,
-                  }),
-                )
-              })
-            }
-          >
-            {state.loading === "diagnosis" ? c().running : c().run}
-          </Button>
-          <Show when={state.diagnosis}>{(value) => <Result value={value()} />}</Show>
+          <div class="flex flex-wrap gap-2">
+            <Button
+              size="small"
+              variant="secondary"
+              disabled={!state.filename.trim() || !!state.loading}
+              onClick={() =>
+                void run("diagnosis", async (location, request, signal) => {
+                  const result = await props.api().diagnostics.diagnose(
+                    {
+                      ...location,
+                      filename: state.filename.trim(),
+                      ...(state.extractedText ? { extractedText: state.extractedText } : {}),
+                      limit: 20,
+                      mode: state.diagnosisMode,
+                    },
+                    { signal },
+                  )
+                  if (scopeGuard.isCurrent(request)) setState("diagnosis", result)
+                })
+              }
+            >
+              {state.loading === "diagnosis" ? c().running : c().run}
+            </Button>
+            <Show when={state.loading === "diagnosis"}>
+              <Button size="small" variant="ghost" onClick={cancelActive} data-testid="diagnostics-cancel">
+                {c().cancelDiagnosis}
+              </Button>
+            </Show>
+          </div>
+          <Show when={state.diagnosis}>
+            {(value) => <DiagnosisResultView value={value()} locale={locale()} copy={c()} />}
+          </Show>
         </article>
         <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
           <h3 class="text-13-medium text-text-strong">{c().repo}</h3>
@@ -549,15 +883,18 @@ export function DiagnosticsWorkbench(props: {
             variant="secondary"
             disabled={!!state.loading}
             onClick={() =>
-              void run("repo", async () => {
-                const result = await props.api().agentCapabilities.repoScale({
-                  ...props.location(),
-                  path: state.repoPath.trim() || ".",
-                  ...(state.repoQuery.trim() ? { query: state.repoQuery.trim() } : {}),
-                  maxFiles: 5_000,
-                  limit: 30,
-                })
-                setState("repo", result.data)
+              void run("repo", async (location, request, signal) => {
+                const result = await props.api().agentCapabilities.repoScale(
+                  {
+                    ...location,
+                    path: state.repoPath.trim() || ".",
+                    ...(state.repoQuery.trim() ? { query: state.repoQuery.trim() } : {}),
+                    maxFiles: 5_000,
+                    limit: 30,
+                  },
+                  { signal },
+                )
+                if (scopeGuard.isCurrent(request)) setState("repo", result.data)
               })
             }
           >
@@ -586,17 +923,20 @@ export function DiagnosticsWorkbench(props: {
             variant="secondary"
             disabled={!!state.loading}
             onClick={() =>
-              void run("quality", async () => {
+              void run("quality", async (location, request, signal) => {
                 const files = state.qualityFiles
                   .split(/\r?\n/)
                   .map((value) => value.trim())
                   .filter(Boolean)
-                const result = await props.api().agentCapabilities.qualityAssess({
-                  ...props.location(),
-                  ...(files.length ? { files } : {}),
-                  ...(state.patchText ? { patchText: state.patchText } : {}),
-                })
-                setState("quality", result.data)
+                const result = await props.api().agentCapabilities.qualityAssess(
+                  {
+                    ...location,
+                    ...(files.length ? { files } : {}),
+                    ...(state.patchText ? { patchText: state.patchText } : {}),
+                  },
+                  { signal },
+                )
+                if (scopeGuard.isCurrent(request)) setState("quality", result.data)
               })
             }
           >
@@ -678,20 +1018,28 @@ export function MemoryLearningGovernance(props: {
       .conflictScanSummary.replace("{scanned}", String(value.scanned))
       .replace("{detected}", String(value.detected))
       .replace("{added}", String(value.newCandidates))
+  const locationScopeKey = () => {
+    const value = props.location().location
+    return value.directory + "\u0000" + (value.workspace ?? "")
+  }
+  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  let previousScopeKey: string | undefined
   const refresh = async () => {
     if (!props.ready() || state.loading) return
-    setState({ loading: true, error: "" })
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    setState({ loading: true, error: "", notice: "" })
     try {
       const [memory, conflicts, learning, feedback, feedbackSummary, history] = await Promise.all([
-        props.api().memories.status(props.location()),
+        props.api().memories.status(requestedLocation),
         props.api().memories.conflictList({
-          ...props.location(),
+          ...requestedLocation,
           ...(state.showConflictHistory ? { includeClosed: "true" as const } : {}),
           limit: 100,
         }),
-        props.api().learning.status(props.location()),
-        props.api().feedback.list({ ...props.location(), limit: 50 }),
-        props.api().feedback.summary(props.location()),
+        props.api().learning.status(requestedLocation),
+        props.api().feedback.list({ ...requestedLocation, limit: 50 }),
+        props.api().feedback.summary(requestedLocation),
         props.sessionID
           ? props.api().sessions.history({
               sessionID: props.sessionID as Parameters<OperationsApi["sessions"]["history"]>[0]["sessionID"],
@@ -699,46 +1047,82 @@ export function MemoryLearningGovernance(props: {
             })
           : Promise.resolve(undefined),
       ])
-      setState({
-        memory,
-        conflicts,
-        learning,
-        feedback,
-        feedbackSummary,
-        recallEvidence: (history?.data.filter((event) => event.type === "session.next.memory.context.prepared") ??
-          []) as RecallEvidence[],
-        fusionEvidence: (history?.data.filter((event) => event.type === "session.next.context.fusion.prepared") ??
-          []) as FusionEvidence[],
-      })
+      if (scopeGuard.isCurrent(request)) {
+        setState({
+          memory,
+          conflicts,
+          learning,
+          feedback,
+          feedbackSummary,
+          recallEvidence: (history?.data.filter((event) => event.type === "session.next.memory.context.prepared") ??
+            []) as RecallEvidence[],
+          fusionEvidence: (history?.data.filter((event) => event.type === "session.next.context.fusion.prepared") ??
+            []) as FusionEvidence[],
+        })
+      }
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
-  const mutate = async (action: () => Promise<unknown>, notice: string) => {
-    if (state.loading) return
+  const mutate = async (
+    action: (location: LocationInput, request: ScopeRequestToken) => Promise<unknown>,
+    notice: string,
+  ) => {
+    if (!props.ready() || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
     setState({ loading: true, error: "", notice: "" })
     try {
-      await action()
-      setState("notice", notice)
+      await action(requestedLocation, request)
+      if (scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
-    await refresh()
+    if (scopeGuard.isCurrent(request)) await refresh()
   }
   createEffect(
     on(
-      () => props.ready(),
-      (ready) => ready && void refresh(),
+      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      (scopeKey) => {
+        scopeGuard.current()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
+        previousScopeKey = scopeKey
+        if (!props.ready()) return
+        if (scopeChanged) {
+          setState({
+            loading: false,
+            error: "",
+            notice: "",
+            recallExecuted: false,
+            recallResult: undefined,
+            recallEvidence: [],
+            fusionEvidence: [],
+            conflicts: undefined,
+            memory: undefined,
+            governance: undefined,
+            learning: undefined,
+            feedback: undefined,
+            feedbackSummary: undefined,
+            correctionHistory: undefined,
+            historyMemoryID: "",
+            correctingID: "",
+            reviewingConflictID: "",
+            conflictReason: "",
+            conflictScanNotice: "",
+          })
+        }
+        void refresh()
+      },
     ),
   )
   const createMemory = () =>
-    void mutate(async () => {
+    void mutate(async (location, request) => {
       await props.api().memories.create({
-        ...props.location(),
+        ...location,
         content: state.content.trim(),
         tags: state.tags
           .split(",")
@@ -748,46 +1132,52 @@ export function MemoryLearningGovernance(props: {
         source: "user",
         scope: "workspace",
       })
-      setState({ content: "", tags: "" })
+      if (scopeGuard.isCurrent(request)) setState({ content: "", tags: "" })
     }, c().createMemory)
   const preview = async () => {
-    setState({ loading: true, error: "" })
+    if (!props.ready() || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    setState({ loading: true, error: "", notice: "" })
     try {
-      setState("governance", await props.api().memories.governancePreview({ ...props.location(), sampleLimit: 100 }))
+      const governance = await props.api().memories.governancePreview({ ...requestedLocation, sampleLimit: 100 })
+      if (scopeGuard.isCurrent(request)) setState("governance", governance)
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const inspectRecall = async () => {
     const query = state.recallQuery.trim()
-    if (!query || state.loading) return
-    setState({ loading: true, error: "", recallExecuted: false, recallResult: undefined })
+    if (!props.ready() || !query || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    setState({ loading: true, error: "", notice: "", recallExecuted: false, recallResult: undefined })
     try {
       const recallResult = await props.api().memories.semantic({
-        ...props.location(),
+        ...requestedLocation,
         query,
         topK: 5,
         includeGlobal: "true",
         indexLimit: 1_000,
       })
-      setState({ recallResult, recallExecuted: true })
+      if (scopeGuard.isCurrent(request)) setState({ recallResult, recallExecuted: true })
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const apply = () => {
     if (!state.governance || !window.confirm(c().warningApply)) return
-    void mutate(() => props.api().memories.governanceApply(props.location()), c().apply)
+    void mutate((location) => props.api().memories.governanceApply(location), c().apply)
   }
   const restore = (item: NonNullable<MemoryStatus>["recent"][number]) => {
     const source =
       item.source === "quarantined:model" ? "model" : item.source === "quarantined:auto" ? "auto" : undefined
     if (!source || !window.confirm(c().warningRestore)) return
-    void mutate(() => props.api().memories.update({ ...props.location(), memoryID: item.id, source }), c().restore)
+    void mutate((location) => props.api().memories.update({ ...location, memoryID: item.id, source }), c().restore)
   }
   const beginCorrection = (item: NonNullable<MemoryStatus>["recent"][number]) => {
     setState({
@@ -803,57 +1193,64 @@ export function MemoryLearningGovernance(props: {
   const saveCorrection = () => {
     const item = state.memory?.recent.find((memory) => memory.id === state.correctingID)
     if (!item || !state.correctionContent.trim() || !state.correctionReason.trim()) return
-    void mutate(async () => {
+    void mutate(async (location, request) => {
       await props.api().memories.correct({
-        ...props.location(),
+        ...location,
         memoryID: item.id,
         content: state.correctionContent.trim(),
         reason: state.correctionReason.trim(),
         expectedUpdatedAt: item.time.updated,
       })
-      cancelCorrection()
+      if (scopeGuard.isCurrent(request)) cancelCorrection()
     }, c().corrected)
   }
   const loadCorrectionHistory = async (memoryID: string) => {
-    if (state.loading) return
+    if (!props.ready() || state.loading) return
     if (state.historyMemoryID === memoryID && state.correctionHistory) {
       setState({ historyMemoryID: "", correctionHistory: undefined })
       return
     }
-    setState({ loading: true, error: "" })
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    setState({ loading: true, error: "", notice: "" })
     try {
+      const correctionHistory = await props.api().memories.correctionHistory({ ...requestedLocation, memoryID })
+      if (!scopeGuard.isCurrent(request)) return
       setState({
         historyMemoryID: memoryID,
-        correctionHistory: await props.api().memories.correctionHistory({ ...props.location(), memoryID }),
+        correctionHistory,
       })
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const undoCorrection = (correctionID: string, successorMemoryID: string) => {
     if (!window.confirm(c().warningUndoCorrection)) return
-    void mutate(async () => {
-      const successor = await props.api().memories.get({ ...props.location(), memoryID: successorMemoryID })
+    void mutate(async (location, request) => {
+      const successor = await props.api().memories.get({ ...location, memoryID: successorMemoryID })
       await props.api().memories.undoCorrection({
-        ...props.location(),
+        ...location,
         correctionID,
         expectedSuccessorUpdatedAt: successor.time.updated,
       })
-      setState({ historyMemoryID: "", correctionHistory: undefined })
+      if (scopeGuard.isCurrent(request)) setState({ historyMemoryID: "", correctionHistory: undefined })
     }, c().correctionUndone)
   }
   const scanConflicts = async () => {
     if (!props.ready() || state.loading) return
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
     setState({ loading: true, error: "", notice: "", conflictScanNotice: "" })
     try {
       const conflicts = await props.api().memories.conflictScan({
-        ...props.location(),
+        ...requestedLocation,
         scanLimit: 1_000,
         resultLimit: 100,
       })
-      const memory = await props.api().memories.status(props.location())
+      const memory = await props.api().memories.status(requestedLocation)
+      if (!scopeGuard.isCurrent(request)) return
       setState({
         conflicts,
         memory,
@@ -861,26 +1258,28 @@ export function MemoryLearningGovernance(props: {
         conflictScanNotice: formatConflictScanNotice(conflicts),
       })
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const toggleConflictHistory = async () => {
-    if (state.loading) return
+    if (!props.ready() || state.loading) return
     const includeClosed = !state.showConflictHistory
-    setState({ loading: true, error: "" })
+    const request = scopeGuard.capture()
+    const requestedLocation = props.location()
+    setState({ loading: true, error: "", notice: "" })
     try {
       const conflicts = await props.api().memories.conflictList({
-        ...props.location(),
+        ...requestedLocation,
         ...(includeClosed ? { includeClosed: "true" as const } : {}),
         limit: 100,
       })
-      setState({ conflicts, showConflictHistory: includeClosed })
+      if (scopeGuard.isCurrent(request)) setState({ conflicts, showConflictHistory: includeClosed })
     } catch (error) {
-      setState("error", publicErrorMessage(error))
+      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
   const beginConflictReview = (conflictID: string) =>
@@ -888,37 +1287,37 @@ export function MemoryLearningGovernance(props: {
   const cancelConflictReview = () => setState({ reviewingConflictID: "", conflictReason: "" })
   const resolveConflict = (item: NonNullable<ConflictPage>["items"][number], chosenMemoryID: string) => {
     if (!state.conflictReason.trim() || !window.confirm(c().warningResolveConflict)) return
-    void mutate(async () => {
+    void mutate(async (location, request) => {
       await props.api().memories.resolveConflict({
-        ...props.location(),
+        ...location,
         conflictID: item.conflict.id,
         chosenMemoryID,
         reason: state.conflictReason.trim(),
         expectedLeftUpdatedAt: item.left.time.updated,
         expectedRightUpdatedAt: item.right.time.updated,
       })
-      cancelConflictReview()
+      if (scopeGuard.isCurrent(request)) cancelConflictReview()
     }, c().conflictResolved)
   }
   const dismissConflict = (item: NonNullable<ConflictPage>["items"][number]) => {
     if (!state.conflictReason.trim() || !window.confirm(c().warningDismissConflict)) return
-    void mutate(async () => {
+    void mutate(async (location, request) => {
       await props.api().memories.dismissConflict({
-        ...props.location(),
+        ...location,
         conflictID: item.conflict.id,
         reason: state.conflictReason.trim(),
         expectedLeftUpdatedAt: item.left.time.updated,
         expectedRightUpdatedAt: item.right.time.updated,
       })
-      cancelConflictReview()
+      if (scopeGuard.isCurrent(request)) cancelConflictReview()
     }, c().conflictDismissed)
   }
   const undoConflict = (item: NonNullable<ConflictPage>["items"][number]) => {
     if (!window.confirm(c().warningUndoConflict)) return
     void mutate(
-      () =>
+      (location) =>
         props.api().memories.undoConflict({
-          ...props.location(),
+          ...location,
           conflictID: item.conflict.id,
           expectedLeftUpdatedAt: item.left.time.updated,
           expectedRightUpdatedAt: item.right.time.updated,
@@ -928,16 +1327,17 @@ export function MemoryLearningGovernance(props: {
   }
   const undo = (outcomeID: NonNullable<Learning>["recent"][number]["id"]) => {
     if (!window.confirm(c().warningUndo)) return
-    void mutate(() => props.api().learning.undo({ ...props.location(), outcomeID }), c().undo)
+    void mutate((location) => props.api().learning.undo({ ...location, outcomeID }), c().undo)
   }
   const removeFeedback = (feedbackID: NonNullable<FeedbackPage>["items"][number]["id"]) => {
     if (!window.confirm(c().warningFeedback)) return
-    void mutate(() => props.api().feedback.delete({ ...props.location(), feedbackID }), c().delete)
+    void mutate((location) => props.api().feedback.delete({ ...location, feedbackID }), c().delete)
   }
   return (
     <section
       class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
       data-testid="memory-learning-governance"
+      aria-busy={state.loading}
     >
       <header class="flex items-center justify-between gap-3">
         <div>
@@ -1040,7 +1440,10 @@ export function MemoryLearningGovernance(props: {
                       <RecallFact label={c().sourceUserMessage} value={event.data.userMessageID} />
                       <RecallFact label={c().sourceTurnStep} value={String(event.data.turnStep)} />
                       <RecallFact label={c().injectedBytes} value={String(event.data.totalInjectedBytes)} />
-                      <RecallFact label={c().fusionBridge} value={event.data.bridgeProtocol} />
+                      <RecallFact
+                        label={c().fusionBridge}
+                        value={event.data.assemblyProtocol ?? event.data.bridgeProtocol ?? "unknown"}
+                      />
                       <RecallFact label={c().combinedDigest} value={event.data.combinedContextDigest} />
                     </dl>
                     <div class="grid gap-2 lg:grid-cols-3">

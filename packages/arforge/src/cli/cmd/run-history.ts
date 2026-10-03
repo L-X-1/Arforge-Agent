@@ -6,6 +6,10 @@ import { effectCmd, fail } from "../effect-cmd"
 
 export const RunHistoryCommand = effectCmd({
   command: "run-history [run-id]",
+  // `replay` is the historical Python spelling for this read-only report
+  // surface. Both names call the same Core AnalysisRuns owner; no replay
+  // cache, trace journal, or second command implementation is introduced.
+  aliases: ["replay"],
   describe: "查看持久化的运行记录（与 Core 共享）",
   instance: false,
   builder: (yargs) =>
@@ -62,7 +66,9 @@ export const RunHistoryCommand = effectCmd({
         }
       },
       catch: (error) => error,
-    }).pipe(Effect.catch((error) => fail(`运行记录读取失败：${error instanceof Error ? error.message : String(error)}`)))
+    }).pipe(
+      Effect.catch((error) => fail(`运行记录读取失败：${error instanceof Error ? error.message : String(error)}`)),
+    )
 
     if (args.json) {
       process.stdout.write(JSON.stringify({ workspace, ...result }, null, 2) + EOL)
@@ -72,7 +78,9 @@ export const RunHistoryCommand = effectCmd({
     if (args.runId && result.found) {
       const report = (result as { report: ReturnType<typeof AnalysisRuns.buildRunReport> }).report
       process.stdout.write(`运行 ${report.run_id}（${report.created}）${EOL}`)
-      process.stdout.write(`  变更文件：${report.changed_files.length}，trace 事件：${report.trace_events}，消息：${report.messages_count}${EOL}`)
+      process.stdout.write(
+        `  变更文件：${report.changed_files.length}，trace 事件：${report.trace_events}，消息：${report.messages_count}${EOL}`,
+      )
       if (report.commands_run.length > 0) {
         process.stdout.write(`  命令：${report.commands_run.map((cmd) => cmd.command).join("；")}${EOL}`)
       }

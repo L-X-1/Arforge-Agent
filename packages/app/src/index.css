@@ -2,6 +2,7 @@
 @import "@arforge-ai/session-ui/styles";
 @import "@arforge-ai/ui/v2/styles/tailwind.css";
 @import "tw-animate-css";
+@import "./review-foundation.css";
 
 @font-face {
   font-family: "JetBrainsMono Nerd Font Mono";
@@ -218,28 +219,10 @@
 
 /* ── Session workspace v2 ── */
 
-/* V4: one faint static accent glow on the continuous canvas */
+/* Approved V2: a quiet canvas rather than decorative accent glows. */
 [data-arforge-session-panel]::before,
 [data-component="home-launchpad"]::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    52rem 34rem at 78% -12%,
-    color-mix(in srgb, var(--arforge-accent) 5%, transparent),
-    transparent 62%
-  );
-}
-
-[data-color-scheme="dark"] [data-arforge-session-panel]::before,
-[data-color-scheme="dark"] [data-component="home-launchpad"]::before {
-  background: radial-gradient(
-    52rem 34rem at 78% -12%,
-    color-mix(in srgb, var(--arforge-accent) 7%, transparent),
-    transparent 62%
-  );
+  display: none;
 }
 
 [data-arforge-session-panel] > *,
@@ -259,7 +242,7 @@
 }
 
 [data-arforge-session-panel] {
-  animation: session-canvas-enter 160ms ease-out;
+  animation: session-canvas-enter var(--arforge-review-motion-duration, 140ms) ease-out;
 }
 
 /* M1: side panel body entrance (width transition + fade/slide) */
@@ -275,14 +258,14 @@
 }
 
 [data-session-side-panel-body] {
-  animation: session-side-panel-enter 260ms ease-out;
+  animation: session-side-panel-enter var(--arforge-review-motion-duration, 140ms) ease-out;
 }
 
 /* Execution status bar running dot */
 [data-component="execution-status-bar"] [data-running] {
   background: var(--v2-background-bg-accent);
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
-  animation: execution-status-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  animation: none;
 }
 
 [data-component="execution-status-bar"] [data-running]::after {
@@ -318,7 +301,8 @@
   inset: -3px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
-  animation: agent-busy-pulse 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  animation: none;
+  display: none;
 }
 
 @keyframes agent-busy-pulse {
@@ -340,7 +324,7 @@
 [data-component="execution-indicator"] [data-running] {
   background: var(--v2-background-bg-accent);
   box-shadow: 0 0 0 0 color-mix(in srgb, var(--v2-background-bg-accent) 40%, transparent);
-  animation: exec-indicator-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  animation: none;
 }
 
 [data-component="execution-indicator"] [data-running]::after {
@@ -349,7 +333,7 @@
   inset: -2px;
   border-radius: 9999px;
   border: 1px solid color-mix(in srgb, var(--v2-background-bg-accent) 35%, transparent);
-  animation: exec-indicator-pulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  animation: none;
 }
 
 @keyframes exec-indicator-pulse {
@@ -416,10 +400,6 @@
 }
 
 @media (max-width: 520px) {
-  [data-component="prompt-input-v2"] {
-    max-height: 35dvh;
-  }
-
   [data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] {
     min-height: 72px;
   }

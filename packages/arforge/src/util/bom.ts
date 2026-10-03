@@ -19,9 +19,21 @@ export const readFile = Effect.fn("Bom.readFile")(function* (fs: FSUtil.Interfac
   return split(new TextDecoder("utf-8", { ignoreBOM: true }).decode(yield* fs.readFile(filePath)))
 })
 
-export const syncFile = Effect.fn("Bom.syncFile")(function* (fs: FSUtil.Interface, filePath: string, bom: boolean) {
-  const current = yield* readFile(fs, filePath)
+export const syncFile = Effect.fn("Bom.syncFile")(function* (
+  fs: Pick<FSUtil.Interface, "readFile" | "writeIfUnchanged">,
+  filePath: string,
+  bom: boolean,
+) {
+  const raw = yield* fs.readFile(filePath)
+  const current = split(new TextDecoder("utf-8", { ignoreBOM: true }).decode(raw))
   if (current.bom === bom) return current.text
-  yield* fs.writeWithDirs(filePath, join(current.text, bom))
+  if (!fs.writeIfUnchanged)
+    return yield* Effect.fail(
+      new FSUtil.FileSystemError({
+        method: "writeIfUnchanged",
+        cause: new Error("BOM synchronization requires conditional atomic write support"),
+      }),
+    )
+  yield* fs.writeIfUnchanged(filePath, raw, join(current.text, bom))
   return current.text
 })

@@ -1,4 +1,6 @@
 import { Memory } from "@arforge-ai/schema/memory"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import * as MemoryCandidate from "@arforge-ai/schema/memory-candidate"
 import { NonNegativeInt, PositiveInt } from "@arforge-ai/schema/schema"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -16,6 +18,18 @@ const location = {
     }),
   ),
 }
+
+const maintenanceDelete = Schema.Struct({
+  expectedVersion: NonNegativeInt,
+  actionID: AgentRuntime.ActionID,
+  redactionEvidenceID: AgentRuntime.EvidenceID,
+  reason: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(500)),
+})
+const candidateItem = `${root}/candidates/:candidateID`
+const candidateDecision = Schema.Struct({
+  expectedUpdatedAt: NonNegativeInt,
+  reason: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(500)),
+})
 
 export const makeMemoryGroup = <I extends HttpApiMiddleware.AnyId, S>(locationMiddleware: Context.Key<I, S>) =>
   HttpApiGroup.make("server.memory")
@@ -191,17 +205,68 @@ export const makeMemoryGroup = <I extends HttpApiMiddleware.AnyId, S>(locationMi
         .annotateMerge(locationQueryOpenApi),
     )
     .add(
-      HttpApiEndpoint.delete("memory.delete", item, {
+      HttpApiEndpoint.get("memory.candidateReview", candidateItem, {
+        params: { candidateID: MemoryCandidate.CandidateID },
+        query: location,
+        success: Schema.Struct({ data: MemoryCandidate.Review }),
+        error: InvalidRequestError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.candidateApprove", `${candidateItem}/approve`, {
+        params: { candidateID: MemoryCandidate.CandidateID },
+        query: location,
+        payload: candidateDecision,
+        success: Schema.Struct({ data: MemoryCandidate.Review }),
+        error: mutationErrors,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.candidateReject", `${candidateItem}/reject`, {
+        params: { candidateID: MemoryCandidate.CandidateID },
+        query: location,
+        payload: candidateDecision,
+        success: Schema.Struct({ data: MemoryCandidate.Review }),
+        error: mutationErrors,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.candidateActivate", `${candidateItem}/activate`, {
+        params: { candidateID: MemoryCandidate.CandidateID },
+        query: location,
+        payload: candidateDecision,
+        success: Schema.Struct({ data: MemoryCandidate.Review }),
+        error: mutationErrors,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.delete("memory.maintenanceDelete", `${root}/maintenance/:memoryID`, {
         params: { memoryID: Memory.ID },
         query: location,
+        payload: maintenanceDelete,
         success: HttpApiSchema.NoContent,
       })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi),
     )
     .add(
-      HttpApiEndpoint.post("memory.deleteMany", `${root}/delete`, {
-        payload: Schema.Struct({ ids: Schema.Array(Memory.ID).check(Schema.isMaxLength(50)) }),
+      HttpApiEndpoint.post("memory.maintenanceDeleteMany", `${root}/maintenance/delete`, {
+        payload: Schema.Struct({
+          items: Schema.Array(
+            Schema.Struct({
+              memoryID: Memory.ID,
+              ...maintenanceDelete.fields,
+            }),
+          ).check(Schema.isMaxLength(50)),
+        }),
         query: location,
         success: Schema.Struct({ data: Memory.DeleteResult }),
         error: InvalidRequestError,

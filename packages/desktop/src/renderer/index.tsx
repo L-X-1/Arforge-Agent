@@ -14,7 +14,6 @@ import {
   useCommand,
   useWslServers,
 } from "@arforge-ai/app"
-import type { AsyncStorage } from "@solid-primitives/storage"
 import { createMemoryHistory, MemoryRouter, type BaseRouterProps } from "@solidjs/router"
 import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
@@ -22,7 +21,7 @@ import pkg from "../../package.json"
 import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
 import { DesktopFirstLaunchOnboarding } from "./onboarding"
-import { createStorageMutationQueue } from "./storage-queue"
+import { createDesktopStorage } from "./storage-queue"
 import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
 import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
@@ -122,28 +121,12 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
   }
 
   const storage = (() => {
-    const cache = new Map<string, AsyncStorage>()
-
-    const createStorage = (name: string) => {
-      const mutate = createStorageMutationQueue()
-      const api: AsyncStorage = {
-        getItem: (key: string) => window.api.storeGet(name, key),
-        setItem: (key: string, value: string) => mutate(() => window.api.storeSet(name, key, value)),
-        removeItem: (key: string) => mutate(() => window.api.storeDelete(name, key)),
-        clear: () => mutate(() => window.api.storeClear(name)),
-        key: async (index: number) => (await window.api.storeKeys(name))[index],
-        getLength: () => window.api.storeLength(name),
-        get length() {
-          return api.getLength()
-        },
-      }
-      return api
-    }
+    const cache = new Map<string, ReturnType<typeof createDesktopStorage>>()
 
     return (name = "default.dat") => {
       const cached = cache.get(name)
       if (cached) return cached
-      const api = createStorage(name)
+      const api = createDesktopStorage(name, window.api)
       cache.set(name, api)
       return api
     }
@@ -260,6 +243,7 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
     },
 
     wslServers: wslServersApi,
+    browserWorkbench: window.api.browserWorkbench,
 
     getDisplayBackend: async () => {
       return window.api.getDisplayBackend().catch(() => null)

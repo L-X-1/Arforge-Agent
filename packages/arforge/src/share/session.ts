@@ -1,15 +1,25 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
-import { Effect, Layer, Scope, Context } from "effect"
+import { Effect, Layer, Context, Schema } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { ShareNext } from "./share-next"
+
+export class MutationUnavailableError extends Schema.TaggedErrorClass<MutationUnavailableError>()(
+  "SessionShare.MutationUnavailableError",
+  {
+    operation: Schema.Literals(["share", "unshare"]),
+  },
+) {
+  override get message() {
+    return `Legacy session ${this.operation} is disabled until controlled publishing runs through a sealed ControlRun worker`
+  }
+}
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
-  readonly share: (sessionID: SessionID) => Effect.Effect<{ url: string }, unknown>
-  readonly unshare: (sessionID: SessionID) => Effect.Effect<void, unknown>
+  readonly share: (sessionID: SessionID) => Effect.Effect<{ url: string }, MutationUnavailableError>
+  readonly unshare: (sessionID: SessionID) => Effect.Effect<void, MutationUnavailableError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/SessionShare") {}
@@ -19,21 +29,14 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const cfg = yield* Config.Service
     const session = yield* Session.Service
-    const shareNext = yield* ShareNext.Service
-    const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
 
-    const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
-      const conf = yield* cfg.get()
-      if (conf.share === "disabled") throw new Error("Sharing is disabled in configuration")
-      const result = yield* shareNext.create(sessionID)
-      yield* session.setShare({ sessionID, share: { url: result.url } })
-      return result
+    const share = Effect.fn("SessionShare.share")(function* (_sessionID: SessionID) {
+      return yield* new MutationUnavailableError({ operation: "share" })
     })
 
-    const unshare = Effect.fn("SessionShare.unshare")(function* (sessionID: SessionID) {
-      yield* shareNext.remove(sessionID)
-      yield* session.setShare({ sessionID, share: undefined })
+    const unshare = Effect.fn("SessionShare.unshare")(function* (_sessionID: SessionID) {
+      return yield* new MutationUnavailableError({ operation: "unshare" })
     })
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
@@ -41,7 +44,12 @@ const layer = Layer.effect(
       if (result.parentID) return result
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
-      yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
+      yield* Effect.logWarning("automatic session sharing suppressed until controlled publishing is available", {
+        sessionID: result.id,
+        configuredAutoShare: conf.share === "auto",
+        environmentAutoShare: flags.autoShare,
+        outcome: "suppressed",
+      })
       return result
     })
 
@@ -52,7 +60,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node],
+  deps: [Config.node, Session.node, RuntimeFlags.node],
 })
 
 export * as SessionShare from "./session"

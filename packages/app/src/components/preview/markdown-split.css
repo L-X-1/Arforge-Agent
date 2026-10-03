@@ -1,0 +1,33 @@
+[data-component="markdown-split-preview"],
+[data-component="html-split-preview"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
+  min-width: 0;
+  padding: 16px;
+
+  > section {
+    min-width: 0;
+  }
+
+  h2 {
+    margin: 0 0 8px;
+    color: var(--text-weak);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  [data-preview-pane] {
+    height: min(60vh, 640px);
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border-weak-base);
+    border-radius: 6px;
+  }
+
+  [data-preview-pane]:focus-visible {
+    outline: 2px solid var(--border-strong-base);
+    outline-offset: 2px;
+  }
+}

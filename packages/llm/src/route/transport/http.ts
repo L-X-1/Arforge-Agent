@@ -1,6 +1,7 @@
-import { Effect, Stream } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { Auth } from "../auth"
+import { describeEndpoint } from "../executor"
 import { render as renderEndpoint } from "../endpoint"
 import { Framing, type Framing as FramingDef } from "../framing"
 import type { Transport, TransportPrepareInput } from "./index"
@@ -19,6 +20,7 @@ export interface JsonRequestParts<Body = unknown> {
 export interface HttpPrepared<Frame> {
   readonly request: HttpClientRequest.HttpClientRequest
   readonly framing: FramingDef<Frame>
+  readonly bodyText: string
 }
 
 const applyQuery = (url: string, query: Record<string, string> | undefined) => {
@@ -117,12 +119,17 @@ export interface HttpJsonTransport<Body, Frame> extends Transport<Body, HttpPrep
 
 export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJsonTransport<Body, Frame> => ({
   id: "http-json",
+  describe: (prepared) => ({
+    endpoint: describeEndpoint(prepared.request.url),
+    body: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(prepared.bodyText),
+  }),
   with: (patch) => httpJson({ ...input, ...patch }),
   prepare: (prepareInput) =>
     jsonRequestParts({
       ...prepareInput,
     }).pipe(
       Effect.map((parts) => ({
+        bodyText: parts.bodyText,
         request: ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
         framing: input.framing,
       })),

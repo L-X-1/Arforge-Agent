@@ -52,7 +52,12 @@ MODEL_FAILURE_PREFIX = "[Arforge] Model call failed:"
 
 
 def _model_failed(answer: str) -> bool:
-    return answer.strip().startswith(MODEL_FAILURE_PREFIX)
+    # Some adapters report a successful transport while returning no content
+    # (for example an exhausted/disabled local model stub). Treat that as a
+    # failed model result so deterministic capability fallbacks can still
+    # produce an actionable answer instead of serializing an empty review.
+    normalized = answer.strip()
+    return not normalized or normalized.startswith(MODEL_FAILURE_PREFIX)
 
 
 def _offline_code_review(query: str) -> str:

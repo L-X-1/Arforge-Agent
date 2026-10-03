@@ -1,0 +1,979 @@
+{
+  "schema_version": "1.0",
+  "manifest_path": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "card_path": "docs/evidence/implementation/cards/BOOTSTRAP-PROTOCOL-001.md",
+  "card_digest": "0d4fa63843472c91f4773f412c65d49f2091df309e5a7cba7fe65593fceb3b0e",
+  "plan_revision": "v1.3",
+  "protocol_revision": "v1.1",
+  "source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "status": "REVIEW_PENDING",
+  "canonical_paths": {
+    "cards_root": "docs/evidence/implementation/cards",
+    "state_root": "docs/evidence/implementation/state.json",
+    "claims_root": "docs/evidence/implementation/claims",
+    "evidence_root": "docs/evidence/implementation"
+  },
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+  "active_claim": null,
+  "active_card": {
+    "card_id": "PY-101-TS-COMPOSITION-001",
+    "card_path": "docs/evidence/implementation/cards/PY-101-TS-COMPOSITION-001.md",
+    "card_digest": "b609f576c4fa2a831f0662fcd1d6c40c8dd61f44324d321b99135fb19cb9a8b9",
+    "status": "ACCEPTED"
+  },
+  "review_pending_claims": [
+    {
+      "claim_id": "BOOTSTRAP-PROTOCOL-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/BOOTSTRAP-PROTOCOL-001.json",
+      "status": "REVIEW_PENDING",
+      "card_path": "docs/evidence/implementation/cards/BOOTSTRAP-PROTOCOL-001.md",
+      "card_digest": "0d4fa63843472c91f4773f412c65d49f2091df309e5a7cba7fe65593fceb3b0e",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48"
+    },
+    {
+      "claim_id": "PY-001-OWNER-REGISTRY-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/PY-001-OWNER-REGISTRY-001.json",
+      "status": "REVIEW_PENDING",
+      "card_path": "docs/evidence/implementation/cards/PY-001-OWNER-REGISTRY-001.md",
+      "card_digest": "fa490f661e3dfe5716082905befa6b96a1763c34700dc21b37aca88beac97896",
+      "registry_path": "docs/evidence/implementation/owner-registry.v1.json",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48"
+    },
+    {
+      "claim_id": "PY-002-CAPABILITY-LEDGER-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/PY-002-CAPABILITY-LEDGER-001.json",
+      "status": "REVIEW_PENDING",
+      "card_path": "docs/evidence/implementation/cards/PY-002-CAPABILITY-LEDGER-001.md",
+      "card_digest": "f219a39943a72ffbb6a645b0a5ce129892621287c94f453b9a1c48242d5ebde3",
+      "capability_artifact": "docs/evidence/implementation/legacy-python-capabilities.json",
+      "file_artifact": "docs/evidence/implementation/legacy-python-files.json",
+      "artifact_digest": "5145d14d9926490be057dbf2c01a842d8fd134a08e8c0c5d28bac95f75aaaaee",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48"
+    },
+    {
+      "claim_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/PY-005-TEST-FIXTURE-LEDGER-001.json",
+      "status": "REVIEW_PENDING",
+      "card_path": "docs/evidence/implementation/cards/PY-005-TEST-FIXTURE-LEDGER-001.md",
+      "card_digest": "57cf7c5518746fe56aefe7f769ba83d123ef380f8b6e6d49349c1c9d3a151c77",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "artifact_digest": "571f3fd571bda8ea1637bc7778ad73b4f4fac139a03ceb64167ecd9e1b79986b"
+    },
+    {
+      "claim_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.json",
+      "status": "REVIEW_PENDING",
+      "card_path": "docs/evidence/implementation/cards/PY-007-DEPENDENCY-ARTIFACT-LEDGER-001.md",
+      "card_digest": "0005e9daa9f498fbec258a1ac79e4363a6806db364f730d0037d01b66422ed72",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "artifact_digest": "0e623144af5edfcc6bb181a1821a0237bcef3e51cbb822cb319067b4dbef5a1f"
+    }
+  ],
+  "ledger_events": [
+    {
+      "event": "READY",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:45:00Z"
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:45:00Z",
+      "evidence": "baseline-dirty-manifest.v1.json"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T08:45:00Z"
+    },
+    {
+      "event": "PREFLIGHT_INVALIDATED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:55:09Z",
+      "reason": "B004 command was tightened to enumerate every untracked file; implementation scope and baseline ownership are unchanged."
+    },
+    {
+      "event": "PREFLIGHT_REPASSED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:55:09Z",
+      "evidence": "B004 and B005 fresh executions recorded in evidence_runs"
+    },
+    {
+      "event": "PREFLIGHT_INVALIDATED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:57:28Z",
+      "reason": "B005 static typecheck was added to the task card; card digest and scope remain within the original allowlist."
+    },
+    {
+      "event": "PREFLIGHT_REPASSED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T08:57:28Z",
+      "evidence": "B004 and B005 completed with exit code 0; current card digest recorded above"
+    },
+    {
+      "event": "BOOTSTRAP_MANIFEST_INVALIDATED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:08:00Z",
+      "reason": "pre_review_claim_whitelist was added to make the explicit PY-001/PY-002/PY-005/PY-007 serial handoff machine-checkable"
+    },
+    {
+      "event": "BOOTSTRAP_MANIFEST_REPASSED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "deterministic-governance-validator",
+      "at": "2026-08-24T09:10:00Z",
+      "evidence": "validator and governance tests passed after manifest digest/attestation refresh"
+    },
+    {
+      "event": "BOOTSTRAP_HANDOFF_REVIEW_PENDING",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:12:00Z",
+      "evidence": "bootstrap claim moved to review_pending; independent review remains required"
+    },
+    {
+      "event": "CLAIMED",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:12:30Z",
+      "claim_id": "PY-001-OWNER-REGISTRY-001",
+      "claim_version": 1
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:12:45Z",
+      "evidence": "bootstrap validator valid=true; claim path and allowlist are inside canonical claims root"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:13:00Z"
+    },
+    {
+      "event": "REVIEW_PENDING",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:14:30Z",
+      "evidence": "O001-O004 passed; owner-registry digest and detached attestation recorded"
+    },
+    {
+      "event": "GOVERNANCE_VALIDATOR_REWORK",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:15:30Z",
+      "reason": "validator now checks review_pending claim records and active claim paths after serial handoff"
+    },
+    {
+      "event": "BOOTSTRAP_VALIDATOR_REPASSED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "deterministic-governance-validator",
+      "at": "2026-08-24T09:16:00Z",
+      "evidence": "governance tests 6/6; bootstrap validator valid=true; owner registry validator valid=true; typecheck exit=0"
+    },
+    {
+      "event": "CLAIM_RELEASED_TO_REVIEW_PENDING",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:17:00Z",
+      "evidence": "owner registry artifact digest e63b9c23c864ccc16445948548f82697a2048444f4b286f3be083529d09e176f; O001-O004 exit=0"
+    },
+    {
+      "event": "CLAIMED",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:17:15Z",
+      "claim_id": "PY-002-CAPABILITY-LEDGER-001",
+      "claim_version": 1
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:17:30Z",
+      "evidence": "Owner Registry valid=true; 487 Python source files readable; card-owned allowlist clean before generation"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:17:45Z"
+    },
+    {
+      "event": "REVIEW_PENDING",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:20:00Z",
+      "evidence": "P001-P005 passed; 487 files and 5062 leaves; combined artifact digest 17f7f750099dc0cfe7b6e7b267c5cf61dbd642a2bdc600c013b4702996ecdf85"
+    },
+    {
+      "event": "CLAIM_RELEASED_TO_REVIEW_PENDING",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:23:20Z",
+      "evidence": "P001-P005 exit=0; capability/file ledger validator valid=true"
+    },
+    {
+      "event": "CLAIMED",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:23:35Z",
+      "claim_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "claim_version": 1
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:23:45Z",
+      "evidence": "Owner Registry valid=true; excluded .codex-tmp snapshot roots are explicit; source-only allowlist is clean"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:24:00Z"
+    },
+    {
+      "event": "REVIEW_PENDING",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:27:00Z",
+      "evidence": "T001-T005 passed; 371 scoped Python test/acceptance files and 3320 leaves; artifact digest 11cb419fb3460f21dc6874358d547274ec1442edf35c6838cdb7464673269ec4"
+    },
+    {
+      "event": "CLAIM_RELEASED_TO_REVIEW_PENDING",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:28:10Z",
+      "evidence": "T001-T005 exit=0; test fixture ledger validator valid=true"
+    },
+    {
+      "event": "CLAIMED",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:28:25Z",
+      "claim_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "claim_version": 1
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T09:28:40Z",
+      "evidence": "Owner Registry valid=true; no process/install side effect; dependency allowlist clean"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:28:55Z"
+    },
+    {
+      "event": "REVIEW_PENDING",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:31:00Z",
+      "evidence": "D001-D005 passed; 10082 text files scanned, 7512 dependency/launch leaves, 6 asset footprints; artifact digest b13fd096a72e2bb7a1fc37004b85d6854d8b935e99677277e0eeb3eebf90e6df3"
+    },
+    {
+      "event": "BOOTSTRAP_BASELINE_CONTRACT_HARDENING",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T09:49:08Z",
+      "evidence": "baseline metadata, safe paths, file SHA-256/size fields and dispatcher artifact metadata are now machine-validated; no status transition"
+    },
+    {
+      "event": "PY001_OWNER_SYMBOL_REPAIR",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:03:22Z",
+      "evidence": "13 stale owner symbols corrected to source-present symbols; registry digest 2a9a475cae2c50d90d8136e61213762d992db1de7eb6d3dee4af543697a2cf32; symbol validator PY001-010 added"
+    },
+    {
+      "event": "PY002_LEDGER_OWNER_REBOUND",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:03:22Z",
+      "evidence": "capability/file ledgers regenerated against owner digest 2a9a475cae2c50d90d8136e61213762d992db1de7eb6d3dee4af543697a2cf32; artifact digest 279aa76cb6bdcffd99e199413fe38686b38cca36bac8afce26de90cb8935de5a"
+    },
+    {
+      "event": "PY005_LEDGER_OWNER_REBOUND",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:03:22Z",
+      "evidence": "test/fixture ledger regenerated against owner digest 2a9a475cae2c50d90d8136e61213762d992db1de7eb6d3dee4af543697a2cf32; artifact digest 7ce1e8854c6cd87b8bfcd338699a9971d5985bc8d7cc6b0fba909f6b914b4598"
+    },
+    {
+      "event": "PY007_LEDGER_REGENERATED_AFTER_TEST_FIX",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:03:22Z",
+      "evidence": "dependency ledger regenerated after owner-registry test fixture update; artifact digest 6ecfb209724f98680343909fd35d9f4c267a1ec1938860263d2a83e77a0faad5"
+    },
+    {
+      "event": "FINAL_MACHINE_REVALIDATION",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "deterministic-governance-validator",
+      "at": "2026-08-24T10:06:00Z",
+      "evidence": "governance 7/7; owner 5/5; capability 4/4; test ledger 3/3; dependency ledger 3/3; combined typecheck exit=0; all five validators valid=true; owner symbol missing=0; baseline checked=99 drift=[]; all claims remain REVIEW_PENDING"
+    },
+    {
+      "event": "BOOTSTRAP_STATE_CARD_BINDING_HARDENING",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:10:55Z",
+      "evidence": "state active_card and non-bootstrap claim references now require canonical card paths and matching SHA-256 card digests; stale-digest negative case passed; no status transition"
+    },
+    {
+      "event": "BOOTSTRAP_CLAIM_MANIFEST_BINDING_HARDENING",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T10:14:03Z",
+      "evidence": "all claims now require canonical protocol_manifest, normalized manifest digest and baseline_manifest; bootstrap claim binding added; no status transition"
+    },
+    {
+      "event": "GOVERNANCE_REWORK_FIXES_APPLIED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T13:34:29.930Z",
+      "evidence": "CAS, claim allowlists, evidence output binding, owner AST scan, deterministic ledger regeneration and directory tree digest hardened"
+    },
+    {
+      "event": "INDEPENDENT_REVIEW_ACCEPTED",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "actor": "independent_review_v3",
+      "at": "2026-08-24T13:51:45.340Z",
+      "evidence": "fresh-context review-2026-08-24-independent-v3; all five cards ACCEPT; no findings"
+    },
+    {
+      "event": "CLAIMED",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T16:06:00.188Z",
+      "claim_id": "PY-101-TS-COMPOSITION-001",
+      "claim_version": 1
+    },
+    {
+      "event": "PREFLIGHT_PASSED",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T16:06:00.188Z",
+      "evidence": "independent_review_v3 ACCEPT; manifest/owner bindings synchronized"
+    },
+    {
+      "event": "IMPLEMENTING",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T16:06:00.188Z"
+    },
+    {
+      "event": "REVIEW_PENDING",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T16:14:33.168Z",
+      "evidence": "TS-FRESH-001/002/003 passed; topology artifact e8389891b8a5baaee856c3a5385c0ebbea3e622d0207bca889885b80c3a5aa29"
+    },
+    {
+      "event": "CLAIM_RELEASED_TO_REVIEW_PENDING",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "manual-dispatcher-bootstrap",
+      "at": "2026-08-24T16:14:33.168Z",
+      "evidence": "governance valid=true; external runner bypass count=0"
+    },
+    {
+      "event": "PY101_ALIAS_HARDENING",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T16:22:45.235Z",
+      "evidence": "AST scanner now resolves named/namespace aliases; invariant renamed to composition-root scope; artifact digest 9b488973343aa62a705e451a398f95879d13cfd02d2937608a3fab54408d16b0"
+    },
+    {
+      "event": "PY101_SCOPE_NARROWED",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "codex-gpt-5",
+      "at": "2026-08-24T16:23:32.248Z",
+      "evidence": "claim allowlist narrowed to explicit files; card digest b609f576c4fa2a831f0662fcd1d6c40c8dd61f44324d321b99135fb19cb9a8b9"
+    },
+    {
+      "event": "INDEPENDENT_REVIEW_ACCEPTED",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "independent_review_py101_quick",
+      "at": "2026-08-24T16:37:35.781Z",
+      "evidence": "fresh-context review-2026-08-25-py101-quick; topology/boot validators and 4 targeted tests passed; remaining_findings=[]"
+    },
+    {
+      "event": "CLAIM_ACCEPTED",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "actor": "independent_review_py101_quick",
+      "at": "2026-08-24T16:40:21.050Z",
+      "evidence": "independent review ACCEPT; claim settled from REVIEW_PENDING to ACCEPTED"
+    }
+  ],
+  "evidence_runs": [
+    {
+      "id": "B-FRESH-001",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-governance.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "bootstrap validator and CAS tests",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:11:03.615Z",
+      "finished_at": "2026-09-04T19:11:04.157Z",
+      "exit_code": 0,
+      "output_digest": "c780fba05d017c1c38a316647d063f88d152bbe94dbeb00e10305a4fae1c4c68",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-001"
+    },
+    {
+      "id": "B-FRESH-002",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "static",
+      "command": "bunx tsc --noEmit --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023 --typeRoots packages/core/node_modules/@types --skipLibCheck script/arforge-governance.ts script/arforge-governance.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "bootstrap TypeScript",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:11:04.157Z",
+      "finished_at": "2026-09-04T19:11:04.854Z",
+      "exit_code": 0,
+      "output_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-002"
+    },
+    {
+      "id": "O-FRESH-001",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-owner-registry.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "owner AST and source safety",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:11:04.854Z",
+      "finished_at": "2026-09-04T19:11:07.440Z",
+      "exit_code": 0,
+      "output_digest": "7570b8855bbd5607762b2c6b197646394264fd9912e278d88f2194c0c41ea49b",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#O-FRESH-001"
+    },
+    {
+      "id": "O-FRESH-002",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-owner-registry.ts validate-owner-registry --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "owner registry",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:11:07.440Z",
+      "finished_at": "2026-09-04T19:12:40.358Z",
+      "exit_code": 0,
+      "output_digest": "44099a6102df19347a30284191b97bf1f76f98e3404702f5b1c28dbcda67a01f",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#O-FRESH-002"
+    },
+    {
+      "id": "P-FRESH-001",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "capability reverse consumers",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:40.358Z",
+      "finished_at": "2026-09-04T19:12:40.562Z",
+      "exit_code": 0,
+      "output_digest": "e57a9ef2feed09f8054bd0550c3cef2a81e9b121f09164bac000d290b015cd3f",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#P-FRESH-001"
+    },
+    {
+      "id": "P-FRESH-002",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-ledger.ts validate-python-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "capability ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:40.562Z",
+      "finished_at": "2026-09-04T19:12:44.507Z",
+      "exit_code": 0,
+      "output_digest": "275b5c9518074cf7c426f110f71ad79cd391287368793e73ab72c3aea3433c21",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#P-FRESH-002"
+    },
+    {
+      "id": "T-FRESH-001",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-tests-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "test scope and owner classification",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:44.507Z",
+      "finished_at": "2026-09-04T19:12:44.691Z",
+      "exit_code": 0,
+      "output_digest": "72b735a6a83a8e149af577f315cf2aa8b86e7ac41fb15dc094a3fe98b44f4e42",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#T-FRESH-001"
+    },
+    {
+      "id": "T-FRESH-002",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-tests-ledger.ts validate-python-tests-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "test fixture ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:44.691Z",
+      "finished_at": "2026-09-04T19:12:47.450Z",
+      "exit_code": 0,
+      "output_digest": "72cce97dcbe77d4705da55dddf4724491d3cc93d1c36000063f89c9d44414218",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#T-FRESH-002"
+    },
+    {
+      "id": "D-FRESH-001",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-dependencies-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "dependency explicit roots",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:47.450Z",
+      "finished_at": "2026-09-04T19:12:47.631Z",
+      "exit_code": 0,
+      "output_digest": "00bd57508fb191c968a0bc5f6e2ae8904e6a4d13f3e7c46c4f10fd9f87971cc3",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#D-FRESH-001"
+    },
+    {
+      "id": "D-FRESH-002",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-dependencies-ledger.ts validate-python-dependencies-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "dependency and asset ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:47.631Z",
+      "finished_at": "2026-09-04T19:12:58.356Z",
+      "exit_code": 0,
+      "output_digest": "7e5a52f19822587451d75bf36e415ee9d5e8a434a59898eb5893197c77b58d3c",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#D-FRESH-002"
+    },
+    {
+      "id": "TS-FRESH-001",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-ts-composition-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "TS composition topology and negative bypass tests",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:58.356Z",
+      "finished_at": "2026-09-04T19:12:58.674Z",
+      "exit_code": 0,
+      "output_digest": "ee14fded6158e489db0a106357cf989869daf2551f60c8c4743a53bb0eedf4a2",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-001"
+    },
+    {
+      "id": "TS-FRESH-002",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-ts-composition-ledger.ts validate-ts-composition-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "deterministic TS composition artifact",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:12:58.674Z",
+      "finished_at": "2026-09-04T19:13:01.903Z",
+      "exit_code": 0,
+      "output_digest": "30b2203821c2bb30d42c6bcb1f5eb71558a3caac4ca9fdb9314aff3d8f048361",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-002"
+    },
+    {
+      "id": "TS-FRESH-003",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "static",
+      "command": "bunx tsc --noEmit --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023 --typeRoots packages/core/node_modules/@types --skipLibCheck script/arforge-ts-composition-ledger.ts script/arforge-ts-composition-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "TS composition TypeScript",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:13:01.903Z",
+      "finished_at": "2026-09-04T19:13:02.696Z",
+      "exit_code": 0,
+      "output_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-003"
+    },
+    {
+      "id": "B-FRESH-003",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-governance.ts validate-bootstrap --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "full bootstrap gate",
+      "attempt": 1,
+      "started_at": "2026-09-04T19:13:03.496Z",
+      "finished_at": "2026-09-04T19:13:04.008Z",
+      "exit_code": 1,
+      "output_digest": "0e4bf8f9d14a4ee4a42509d3001f2a613ca67aaa7fdc04263f3890487bc34c7e",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-003"
+    }
+  ],
+  "final_confirmation": {
+    "at": "2026-08-24T08:58:54Z",
+    "commands": [
+      {
+        "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-governance.test.ts",
+        "exit_code": 0,
+        "observed": "5 pass, 0 fail, 9 expect() calls"
+      },
+      {
+        "command": "bunx tsc --noEmit --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023 --typeRoots packages/core/node_modules/@types --skipLibCheck script/arforge-governance.ts script/arforge-governance.test.ts",
+        "exit_code": 0,
+        "observed": "no diagnostics"
+      },
+      {
+        "command": "bun run script/arforge-governance.ts validate-bootstrap --root .",
+        "exit_code": 0,
+        "observed": "valid=true; status=REVIEW_PENDING; findings=[]"
+      },
+      {
+        "command": "git status --porcelain=v2 --untracked-files=all -- docs/evidence/implementation script/arforge-governance.ts script/arforge-governance.test.ts script/bunfig.toml",
+        "exit_code": 0,
+        "observed": "9 expected card-owned paths; unknown_paths=[]"
+      }
+    ],
+    "baseline_integrity": {
+      "command": "bun -e \"import { readFileSync, existsSync, statSync } from 'node:fs'; import { resolve } from 'node:path'; import { createHash } from 'node:crypto'; const root=process.cwd(); const b=JSON.parse(readFileSync('docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json','utf8')); const owned=new Set([...(b.target_paths??[]), ...((b.dispatcher_artifacts??[]).filter(Boolean).map((x:any)=>x.path))]); const drift:any[]=[]; for (const e of b.entries) { if (e.kind !== 'file' || owned.has(e.path)) continue; const p=resolve(root,e.path); if (!existsSync(p) || !statSync(p).isFile()) { drift.push({path:e.path,reason:'missing'}); continue; } const digest=createHash('sha256').update(readFileSync(p)).digest('hex'); if (digest !== e.content_digest) drift.push({path:e.path,reason:'digest_mismatch',expected:e.content_digest,actual:digest}); } console.log(JSON.stringify({valid:drift.length===0,checked:b.entries.filter((e:any)=>e.kind==='file'&&!owned.has(e.path)).length,drift},null,2));\"",
+      "exit_code": 0,
+      "checked_preexisting_files": 99,
+      "drift": []
+    }
+  },
+  "review": {
+    "machine_review": "PASSED",
+    "independent_human_review": "PENDING",
+    "closure_rule": "Do not transition to CLOSED until an independent reviewer and Gate Owner record fresh review/settlement events.",
+    "rework": {
+      "review_id": "independent-fresh-20260824T102639Z",
+      "decision": "REWORK",
+      "reviewed_at": "2026-08-24T10:26:39.5257842Z",
+      "mutation_count": 0,
+      "findings_digest": "6423fd25c1bbc309f82975bd9195136f2fef5c912ffad5af30f86105978c3671",
+      "next_action": "Rework findings before second independent review"
+    },
+    "independent_review": {
+      "reviewer_identity": "independent_review_v3",
+      "fresh_context_id": "review-2026-08-24-independent-v3",
+      "decision": "ACCEPT",
+      "reviewed_at": "2026-08-24T13:51:45.340Z",
+      "mutation_count": 0,
+      "remaining_findings": [],
+      "verification": {
+        "targeted_tests": {
+          "governance": "9 pass",
+          "owner_registry": "6 pass",
+          "py002": "4 pass",
+          "py005": "3 pass",
+          "py007": "4 pass"
+        },
+        "combined_tsc": "pass",
+        "validators": "all valid=true",
+        "recomputations": "baseline/status/evidence/CAS/PY-002/PY-005/PY-007 all pass"
+      },
+      "findings_digest": "6189c8fb19cc786169a8bfa12a18c465f55e3bf1b5479e0c0f0bdbe55bd345a4"
+    },
+    "py101_independent_review": {
+      "reviewer_identity": "independent_review_py101_quick",
+      "fresh_context_id": "review-2026-08-25-py101-quick",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "decision": "ACCEPT",
+      "reviewed_at": "2026-08-24T16:37:35.781Z",
+      "mutation_count": 0,
+      "remaining_findings": [],
+      "verification": {
+        "targeted_tests": "4 pass",
+        "topology_validator": "valid=true; 1602 source files; 2 composition roots; 3 bindings; external runner bypass=0",
+        "bootstrap_validator": "valid=true; status=REVIEW_PENDING",
+        "attestation": "topology digest and state/card bindings match"
+      },
+      "findings_digest": "e674fdd03cc5bf29f653a8a50ad809ad136867c6764b3f5eecc40ca83ec1a10b"
+    }
+  },
+  "closure_readiness": {
+    "machine_gate": "PASS",
+    "bootstrap_validator": "valid=true; findings=[]",
+    "owner_registry": "valid=true; findings=[]",
+    "python_capability_ledger": "valid=true; 487 files; 5062 leaves",
+    "python_test_fixture_ledger": "valid=true; 371 files; 3320 leaves",
+    "python_dependency_ledger": "valid=true; 10082 scanned files; 7512 leaves; 6 asset footprints",
+    "combined_typecheck": "exit=0; no diagnostics",
+    "preexisting_digest_check": "valid=true; 99 files checked; drift=[]",
+    "active_claim": null,
+    "next_action": "PY-101 ACCEPTED after independent review; PY-105 static negative-test card may be dispatched. PY-102 remains Gate Owner/E2 gated."
+  },
+  "historical_evidence_runs": [
+    {
+      "id": "B-FRESH-001",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-governance.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "bootstrap validator and CAS tests",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:39:18.625Z",
+      "finished_at": "2026-09-04T18:39:19.270Z",
+      "exit_code": 0,
+      "output_digest": "b67953d2baffb8b7904b8e2007d3cfd9885d267e971a632dd435b90b4822d148",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-001"
+    },
+    {
+      "id": "B-FRESH-002",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "static",
+      "command": "bunx tsc --noEmit --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023 --typeRoots packages/core/node_modules/@types --skipLibCheck script/arforge-governance.ts script/arforge-governance.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "bootstrap TypeScript",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:39:19.271Z",
+      "finished_at": "2026-09-04T18:39:19.943Z",
+      "exit_code": 0,
+      "output_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-002"
+    },
+    {
+      "id": "O-FRESH-001",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-owner-registry.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "owner AST and source safety",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:39:19.943Z",
+      "finished_at": "2026-09-04T18:39:22.183Z",
+      "exit_code": 0,
+      "output_digest": "1c7284e3c0fcfa6b2234697943fd3574d8203d81d99047778da5609d605f034d",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#O-FRESH-001"
+    },
+    {
+      "id": "O-FRESH-002",
+      "card_id": "PY-001-OWNER-REGISTRY-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-owner-registry.ts validate-owner-registry --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "owner registry",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:39:22.183Z",
+      "finished_at": "2026-09-04T18:40:27.209Z",
+      "exit_code": 0,
+      "output_digest": "44099a6102df19347a30284191b97bf1f76f98e3404702f5b1c28dbcda67a01f",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#O-FRESH-002"
+    },
+    {
+      "id": "P-FRESH-001",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "capability reverse consumers",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:27.209Z",
+      "finished_at": "2026-09-04T18:40:27.480Z",
+      "exit_code": 0,
+      "output_digest": "d79cff515a4f5e2f3302fd75640df0d7cbc0117926436b8f6984a0000f2dcb41",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#P-FRESH-001"
+    },
+    {
+      "id": "P-FRESH-002",
+      "card_id": "PY-002-CAPABILITY-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-ledger.ts validate-python-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "capability ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:27.480Z",
+      "finished_at": "2026-09-04T18:40:32.403Z",
+      "exit_code": 0,
+      "output_digest": "275b5c9518074cf7c426f110f71ad79cd391287368793e73ab72c3aea3433c21",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#P-FRESH-002"
+    },
+    {
+      "id": "T-FRESH-001",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-tests-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "test scope and owner classification",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:32.403Z",
+      "finished_at": "2026-09-04T18:40:32.586Z",
+      "exit_code": 0,
+      "output_digest": "1df8cceb6437ded12a53a6b53ca71a503671fd2c8ee56080b6efd88e2d179dd1",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#T-FRESH-001"
+    },
+    {
+      "id": "T-FRESH-002",
+      "card_id": "PY-005-TEST-FIXTURE-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-tests-ledger.ts validate-python-tests-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "test fixture ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:32.586Z",
+      "finished_at": "2026-09-04T18:40:35.511Z",
+      "exit_code": 0,
+      "output_digest": "72cce97dcbe77d4705da55dddf4724491d3cc93d1c36000063f89c9d44414218",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#T-FRESH-002"
+    },
+    {
+      "id": "D-FRESH-001",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-python-dependencies-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "dependency explicit roots",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:35.511Z",
+      "finished_at": "2026-09-04T18:40:35.721Z",
+      "exit_code": 0,
+      "output_digest": "df24f0f354f7b704b9c91e42e2e940c223e9b7cb552e81f678b597280447ae4a",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#D-FRESH-001"
+    },
+    {
+      "id": "D-FRESH-002",
+      "card_id": "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-python-dependencies-ledger.ts validate-python-dependencies-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "dependency and asset ledger",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:35.721Z",
+      "finished_at": "2026-09-04T18:40:53.147Z",
+      "exit_code": 0,
+      "output_digest": "999215a8ebbedb85fc3a8bd5e618b5c272c1ae161a98b835fbbe6e86a7b8a75c",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#D-FRESH-002"
+    },
+    {
+      "id": "TS-FRESH-001",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "targeted",
+      "command": "bun test --config E:/Arforge-Agent/script/bunfig.toml E:/Arforge-Agent/script/arforge-ts-composition-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "TS composition topology and negative bypass tests",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:53.147Z",
+      "finished_at": "2026-09-04T18:40:53.544Z",
+      "exit_code": 0,
+      "output_digest": "26896fdfbc37365797b7184d4a742b4a5dc2f029c5e67cdc537daa29d0fac4e9",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-001"
+    },
+    {
+      "id": "TS-FRESH-002",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-ts-composition-ledger.ts validate-ts-composition-ledger --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "deterministic TS composition artifact",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:53.544Z",
+      "finished_at": "2026-09-04T18:40:56.542Z",
+      "exit_code": 0,
+      "output_digest": "30b2203821c2bb30d42c6bcb1f5eb71558a3caac4ca9fdb9314aff3d8f048361",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-002"
+    },
+    {
+      "id": "TS-FRESH-003",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "phase": "static",
+      "command": "bunx tsc --noEmit --module ESNext --moduleResolution Bundler --target ES2023 --lib ES2023 --typeRoots packages/core/node_modules/@types --skipLibCheck script/arforge-ts-composition-ledger.ts script/arforge-ts-composition-ledger.test.ts",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "TS composition TypeScript",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:56.542Z",
+      "finished_at": "2026-09-04T18:40:57.345Z",
+      "exit_code": 0,
+      "output_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#TS-FRESH-003"
+    },
+    {
+      "id": "B-FRESH-003",
+      "card_id": "BOOTSTRAP-PROTOCOL-001",
+      "phase": "validator",
+      "command": "bun run script/arforge-governance.ts validate-bootstrap --root .",
+      "cwd": "%ARFORGE_REPO%",
+      "scope": "full bootstrap gate",
+      "attempt": 1,
+      "started_at": "2026-09-04T18:40:58.037Z",
+      "finished_at": "2026-09-04T18:40:58.532Z",
+      "exit_code": 1,
+      "output_digest": "0e4bf8f9d14a4ee4a42509d3001f2a613ca67aaa7fdc04263f3890487bc34c7e",
+      "output_artifact_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json#B-FRESH-003"
+    }
+  ],
+  "evidence_bundle_ref": "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json",
+  "evidence_bundle_digest": "b762a8a07e785e39e40ccc65a588297d9b016233db98437fd4a5afe134c2996c",
+  "state_version": 11,
+  "last_cas_transition_at": "2026-08-24T16:40:21.050Z",
+  "review_events": [
+    {
+      "reviewer_identity": "independent_review_v3",
+      "fresh_context_id": "review-2026-08-24-independent-v3",
+      "decision": "ACCEPT",
+      "reviewed_at": "2026-08-24T13:51:45.340Z",
+      "mutation_count": 0,
+      "remaining_findings": [],
+      "verification": {
+        "targeted_tests": {
+          "governance": "9 pass",
+          "owner_registry": "6 pass",
+          "py002": "4 pass",
+          "py005": "3 pass",
+          "py007": "4 pass"
+        },
+        "combined_tsc": "pass",
+        "validators": "all valid=true",
+        "recomputations": "baseline/status/evidence/CAS/PY-002/PY-005/PY-007 all pass"
+      },
+      "findings_digest": "6189c8fb19cc786169a8bfa12a18c465f55e3bf1b5479e0c0f0bdbe55bd345a4"
+    },
+    {
+      "reviewer_identity": "independent_review_py101_quick",
+      "fresh_context_id": "review-2026-08-25-py101-quick",
+      "card_id": "PY-101-TS-COMPOSITION-001",
+      "decision": "ACCEPT",
+      "reviewed_at": "2026-08-24T16:37:35.781Z",
+      "mutation_count": 0,
+      "remaining_findings": [],
+      "verification": {
+        "targeted_tests": "4 pass",
+        "topology_validator": "valid=true; 1602 source files; 2 composition roots; 3 bindings; external runner bypass=0",
+        "bootstrap_validator": "valid=true; status=REVIEW_PENDING",
+        "attestation": "topology digest and state/card bindings match"
+      },
+      "findings_digest": "e674fdd03cc5bf29f653a8a50ad809ad136867c6764b3f5eecc40ca83ec1a10b"
+    }
+  ],
+  "accepted_claims": [
+    {
+      "claim_id": "PY-101-TS-COMPOSITION-001",
+      "version": 1,
+      "claim_path": "docs/evidence/implementation/claims/PY-101-TS-COMPOSITION-001.json",
+      "status": "ACCEPTED",
+      "card_path": "docs/evidence/implementation/cards/PY-101-TS-COMPOSITION-001.md",
+      "card_digest": "b609f576c4fa2a831f0662fcd1d6c40c8dd61f44324d321b99135fb19cb9a8b9",
+      "registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+      "topology_artifact": "docs/evidence/implementation/ts-session-composition.v1.json",
+      "artifact_digest": "9b488973343aa62a705e451a398f95879d13cfd02d2937608a3fab54408d16b0"
+    }
+  ]
+}

@@ -55,8 +55,12 @@ def test_cli_ansi_styles_emit_valid_single_escape_sequences(monkeypatch):
 
 
 def test_root_python_entrypoint_preserves_backend_exit_code():
+    # The repository-root Python launcher is now a thin bridge into the
+    # TypeScript CLI. Use a known migration guard so the assertion exercises
+    # the canonical exit-code contract without falling through to the
+    # interactive TUI's no-TTY diagnostic.
     result = subprocess.run(
-        [sys.executable, "main.py", "definitely-not-a-command"],
+        [sys.executable, "main.py", "ssh"],
         capture_output=True,
         check=False,
     )

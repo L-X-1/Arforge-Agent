@@ -1,7 +1,10 @@
-"""Asset download tool — download CDN resources to local static directory.
+"""Explicit Python compatibility seam for legacy CDN localization.
 
-Lets Arforge create self-contained frontends that don't depend on
-unreliable CDN connections.
+The default registry deliberately does not load this module: its historical
+implementation combines network retrieval and direct file writes without the
+canonical TypeScript/Core egress, CAS, and rollback pipeline. The migration
+target is a future staged composition of Core ``webfetch`` plus ``write``;
+callers that still need the old API must import this module explicitly.
 """
 
 from __future__ import annotations

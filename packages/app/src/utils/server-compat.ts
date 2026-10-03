@@ -24,7 +24,7 @@ type CompatibleSessionApi = Omit<
 > & {
   prompt: (input: SessionPromptInput & LegacyPrompt) => Promise<SessionPromptOutput>
   command: (input: SessionCommandInput) => Promise<SessionCommandOutput>
-  shell: (input: SessionShellInput & LegacyPrompt) => Promise<SessionShellOutput>
+  shell: (input: DirectShellInput & LegacyPrompt) => Promise<SessionShellOutput>
   compact: (input: SessionCompactInput & { model?: LegacyPrompt["model"] }) => Promise<SessionCompactOutput>
   rename: (input: Parameters<SessionApi["rename"]>[0] & LegacyLocation) => ReturnType<SessionApi["rename"]>
   archive: (input: Parameters<SessionApi["archive"]>[0] & LegacyLocation) => ReturnType<SessionApi["archive"]>
@@ -46,6 +46,10 @@ type LegacyPrompt = {
   variant?: string
   legacyParts?: (TextPartInput | FilePartInput | AgentPartInput)[]
 }
+// The checked-in desktop vendor client may predate the current server's
+// stable direct-Shell identity field. Preserve it at this compatibility
+// boundary instead of dropping it during V1 translation.
+type DirectShellInput = SessionShellInput & { readonly messageID?: string }
 type LegacyLocation = { directory?: string }
 type CompatibleInput = {
   protocol: Promise<ServerProtocol>
@@ -266,9 +270,10 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
           delivery: value.delivery ?? "steer",
         }
       },
-      async shell(value: SessionShellInput & LegacyPrompt) {
+      async shell(value: DirectShellInput & LegacyPrompt) {
         await legacy().session.shell({
           sessionID: value.sessionID,
+          messageID: value.messageID,
           command: value.command,
           agent: value.agent,
           model: value.model,
@@ -490,10 +495,9 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
     permission: {
       ...input.current.permission,
       async reply(value: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } }) {
-        await legacy(value.location).permission.respond({
-          sessionID: value.sessionID,
-          permissionID: value.requestID,
-          response: value.reply,
+        await legacy(value.location).permission.reply({
+          requestID: value.requestID,
+          reply: value.reply,
           directory: directory(value.location),
         })
       },

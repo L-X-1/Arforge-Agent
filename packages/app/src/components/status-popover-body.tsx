@@ -17,6 +17,7 @@ import { useGlobal } from "@/context/global"
 import { useSettings } from "@/context/settings"
 import { useMcpToggle } from "@/context/mcp"
 import { useServerProtocol } from "@/context/server-sdk"
+import { mcpStatusLabelKey } from "./mcp-status"
 
 const pluginEmptyMessage = (value: string, file: string): JSXElement => {
   const parts = value.split(file)
@@ -410,6 +411,17 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                   {(name) => {
                     const status = () => mcpStatus(name)
                     const enabled = () => status() === "connected"
+                    const approvalReason = () => {
+                      const mcp = sync().data.mcp?.[name]
+                      return mcp?.status === "needs_approval" ? mcp.reason : undefined
+                    }
+                    const statusLabel = () => {
+                      const key = mcpStatusLabelKey(status())
+                      if (!key || status() === "connected" || status() === "disabled" || status() === "needs_auth") {
+                        return
+                      }
+                      return language.t(key)
+                    }
                     return (
                       <button
                         type="button"
@@ -427,7 +439,9 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                             "bg-icon-critical-base": status() === "failed",
                             "bg-border-weak-base": status() === "disabled",
                             "bg-icon-warning-base":
-                              status() === "needs_auth" || status() === "needs_client_registration",
+                              status() === "needs_auth" ||
+                              status() === "needs_client_registration" ||
+                              status() === "needs_approval",
                           }}
                         />
                         <span class="flex flex-col min-w-0 flex-1">
@@ -438,6 +452,12 @@ export function StatusPopoverBody(props: { shown: Accessor<boolean> }) {
                             <span class="text-11-regular text-text-weaker truncate">
                               {language.t("mcp.auth.clickToAuthenticate")}
                             </span>
+                          </Show>
+                          <Show when={statusLabel()}>
+                            <span class="text-11-regular text-text-weaker truncate">{statusLabel()}</span>
+                          </Show>
+                          <Show when={approvalReason()}>
+                            <span class="text-11-regular text-text-weaker truncate">{approvalReason()}</span>
                           </Show>
                         </span>
                         <div onClick={(event) => event.stopPropagation()}>

@@ -1,0 +1,19 @@
+R13 原生 MCP prompt generation lease（2026-09-15）
+
+结论：native MCP prompt 读取与 ToolRegistry prompt 投影统一使用脱敏 generation lease。服务在 SDK transport 之前校验 server、kind、稳定 capability ID、prompt 名称、当前 generation 与 declared scope；旧代或错配 lease fail-closed，不能触达替换后的 Client。无 generation 历史调用仍保持接口兼容，但同样必须先解析 declared scope，scope 消失时零 transport。
+
+实现：
+- packages/arforge/src/mcp/index.ts：MCP.getPrompt 接受 McpCapabilityLease，严格匹配当前 registry 与 scope。
+- packages/arforge/src/mcp/resource-projection.ts：prompt Tool.Def 传递完整 lease。
+- packages/arforge/src/command/index.ts：MCP slash-command 延迟 getter 传递同一 lease。
+- packages/arforge/test/mcp/lifecycle.test.ts：有效 lease、重连后旧 lease 零 transport、错配 ID，以及 scope 消失时无 lease 直读零 transport 回归。
+
+验收：
+- lifecycle 筛选：3 pass / 0 fail / 21 assertions，exit 0（含 catalog scope 消失时的无 lease prompt 直读）。
+- resource-projection：11 pass / 0 fail / 48 assertions，exit 0。
+- Core typecheck exit 0；Prettier、git diff --check 通过。
+- scoped Oxlint：0 errors、36 warnings（既有规则告警）。
+- Arforge typecheck 仍只受既有 packages/tui JSX/BaseRenderable 诊断阻断。
+- 迁移账本按规定顺序重生成，audit:migration-freshness 退出 0。
+
+未关闭：HTTP/CLI catalog control Action/Gateway 与持久恢复、四类 MCP 生命周期/真实外部矩阵、旧数字/无代际 prompt 消费者的最终收口；full sandbox 仍按 R30 后执行。未改用户数据。

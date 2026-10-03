@@ -41,7 +41,10 @@ class CheckResult:
 
 
 CORE_MODULES = [
-    "arforge.cli",
+    # The product launcher is the TypeScript CLI; Python is checked only at
+    # the compatibility bridge boundary.  The legacy parser remains importable
+    # for migration fixtures but is not a product health dependency.
+    "arforge.cli_bridge",
     "arforge.logger",
     "arforge.cli_ui",
     "arforge.product.doctor",

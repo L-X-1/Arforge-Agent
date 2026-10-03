@@ -1,6 +1,8 @@
-// Regression coverage for issue #26526's claim that promptAsync's
-// Effect.forkIn loses the request's InstanceRef/WorkspaceRef. It does not —
-// forkIn preserves Context.Reference values via standard fiber inheritance.
+// Regression coverage for promptAsync's authorized background boundary.
+// Request forks preserve every FiberRef, including PostgreSQL's request
+// transaction. That is unsafe after the HTTP response commits. The production
+// launcher deliberately detaches from the request while explicitly preserving
+// InstanceRef/WorkspaceRef and re-establishing the authorization principal.
 //
 // The companion claim that the streaming prompt handler "captures and
 // provides" those services is true and load-bearing: Stream.fromEffect's
@@ -9,7 +11,7 @@
 
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Layer, Schema, Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -34,6 +36,8 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { testEffect } from "../lib/effect"
+import { makeAuthorizedBackground, type AuthorizedBackground } from "../../src/server/routes/instance/httpapi/authorized-background"
+import { IdentityContext } from "@arforge-ai/server/identity-context"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -79,12 +83,17 @@ const setupWorkspace = (kind: string) =>
     return { dir, workspace }
   })
 
-type Capture = { directory?: string; workspaceID?: string }
+const RequestTransactionRef = Context.Reference("test/RequestTransactionRef", {
+  defaultValue: () => "clean",
+})
+
+type Capture = { directory?: string; workspaceID?: string; transaction?: string }
 
 const captureInstance = Effect.gen(function* () {
   const instance = yield* InstanceRef
   const workspaceID = yield* WorkspaceRef
-  return { directory: instance?.directory, workspaceID } satisfies Capture
+  const transaction = yield* RequestTransactionRef
+  return { directory: instance?.directory, workspaceID, transaction } satisfies Capture
 })
 
 const ProbeApi = HttpApi.make("handler-context-probe").add(
@@ -105,20 +114,30 @@ const ProbeApi = HttpApi.make("handler-context-probe").add(
 )
 
 const serveProbes = (input: {
-  fork?: Effect.Effect<boolean, never, Scope.Scope>
+  fork?: (background: AuthorizedBackground) => Effect.Effect<boolean>
   streamWithout?: Effect.Effect<HttpServerResponse.HttpServerResponse>
   streamWith?: Effect.Effect<HttpServerResponse.HttpServerResponse>
 }) =>
   HttpApiBuilder.layer(ProbeApi).pipe(
     Layer.provide(
       HttpApiBuilder.group(ProbeApi, "probe", (handlers) =>
-        handlers
-          .handle("fork", () => input.fork ?? Effect.succeed(false))
-          .handleRaw(
-            "streamWithout",
-            () => input.streamWithout ?? Effect.succeed(HttpServerResponse.empty({ status: 404 })),
-          )
-          .handleRaw("streamWith", () => input.streamWith ?? Effect.succeed(HttpServerResponse.empty({ status: 404 }))),
+        Effect.gen(function* () {
+          const background = yield* makeAuthorizedBackground
+          return handlers
+            .handle("fork", () =>
+              (input.fork?.(background) ?? Effect.succeed(false)).pipe(
+                Effect.provideService(RequestTransactionRef, "request-transaction"),
+              ),
+            )
+            .handleRaw(
+              "streamWithout",
+              () => input.streamWithout ?? Effect.succeed(HttpServerResponse.empty({ status: 404 })),
+            )
+            .handleRaw(
+              "streamWith",
+              () => input.streamWith ?? Effect.succeed(HttpServerResponse.empty({ status: 404 })),
+            )
+        }),
       ),
     ),
     Layer.provide(instanceContextTestLayer),
@@ -128,22 +147,21 @@ const serveProbes = (input: {
   )
 
 describe("HttpApi handler context inheritance", () => {
-  // Mirrors handlers/session.ts:281 promptAsync. The forked fiber inherits
-  // the request's Context — including InstanceRef and WorkspaceRef provided
-  // by InstanceContextMiddleware — without any explicit re-provide.
-  it.live("Effect.forkIn preserves InstanceRef/WorkspaceRef across the fork", () =>
+  it.live("authorized background preserves workspace context without inheriting the request transaction", () =>
     Effect.gen(function* () {
       const { dir, workspace } = yield* setupWorkspace("local-fork")
       const capture = yield* Deferred.make<Capture>()
 
       yield* serveProbes({
-        fork: Effect.gen(function* () {
-          const scope = yield* Scope.Scope
-          yield* Effect.gen(function* () {
-            yield* Deferred.succeed(capture, yield* captureInstance)
-          }).pipe(Effect.forkIn(scope, { startImmediately: true }))
-          return true
-        }),
+        fork: (background) =>
+          background
+            .launch(
+              IdentityContext.LocalPrincipal,
+              Effect.gen(function* () {
+                yield* Deferred.succeed(capture, yield* captureInstance)
+              }),
+            )
+            .pipe(Effect.as(true)),
       })
 
       const response = yield* HttpClient.post(
@@ -154,6 +172,7 @@ describe("HttpApi handler context inheritance", () => {
       const observed = yield* Deferred.await(capture).pipe(Effect.timeout("2 seconds"))
       expect(observed.directory).toBe(dir)
       expect(observed.workspaceID).toBe(workspace.id)
+      expect(observed.transaction).toBe("clean")
     }),
   )
 

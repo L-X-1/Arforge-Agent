@@ -411,9 +411,9 @@ def _custom_hook_execution_allowed() -> bool:
     if enabled not in {"1", "true", "yes", "on"}:
         return False
     try:
-        from arforge.trust_screen import _auto_trust_enabled, is_workspace_trusted
+        from arforge.custom_agent_profiles import typescript_workspace_trusted
 
-        return _auto_trust_enabled() or is_workspace_trusted()
+        return typescript_workspace_trusted()
     except Exception:
         return False
 

@@ -1,7 +1,7 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@arforge-ai/core/config"
 import { ConfigProvider } from "@arforge-ai/core/config/provider"
@@ -9,7 +9,7 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { ConfigMigrateV1 } from "@arforge-ai/core/v1/config/migrate"
 import { ConfigV1 } from "@arforge-ai/core/v1/config/config"
-import { FSUtil } from "@arforge-ai/core/fs-util"
+import { ConfigMCPV1 } from "@arforge-ai/core/v1/config/mcp"
 import { Global } from "@arforge-ai/core/global"
 import { Location } from "@arforge-ai/core/location"
 import { Policy } from "@arforge-ai/core/policy"
@@ -52,6 +52,237 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.effect("rejects typed invalid MCP servers instead of decoding them as enable-only overrides", () =>
+    Effect.sync(() => {
+      for (const server of [
+        { type: "local", command: ["fixture"], enabled: false, read_only_paths: [""] },
+        { type: "local", command: ["fixture"], enabled: false, read_only_paths: ["bad\0path"] },
+        { type: "local", command: 7, enabled: false },
+        { type: "remote", url: 7, enabled: false },
+        { type: "unknown", enabled: false },
+      ])
+        expect(() => Schema.decodeUnknownSync(ConfigV1.Info)({ mcp: { fixture: server } })).toThrow()
+      expect(Schema.decodeUnknownSync(ConfigV1.Info)({ mcp: { fixture: { enabled: false } } }).mcp).toEqual({
+        fixture: { enabled: false },
+      })
+    }),
+  )
+
+  it.effect("retains explicit MCP read grants through the canonical document and runtime projection", () =>
+    Effect.sync(() => {
+      const server = { type: "local" as const, command: ["fixture"], read_only_paths: ["../dependency 两个词"] }
+      const canonical = Config.decodeDocument(JSON.stringify({ mcp: { servers: { fixture: server } } }))[0]?.info.mcp
+        ?.servers?.fixture
+      expect(canonical).toMatchObject(server)
+      expect(ConfigMCPV1.fromCanonical(canonical!)).toMatchObject(server)
+      const migrated = Config.decodeDocument(JSON.stringify({ mcp: { fixture: server } }))[0]?.info.mcp?.servers
+        ?.fixture
+      expect(migrated).toMatchObject(server)
+      for (const paths of [[""], ["   "], ["bad\0path"], [3], "directory"])
+        expect(() =>
+          Config.decodeDocument(JSON.stringify({ mcp: { servers: { bad: { ...server, read_only_paths: paths } } } })),
+        ).toThrow("Invalid")
+    }),
+  )
+
+  it.effect("migrates MCP-only legacy documents including disable overrides and reserved-looking server names", () =>
+    Effect.sync(() => {
+      const config = Config.decodeDocument(
+        JSON.stringify({
+          mcp: {
+            demo: { type: "local", command: ["fixture", "two words"] },
+            retained: { enabled: false },
+            servers: { type: "remote", url: "https://fixture.invalid" },
+            timeout: { enabled: false },
+          },
+        }),
+      )[0]?.info.mcp
+      expect(config?.servers).toMatchObject({
+        demo: { type: "local", command: ["fixture", "two words"] },
+        retained: { disabled: true },
+        servers: { type: "remote", url: "https://fixture.invalid" },
+        timeout: { disabled: true },
+      })
+    }),
+  )
+
+  it.effect("retains canonical MCP settings beside legacy entries in the same ordered document pipeline", () =>
+    Effect.sync(() => {
+      const docs = Config.decodeDocument(
+        JSON.stringify({
+          snapshot: false,
+          mcp: {
+            old: { type: "local", command: ["legacy-fixture"] },
+            timeout: { startup: 1234, request: 5678 },
+            servers: {
+              current: {
+                type: "remote",
+                url: "https://fixture.invalid",
+                oauth: { callback_port: 54321 },
+                disabled: false,
+              },
+            },
+          },
+        }),
+        "mixed.jsonc",
+      )
+      expect(docs).toHaveLength(2)
+      expect(docs.map((doc) => doc.path)).toEqual(["mixed.jsonc", "mixed.jsonc"])
+      expect(docs[0]?.info.mcp?.servers?.old).toMatchObject({ type: "local", command: ["legacy-fixture"] })
+      expect(docs[1]?.info.mcp).toMatchObject({
+        timeout: { startup: 1234, request: 5678 },
+        servers: { current: { oauth: { callback_port: 54321 }, disabled: false } },
+      })
+    }),
+  )
+
+  it.effect("rejects invalid explicit MCP settings rather than silently dropping or downgrading them", () =>
+    Effect.sync(() => {
+      for (const mcp of [
+        { servers: { bad: { type: "local", command: 12, disabled: false } } },
+        { timeout: { request: -1 } },
+        { old: { type: "remote", url: 12 } },
+      ])
+        expect(() => Config.decodeDocument(JSON.stringify({ mcp }))).toThrow("Invalid")
+    }),
+  )
+
+  it.effect("preserves an explicit active model status so a saved patch can re-enable a deprecated model", () =>
+    Effect.sync(() => {
+      for (const status of [undefined, "active", "deprecated"] as const) {
+        const migrated = ConfigMigrateV1.migrate({ provider: { local: { models: { model: { status } } } } })
+        expect(migrated.providers?.local?.models?.model?.disabled).toBe(
+          status === undefined ? undefined : status === "deprecated",
+        )
+      }
+    }),
+  )
+
+  it.live("retains mixed canonical providers after legacy migration in the original document order", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const file = path.join(tmp.path, "arforge.json")
+          const contents = JSON.stringify({
+            snapshot: false,
+            provider: {
+              local: { npm: "@ai-sdk/openai-compatible", models: { retained: { name: "Legacy retained" } } },
+            },
+            providers: {
+              local: {
+                api: { type: "native", url: "https://canonical.invalid", settings: {} },
+                models: {
+                  current: {
+                    disabled: false,
+                    limit: { output: 1234 },
+                    request: { variant: "careful" },
+                    variants: [{ id: "careful", headers: { "x-variant": "preserved" } }],
+                  },
+                },
+              },
+            },
+          })
+          yield* Effect.promise(() => fs.writeFile(file, contents))
+          yield* Effect.gen(function* () {
+            const documents = (yield* (yield* Config.Service).entries()).filter((entry) => entry.type === "document")
+            expect(documents).toHaveLength(2)
+            expect(documents.map((entry) => entry.path)).toEqual([file, file])
+            expect(documents[0]?.info.snapshots).toBe(false)
+            expect(documents[0]?.info.providers?.local?.models?.retained?.name).toBe("Legacy retained")
+            expect(documents[1]?.info.providers?.local?.api).toMatchObject({
+              type: "native",
+              url: "https://canonical.invalid",
+            })
+            expect(documents[1]?.info.providers?.local?.models?.current).toMatchObject({
+              disabled: false,
+              limit: { output: 1234 },
+              request: { variant: "careful" },
+              variants: [{ id: "careful", headers: { "x-variant": "preserved" } }],
+            })
+            expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(contents)
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        }),
+      ),
+    ),
+  )
+
+  for (const format of ["canonical", "mixed", "legacy"] as const) {
+    it.live(`refuses an invalid explicit price instead of falling back to another configuration: ${format}`, () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const file = path.join(tmp.path, "arforge.jsonc")
+            const invalid = {
+              revision: "invalid-price",
+              currency: "USD",
+              minorUnit: 6,
+              unit: "token",
+              effectiveFrom: 0,
+              source: "fixture",
+              rates: { unknownInput: { amountMinor: -1 } },
+            }
+            const contents = JSON.stringify({
+              ...(format !== "canonical"
+                ? {
+                    provider: {
+                      local: {
+                        options: { apiKey: "must-not-appear-in-errors" },
+                        models: { current: { priceCatalog: format === "legacy" ? invalid : undefined } },
+                      },
+                    },
+                  }
+                : {}),
+              ...(format !== "legacy"
+                ? { providers: { local: { models: { current: { priceCatalog: invalid } } } } }
+                : {}),
+            })
+            yield* Effect.promise(() =>
+              fs.writeFile(path.join(tmp.path, "arforge.json"), JSON.stringify({ providers: { local: provider } })),
+            )
+            yield* Effect.promise(() => fs.writeFile(file, contents))
+            const exit = yield* Config.Service.pipe(
+              Effect.flatMap((config) => config.entries()),
+              Effect.provide(testLayer(tmp.path)),
+              Effect.exit,
+            )
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+              const error = Cause.pretty(exit.cause)
+              expect(error).toContain("ConfigInvalidError")
+              expect(error).not.toContain("must-not-appear-in-errors")
+            }
+            expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(contents)
+          }),
+        ),
+      ),
+    )
+  }
+
+  it.effect("migrates legacy small_model into the existing title agent model", () =>
+    Effect.sync(() => {
+      expect(ConfigMigrateV1.migrate({ small_model: "test/small" }).agents?.title?.model).toBe("test/small")
+      expect(
+        ConfigMigrateV1.migrate({ small_model: "test/small", agent: { title: { prompt: "Short title" } } }).agents
+          ?.title,
+      ).toMatchObject({ model: "test/small", system: "Short title" })
+      expect(
+        ConfigMigrateV1.migrate({ small_model: "test/small", agent: { title: { model: "test/explicit" } } }).agents
+          ?.title?.model,
+      ).toBe("test/explicit")
+      expect(
+        ConfigMigrateV1.migrate({ small_model: "test/small", agent: { title: { disable: true } } }).agents?.title
+          ?.disabled,
+      ).toBe(true)
+      expect(ConfigMigrateV1.migrate({}).agents).toBeUndefined()
+    }),
+  )
+
   it.effect("returns the latest defined scalar from priority-ordered documents", () =>
     Effect.sync(() => {
       const entries = [
@@ -205,6 +436,41 @@ describe("Config", () => {
             ).toEqual(["base", "last"])
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
+      ),
+    ),
+  )
+
+  it.live("loads legacy-shaped ARFORGE_CONFIG_CONTENT as an ephemeral highest-priority document", () =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const previous = process.env.ARFORGE_CONFIG_CONTENT
+        process.env.ARFORGE_CONFIG_CONTENT = JSON.stringify({
+          provider: { inline: { npm: "@ai-sdk/openai-compatible", options: { apiKey: "test" } } },
+        })
+        return previous
+      }),
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.ARFORGE_CONFIG_CONTENT
+          else process.env.ARFORGE_CONFIG_CONTENT = previous
+        }),
+    ).pipe(
+      Effect.flatMap(() =>
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.flatMap((tmp) =>
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
+              const inline = documents.find((document) => document.path === undefined)
+
+              expect(inline?.info.providers?.inline).toBeInstanceOf(ConfigProvider.Info)
+              expect(documents.at(-1)).toBe(inline)
+            }).pipe(Effect.provide(testLayer(tmp.path))),
+          ),
+        ),
       ),
     ),
   )

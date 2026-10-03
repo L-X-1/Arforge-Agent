@@ -6,6 +6,7 @@ import { Cause, Effect, Exit, Layer, Option } from "effect"
 import { NamedError } from "@arforge-ai/core/util/error"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { buildLocationServiceMap, LocationServiceMap } from "@arforge-ai/core/location-services"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
 import { Npm } from "@arforge-ai/core/npm"
@@ -106,7 +107,7 @@ const configLayer = (
     [httpClient, Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)],
   ])
 
-const layer = configLayer()
+const layer = Layer.merge(configLayer(), buildLocationServiceMap())
 
 const it = testEffect(layer)
 const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(configLayer(options))
@@ -209,6 +210,177 @@ const withConfigTree = <A, E, R>(
     )
     return yield* withGlobalConfigDir(global, withInstanceDir(directory, effect))
   })
+
+it.live("MCP endpoint replacement drops credentials while type-less disable overrides retain the server", () =>
+  withConfigTree(
+    {
+      global: {
+        mcp: { demo: { type: "remote", url: "https://old.invalid", headers: { Authorization: "fixture-old" } } },
+      },
+      project: {
+        mcp: {
+          servers: { demo: { type: "remote", url: "https://new.invalid", oauth: false } },
+          timeout: { request: 4321 },
+        },
+      },
+      local: { mcp: { servers: { demo: { disabled: true } } } },
+    },
+    Effect.gen(function* () {
+      const config = yield* Config.use.get()
+      expect(config.mcp?.demo).toEqual({ type: "remote", url: "https://new.invalid", oauth: false, enabled: false })
+      expect(config.experimental?.mcp_timeout).toEqual({ request: 4321 })
+    }),
+  ),
+)
+
+it.live("MCP phase defaults and server overrides preserve each phase across mixed configuration layers", () =>
+  withConfigTree(
+    {
+      global: {
+        mcp: {
+          timeout: { startup: 6000, request: 1000 },
+          demo: { type: "local", command: ["fixture"], timeout: 9000 },
+        },
+      },
+      project: {
+        experimental: { mcp_timeout: 500 },
+        mcp: { servers: { demo: { type: "local", command: ["fixture"], timeout: { request: 200 } } } },
+      },
+    },
+    Effect.gen(function* () {
+      const config = yield* Config.use.get()
+      expect(config.experimental?.mcp_timeout).toEqual({ startup: 6000, request: 500 })
+      expect(config.mcp?.demo).toMatchObject({ timeout: { startup: 9000, request: 200 } })
+    }),
+  ),
+)
+
+for (const sameEndpoint of [true, false]) {
+  it.live(`mixed MCP spellings share endpoint-scoped inheritance: sameEndpoint=${sameEndpoint}`, () =>
+    withConfigTree(
+      {
+        project: {
+          mcp: {
+            demo: { type: "remote", url: "https://old.invalid", headers: { "X-Fixture": "old-header" } },
+            servers: {
+              demo: {
+                type: "remote",
+                url: sameEndpoint ? "https://old.invalid" : "https://new.invalid",
+                disabled: true,
+              },
+            },
+          },
+        },
+      },
+      Effect.gen(function* () {
+        const server = (yield* Config.use.get()).mcp?.demo
+        expect(server).toEqual({
+          type: "remote",
+          url: sameEndpoint ? "https://old.invalid" : "https://new.invalid",
+          enabled: false,
+          ...(sameEndpoint ? { headers: { "X-Fixture": "old-header" } } : {}),
+        })
+      }),
+    ),
+  )
+}
+
+it.live("a different local MCP command does not inherit the previous process environment", () =>
+  withConfigTree(
+    {
+      global: {
+        mcp: { demo: { type: "local", command: ["old-fixture"], environment: { PREVIOUS_TOKEN: "fixture-only" } } },
+      },
+      project: { mcp: { servers: { demo: { type: "local", command: ["new-fixture", "two words"] } } } },
+      local: { mcp: { servers: { demo: { disabled: true } } } },
+    },
+    Effect.gen(function* () {
+      expect((yield* Config.use.get()).mcp?.demo).toEqual({
+        type: "local",
+        command: ["new-fixture", "two words"],
+        enabled: false,
+      })
+    }),
+  ),
+)
+
+for (const paths of [["new-dependency"], []]) {
+  it.live(`MCP explicit read dependencies replace lower-priority grants: empty=${paths.length === 0}`, () =>
+    withConfigTree(
+      {
+        global: { mcp: { demo: { type: "local", command: ["same-fixture"], read_only_paths: ["old-dependency"] } } },
+        project: { mcp: { servers: { demo: { type: "local", command: ["same-fixture"], read_only_paths: paths } } } },
+      },
+      Effect.gen(function* () {
+        expect((yield* Config.use.get()).mcp?.demo).toMatchObject({ read_only_paths: paths })
+      }),
+    ),
+  )
+}
+
+it.live("replaces saved price revisions atomically across legacy and canonical provider documents", () => {
+  const base = {
+    revision: "old-price",
+    currency: "USD",
+    minorUnit: 6,
+    unit: "token",
+    effectiveFrom: 0,
+    source: "fixture",
+    rates: { unknownInput: { amountMinor: 9 }, textOutput: { amountMinor: 9 }, cacheRead: { amountMinor: 9 } },
+  }
+  const price = {
+    ...base,
+    revision: "new-price",
+    rates: { unknownInput: { amountMinor: 1 }, textOutput: { amountMinor: 2 } },
+  }
+  return withConfigTree(
+    {
+      global: { provider: { local: { models: { model: { name: "Retained name", priceCatalog: base } } } } },
+      project: { providers: { local: { models: { model: { priceCatalog: price } } } } },
+    },
+    Effect.gen(function* () {
+      const config = yield* (yield* Config.Service).get()
+      const model = config.provider?.local?.models?.model
+      expect(model?.name).toBe("Retained name")
+      expect(model?.priceCatalog?.revision).toBe("new-price")
+      expect(model?.priceCatalog?.rates).toEqual(price.rates)
+    }),
+  )
+})
+
+for (const key of ["provider", "providers"] as const) {
+  it.live(`rejects an invalid saved price in ${key} before falling back to another document`, () =>
+    withConfigTree(
+      {
+        global: { provider: { local: { models: { model: { name: "Must not silently use old configuration" } } } } },
+        project: {
+          [key]: {
+            local: {
+              models: {
+                model: {
+                  priceCatalog: {
+                    revision: "bad",
+                    currency: "USD",
+                    minorUnit: 6,
+                    unit: "token",
+                    effectiveFrom: 0,
+                    source: "fixture",
+                    rates: { unknownInput: { amountMinor: -1 } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      Effect.gen(function* () {
+        const result = yield* (yield* Config.Service).get().pipe(Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+        if (Exit.isFailure(result)) expect(Cause.pretty(result.cause)).toContain("ConfigInvalidError")
+      }),
+    ),
+  )
+}
 
 const wellKnown = (input: {
   authUrl?: string
@@ -365,17 +537,21 @@ it.instance("updates config and preserves empty shell sentinel", () =>
       "config.json",
     )
 
-    yield* Config.Service.use((svc) => svc.update(ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config")))
+    yield* Config.use.update(
+      ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config"),
+      yield* LocationServiceMap.Service,
+    )
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "arforge.jsonc"))
     expect(writtenConfig).toMatchObject({ shell: "" })
+    expect(yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))).toMatchObject({ shell: "bash" })
   }),
 )
 
 it.effect("updates global config and omits empty shell key in json", () =>
   withGlobalConfig({ config: { shell: "bash" } }, ({ dir }) =>
     Effect.gen(function* () {
-      yield* Config.use.updateGlobal({ shell: "" })
+      yield* Config.use.updateGlobal({ shell: "" }, yield* LocationServiceMap.Service)
 
       const writtenConfig = yield* FSUtil.use.readJson(path.join(dir, "arforge.json"))
       expect(writtenConfig).not.toHaveProperty("shell")
@@ -383,10 +559,92 @@ it.effect("updates global config and omits empty shell key in json", () =>
   ),
 )
 
+it.effect(
+  "updates a canonical global provider document without rewriting its provider spelling or numeric price",
+  () => {
+    const price = {
+      revision: "global-price",
+      currency: "USD",
+      minorUnit: 6,
+      unit: "token",
+      effectiveFrom: 0,
+      source: "fixture",
+      rates: { unknownInput: { amountMinor: 2 }, textOutput: { amountMinor: 3 } },
+    }
+    return withGlobalConfig(
+      { config: { providers: { local: { name: "Preserved", models: { model: { priceCatalog: price } } } } } },
+      ({ dir }) =>
+        Effect.gen(function* () {
+          const result = yield* Config.use.updateGlobal({ username: "saved" }, yield* LocationServiceMap.Service)
+          expect(result.changed).toBe(true)
+          expect(result.info.provider?.local?.models?.model?.priceCatalog?.revision).toBe("global-price")
+          const saved = yield* FSUtil.use.readJson(path.join(dir, "arforge.json"))
+          expect(saved).toMatchObject({
+            username: "saved",
+            providers: { local: { name: "Preserved", models: { model: { priceCatalog: price } } } },
+          })
+          expect(saved).not.toHaveProperty("provider")
+        }),
+    )
+  },
+)
+
+it.effect("preserves an old global profile when its first edit creates the canonical configuration", () =>
+  withGlobalConfig({ name: "config.json", config: { model: "local/original", username: "original" } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const legacy = yield* FSUtil.use.readFileString(path.join(dir, "config.json"))
+      const result = yield* Config.use.updateGlobal({ username: "saved" }, yield* LocationServiceMap.Service)
+      expect(result.info).toMatchObject({ model: "local/original", username: "saved" })
+      expect(yield* FSUtil.use.readJson(path.join(dir, "arforge.jsonc"))).toMatchObject({
+        model: "local/original",
+        username: "saved",
+      })
+      expect(yield* FSUtil.use.readFileString(path.join(dir, "config.json"))).toBe(legacy)
+    }),
+  ),
+)
+
+it.effect("does not commit a global change if the existing product response cannot represent the document", () =>
+  withGlobalConfig({ config: { skills: ["./local-skills"] } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const file = path.join(dir, "arforge.json")
+      const before = yield* FSUtil.use.readFileString(file)
+      const result = yield* Config.use
+        .updateGlobal({ username: "must-not-be-saved" }, yield* LocationServiceMap.Service)
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      expect(yield* FSUtil.use.readFileString(file)).toBe(before)
+    }),
+  ),
+)
+
+it.effect("saves and reads global config from the explicit ARFORGE_CONFIG_DIR instead of the default profile", () =>
+  withGlobalConfig({ config: { username: "default-profile" } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const configured = yield* tmpdirScoped()
+      yield* writeConfigEffect(configured, { username: "explicit-profile" })
+      yield* withProcessEnv(
+        "ARFORGE_CONFIG_DIR",
+        configured,
+        Effect.gen(function* () {
+          yield* Config.use.updateGlobal({ username: "saved-explicit" }, yield* LocationServiceMap.Service)
+          expect((yield* Config.use.getGlobal()).username).toBe("saved-explicit")
+          expect(yield* FSUtil.use.readJson(path.join(configured, "arforge.json"))).toMatchObject({
+            username: "saved-explicit",
+          })
+          expect(yield* FSUtil.use.readJson(path.join(dir, "arforge.json"))).toMatchObject({
+            username: "default-profile",
+          })
+        }),
+      )
+    }),
+  ),
+)
+
 it.effect("updates global config and omits empty shell key in jsonc", () =>
   withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "arforge.jsonc" }, ({ dir }) =>
     Effect.gen(function* () {
-      yield* Config.use.updateGlobal({ shell: "" })
+      yield* Config.use.updateGlobal({ shell: "" }, yield* LocationServiceMap.Service)
 
       const file = path.join(dir, "arforge.jsonc")
       const writtenConfig = yield* FSUtil.use.readFileString(file)
@@ -894,11 +1152,12 @@ Nested command template`,
 it.instance("updates config and writes to file", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance
-    yield* Config.Service.use((svc) =>
-      svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
+    yield* Config.use.update(
+      ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config"),
+      yield* LocationServiceMap.Service,
     )
 
-    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "arforge.jsonc"))
     expect(writtenConfig).toMatchObject({ model: "updated/model" })
   }),
 )

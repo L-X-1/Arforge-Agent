@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "claim_id": "BOOTSTRAP-PROTOCOL-001",
+  "owner": "manual-dispatcher-bootstrap",
+  "implementer": "codex-gpt-5",
+  "version": 1,
+  "status": "REVIEW_PENDING",
+  "protocol_manifest": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "protocol_manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "claimed_at": "2026-08-24T08:45:00Z",
+  "allowed_paths": [
+    "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+    "docs/evidence/implementation/bootstrap/status-porcelain-v2.v1.json",
+    "docs/evidence/implementation/bootstrap/fresh-validation-bundle.v1.json",
+    "docs/evidence/implementation/protocol-bootstrap.v1.json",
+    "docs/evidence/implementation/cards/BOOTSTRAP-PROTOCOL-001.md",
+    "docs/evidence/implementation/state.json",
+    "docs/evidence/implementation/claims/BOOTSTRAP-PROTOCOL-001.json",
+    "docs/evidence/implementation/attestations/protocol-bootstrap.v1.sha256",
+    "docs/evidence/implementation/attestations/status-porcelain-v2.v1.sha256",
+    "docs/evidence/implementation/attestations/fresh-validation-bundle.v1.sha256",
+    "script/arforge-governance.ts",
+    "script/arforge-governance.test.ts",
+    "script/bunfig.toml"
+  ],
+  "forbidden_paths": [
+    "packages/",
+    "arforge/",
+    "tests/",
+    "release/",
+    "deploy/"
+  ],
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json"
+}

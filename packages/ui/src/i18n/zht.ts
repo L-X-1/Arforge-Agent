@@ -3,6 +3,7 @@ import { dict as en } from "./en"
 type Keys = keyof typeof en
 
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "工作階段變更",
   "ui.sessionReview.title.git": "Git 變更",
   "ui.sessionReview.title.branch": "分支變更",
@@ -98,6 +99,7 @@ export const dict = {
 
   "ui.messagePart.questions.dismissed": "問題已略過",
   "ui.messagePart.compaction": "工作階段已壓縮",
+  "ui.messagePart.reasoningSummary": "推理摘要",
   "ui.messagePart.context.read.one": "{{count}} 次讀取",
   "ui.messagePart.context.read.other": "{{count}} 次讀取",
   "ui.messagePart.context.search.one": "{{count}} 次搜尋",
@@ -158,6 +160,25 @@ export const dict = {
   "ui.permission.deny": "拒絕",
   "ui.permission.allowAlways": "永遠允許",
   "ui.permission.allowOnce": "允許一次",
+  "ui.permission.humanConfirmation": "此操作必須由你本次手動確認，系統不會記住為「永遠允許」。",
+  "ui.permission.opaqueShell.summary":
+    "這是使用者直接輸入的精確 Shell 指令。執行前無法完整靜態判定檔案、網路與子行程影響。",
+  "ui.permission.opaqueShell.cwd": "工作目錄：{{cwd}}",
+  "ui.permission.opaqueShell.shell": "Shell：{{shell}}",
+  "ui.permission.opaqueShell.environment": "子行程只會取得最小執行環境，不會繼承 Arforge 的環境憑據。",
+  "ui.permission.taskCapabilities.title": "子代理程式存取範圍",
+  "ui.permission.taskCapabilities.defaultReadOnly": "此任務預設只有唯讀權限。",
+  "ui.permission.taskCapabilities.readOnly": "此任務只要求讀取類權限。",
+  "ui.permission.taskCapabilities.writeWarning": "此任務要求寫入能力。允許前請逐項核對操作與範圍。",
+  "ui.permission.taskCapabilities.access.read": "讀取",
+  "ui.permission.taskCapabilities.access.write": "寫入",
+  "ui.permission.taskCapabilities.resources": "範圍：{{resources}}",
+  "ui.permission.taskBudget.title": "執行上限",
+  "ui.permission.taskBudget.summary":
+    "最多 {{attempts}} 次嘗試 · {{duration}} 分鐘 · 成本上限 {{cost}} · {{tokens}} Token",
+  "ui.permission.taskBudget.enforced": "執行期間限制時長與模型輸出；結束後結算實際成本和總 Token 用量。",
+  "ui.permission.taskBudget.legacyWarning":
+    "此舊式任務沒有持久化的時間、成本或 Token 上限。僅在你信任其範圍時允許。",
 
   "ui.message.expand": "展開訊息",
   "ui.message.collapse": "收合訊息",
@@ -192,6 +213,12 @@ export const dict = {
   "ui.basicTool.called": "呼叫了 `{{tool}}`",
   "ui.toolErrorCard.failed": "失敗",
   "ui.toolErrorCard.copyError": "複製錯誤",
+  "ui.toolErrorCard.fileConflict.changed": "檔案在授權後發生變更",
+  "ui.toolErrorCard.fileConflict.targetExists": "授權後檔案已出現",
+  "ui.toolErrorCard.fileConflict.instruction": "請重新讀取檔案，確認目前內容後再重試。",
+  "ui.toolErrorCard.fileConflict.targetExistsInstruction": "授權後發現同名檔案。請先讀取並確認內容，再重試。",
+  "ui.toolErrorCard.fileConflict.path": "檔案",
+  "ui.toolErrorCard.fileConflict.versions": "授權版本 {{observed}} · 目前版本 {{current}}",
   "ui.message.duration.seconds": "{{count}}秒",
   "ui.message.duration.minutesSeconds": "{{minutes}}分 {{seconds}}秒",
 } satisfies Partial<Record<Keys, string>>

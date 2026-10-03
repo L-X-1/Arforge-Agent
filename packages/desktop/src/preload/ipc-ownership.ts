@@ -56,7 +56,8 @@ export const DESKTOP_IPC_OWNERSHIP = [
     feature: "durable-renderer-storage",
     surface: "desktop-storage",
     channels: ["store-get", "store-set", "store-delete", "store-clear", "store-keys", "store-length"],
-    rationale: "The preload exposes bounded key/value persistence because the sandboxed renderer cannot access files directly.",
+    rationale:
+      "The preload exposes bounded key/value persistence because the sandboxed renderer cannot access files directly.",
   },
   {
     feature: "files-attachments-clipboard-and-shell",
@@ -107,13 +108,7 @@ export const DESKTOP_IPC_OWNERSHIP = [
   {
     feature: "desktop-updater",
     surface: "desktop-updater",
-    channels: [
-      "updater-subscribe",
-      "updater-unsubscribe",
-      "updater-check",
-      "updater-install",
-      "updater-state",
-    ],
+    channels: ["updater-subscribe", "updater-unsubscribe", "updater-check", "updater-install", "updater-state"],
     rationale: "Update state and installation require the native application lifecycle.",
   },
   {
@@ -140,7 +135,7 @@ export const DESKTOP_IPC_OWNERSHIP = [
   {
     feature: "deep-link-delivery",
     surface: "desktop-events",
-    channels: ["deep-link"],
+    channels: ["deep-link", "native-action-receipt"],
     rationale: "Protocol links are queued by the native host and delivered to the shared application router.",
   },
 ] as const satisfies readonly DesktopIpcOwnership[]

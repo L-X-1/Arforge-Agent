@@ -1,0 +1,22 @@
+bun test v1.3.14 (0d9b296a)
+
+src\artifact-auth-route.test.ts:
+(pass) authenticated artifact owner context enforces profile and tenant roles over HTTP [2077.94ms]
+
+src\artifact-openapi.test.ts:
+(pass) artifact read admission bounds requests and bytes per authenticated session [2.20ms]
+(pass) artifact reads expose full and bounded session/profile/tenant routes in OpenAPI [130.10ms]
+
+src\artifact-owner-context.test.ts:
+(pass) artifact owner context > derives tenant readability for owner [0.07ms]
+(pass) artifact owner context > derives tenant readability for admin
+(pass) artifact owner context > derives tenant readability for member
+(pass) artifact owner context > does not allow a caller-supplied owner scope to replace the principal [0.02ms]
+
+src\artifact-route.test.ts:
+(pass) authenticated artifact route resolves a receipt without exposing a path [6920.91ms]
+
+ 8 pass
+ 0 fail
+ 66 expect() calls
+Ran 8 tests across 4 files. [10.55s]

@@ -1,7 +1,11 @@
 export * as WorkflowGraph from "./workflow-graph"
 
 /**
- * Workflow graph runtime — native TS port of ``arforge/workflow_graph_runtime.py``.
+ * Legacy workflow graph runtime — migration/source compatibility only.
+ *
+ * Production workflow execution uses `DurableWorkflowGraphRuntime` and the
+ * DurableRun aggregate. This table-backed runtime must not be wired as a
+ * second production writer or lease authority after the cutover.
  *
  * Executes dependency graphs over the PostgreSQL ``workflow_graph_runs/nodes/events``
  * tables (or an equivalent SQLite schema for local tests). Command nodes spawn
@@ -11,7 +15,6 @@ export * as WorkflowGraph from "./workflow-graph"
  */
 
 import { randomUUID } from "node:crypto"
-import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { createHash } from "node:crypto"
@@ -55,6 +58,42 @@ export interface WorkflowDefinition {
   readonly steps: WorkflowStepDefinition[]
 }
 
+export interface WorkflowRunBudget {
+  readonly max_attempts: number
+  readonly reserved_attempts: number
+  readonly used_attempts: number
+  readonly max_duration_ms: number
+}
+
+export interface WorkflowSchedulingSummary {
+  readonly schema_version: number
+  readonly request_digest: string
+  readonly requested_max_parallel: number
+  readonly effective_max_parallel: number
+  readonly action: string
+  readonly execute_mode: string
+  readonly eligible: boolean
+  readonly reasons: ReadonlyArray<string>
+  readonly failed_checks: ReadonlyArray<string>
+  readonly reason: string
+  readonly decision_digest: string
+  readonly evaluated_at: string
+  readonly evidence_digest?: string
+  readonly policy_revision?: string
+}
+
+export interface WorkflowVerificationSummary {
+  readonly schema_version: 1
+  readonly action_kind: "workflow"
+  readonly action_version: "1"
+  readonly passed: boolean
+  readonly total: number
+  readonly passed_count: number
+  readonly failed_checks: ReadonlyArray<string>
+  readonly evidence_digest: string
+  readonly evaluated_at: string
+}
+
 export interface RunRecord {
   readonly run_id: string
   readonly session_id: string
@@ -67,6 +106,10 @@ export interface RunRecord {
   readonly status: string
   readonly control: string
   readonly max_parallel: number
+  readonly definition_digest?: string
+  readonly budget?: WorkflowRunBudget
+  readonly scheduling?: WorkflowSchedulingSummary
+  readonly verification?: WorkflowVerificationSummary
   readonly created_at: string
   readonly updated_at: string
   readonly started_at: string | null
@@ -94,6 +137,8 @@ export interface NodeRecord {
   readonly error: string
   readonly started_at: string | null
   readonly finished_at: string | null
+  readonly budget_reserved_attempts?: number
+  readonly child_run_id?: string
 }
 
 export interface GraphEvent {
@@ -156,7 +201,7 @@ CREATE TABLE IF NOT EXISTS workflow_graph_nodes (
   position INTEGER NOT NULL DEFAULT 0,
   title TEXT NOT NULL,
   kind TEXT NOT NULL,
-  access TEXT NOT NULL DEFAULT 'write',
+  access TEXT NOT NULL DEFAULT 'read',
   status TEXT NOT NULL,
   attempt INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL DEFAULT 1,
@@ -522,38 +567,19 @@ export class WorkflowGraphRuntime {
     return ["failed", "", lastError, step.max_attempts]
   }
 
-  private runCommandNode(step: WorkflowStepDefinition, context: NodeContext): Promise<string> {
-    const lines = step.prompt.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    const command = lines[0] ?? ""
-    const args = lines.slice(1)
-    return new Promise((resolvePromise, rejectPromise) => {
-      const allowedEnv = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME", "USERPROFILE", "LANG", "LC_ALL"])
-      const env: Record<string, string> = {}
-      for (const [key, value] of Object.entries(process.env)) {
-        if (allowedEnv.has(key.toUpperCase()) && typeof value === "string") env[key] = value
-      }
-      let result
-      try {
-        result = spawnSync(command, args, {
-          cwd: context.workspace,
-          env,
-          encoding: "utf8",
-          timeout: 60_000,
-          windowsHide: true,
-          maxBuffer: 2 * 1024 * 1024,
-        })
-      } catch (error) {
-        rejectPromise(error)
-        return
-      }
-      const output = `${result.stdout ?? ""}`.trim()
-      const error = `${result.stderr ?? ""}`.trim()
-      if (result.status !== 0) {
-        rejectPromise(new Error(`command exited with code ${result.status}: ${(error || output).slice(0, 2000)}`))
-        return
-      }
-      resolvePromise(output)
-    })
+  /**
+   * Command nodes are intentionally unavailable until they carry a canonical
+   * ActionGateway identity. Keeping the old raw spawn here would let a
+   * workflow request bypass the same authorization boundary as every other
+   * product process execution.
+   */
+  private runCommandNode(_step: WorkflowStepDefinition, _context: NodeContext): Promise<string> {
+    return Promise.reject(
+      new WorkflowGraphError(
+        "GATEWAY_REQUIRED",
+        "workflow command nodes are hard-blocked until execution is bound to ActionGateway",
+      ),
+    )
   }
 
   private async settleNode(runId: string, nodeId: string, status: string, output = "", error = ""): Promise<void> {
@@ -737,7 +763,7 @@ export function validateDefinition(payload: Record<string, unknown>, sourcePath:
       max_attempts: Math.max(1, Math.min(Number(record.max_attempts ?? 1), 10)),
       when_step: String(record.when_step ?? ""),
       when_statuses: (Array.isArray(record.when_statuses) ? record.when_statuses : []).map((item) => String(item)),
-      access: record.access === "read" ? "read" : "write",
+      access: record.access === "write" ? "write" : "read",
     })
   }
   return {
@@ -808,7 +834,7 @@ function rowToNode(row: Record<string, unknown>): NodeRecord {
     position: Number(row.position ?? 0),
     title: String(row.title ?? ""),
     kind: String(row.kind ?? ""),
-    access: String(row.access ?? "write"),
+    access: String(row.access ?? "read"),
     status: String(row.status ?? ""),
     attempt: Number(row.attempt ?? 0),
     max_attempts: Number(row.max_attempts ?? 1),
@@ -820,6 +846,10 @@ function rowToNode(row: Record<string, unknown>): NodeRecord {
     error: String(row.error ?? ""),
     started_at: row.started_at === null || row.started_at === undefined ? null : String(row.started_at),
     finished_at: row.finished_at === null || row.finished_at === undefined ? null : String(row.finished_at),
+    ...(row.budget_reserved_attempts !== undefined
+      ? { budget_reserved_attempts: Math.max(0, Number(row.budget_reserved_attempts ?? 0)) }
+      : {}),
+    ...(typeof row.child_run_id === "string" && row.child_run_id.length > 0 ? { child_run_id: row.child_run_id } : {}),
   }
 }
 
@@ -849,6 +879,9 @@ function publicRun(run: RunRecord, _placeholder: boolean): Record<string, unknow
     started_at: run.started_at,
     finished_at: run.finished_at,
     last_error: run.last_error,
+    ...(run.definition_digest ? { definition_digest: run.definition_digest } : {}),
+    ...(run.budget ? { budget: run.budget } : {}),
+    ...(run.scheduling ? { scheduling: run.scheduling } : {}),
   }
 }
 
@@ -873,4 +906,3 @@ function sanitizeForStorage(value: unknown): string {
 export function digestWorkflowPath(workspace: string, name: string): string {
   return createHash("sha256").update(`arforge-workflow\0${workspace}\0${name}`).digest("hex").slice(0, 16)
 }
-

@@ -8,9 +8,23 @@ import { createHash } from "node:crypto"
 import { Database } from "./database/database"
 import { makeLocationNode } from "./effect/app-node"
 import { Location } from "./location"
-import { MemoryConflictTable, MemoryCorrectionTable, MemoryTable } from "./memory/sql"
+import * as MemoryKernel from "./memory-kernel"
+import { MemoryConflictTable, MemoryCorrectionTable, MemoryRevisionTable, MemoryTable } from "./memory/sql"
+import * as MemoryRevision from "@arforge-ai/schema/memory-revision"
+import { digest } from "./memory-revision"
+import * as MemoryRetention from "@arforge-ai/schema/memory-retention"
 import { RuntimeInsight } from "./runtime/insight"
 import { RuntimeEmbedding } from "./runtime"
+import { ALGORITHM_REVISION, applyConflictBoundary, fingerprint } from "./memory-recall"
+import {
+  canonicalPath,
+  contentFingerprint,
+  deriveClaim,
+  detectConflicts,
+  normalize,
+  sanitize,
+  scopeFingerprint,
+} from "./analysis/memory-conflict"
 
 export const ID = Memory.ID
 export type ID = Memory.ID
@@ -85,6 +99,35 @@ const MaximumConflictScan = 1_000
 const MaximumConflictResults = 500
 type DatabaseTransaction = Parameters<Parameters<EffectDrizzleSqlite.EffectSQLiteDatabase["transaction"]>[0]>[0]
 
+const recordRevision = (
+  tx: DatabaseTransaction,
+  input: {
+    readonly memoryID: ID
+    readonly version: number
+    readonly operation: MemoryRevision.Operation
+    readonly actor: MemoryRevision.Actor["kind"]
+    readonly reason: string
+    readonly content: string
+    readonly priorDigest?: MemoryRevision.ContentDigest
+  },
+) =>
+  tx
+    .insert(MemoryRevisionTable)
+    .values({
+      id: MemoryRevision.RevisionID.make(`mrev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`),
+      memory_id: input.memoryID,
+      version: input.version,
+      operation: input.operation,
+      actor_kind: input.actor,
+      reason: input.reason,
+      policy_version: MemoryKernel.POLICY_VERSION,
+      evidence_ids: [],
+      prior_digest: input.priorDigest,
+      content_digest: digest({ memoryID: input.memoryID, content: input.content, version: input.version }),
+      time_created: Date.now(),
+    })
+    .run()
+
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Memory.NotFoundError", {
   memoryID: ID,
 }) {}
@@ -95,6 +138,10 @@ export class DuplicateError extends Schema.TaggedErrorClass<DuplicateError>()("M
 }) {}
 
 export class InvalidScopeError extends Schema.TaggedErrorClass<InvalidScopeError>()("Memory.InvalidScopeError", {
+  message: Schema.String,
+}) {}
+
+export class GovernanceError extends Schema.TaggedErrorClass<GovernanceError>()("Memory.GovernanceError", {
   message: Schema.String,
 }) {}
 
@@ -162,14 +209,18 @@ export interface CorrectInput {
   readonly expectedUpdatedAt: number
 }
 
+export type MaintenanceDeleteInput = MemoryRetention.MaintenanceDeleteRequest
+
 export interface Interface {
-  readonly create: (input: CreateInput) => Effect.Effect<Info, DuplicateError | InvalidScopeError>
+  readonly create: (input: CreateInput) => Effect.Effect<Info, DuplicateError | InvalidScopeError | GovernanceError>
   readonly list: (input?: ListInput) => Effect.Effect<Page>
   readonly get: (memoryID: ID) => Effect.Effect<Info, NotFoundError>
-  readonly update: (input: UpdateInput) => Effect.Effect<Info, DuplicateError | InvalidScopeError | NotFoundError>
+  readonly update: (
+    input: UpdateInput,
+  ) => Effect.Effect<Info, DuplicateError | InvalidScopeError | GovernanceError | NotFoundError>
   readonly correct: (
     input: CorrectInput,
-  ) => Effect.Effect<CorrectionResult, DuplicateError | NotFoundError | CorrectionConflictError>
+  ) => Effect.Effect<CorrectionResult, DuplicateError | NotFoundError | CorrectionConflictError | GovernanceError>
   readonly correctionHistory: (memoryID: ID) => Effect.Effect<CorrectionHistory, NotFoundError>
   readonly undoCorrection: (input: {
     readonly correctionID: CorrectionID
@@ -201,13 +252,19 @@ export interface Interface {
     readonly expectedLeftUpdatedAt: number
     readonly expectedRightUpdatedAt: number
   }) => Effect.Effect<ConflictDecisionResult, ConflictNotFoundError | ConflictDecisionError>
-  readonly delete: (memoryID: ID) => Effect.Effect<boolean>
-  readonly deleteMany: (ids: ReadonlyArray<ID>) => Effect.Effect<DeleteResult, DeleteLimitError>
+  readonly maintenanceDelete: (input: MaintenanceDeleteInput) => Effect.Effect<boolean, GovernanceError>
+  readonly maintenanceDeleteMany: (
+    inputs: ReadonlyArray<MaintenanceDeleteInput>,
+  ) => Effect.Effect<DeleteResult, DeleteLimitError | GovernanceError>
   readonly semantic: (input: {
     readonly query: string
     readonly topK?: number
     readonly includeGlobal?: boolean
     readonly indexLimit?: number
+    /** Optional request assembled by an authorized caller; env configuration alone never sends. */
+    readonly embeddingRequest?: RuntimeEmbedding.RemoteRequest
+    readonly signal?: AbortSignal
+    readonly deadlineAt?: number
   }) => Effect.Effect<SemanticResults>
   readonly facets: (includeGlobal?: boolean) => Effect.Effect<Facets>
   readonly status: () => Effect.Effect<Status>
@@ -229,6 +286,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const location = yield* Location.Service
+    const kernel = yield* MemoryKernel.Service
     const projectID = String(location.project.id)
     const workspacePath = canonicalPath(location.directory)
 
@@ -310,33 +368,59 @@ const layer = Layer.effect(
       return best
     })
 
+    const gateError = (error: MemoryKernel.GateError) => new GovernanceError({ message: error.reason })
+
+    const automaticCandidate = (input: CreateInput, source: "auto" | "model") =>
+      kernel.propose({
+        content: Content.make(sanitize(input.content)),
+        proposedClass: memoryClassForType(input.type),
+        sourceEvidenceIDs: [],
+        scope: input.scope ?? "workspace",
+        sensitivity: "internal",
+        confidence: 0.5,
+        dedup: { status: "unknown", comparedMemoryIDs: [] },
+        retention: { mode: "indefinite", reason: "Automatic memory requires explicit approval." },
+        proposer: { kind: "agent" },
+        policy: {
+          status: "review",
+          policyVersion: MemoryKernel.POLICY_VERSION,
+          reason: `Legacy ${source} write routed to candidate review.`,
+        },
+        reason: `Legacy ${source} MemoryV2.create request`,
+      })
+
     const create: Interface["create"] = Effect.fn("Memory.create")(function* (input) {
       const content = Content.make(sanitize(input.content))
       const scope = input.scope ?? "workspace"
       const source = input.source ?? "user"
+      if (source === "auto" || source === "model") {
+        const candidate = yield* automaticCandidate({ ...input, content, scope }, source).pipe(
+          Effect.mapError(gateError),
+        )
+        return yield* new GovernanceError({
+          message: `Automatic/model memory is candidate-only; approval is required (${candidate.candidateID}).`,
+        })
+      }
       yield* assertScope(scope, source)
       const existing = yield* duplicate(content, scope)
       if (existing) return yield* new DuplicateError({ memoryID: existing.id, similarity: existing.similarity })
-      const row = yield* db
-        .insert(MemoryTable)
-        .values({
-          id: ID.create(),
+      return yield* kernel
+        .createActive({
           content,
           type: input.type ?? Type.make("fact"),
           tags: unique(input.tags ?? []),
           importance: input.importance ?? Importance.make(1),
           source,
           scope,
-          project_id: scope === "workspace" ? projectID : null,
-          workspace_path: scope === "workspace" ? workspacePath : null,
-          related_to: input.relatedTo,
+          relatedTo: input.relatedTo,
           strength: input.strength ?? Strength.make(0.5),
-          review_level: input.reviewLevel ?? ReviewLevel.make(0),
+          reviewLevel: input.reviewLevel ?? ReviewLevel.make(0),
+          actor: { kind: "user" },
+          policyVersion: MemoryKernel.POLICY_VERSION,
+          evidenceIDs: [],
+          reason: "Explicit MemoryV2 create",
         })
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      return toInfo(row)
+        .pipe(Effect.mapError(gateError))
     })
 
     const list: Interface["list"] = Effect.fn("Memory.list")(function* (input = {}) {
@@ -378,26 +462,28 @@ const layer = Layer.effect(
         const existing = yield* duplicate(content, current.scope, current.id)
         if (existing) return yield* new DuplicateError({ memoryID: existing.id, similarity: existing.similarity })
       }
-      const reviewed = input.reviewLevel === undefined ? undefined : Date.now()
-      const row = yield* db
-        .update(MemoryTable)
-        .set({
+      return yield* kernel
+        .updateActive({
+          memoryID: input.memoryID,
           content,
           type: input.type,
           tags: input.tags === undefined ? undefined : unique(input.tags),
           source: input.source,
           importance: input.importance,
           strength: input.strength,
-          review_level: input.reviewLevel,
-          time_reviewed: reviewed,
-          time_updated: Date.now(),
+          reviewLevel: input.reviewLevel,
+          actor: { kind: "user" },
+          policyVersion: MemoryKernel.POLICY_VERSION,
+          evidenceIDs: [],
+          reason: "Explicit MemoryV2 update",
         })
-        .where(eq(MemoryTable.id, input.memoryID))
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      if (!row) return yield* new NotFoundError({ memoryID: input.memoryID })
-      return toInfo(row)
+        .pipe(
+          Effect.mapError((error) =>
+            error.reason === "Memory does not exist."
+              ? new NotFoundError({ memoryID: input.memoryID })
+              : gateError(error),
+          ),
+        )
     })
 
     const correct: Interface["correct"] = Effect.fn("Memory.correct")(function* (input) {
@@ -412,94 +498,19 @@ const layer = Layer.effect(
       const reason = CorrectionReason.make(sanitize(input.reason))
       const existing = yield* duplicate(content, current.scope, current.id)
       if (existing) return yield* new DuplicateError({ memoryID: existing.id, similarity: existing.similarity })
-      const correctionID = CorrectionID.create()
-      const successorID = ID.create()
-      const now = Date.now()
-      const result = yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const original = yield* tx
-              .select()
-              .from(MemoryTable)
-              .where(and(eq(MemoryTable.id, current.id), visibility(true)))
-              .get()
-            if (!original) return yield* new NotFoundError({ memoryID: current.id })
-            if (original.time_updated !== input.expectedUpdatedAt) {
-              return yield* new CorrectionConflictError({
-                resource: original.id,
-                message:
-                  "This memory changed after it was loaded. Refresh and review the latest value before correcting it.",
-              })
-            }
-            if (original.source.startsWith("quarantined")) {
-              return yield* new CorrectionConflictError({
-                resource: original.id,
-                message: "Only an active memory can be corrected.",
-              })
-            }
-
-            const successor = yield* tx
-              .insert(MemoryTable)
-              .values({
-                id: successorID,
-                content,
-                type: original.type,
-                tags: original.tags,
-                importance: original.importance,
-                source: "user-corrected",
-                scope: original.scope,
-                project_id: original.project_id,
-                workspace_path: original.workspace_path,
-                related_to: original.id,
-                strength: 1,
-                review_level: Math.max(1, original.review_level),
-                time_reviewed: now,
-                time_created: now,
-                time_updated: now,
-              })
-              .returning()
-              .get()
-
-            const superseded = yield* tx
-              .update(MemoryTable)
-              .set({ source: "quarantined", time_updated: now })
-              .where(and(eq(MemoryTable.id, original.id), eq(MemoryTable.time_updated, input.expectedUpdatedAt)))
-              .returning()
-              .get()
-            if (!superseded) {
-              return yield* new CorrectionConflictError({
-                resource: original.id,
-                message: "This memory changed during correction. Refresh and try again.",
-              })
-            }
-
-            const correction = yield* tx
-              .insert(MemoryCorrectionTable)
-              .values({
-                id: correctionID,
-                original_memory_id: original.id,
-                successor_memory_id: successor.id,
-                original_source: original.source,
-                reason,
-                status: "active",
-                time_created: now,
-              })
-              .returning()
-              .get()
-            return CorrectionResult.make({
-              correction: toCorrectionInfo(correction),
-              original: toInfo(superseded),
-              successor: toInfo(successor),
-            })
-          }),
-        )
+      return yield* kernel
+        .correctActive({
+          memoryID: current.id,
+          content,
+          reason,
+          expectedUpdatedAt: input.expectedUpdatedAt,
+          actor: { kind: "user" },
+          policyVersion: MemoryKernel.POLICY_VERSION,
+          evidenceIDs: [],
+        })
         .pipe(
-          Effect.catchTags({
-            EffectDrizzleQueryError: Effect.die,
-            SqlError: Effect.die,
-          }),
+          Effect.mapError((error) => new CorrectionConflictError({ resource: input.memoryID, message: error.reason })),
         )
-      return result
     })
 
     const correctionHistory: Interface["correctionHistory"] = Effect.fn("Memory.correctionHistory")(
@@ -523,92 +534,21 @@ const layer = Layer.effect(
     )
 
     const undoCorrection: Interface["undoCorrection"] = Effect.fn("Memory.undoCorrection")(function* (input) {
-      const result = yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const correction = yield* tx
-              .select()
-              .from(MemoryCorrectionTable)
-              .where(eq(MemoryCorrectionTable.id, input.correctionID))
-              .get()
-            if (!correction) return yield* new CorrectionNotFoundError({ correctionID: input.correctionID })
-            if (correction.status !== "active") {
-              return yield* new CorrectionConflictError({
-                resource: correction.id,
-                message: "This correction has already been undone.",
-              })
-            }
-            const original = yield* tx
-              .select()
-              .from(MemoryTable)
-              .where(eq(MemoryTable.id, correction.original_memory_id))
-              .get()
-            const successor = yield* tx
-              .select()
-              .from(MemoryTable)
-              .where(eq(MemoryTable.id, correction.successor_memory_id))
-              .get()
-            if (!original || !successor) {
-              return yield* new CorrectionConflictError({
-                resource: correction.id,
-                message: "The correction lineage is incomplete and cannot be undone safely.",
-              })
-            }
-            if (
-              original.source !== "quarantined" ||
-              successor.source !== "user-corrected" ||
-              successor.time_updated !== input.expectedSuccessorUpdatedAt
-            ) {
-              return yield* new CorrectionConflictError({
-                resource: correction.id,
-                message: "The correction lineage changed after it was loaded. Refresh before undoing it.",
-              })
-            }
-            const now = Date.now()
-            const restored = yield* tx
-              .update(MemoryTable)
-              .set({ source: correction.original_source, time_updated: now })
-              .where(and(eq(MemoryTable.id, original.id), eq(MemoryTable.source, "quarantined")))
-              .returning()
-              .get()
-            const retired = yield* tx
-              .update(MemoryTable)
-              .set({ source: "quarantined", time_updated: now })
-              .where(
-                and(
-                  eq(MemoryTable.id, successor.id),
-                  eq(MemoryTable.source, "user-corrected"),
-                  eq(MemoryTable.time_updated, input.expectedSuccessorUpdatedAt),
-                ),
-              )
-              .returning()
-              .get()
-            const undone = yield* tx
-              .update(MemoryCorrectionTable)
-              .set({ status: "undone", time_undone: now })
-              .where(and(eq(MemoryCorrectionTable.id, correction.id), eq(MemoryCorrectionTable.status, "active")))
-              .returning()
-              .get()
-            if (!restored || !retired || !undone) {
-              return yield* new CorrectionConflictError({
-                resource: correction.id,
-                message: "The correction changed during undo. Refresh and try again.",
-              })
-            }
-            return CorrectionResult.make({
-              correction: toCorrectionInfo(undone),
-              original: toInfo(restored),
-              successor: toInfo(retired),
-            })
-          }),
-        )
+      return yield* kernel
+        .undoCorrection({
+          correctionID: input.correctionID,
+          expectedSuccessorUpdatedAt: input.expectedSuccessorUpdatedAt,
+          actor: { kind: "user" },
+          policyVersion: MemoryKernel.POLICY_VERSION,
+          evidenceIDs: [],
+        })
         .pipe(
-          Effect.catchTags({
-            EffectDrizzleQueryError: Effect.die,
-            SqlError: Effect.die,
-          }),
+          Effect.mapError((error) =>
+            error.reason === "Correction does not exist."
+              ? new CorrectionNotFoundError({ correctionID: input.correctionID })
+              : new CorrectionConflictError({ resource: input.correctionID, message: error.reason }),
+          ),
         )
-      return result
     })
 
     const conflictList: Interface["conflictList"] = Effect.fn("Memory.conflictList")(function* (input = {}) {
@@ -716,12 +656,29 @@ const layer = Layer.effect(
               .update(MemoryTable)
               .set({
                 source: "quarantined",
+                lifecycle: "quarantined",
+                memory_version: retired.memory_version + 1,
+                content_digest: digest({
+                  memoryID: retired.id,
+                  content: retired.content,
+                  version: retired.memory_version + 1,
+                }),
                 tags: unique([...retired.tags, conflictTag]),
                 time_updated: now,
               })
               .where(and(eq(MemoryTable.id, retired.id), eq(MemoryTable.time_updated, retired.time_updated)))
               .returning()
               .get()
+            if (retiredRow)
+              yield* recordRevision(tx, {
+                memoryID: retiredRow.id,
+                version: retiredRow.memory_version,
+                operation: "conflict_decision",
+                actor: "system",
+                reason,
+                content: retiredRow.content,
+                priorDigest: retired.content_digest ?? undefined,
+              })
             const decision = yield* tx
               .update(MemoryConflictTable)
               .set({
@@ -850,12 +807,29 @@ const layer = Layer.effect(
               .update(MemoryTable)
               .set({
                 source: conflict.retired_original_source,
+                lifecycle: "active",
+                memory_version: retired.memory_version + 1,
+                content_digest: digest({
+                  memoryID: retired.id,
+                  content: retired.content,
+                  version: retired.memory_version + 1,
+                }),
                 tags: retired.tags.filter((tag) => tag !== conflictTag),
                 time_updated: now,
               })
               .where(and(eq(MemoryTable.id, retired.id), eq(MemoryTable.time_updated, retired.time_updated)))
               .returning()
               .get()
+            if (restored)
+              yield* recordRevision(tx, {
+                memoryID: restored.id,
+                version: restored.memory_version,
+                operation: "restore",
+                actor: "system",
+                reason: "Undo memory conflict decision",
+                content: restored.content,
+                priorDigest: retired.content_digest ?? undefined,
+              })
             const undone = yield* tx
               .update(MemoryConflictTable)
               .set({ status: "undone", time_updated: now, time_undone: now })
@@ -883,61 +857,90 @@ const layer = Layer.effect(
         )
     })
 
-    const remove: Interface["delete"] = Effect.fn("Memory.delete")(function* (memoryID) {
-      const row = yield* db
-        .delete(MemoryTable)
-        .where(and(eq(MemoryTable.id, memoryID), visibility(true)))
-        .returning({ id: MemoryTable.id })
-        .get()
-        .pipe(Effect.orDie)
-      return row !== undefined
+    const maintenanceDelete: Interface["maintenanceDelete"] = Effect.fn("Memory.maintenanceDelete")(function* (input) {
+      return (yield* kernel
+        .maintenanceDelete({ ...input, policyVersion: MemoryKernel.POLICY_VERSION })
+        .pipe(Effect.mapError(gateError))).deleted
     })
 
-    const deleteMany: Interface["deleteMany"] = Effect.fn("Memory.deleteMany")(function* (ids) {
-      const requested = unique(ids)
-      if (requested.length > MaximumBulkDelete) return yield* new DeleteLimitError({ limit: MaximumBulkDelete })
-      if (requested.length === 0) return DeleteResult.make({ deleted: [], notFound: [] })
-      const visible = new Set(
-        (yield* db
-          .select({ id: MemoryTable.id })
-          .from(MemoryTable)
-          .where(and(inArray(MemoryTable.id, requested), visibility(true)))
-          .all()
-          .pipe(Effect.orDie)).map((row) => row.id),
-      )
-      const deleted = requested.filter((id) => visible.has(id))
-      if (deleted.length) yield* db.delete(MemoryTable).where(inArray(MemoryTable.id, deleted)).run().pipe(Effect.orDie)
-      return DeleteResult.make({ deleted, notFound: requested.filter((id) => !visible.has(id)) })
-    })
+    const maintenanceDeleteMany: Interface["maintenanceDeleteMany"] = Effect.fn("Memory.maintenanceDeleteMany")(
+      function* (ids) {
+        const requested = unique(ids.map((input) => input.memoryID))
+        if (requested.length > MaximumBulkDelete) return yield* new DeleteLimitError({ limit: MaximumBulkDelete })
+        if (requested.length === 0) return DeleteResult.make({ deleted: [], notFound: [] })
+        const byID = new Map(ids.map((input) => [input.memoryID, input]))
+        const deleted: ID[] = []
+        const notFound: ID[] = []
+        for (const memoryID of requested) {
+          const input = byID.get(memoryID)!
+          const result = yield* kernel
+            .maintenanceDelete({ ...input, policyVersion: MemoryKernel.POLICY_VERSION })
+            .pipe(Effect.mapError(gateError))
+          if (result.deleted) deleted.push(memoryID)
+          else notFound.push(memoryID)
+        }
+        return DeleteResult.make({ deleted, notFound })
+      },
+    )
 
     const semantic: Interface["semantic"] = Effect.fn("Memory.semantic")(function* (input) {
+      const startedAt = Date.now()
       const query = sanitize(input.query)
       if (!query)
-        return SemanticResults.make({ algorithm: "hybrid_bm25_hashing_vector", localOnly: true, items: [], count: 0 })
+        return SemanticResults.make({
+          algorithm: "hybrid_bm25_hashing_vector",
+          localOnly: true,
+          embeddingEgress: "none",
+          items: [],
+          count: 0,
+        })
       const rows = (yield* visibleRows(input.includeGlobal, input.indexLimit)).filter(
-        (row) => !row.source.startsWith("quarantined"),
+        (row) => row.lifecycle === "active" && !row.source.startsWith("quarantined"),
       )
-      const vectors = yield* Effect.promise(() => RuntimeEmbedding.embedBatch(query, rows.map((row) => row.content)))
-      const algorithm =
-        vectors.backend === "api" ? "hybrid_bm25_embedding_api" : "hybrid_bm25_hashing_vector"
-      const ranked = hybridRank(query, rows, vectors)
+      const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+      const vectors = yield* Effect.tryPromise((signal) =>
+        RuntimeEmbedding.embedBatch(
+          query,
+          rows.map((row) => row.content),
+          {
+            signal,
+            deadlineAt: input.deadlineAt,
+            remote: input.embeddingRequest,
+            expectedBinding:
+              input.embeddingRequest === undefined
+                ? undefined
+                : {
+                    principal: { tenantID: principal.tenantID, userID: principal.userID },
+                    workspaceID: workspacePath,
+                    dataScope: `memory:${projectID}:${workspacePath}`,
+                  },
+          },
+        ),
+      ).pipe(Effect.orDie)
+      const algorithm = vectors.backend === "api" ? "hybrid_bm25_embedding_api" : "hybrid_bm25_hashing_vector"
+      const conflicts = yield* conflictList({ includeClosed: true, limit: MaximumConflictResults })
+      const ranked = applyConflictBoundary(hybridRank(query, rows, vectors), conflicts.items, "exclude_both")
         .slice(0, clamp(input.topK ?? 5, 1, 20))
         .map((hit) => ({ ...hit, memory: toInfo(hit.row) }))
       RuntimeInsight.recordMemoryRecall({
         timestamp: Date.now(),
         sessionID: "session", // semantic 无会话上下文；前端按时间展示
-        query: query.slice(0, 200),
+        scopeHash: fingerprint(`${projectID}|${workspacePath}`),
+        queryFingerprint: fingerprint(query),
         algorithm,
+        algorithmRevision: ALGORITHM_REVISION,
+        latencyMs: Math.max(0, Date.now() - startedAt),
         hits: ranked.slice(0, 10).map((hit) => ({
           memoryID: hit.row.id,
-          content: hit.row.content.slice(0, 200),
           score: hit.score,
           source: hit.row.source,
         })),
       })
       return SemanticResults.make({
         algorithm,
-        localOnly: true,
+        localOnly: vectors.localOnly,
+        embeddingEgress: vectors.egress,
+        ...(vectors.fallbackReason === undefined ? {} : { embeddingFallback: vectors.fallbackReason }),
         items: ranked,
         count: ranked.length,
       })
@@ -1026,12 +1029,28 @@ const layer = Layer.effect(
 
     const extract: Interface["extract"] = Effect.fn("Memory.extract")(function* (text) {
       const candidates = extractCandidates(text)
-      const saved: Info[] = []
       for (const candidate of candidates) {
-        const result = yield* create(candidate).pipe(Effect.catch(() => Effect.succeed(undefined)))
-        if (result) saved.push(result)
+        yield* kernel
+          .propose({
+            content: candidate.content,
+            proposedClass: memoryClassForType(candidate.type),
+            sourceEvidenceIDs: [],
+            scope: candidate.scope ?? "workspace",
+            sensitivity: "internal",
+            confidence: 0.5,
+            dedup: { status: "unknown", comparedMemoryIDs: [] },
+            retention: { mode: "indefinite", reason: "Automatic extraction requires explicit approval." },
+            proposer: { kind: "agent" },
+            policy: {
+              status: "review",
+              policyVersion: MemoryKernel.POLICY_VERSION,
+              reason: "Automatic extraction is candidate-only until user approval.",
+            },
+            reason: "MemoryV2 automatic extraction",
+          })
+          .pipe(Effect.mapError(gateError), Effect.ignore)
       }
-      return saved
+      return []
     })
 
     const governancePreview: Interface["governancePreview"] = Effect.fn("Memory.governancePreview")(function* (
@@ -1117,17 +1136,40 @@ const layer = Layer.effect(
         const source = current.source === "model" ? "quarantined:model" : "quarantined:auto"
         const reasonTag = Tag.make(`quarantine:${reason}`.slice(0, 64))
         const updated = yield* db
-          .update(MemoryTable)
-          .set({
-            source,
-            importance: 1,
-            strength: 0.1,
-            tags: unique([...current.tags, reasonTag]),
-            time_updated: Date.now(),
-          })
-          .where(eq(MemoryTable.id, candidate.id))
-          .returning({ id: MemoryTable.id })
-          .get()
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              const row = yield* tx
+                .update(MemoryTable)
+                .set({
+                  source,
+                  lifecycle: "quarantined",
+                  memory_version: current.memory_version + 1,
+                  content_digest: digest({
+                    memoryID: current.id,
+                    content: current.content,
+                    version: current.memory_version + 1,
+                  }),
+                  importance: 1,
+                  strength: 0.1,
+                  tags: unique([...current.tags, reasonTag]),
+                  time_updated: Date.now(),
+                })
+                .where(and(eq(MemoryTable.id, candidate.id), eq(MemoryTable.memory_version, current.memory_version)))
+                .returning()
+                .get()
+              if (row)
+                yield* recordRevision(tx, {
+                  memoryID: row.id,
+                  version: row.memory_version,
+                  operation: "quarantine",
+                  actor: "system",
+                  reason,
+                  content: row.content,
+                  priorDigest: current.content_digest ?? undefined,
+                })
+              return row
+            }),
+          )
           .pipe(Effect.orDie)
         if (updated) quarantined.push(updated.id)
       }
@@ -1154,8 +1196,8 @@ const layer = Layer.effect(
       resolveConflict,
       dismissConflict,
       undoConflict,
-      delete: remove,
-      deleteMany,
+      maintenanceDelete,
+      maintenanceDeleteMany,
       semantic,
       facets,
       status,
@@ -1172,7 +1214,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Database.node, Location.node],
+  deps: [Database.node, Location.node, MemoryKernel.node],
 })
 
 type Row = typeof MemoryTable.$inferSelect
@@ -1182,6 +1224,7 @@ type ConflictRow = typeof MemoryConflictTable.$inferSelect
 function toInfo(row: Row): Info {
   return Info.make({
     id: row.id,
+    version: row.memory_version,
     content: row.content,
     type: row.type,
     tags: row.tags,
@@ -1234,113 +1277,6 @@ function toConflictInfo(row: ConflictRow): ConflictInfo {
       ...(row.time_undone === null ? {} : { undone: DateTime.makeUnsafe(row.time_undone) }),
     },
   })
-}
-
-interface DerivedClaim {
-  readonly key: ConflictKey
-  readonly value: string
-  readonly basis: Memory.ConflictBasis
-}
-
-interface DetectedConflict {
-  readonly key: ConflictKey
-  readonly basis: Memory.ConflictBasis
-  readonly left: Row
-  readonly right: Row
-  readonly signature: string
-}
-
-function deriveClaim(row: Row): DerivedClaim | undefined {
-  const explicit = row.tags.find((tag) => tag.toLocaleLowerCase("en-US").startsWith("fact-key:"))
-  if (explicit) {
-    const key = normalizeClaimKey(explicit.slice("fact-key:".length))
-    const value = normalize(row.content)
-    if (key && value) return { key: ConflictKey.make(key), value, basis: "explicit-tag" }
-  }
-
-  const content = sanitize(row.content).normalize("NFKC")
-  const chinese = content.match(
-    /^(.{1,60}?(?:区域|语言|时区|端口|版本|分支|路径|目录|模型|名称|名字|邮箱|邮件|端点|环境|账号|账户|状态))\s*(?:是|为|=|：|:)\s*(.{1,200}?)[。.!]?$/u,
-  )
-  if (chinese?.[1] && chinese[2]) {
-    const key = normalizeClaimKey(chinese[1])
-    const value = normalize(chinese[2])
-    if (key && value) return { key: ConflictKey.make(key), value, basis: "deterministic-pattern-v1" }
-  }
-
-  const english = content.match(
-    /^(?:the\s+)?(.{1,80}?(?:deployment\s+region|region|language|time\s*zone|timezone|port|version|branch|path|directory|model|name|email|endpoint|environment|account|status))\s+(?:is|equals|=|uses?)\s+(.{1,200}?)[.!]?$/i,
-  )
-  if (english?.[1] && english[2]) {
-    const key = normalizeClaimKey(english[1])
-    const value = normalize(english[2])
-    if (key && value) return { key: ConflictKey.make(key), value, basis: "deterministic-pattern-v1" }
-  }
-}
-
-function normalizeClaimKey(value: string) {
-  return sanitize(value)
-    .normalize("NFKC")
-    .toLocaleLowerCase("en-US")
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^\p{L}\p{N}.:-]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 160)
-}
-
-function scopeFingerprint(row: Row) {
-  return row.scope === "global"
-    ? "global"
-    : `workspace:${row.project_id ?? ""}:${canonicalPath(row.workspace_path ?? "")}`
-}
-
-function contentFingerprint(content: string) {
-  return createHash("sha256").update(normalize(content)).digest("hex")
-}
-
-function detectConflicts(rows: ReadonlyArray<Row>): {
-  readonly items: ReadonlyArray<DetectedConflict>
-  readonly truncated: boolean
-} {
-  const groups = new Map<string, Array<{ readonly row: Row; readonly claim: DerivedClaim }>>()
-  for (const row of rows) {
-    const claim = deriveClaim(row)
-    if (!claim) continue
-    const groupKey = `${scopeFingerprint(row)}\u0000${claim.key}`
-    const group = groups.get(groupKey) ?? []
-    group.push({ row, claim })
-    groups.set(groupKey, group)
-  }
-  const result: DetectedConflict[] = []
-  for (const group of groups.values()) {
-    const sorted = group.toSorted((a, b) => a.row.id.localeCompare(b.row.id))
-    for (let leftIndex = 0; leftIndex < sorted.length; leftIndex++) {
-      for (let rightIndex = leftIndex + 1; rightIndex < sorted.length; rightIndex++) {
-        const left = sorted[leftIndex]!
-        const right = sorted[rightIndex]!
-        if (left.claim.value === right.claim.value) continue
-        const basis =
-          left.claim.basis === "explicit-tag" || right.claim.basis === "explicit-tag"
-            ? "explicit-tag"
-            : "deterministic-pattern-v1"
-        const signature = createHash("sha256")
-          .update(
-            [
-              scopeFingerprint(left.row),
-              left.claim.key,
-              left.row.id,
-              contentFingerprint(left.row.content),
-              right.row.id,
-              contentFingerprint(right.row.content),
-            ].join("\u0000"),
-          )
-          .digest("hex")
-        if (result.length >= MaximumConflictResults) return { items: result, truncated: true }
-        result.push({ key: left.claim.key, basis, left: left.row, right: right.row, signature })
-      }
-    }
-  }
-  return { items: result, truncated: false }
 }
 
 function conflictRecordMatches(conflict: ConflictRow, left: Row, right: Row) {
@@ -1397,19 +1333,6 @@ function validateConflictDecision(
     )
   }
   return Effect.void
-}
-
-function sanitize(value: string) {
-  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()
-}
-
-function canonicalPath(value: string) {
-  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "") || "/"
-  return process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized
-}
-
-function normalize(value: string) {
-  return sanitize(value).normalize("NFKC").toLocaleLowerCase("en-US").replace(/\s+/g, " ")
 }
 
 function unique<A>(values: ReadonlyArray<A>) {
@@ -1561,6 +1484,12 @@ function facet(values: ReadonlyArray<string>) {
 
 function escapeUntrusted(value: string) {
   return value.replaceAll("&", "\\u0026").replaceAll("<", "\\u003c").replaceAll(">", "\\u003e")
+}
+
+function memoryClassForType(type: Type | undefined): "episodic" | "semantic" | "user" | "project" {
+  if (type === "identity" || type === "preference" || type === "constraint") return "user"
+  if (type === "workflow" || type === "convention") return "project"
+  return "semantic"
 }
 
 function extractCandidates(text: string): CreateInput[] {

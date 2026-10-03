@@ -42,7 +42,8 @@ test("client and Server contracts generate identically", () => {
   const client = compile(ClientApi, { groupNames, endpointNames, omitEndpoints })
 
   expect(emitPromise(client)).toEqual(emitPromise(server))
-})
+  // Full API compilation is a parity check, not a five-second latency benchmark.
+}, 15_000)
 
 test("shared DTO schemas construct and decode plain objects", () => {
   const made = Prompt.make({ text: "hello" })

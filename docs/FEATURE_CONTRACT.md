@@ -6,18 +6,55 @@ Core/Server/CLI/App/Desktop；Python 能力通过 capability bridge 接入，不
 
 ## 当前可交付界面
 
-| 界面 | 状态 | 契约 |
-| --- | --- | --- |
-| 统一 TypeScript CLI | 已实现 | 正式命令行入口，与 Server/Session 共用契约 |
-| Electron Desktop | 已实现 | 使用共享 App、Server、Provider、Session 和 Permission |
-| Web / ACP / MCP | 已实现 | 使用同一服务契约，不维护第二份会话状态 |
-| Python CLI / Tauri | 兼容基线 | 仅验证尚未迁移能力，不是默认入口 |
+| 界面                | 状态     | 契约                                                                                         |
+| ------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| 统一 TypeScript CLI | 已实现   | 正式命令行入口，与 Server/Session 共用契约                                                   |
+| Electron Desktop    | 已实现   | 使用共享 App、Server、Provider、Session 和 Permission                                        |
+| Web / ACP / MCP     | 已实现   | 使用同一服务契约，不维护第二份会话状态                                                       |
+| Python CLI / Tauri  | 兼容转发 | `arforge` 控制台脚本、`python -m arforge` 与 `python -m arforge.cli` 只转发到 TS CLI；`arforge.cli` 仅保留显式兼容 API |
 
 桌面端通过本地 HTTP/Effect API 与统一 Core 通信，禁止通过抓取 ANSI 终端文本接入。
 
+`workspace --contract-audit` 与 `settlement-status` 共享同一份只读执行边界契约：
+JSON 的 `execution_boundary` 固定声明 `mode=read-only`、`writes=false`、不创建
+profile/结算状态、不自动修复 recovery，且 `provider_execution_allowed=false`；
+人类可读输出同步展示这些限制，证据完整不等于获得写入或 Provider 执行授权。
+该契约由 `@arforge-ai/core/runtime/execution-boundary` 单一维护；CLI、Server、
+Desktop 或 SDK 不应复制 boundary 常量或自行放宽断言。
+
+Python 包的命令行入口已经并入 TypeScript 主线：`pyproject.toml` 的
+`arforge` console script、`python -m arforge`、迁移期 `python -m arforge.cli`、
+仓库根 `main.py` 和 Windows `arforge.cmd` 都经过
+`arforge.cli_bridge`，以参数向量启动 `packages/arforge/src/index.ts`，共享同一
+Bun、Provider、Session、Permission、退出码和错误边界。找不到 TS 入口或 Bun 时
+会明确 fail-closed，不会静默回落到旧 Python CLI。`arforge.cli_compat` 现在是外部
+Python IDE、测试和服务宿主的稳定嵌入 facade：它只重导出 `cli_bridge`，并通过
+`invoke(...)` 返回 argv、命令、stdout、stderr、退出码和超时标记；调用始终使用
+无 shell 的 TS 子进程，未找到 Bun/TS 时返回明确非零结果。`arforge.cli` 仍可被旧
+嵌入和迁移测试显式导入，但它不是产品入口、不会写入新的 TS 状态，也不能作为第二
+命令注册表继续扩展；新集成迁移到 `cli_compat` 后，旧 API 才能进入退役窗口。
+
+旧模块退役边界由只读 `script/arforge-cli-compat-inventory.ts --json --check` 固定；
+兼容命令 `scripts/cli_compat_inventory.py --json --check` 只无状态转发到该 TS 实现。
+TS 实现枚举 `arforge/cli.py` 的每个顶层函数/类/常量并绑定源码 SHA-256，校验
+`cli_compat` 只重导出 bridge。digest 或定义集合变化必须经过迁移审查；两条入口都不
+导入、不执行旧 parser，也不写入任何状态。
+
 ## Machine bridge (desktop backend contract)
 
-`arforge-bridge` is the canonical JSONL-over-stdio backend for non-terminal clients. Protocol 1.0 remains a read-only compatibility surface. Protocol 1.1 adds isolated in-process sessions, accepted background chat operations, ordered events, cooperative cancellation and timeout, concurrency limits and blocking transport backpressure. Every response carries the request ID, protocol version, explicit `ok`, and either structured `data` or a stable error object. Configuration output exposes booleans and credential-free targets only.
+The current product entry is the TypeScript `arforge bridge` command. It is the
+single JSONL-over-stdio adapter over the existing Core/Server session, event and
+VCS owners; the former Python `python -m arforge.bridge` process is retired.
+Clients must call `protocol.describe`, require `runtime: "typescript"`, and use
+only the methods advertised by the live runtime; VS Code and JetBrains fail
+closed when the handshake identifies a retired Python or unknown runtime, and
+reject an unadvertised method locally with a capability error. The
+migration slice currently exposes protocol/health/workspace,
+session create/get/resume, chat start/cancel and bounded `git.diff`; the historical
+1.1/1.2 capability inventory below remains a roadmap until each method is wired
+through the same TypeScript owner and advertised. Permission mode is compatibility
+metadata, while Core agent permission rules remain authoritative; full OS sandbox
+validation is deferred.
 
 Plan Mode uses the read-only `plan.preview` Bridge method as the shared structured contract for non-terminal clients. It accepts a task plus plan text and returns `schema_version`, `mode=plan`, `approval_required`, `execution_mode_after_approval=acceptEdits`, affected files, pending steps, risk notes, rollback notes and the raw plan. This method is a preview/normalization surface only: it does not approve execution, change permission mode, write files or mutate workspace state. Desktop may render the returned object as a plan card before any user-approved edit flow.
 
@@ -25,28 +62,44 @@ Desktop clients must consume this bridge and must not parse CLI or ANSI output. 
 
 ## 顶层命令与后端能力
 
-| 用户命令 | 后端实现 | 成功条件 | 失败语义 |
-| --- | --- | --- | --- |
-| `chat` / `ask` | `ArforgeAgent` | 返回真实模型/工具/多 Agent 结果 | 后端异常返回非零；工具失败不可伪装为模型成功 |
-| `doctor` | `product.doctor.run_checks` | 必需检查无失败 | 有失败项返回 1 |
-| `privacy` | `privacy_audit` | 显示当前隔离 profile | 不输出凭据值 |
-| `export` | `export_data` | 文件成功落盘 | 写入/查询失败返回 1 |
-| `clear-data` | `clear_local_data` | dry-run 或确认删除完成 | 拒绝/失败返回非零，凭据默认保留 |
-| `logs-prune` | `prune_logs` | 保留期参数有效且清理完成 | 参数错误返回 2，I/O 失败非零 |
-| `secrets-scan` | `scan_sensitive_files` | 无命中 | 有敏感样式命中返回 1且不显示原值 |
-| `status` | `status.get_status` | 后端状态读取完成 | 未处理异常由顶层边界脱敏并返回 1 |
-| `tools` | Tool Registry | schema 和风险可读取 | 注册/加载失败非零 |
-| `agents` | SubAgent Pool | 角色元数据可读取 | 不得用空列表冒充“已启用” |
-| `capabilities` | Capability Engine | 状态/测试真实执行 | 测试缺参数返回非零 |
-| `memory` / `learning` | PostgreSQL 持久层 | 统计与列表读取完成 | 数据库失败脱敏并返回 1 |
-| `config` | canonical config loader | 仅显示掩码/非敏感配置 | 永不输出完整密钥或数据库凭据 |
-| `db-*` | backup + Alembic | 操作完成且确认要求满足 | 参数错误 2；拒绝/运行失败 1 |
+| 用户命令                     | 后端实现                                                                                                                                                                                                          | 成功条件                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 失败语义                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat` / `ask`               | TS `TuiThreadCommand` / `RunCommand`（`ask` 共享 `run` handler）                                                                                                                                                  | 返回真实模型/工具/多 Agent 结果                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 后端异常返回非零；工具失败不可伪装为模型成功                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `doctor`                     | `product.doctor.run_checks`                                                                                                                                                                                       | 必需检查无失败                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | 有失败项返回 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `privacy`                    | `privacy_audit`                                                                                                                                                                                                   | 显示当前隔离 profile                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 不输出凭据值                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `export`                     | `export_data`                                                                                                                                                                                                     | 文件成功落盘                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 写入/查询失败返回 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `clear-data`                 | `clear_local_data`                                                                                                                                                                                                | dry-run 或确认删除完成                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 拒绝/失败返回非零，凭据默认保留                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `logs-prune`                 | `prune_logs`                                                                                                                                                                                                      | 保留期参数有效且清理完成                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 参数错误返回 2，I/O 失败非零                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `secrets-scan`               | `scan_sensitive_files`                                                                                                                                                                                            | 无命中                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 有敏感样式命中返回 1且不显示原值                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `status`                     | `status.get_status`                                                                                                                                                                                               | 后端状态读取完成                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 未处理异常由顶层边界脱敏并返回 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `privacy`                    | Core `privacyAudit` + TS `PrivacyCommand`                                                                                                                                                                         | 只读显示本地存储、网络使用、文件/日志/备份元数据与同意状态                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | 目录不可读或扫描失败返回非零；绝不输出文件内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `tools`                      | Tool Registry                                                                                                                                                                                                     | schema 和风险可读取                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 注册/加载失败非零                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `agents`                     | SubAgent Pool                                                                                                                                                                                                     | 角色元数据可读取                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 不得用空列表冒充“已启用”                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `capabilities`               | TypeScript/Core capability catalog + deterministic route preview + read-only execution-contract audit + typed system overview                                                                                   | 状态目录、`capabilities test <input>` 路由预览、`capabilities evaluate` 合同审计与 `capabilities overview` 系统概览；不执行未具备 typed owner 的 Python handlers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 缺少输入、目录参数冲突或越界返回非零；`evaluate`/`overview` 只读；`--execute` 在全量 Core 执行合同完成前 fail-closed                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `memory`                     | Core/Server `MemoryV2` + generated HTTP/SDK；`analysis/memory-metrics`（含 write-stats）、`analysis/memory-recovery`、`analysis/memory-feedback`、`analysis/memory-digest` 与 `analysis/memory-conflict` 只读组合 | `memory status/list/search/get/create/update/facets/recall-quality/metrics/write-stats/recovery/digest/conflict` 已由 TS CLI 统一 owner 提供；`memory feedback --contract-audit` 通过同一 Core 合同输出只读缺口审计；其它反馈写入仍 fail-closed；`metrics` 组合 typed 状态/召回/冲突/来源计数，旧 golden eval/history 明确为 `not_comparable`/`not_read`；`write-stats` 只投影 Core 数据库的范围/来源/类型计数，旧 `memory_writes.jsonl` 决策日志为 `not_read`；`recovery` 只读聚合 profile-local `recovery_outcomes.jsonl` 并报告损坏行/近 7 天趋势，旧 producer 与清理仍未接管；digest 支持类别过滤、JSON 报告、有界读取和显式 Markdown 输出；conflict 运行共享确定性基准并读取 `conflictList` 已持久化候选，明确不调用写入型 `conflictScan`；历史 `memory feedback` 输入语法可校验但未满足合同 | 数据库失败脱敏并返回 1；`metrics`/`write-stats`/`recovery`/`memory feedback`/`contract-audit` 不写 benchmark、决策、恢复或 recall 历史，且不伪造 provenance/eligible 覆盖率；`write-stats --clear` 与 `recovery --clear` 在 typed producer/权限合同完成前返回 2；`memory feedback` 必须先具备 durable retrieval event、returned-set 校验、工作区/身份绑定、授权、事务更新、保留/清理和跨进程证据；`digest` 的 `truncated` 标记读取上限；`conflict` 的 `relation_coverage.status` 固定为 `not_comparable`，不得把候选数冒充关系覆盖率；未完成合同的历史叶返回 2，不得伪造成功 |
+| `learning`                   | Core/Server `LearningV2` + generated HTTP/SDK；`analysis/learning-recall` 与 `analysis/learning-dream` 只读组合                                                                                                  | `learning status/recall/record/undo/sync-dogfood/dream` 已由 TS CLI 统一 owner；`recall` 组合 Memory.recallQuality 与 Learning.status；`dream` 通过 `/api/learning/dream` 返回基于同一 scoped status 的确定性洞察/建议，并显式标记 consolidation 未执行                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 数据库/权限失败脱敏并返回 1；recall/dream 只读组合不写状态、不调用模型；dream 不恢复旧 consolidation writer，未来写入必须另行通过 typed ActionGateway 合同                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `feedback`                   | Core/Server `FeedbackV2` + generated HTTP/SDK                                                                                                                                                                     | `feedback summary/list/submit/delete` 已由 TS CLI 统一 owner 提供；旧 Python 位置参数归一到同一 owner，历史 Python UUID 数据不迁回                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 脱敏后本地持久化；工作区/会话越界和参数错误返回 1；删除幂等；不得回退 Python                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `skill` / `skills`           | Core/Server `ManagedSkillRegistry` + generated HTTP/SDK                                                                                                                                                           | `skill` 与历史复数 `skills` 共享 `list/enable/disable/refresh/route`；route 使用确定性技能路由合同                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | manifest/state 与工作区路径校验失败脱敏并返回 1；缺参/多余位置参数返回 1；不得恢复 Python 第二 owner                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `workflow` / `workflows`     | TypeScript/Core durable workflow operations + generated HTTP/SDK                                                                                                                                                  | canonical `workflow` 与历史 `workflows list/validate/run/runs/status/events/pause/resume/cancel/retry/approve/reject` 共享 typed graph owner（`status`→`get`，`validate`→只读 preview 投影，`run`→typed preview/start + report，`events` 有界读取）；`run` 的 `--execute` 等待同一持久化运行达到终态或明确暂停/审批状态                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 工作区、运行 ID、节点、游标和权限错误返回非零并脱敏；`--report` 相对路径必须位于工作区，默认报告写入 profile data；不静默启动旧 Python loop 或创建第二 graph journal；写控制继续沿用现有 API/权限/恢复证据                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `quality`                    | Core `AnalysisQuality`                                                                                                                                                                                            | canonical `quality [files..] --patch-file <file>` 与 Python 旧 `quality <patch-file>`（`.diff`/`.patch` 或 unified-diff 内容）在同一 handler 融合；普通源码位置参数仍检查文件本身                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 补丁读取/大小错误返回非零；历史 `.diff`/`.patch` 缺失返回 2；不得静默切回 Python quality gate                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `repo-scale`                 | Core `RepoScale` + bounded scanner                                                                                                                                                                                | canonical `repo-scale [query] --path <dir>` 与 Python 旧 `repo-scale <path> [--query <text>]` 在同一 handler 融合                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 路径/查询冲突返回 1；扫描受文件数、结果数和工作区边界约束；不得静默切回 Python scanner                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `plugin-manager` / `plugins` | Core `PluginInstallRuntime` + Server `PluginControl` + generated HTTP/SDK                                                                                                                                         | `plugin-manager` 与历史 `plugins` 共享 `list/inspect/install/update/remove/restore/enable/disable`；旧 install/update 名称位置参数归一到同一 typed 请求，默认动作是 list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 写操作必须经过 L3 人工控制审批、持久租约和可恢复事务；旧 root 仅允许 `<workspace>/.arforge/plugins`，任意其它 root 在 API 前返回 2；不得新增 Python plugin owner                                                                                                                                                                                                                                                                                                                                                                                            |
+| `agent-metrics`              | TypeScript/Core `AgentMetrics` profile-local telemetry reader                                                                                                                                                     | 聚合 dogfood、恢复、验证、回归等 8 个质量指标，报告正式/纵向门禁，并提供有界 `history`/`record`/`--clear` 历史操作                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 源文件缺失/坏行返回 `n/a` 与 `insufficient_evidence`，不影响主会话；仅显式历史操作写入或删除 `agent_metrics.jsonl`，不得恢复 Python 第二 owner                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `features`                   | TypeScript/Core `agentCapability.deepInsights` 的 `features` section                                                                                                                                              | `features`/`features list`/`--json` 读取 Desktop 共用的 TS-native 功能策略；旧 Python `features` 入口只转发到同一命令                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 只读路径不读取或创建 `feature_flags.json`；`set`/`clear`/`refresh` 参数校验后退出 2，直到具备事务、权限和证据合同的 TS 写入 owner                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `permissions`                | TypeScript/Core `permission.saved.list`                                                                                                                                                                           | `permissions`/`permissions list`/`--json` 读取 Desktop 共用的当前工作区已保存权限规则；旧 Python `permissions` 入口只转发到同一命令                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 只读路径不读取或创建 Python `permission_rules.json`；`add`/`revoke` 参数校验后退出 2，直到具备事务、授权、审计和回滚合同的 TS 写入 owner                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `file-state`                 | Core `FileStateAnalysis.audit`（通过 `agentCapability.deepInsights` 的 `file-state` section 暴露）                                                                                                               | 深度诊断可查看跨进程文件观察合同的结构化审计；历史 `file-state` CLI 在完整 owner 建立前保持退出 2 fail-closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 只读审计不读取/创建旧进程内 tracker；明确列出 observation journal、run/session 绑定、持久化、恢复、授权、取消、结算、证据和清理策略缺口；不得把 `FileMutation.fingerprint` 或 `AnalysisRuns` 冒充观察账本                                                                                                                                                                                                                                                                                                                                                                                     |
+| `cost-optimization`          | Core `CostOptimizationAnalysis.audit`（通过 `agentCapability.systemOverview` 的 `cost-optimization` section 暴露）                                                                                              | 系统概览可查看跨进程成本账本合同的结构化审计；历史 `cost-optimization` CLI 在完整 owner 建立前保持退出 2 fail-closed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 只读审计不读取/创建旧进程 tracker；明确列出 durable cost attribution、provider 定价版本、token 对账、跨进程聚合、恢复、授权/证据和清理策略缺口；不得把 Session stats、AgentMetrics 或文件指纹冒充成本账本                                                                                                                                                                                                                                                                                                                                                                        |
+| `print` / `--print`          | TS `RunCommand` + `PrintModeRenderer`                                                                                                                                                                             | 文本/JSONL、stream-json 多消息、final-only、工具记录、统一会话与退出码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 输入结构错误返回 1；永久失败返回 1；可识别的 provider/rate/timeout 临时失败返回 75                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `config`                     | canonical config loader（顶层与 `debug config` 共用）                                                                                                                                                             | 仅显示掩码/非敏感配置                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 永不输出完整密钥或数据库凭据                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `db` / `db-current`          | TypeScript/Core migration ledger for `db current`; remaining `db-*` leaves stay compatibility-guarded                                                                                                             | `db current [main]` read-only revision projection; historical `db-current [main]` shares the same argv/result; no implicit migration                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | local SQLite read errors return 1; invalid target or unowned `multiagent` returns 2; mutating migration/backup/rollback aliases remain fail-closed                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `run-history` / `replay`     | Core `AnalysisRuns` bounded run transaction/trace reader                                                                                                                                                          | `run-history [run-id]` and historical `replay [run-id]` share the same read-only report owner; no model/tool replay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | missing runs are reported as data; persisted artifacts are bounded and redacted; the alias must not execute a provider or side effect                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## 一致性规则
 
 1. `COMMANDS_HELP` 与 `_COMMAND_MAP` 必须一一对应。
 2. `--verbose`、`--no-stream` 在命令前后含义一致。
-3. `main.py`、`python -m arforge`、Python console script 和 npm wrapper 保留相同退出码。
+3. `python -m arforge`、`python -m arforge.cli`、Python console script 和 npm wrapper 都进入同一 TypeScript CLI 并保留相同退出码；`chat`/`ask`/`print`/`config`/`skills`/`plugins`/`replay` 的旧命令名只作为同一 TS handler 的别名，`--print` 及其输入输出旗标在 argv 边界归一到同一 `RunCommand`，外部 Python 嵌入应通过 `arforge.cli_compat` 的 `main`/`run`/`invoke` 调用统一 bridge，`arforge.cli` 直接导入仅是迁移兼容 API；Python 运行时与 dogfood runner 不得绕过 bridge 启动旧模块 parser 作为第二套产品循环。静态门禁还必须保证产品源（测试、证据与显式兼容模块除外）不存在 `arforge.cli` import 或旧模块子进程调用。
+   `learning` 已公开的六个 TS 叶遵循同一合同；`recall` 与 `dream` 只读组合既有 Core 来源，`dream` 明确标记 consolidation 未执行，不由 bridge 恢复旧 Python writer；`memory` 已公开的 TS 叶（含只读 `metrics`/`write-stats`/`recovery`）和 `feedback` 已公开的四个 TS 叶遵循同一合同，`metrics` 明确标记未等价的 golden/history 部分，`write-stats` 明确标记未读取的决策日志，`recovery` 明确标记旧 producer/clear 未接管，未完成的历史叶仍只有明确迁移失败；任何新叶必须先完成参数、权限、取消、错误和负例合同。
 4. npm postinstall 创建包内私有 `.venv`；缺少 Python 3.10+ 或后端安装失败时，npm 安装必须失败。
 5. 复杂请求由确定性预路由进入 `MasterAgent`；高置信提示注入必须在 MasterAgent/模型前阻断。
 6. `ARFORGE_HOME` 是所有运行状态的唯一 profile 根目录。
@@ -57,6 +110,8 @@ Desktop clients must consume this bridge and must not parse CLI or ANSI output. 
 
 - `tests/test_cli_contract.py`：帮助、处理器、选项、退出码、错误脱敏和多 Agent 路由。
 - `tests/test_m6_packaging.py`：Node/Python 输出一致、npm 安装器隔离及 shell 安全。
+- `tests/test_cli_ts_bridge.py`：Python 入口指向 TS owner、参数向量原样转发、无 shell
+  执行，以及缺少 Bun/TS 入口时的 fail-closed 行为。
 - `tests/test_profile_isolation.py`：跨模块 profile 隔离。
 - `tests/test_multiagent_integration.py`：真实 MasterAgent 委托与注入前阻断。
 - `tests/test_privacy_lifecycle.py`：数据生命周期、凭据保留和脱敏。
@@ -91,10 +146,17 @@ The focused acceptance evidence is `tests/test_task_graph_tools.py`.
 
 ## Structured user interaction contract
 
-The `ask_user` tool may pause an active agentic turn for one to four structured
-questions. Questions have bounded headers and text, two to four unique options,
-optional markdown previews for single-select choices, and an optional multi-select
-mode. The terminal uses the same validated tool through interactive input; a
+TypeScript/Core `question` is the canonical product owner for session-bound
+prompts, permission checks, lifecycle events, and Desktop/Bridge settlement.
+The Python `arforge.tools.question_tools.ask_user` module remains only as an
+explicit compatibility wrapper and is excluded from the default Python
+registry. Its legacy `multi_select` and text-answer shape is not a second
+product contract; new callers must use TS/Core `multiple` and array answers.
+
+The canonical `question` tool may pause an active agentic turn for one to four
+structured questions. Questions have bounded headers and text, two to four
+unique options, optional markdown previews for single-select choices, and an
+optional multi-select mode. The terminal uses the same validated tool through interactive input; a
 non-interactive process fails explicitly instead of waiting indefinitely.
 
 Machine clients receive `question.requested` and answer through
@@ -108,24 +170,70 @@ files. Acceptance evidence is in `tests/test_question_runtime.py` and
 
 ## Language service contract
 
-The read-only `language_service` tool supports definition, references, hover,
-document/workspace symbols, implementation, call hierarchy, and diagnostics with
-1-based line and character inputs. It resolves the target through the existing
-workspace authorization boundary, rejects missing, oversized, out-of-workspace, and
-invalid-position targets, and never launches a user-supplied command.
+The TypeScript `lsp` tool is the canonical product contract. It exposes one
+operation-dispatched, read-only pipeline for definition, references, hover,
+document/workspace symbols, implementation, call hierarchy, and diagnostics, plus
+an authorization-safe `status` operation. Position-based operations require
+1-based `line` and `character`; document, workspace, diagnostics, and status
+operations accept only the fields they need. Missing operation-specific fields,
+missing files, unsupported extensions, and unreadable targets fail closed with an
+actionable error; a missing server for a supported source extension uses the
+bounded TS fallback described below.
+Permission metadata is stable and contains no command arguments or process secrets.
 
-For Python, JavaScript/TypeScript, Go, and Rust, the runtime discovers fixed local
-language-server commands and communicates over bounded stdio JSON-RPC without a
-shell. Server processes receive a credential-minimized environment, requests have a
-timeout, messages and source files are limited to 10 MB, documents use
-`didOpen`/`didChange`, and shutdown is cooperative with a forced-process fallback.
-When no compatible server is installed or a request fails, the result explicitly
-uses `backend=index-fallback` and reuses the existing symbol/reference index. Broken
-source files retain lexical definition navigation and Python compile diagnostics.
-`language_service_status` reports availability without exposing command arguments.
-Acceptance evidence is `tests/test_lsp_runtime.py`.
+The tool currently remains opt-in behind `ARFORGE_EXPERIMENTAL_LSP_TOOL` while the
+remaining supervisor parity is completed. Once enabled, it uses the existing
+TypeScript LSP supervisor and fixed local server definitions over bounded stdio
+JSON-RPC; it never launches a user-supplied command. Server lifecycle and
+source-file access remain constrained by the workspace authorization boundary,
+request/message/file limits, and cooperative shutdown rules. For supported
+Python/JavaScript/TypeScript/Go/Rust extensions, no-client requests now use the
+same TypeScript owner’s bounded index/lexical fallback (maximum file size, scanned
+files, and result count); outside-workspace, unreadable, and oversized targets fail
+closed. The fallback provides deterministic symbols/references/hover and delimiter
+diagnostics. Python files additionally use a deterministic, no-process syntax
+diagnostic subset compatible with the legacy compile contract (unclosed/mismatched
+delimiters, unterminated strings, block-colon and indentation errors); the first
+diagnostic keeps the `python-compile` source and stable zero-based range. This is
+syntax parity only, not Python type checking or semantic analysis.
+
+The supervisor observes the child-process exit promise during initialization. A
+cold process that exits before the handshake is marked as a safe per-workspace
+failure, is reported by `status` as `error` without command arguments, and is not
+retried in the same instance; supported files continue through the bounded TS
+fallback. The failure state is in-memory and is never treated as a live server.
+
+The Python `language_service` and `language_service_status` wrappers are retained
+only for explicit compatibility imports and migration fixtures. They are excluded
+from both the Python built-in registry and deferred auto-discovery, so they cannot
+become a second default owner. Their stdio supervisor remains temporary
+compatibility code while the TypeScript fallback and supervisor negative/cold
+process evidence are completed; only then may the Python runtime be removed.
+
+Acceptance evidence includes `packages/arforge/test/tool/lsp.test.ts`,
+`packages/arforge/test/tool/parameters.test.ts`,
+`packages/arforge/test/lsp/fallback.test.ts`, the cold-process/error cases in
+`packages/arforge/test/lsp/index.test.ts`, the existing TypeScript LSP
+client/lifecycle/index suites, and the explicit-compatibility cases in
+`tests/test_lsp_runtime.py`.
+
+The same single-owner rule applies to symbol lookup. The old Python
+`arforge.tools.symbol_tools` module is now an import-only compatibility seam;
+it re-exports the `code_symbols` implementation from `arforge.tools.code_tools`
+and is excluded from the default Python registry. This prevents import order
+from replacing the canonical schema/output while preserving explicit legacy
+imports during the TypeScript migration. New product code should use the
+unified TypeScript LSP symbol operations (`documentSymbol`/`workspaceSymbol`)
+instead of importing either Python module.
 
 ## Structured notebook contract
+
+TypeScript/Core `NotebookTools` is the canonical product owner for both
+notebook operations, including workspace resolution, permission metadata,
+SHA-256 stale protection, and durable tool events. The Python
+`arforge.tools.notebook_tools` module is retained only as an explicit
+compatibility wrapper for legacy callers and fixtures; it is excluded from the
+default Python registry and must not form a second notebook execution path.
 
 The `notebook_read` tool parses nbformat 4 `.ipynb` files as JSON and returns
 bounded cell summaries plus the exact file SHA-256. Cells are addressed by their
@@ -151,17 +259,20 @@ without a separate approval. Acceptance evidence is
 
 ## Managed worktree contract
 
-`worktree_enter`, `worktree_status`, and `worktree_exit` add session-owned Git
+The TypeScript/Core `Worktree.Service` and durable `ControlOperation` endpoints
+(`worktree.create`, `worktree.remove`, and `worktree.reset`) add session-owned Git
 worktree lifecycle management without replacing the existing Git branch, checkout,
 or one-shot worktree creation interfaces. A clean repository is required before
 entering. Names use bounded slash-separated safe segments; the derived branch has
 an Arforge-owned prefix and the directory is constrained to the repository sibling
-`.arforge-worktrees` root.
+`.arforge-worktrees` root. The historical Python `worktree_enter`,
+`worktree_status`, and `worktree_exit` names remain only as an explicit
+compatibility import and are not default registry owners.
 
 Bridge operations run inside a session context instead of changing the process-wide
 current directory. Existing file, command, Git, code search, language service,
-notebook, regression, test runner, workflow, frontend, JavaScript, and asset tools
-resolve their root dynamically. Concurrent sessions can therefore use separate
+notebook, regression, test runner, workflow, and Core diagnostic tools resolve
+their root dynamically. Concurrent sessions can therefore use separate
 managed worktrees while sessions without one retain their existing workspace
 semantics.
 
@@ -174,8 +285,9 @@ fails closed when state is unknown, and requires explicit `discard_changes` befo
 destroying work. Directory and branch ownership are revalidated from persisted
 state before every activation or cleanup, so a modified state file cannot redirect
 the runtime to a manual worktree or primary branch. Removal is dynamically classified
-as dangerous while keep remains a normal workspace command. Acceptance evidence is
-`tests/test_worktree_runtime.py`.
+as dangerous while keep remains a normal workspace command. The canonical
+acceptance evidence is the TypeScript/Core worktree control-operation suite plus
+the Python compatibility regression `tests/test_worktree_runtime.py`.
 
 ## Scheduled prompt contract
 
@@ -233,7 +345,13 @@ The `deferred_tool_loading` feature flag preserves the legacy full-schema
 export when disabled. When enabled, core file, command, test, plan, question,
 task, and subagent tools remain immediately visible while heavier browser,
 web, notebook, language-service, worktree, workflow, scheduling, asset, and
-dynamic MCP schemas are omitted until selected.
+dynamic MCP schemas are omitted until selected. Worktree execution itself is
+owned by the TypeScript/Core control-operation pipeline; the Python worktree
+module is explicit migration compatibility only. The TypeScript/Core notebook
+tools are the default owner; the Python notebook module is explicit migration
+compatibility only. The TypeScript/Core `question` tool is likewise the default
+interactive-question owner; the Python `ask_user` module is explicit migration
+compatibility only.
 
 `tool_search` is always visible and accepts ranked keywords, `+required`
 terms, an exact tool name, or `select:name_a,name_b`. Search is limited to the
@@ -298,9 +416,13 @@ reconnection, and expose resource list/read operations.
 Bearer tokens are resolved from a named environment variable at request time.
 OAuth client credentials resolve the secret through a host callback, cache only
 the short-lived access token in memory, and redact credentials and URL query
-data from public state and representations. Agent tools can inspect connected
-servers, list/read resources, and refresh schemas, but cannot create
-connections or request credential material.
+data from public state and representations. The TypeScript/Core MCP service and
+its native ToolRegistry projections own connected-server inspection,
+generation-bound capability catalogs, resource/prompt listing and reads, and
+dynamic schema refresh. The old Python `mcp_client_tools` module is an explicit
+compatibility import only and is not loaded by the default Python registry; it
+cannot become a second MCP client or tool owner. Neither path lets the model
+create connections or request credential material.
 
 External schemas are validated before replacement and registered as deferred
 Arforge tools under a server namespace. Refresh reports added, removed, and
@@ -312,13 +434,273 @@ Disconnect removes all registrations owned by that connection. Acceptance
 evidence is `tests/test_mcp_client_runtime.py` plus the existing MCP and tool
 registry suites.
 
+The canonical `multimodal.diagnose` path now also performs local, read-only
+OOXML extraction for DOCX, XLSX, and PPTX, and treats CSV/TSV as bounded UTF-8
+document sources. The Office reader is dependency-free and fail-closed: it
+limits archive size, entry count, per-entry and expanded bytes; rejects ZIP64,
+encrypted entries, unsafe paths, malformed central/local headers, CRC-32
+integrity mismatches and unsupported compression; and reads only text-bearing
+parts with namespace-prefix agnostic matching. This extends the existing
+diagnosis contract without launching Office, making network calls, or writing
+artifacts. The first write slices are now fused into the canonical `write`
+tool: `.xlsx` content is accepted as a bounded JSON array of rows (array rows
+or first-seen-key object rows), `.docx` content is accepted as bounded
+Markdown-like text, `.pptx` content is accepted as a bounded JSON array of
+slides, and `.pdf` content is accepted as bounded Markdown-like text. All
+four are encoded deterministically (OOXML for Office formats and a portable
+A4 PDF with CJK/ASCII text, wrapping, pagination and page numbers) and sent
+through the existing LocationMutation, permission, ActionGateway and
+FileMutation path. Malformed JSON, unsupported cell values, XML/PDF control
+characters, row/column/text/output limits, and excessive DOCX/PDF lines fail
+before mutation. This does not yet fully replace the Python
+`read_office_document`/`write_docx`/`write_pptx`/`write_pdf` compatibility
+behavior; remaining format parity and Artifact/Sandbox integration must stay
+under the same Core owner and is not registered a second time in Core.
+
+The same `multimodal.diagnose` contract accepts `mode=frontend` and
+`mode=javascript`. These modes read only workspace-local UTF-8 HTML/HTM/JS/JSX/
+MJS/CJS/Vue files (or an explicit extracted-text override), apply bounded
+deterministic delimiter scanning that ignores strings/comments, and return a
+versioned frontend report with HTML closing-tag checks, script and blocking
+counts, Vue mount-target/router/icon checks, undeclared-app warnings, and
+external-asset references. Reachability is intentionally reported as
+"not checked"; the tool never fetches URLs, disables TLS verification, runs
+JavaScript, or writes files. The legacy Python `validate_frontend` and
+`validate_js` modules remain explicit compatibility imports only and are not
+default registry owners. Legacy `download_asset`/`download_all_cdn` are also
+explicit-only until a staged TypeScript composition can bind webfetch egress,
+write CAS, and rollback in one durable operation; no unsafe direct CDN writer
+is promoted as a second Core tool.
+
+The historical `multimodal-diagnose` Python CLI entry now forwards to the same
+TypeScript command owner. `arforge multimodal-diagnose <file>` accepts a
+workspace root, optional extracted text, one of the three modes, a 1–50 result
+limit and JSON output; it calls the generated typed diagnostics route rather
+than importing Python code. Cross-process tests compare the Python bridge and
+direct Bun invocation, and assert the local-only/model-call-zero/no-write
+boundary.
+
+The historical Python `features` CLI now forwards to a single read-only
+TypeScript/Core projection: `features list` calls the typed
+`agentCapability.deepInsights` endpoint and selects its `features` section,
+which is also consumed by Desktop. The projection is limited to
+TS-native flags and never opens the legacy `feature_flags.json`. `set`,
+`clear`, and `refresh` retain strict argument validation but return exit 2
+with a `fail-closed` migration message until a permissioned transactional
+feature-policy writer, audit evidence, and rollback contract are available.
+
+`features --contract-audit --json` is the explicit migration diagnostic for this
+boundary. It is a pure TS/Core report with `not_ready`, `ready=false`, and
+`writes=0`; the Desktop `feature-policy-contract` deep-insights section uses the
+same report. It does not inspect `feature_flags.json` and cannot enable a
+second feature-policy state owner.
+
+The historical Python `permissions` CLI now forwards to a single
+TypeScript/Core read-only projection. `permissions list` calls the typed
+`permission.saved.list` endpoint scoped to the current workspace and emits
+the same rule records that Desktop consumes; `--json` uses a stable
+`schema_version`/`count`/`items` envelope. The command never opens the legacy
+Python `permission_rules.json`. `add` and `revoke` retain strict legacy
+argument validation but return exit 2 with a `fail-closed` migration message
+until a transaction, authorization, audit and rollback-safe TS writer is
+proven, so there is no second permission state owner.
+
+`permissions --contract-audit --json` exposes the same permission-policy gap as
+a structured read-only report (`not_ready`, `ready=false`, `writes=0`). The
+Desktop `permission-policy-contract` section and this CLI command share the
+Core analysis, including the optimistic-revision and cross-process gates; the
+legacy `permission_rules.json` remains unopened.
+
+External asset URL values in the structured report, issue details, formatted
+diagnostics, and the optional localization preview preserve host/path and
+query keys but replace every query value with `[REDACTED]`; exact request
+digests remain internal discovery evidence. This keeps the advanced raw
+evidence panel useful without allowing credential-like query values to cross
+the diagnostics API or UI.
+
+The Desktop Control Center uses one Diagnostics workbench for all three modes.
+It presents a plain-language mode selector and mode-specific hint, reports
+success/findings, source, local-only/model-call facts, bounded issue summaries,
+and next-step suggestions before exposing the raw JSON evidence in an explicit
+advanced disclosure. The active HTTP request carries an AbortSignal and can be
+cancelled by the user; cancellation is shown as a no-change outcome and never
+creates a mutation or a retry. This is a presentation and transport control
+only: the canonical Core diagnosis contract, permission boundary, and local
+read-only guarantees remain unchanged.
+
+The future CDN localization path now has a pure TypeScript planning seam at
+`@arforge-ai/core/runtime/asset-localization`. It extracts only external
+`script[src]` and stylesheet `link[href]` references, caps HTML/reference/asset
+sizes, rejects credentials and unsupported MIME types, records redirect
+destinations, deduplicates bytes by SHA-256, and produces content-addressed
+workspace-relative staging targets plus an atomic HTML rewrite. Its
+`discover()` phase snapshots the normalized HTML resource, reference order,
+network scope, and a stable request digest before any fetch is authorized;
+`plan()` recomputes that digest against fresh HTML and rejects a changed
+document. The planner does not fetch, write, or execute anything. Its
+`inputDigest`, discovery digest, network scope, filesystem scope, and expected
+writes are the exact metadata that a future ActionGateway adapter must bind to
+one approval, mutation-intent journal, CAS/rollback artifact set, and
+crash/restart reconciliation. Missing fetches, conflicting results, nested
+external stylesheet imports, unsafe resources, and size limits fail before a
+plan containing writes is returned; the legacy Python CDN writers therefore
+remain explicit compatibility only.
+
+The first execution adapter now exists at
+`@arforge-ai/core/runtime/asset-localization-action`. It reads the source,
+builds the discovery-bound `asset-localization` ActionGateway request (with a
+bounded `file-prefix:` asset-root resource), derives egress from the verified
+gateway capability, and requires the canonical Core `FileMutation` owner plus
+the profile-owned rollback-artifact store. It fetches through the existing
+`WebFetchTool.fetchRawAsset` transport seam, rechecks every redirect, replans
+against fresh HTML, stages inverse bytes before the durable `prepared`
+checkpoint, commits each target with CAS/create semantics, and records
+`prepared → committed → settled` or `rollback_required → rolled_back` in the
+existing mutation-intent stream. A settlement-write failure is surfaced as
+`outcome_unknown` and is never retried automatically. This is an internal
+adapter contract and SQLite-testable transaction path only; no new model tool,
+endpoint, registry owner, or real cross-platform sandbox claim is made until
+the Browser/Desktop product route and restart UI are closed.
+
+The isolated SQLite acceptance slice now runs the same adapter against a real
+`Database.layerFromPath()`/`DurableAction` aggregate: allow/approval persists
+one settled mutation manifest, denial and download failure stop before any
+manifest or workspace change, pending approval can be cancelled into a durable
+`cancelled` action, and a simulated settlement-record loss leaves committed
+files explicitly `outcome_unknown` without an automatic retry. An asset-specific
+SIGKILL probe also uses real Core `FileMutation` and profile rollback artifacts:
+the child persists the `committed` intent and files, is terminated, and a fresh
+process reopens the same SQLite/workspace, obtains a fresh postimage fingerprint,
+and settles only through explicit `reviewMutationIntent(settle_postimage)`;
+replay remains blocked and the side-effect counter stays at zero. These tests
+close the Core crash/restart boundary, but are not permission to expose a
+product route; Browser/Desktop multi-role journeys are still required before
+enabling it.
+
+The Desktop acceptance seed now also executes the real adapter in the same
+isolated SQLite/workspace used by Electron. `desktop-runtime-insight-review`
+asserts that the persisted `asset-localization` action is visible as a settled
+durable-action card, that `src/index.html` contains the content-addressed
+`vendor/js/<sha256>.js` reference, and that exactly one staged asset file is
+present. The callback uses deterministic bytes and still receives the
+ActionGateway-derived egress capability, so this is a local projection test,
+not a claim of live CDN access. The same acceptance now creates a real Session
+against an isolated deterministic OpenAI-compatible test provider, receives a
+real `bash` tool proposal, opens the originating Session route through the
+desktop memory router, and cancels the `awaiting_approval` action from Runtime
+Insight. It verifies the backend `DurableAction` becomes `cancelled` before
+execution, the UI button disappears after the authoritative refresh, and no
+side effect is produced. The build and packaged Electron modes both pass this
+generic pending-action journey; the asset-specific product route, live CDN
+approval flow, and restart-specific asset controls remain closed until they
+are wired without introducing another owner.
+
+Durable operation progress is now an observational checkpoint on that same
+ActionGateway/EventV2 aggregate. `OperationExecutionContext.reportProgress`
+accepts only bounded phases, counters, and control-character-free detail;
+`DurableAction` assigns the monotonic sequence/timestamp, treats exact
+duplicates as idempotent, and rejects identity mismatches, over-total counts,
+clock regressions, and updates after terminal state. The asset adapter reports
+discovery, authorization wait, fetch, planning, preparation, commit, and
+settlement metadata without URLs, paths, response bytes, or credentials. The
+Runtime Insight card renders this progress in all supported UI locales with an
+`aria-live` region and an explicit read-only notice. Cancellation remains a
+requesting-session operation before execution handoff; Formal/Core
+`SessionExecution.interrupt` first asks the same location-scoped
+`ActionGateway` to CAS-cancel its registered pending session actions, then
+interrupts the runner. The gateway keeps the exact canonical input/plan and
+uses a proposal-ready latch so a late proposal cannot escape cancellation;
+authorized/executing races are recorded as handoff/review rather than a false
+cancel. Runtime Insight never turns a progress card into execution authority.
+The Browser acceptance fixture asserts the localized progress card and a real
+pending-approval cancellation with no side effect. Electron acceptance now
+asserts the real persisted settled projection plus the generic pending-action
+originating-session cancellation in both unpacked-build and packaged modes;
+the deterministic test provider is an acceptance seam, not a live provider or
+asset CDN claim. The asset product route, asset-specific in-flight
+cancellation control, and asset-specific restart UI remain closed pending the
+same owner/authorization evidence.
+
+The Browser role matrix also renders a second pending asset action owned by a
+different Session: members can inspect it but receive no cancel control because
+the originating-session identity does not match. A separate administrator
+journey exposes the existing guarded rollback control after fresh inspection;
+member recovery remains read-only. These are deterministic fixture checks of
+the shared capability contract, not a claim that the fixture replaces
+production identity or multi-tenant authorization.
+
+Runtime Insight now includes a request-scoped, metadata-only `access`
+projection on both the snapshot and recovery response. It reports the
+authenticated role and four bounded capabilities without user, tenant, or
+profile identifiers: evidence-only mutation review is available to every
+authenticated role, while guarded rollback, inverse-artifact maintenance, and
+MCP evidence recording require owner/admin. The rollback handler enforces the
+same boundary server-side and returns a forbidden result before reading or
+writing workspace bytes. Browser/Desktop renders the capability notice and
+keeps member recovery read-only; the asset-localization adapter remains
+internal until its product route supplies the same approval/cancel/restart
+journey.
+
+The Runtime Insight workbench treats the resolved directory/workspace pair as
+one scope key. When that key changes, it refreshes from the new scope, clears
+old recovery inspection, MCP reconciliation, verification, maintenance and
+confirmation state, and drops a late response from the previous scope. If a
+refresh is already in flight, exactly one follow-up refresh is queued for the
+latest scope. This is a UI consistency boundary only; authorization and durable
+state remain owned by the location-scoped server routes and ActionGateway.
+
+The same boundary is used by the System Overview control-center surface: its
+parallel health, Agent, capability and runtime-overview reads capture one
+location scope and discard a late result after a workspace change. The
+read-only `custom-agents list/validate` presentation additionally exposes a
+bounded admission-evidence card (decision, four invariant checks and a short
+descriptor digest) while keeping the historical JSON profile contract free of
+diagnostic fields.
+
+All Runtime Insight asynchronous operations share the same UI request-generation
+guard: snapshot refresh, audit verification, artifact audit/sweep, recovery
+inspection/review/rollback/cancel, and MCP inspection/evidence recording capture
+the current scope before dispatch and may update state only while that scope and
+generation are still current. A stale response is dropped (and cannot clear a
+new operation's busy marker); changing scope clears the old operation markers
+before the replacement snapshot is shown. This guard is a presentation
+consistency aid, not a replacement for server-side authorization, CAS, or
+durable settlement.
+
+The mature Arforge `write` entry delegates to these same Core encoders. It
+uses the same CAS journal and durable mutation-intent path, stages inverse
+bytes when a rollback artifact service is present, and skips text-only
+formatter/BOM/LSP post-processing for binary Office/PDF outputs. Permission
+approval and event/watcher settlement remain shared, so the mature entry does
+not create a second Office registry or a second write owner. The documented
+limits and partial-parity boundary above apply equally to both entry points.
+The legacy Python `office_tools` module is no longer part of the default
+Python tool bootstrap (and the legacy DOCX registration is no longer emitted
+by `file_tools`); old callers must explicitly import that compatibility seam.
+This keeps the TypeScript/Core `write` path as the only default product owner
+without deleting the migration-time Python API.
+
+The durable task graph follows the same ownership rule. TypeScript/Core
+`TaskGraphV2` and its `task-graph` tools own session-scoped persistence,
+optimistic revisions, dependency validation, policy gates, and authorization.
+The legacy Python `task_tools` module is no longer loaded by the default
+Python bootstrap; `load_compatibility_tools()` (or an explicit module import)
+is required for old embeddings. The compatibility store is not a second
+product task graph and new product code must use the Core service.
+
 ## Primary message and local attachment delivery contract
 
 `deliver_user_message` publishes the primary answer for the current agent run.
-It accepts a bounded Markdown message, an honest `normal` or `proactive`
-classification, and up to eight existing local files. Once a delivery occurs,
-later model prose is not streamed as a duplicate answer and the last delivery
-becomes the durable assistant message.
+The TypeScript/Core tool and `PrimaryDelivery` service are the sole product
+owner: they enforce the bounded Markdown message, honest `normal` or
+`proactive` classification, Goal completion gate, authorization, attachment
+type/size/path checks, and durable event projection. Up to eight existing local
+files may be attached and are never uploaded. Once a delivery occurs, later
+model prose is not streamed as a duplicate answer and the last delivery becomes
+the durable assistant message. The old Python
+`arforge.tools.user_message_tools` module is explicit compatibility only and is
+excluded from the default Python registry, preventing a second schema or
+delivery journal.
 
 Attachments resolve relative to the active execution workspace and must remain
 inside the primary or separately trusted workspace roots. They must be regular,
@@ -343,6 +725,17 @@ system directly; no shell command interpreter is used. Acceptance evidence is
 `tests/test_user_message_delivery.py`, `tests/test_message_model.py`, the
 Bridge session suites, the Desktop component suite, the production frontend
 build, and `cargo check`.
+
+## Session plan and todo contract
+
+TypeScript/Core `todowrite` is the sole product owner for the session-scoped
+structured todo list: its schema, permission check, atomic replacement,
+persistence projection, and Desktop/Bridge event consumers are one contract.
+The old Python `arforge.tools.plan_tools.update_plan` module is retained only
+as an explicit migration compatibility wrapper and is excluded from the
+default Python registry. Its in-memory `TaskLedger` behavior must not be
+treated as a second product planning state machine or written in parallel with
+the TypeScript/Core session todo projection.
 
 ## Provider-neutral trigger contract
 
@@ -384,10 +777,15 @@ deferred loading, and permission regression suites.
 ## Cooperative wait, wake, and check-in contract
 
 `cooperative_wait` is a low-risk deferred tool for bounded pauses that do not
-start or occupy a shell process. A wait lasts from 0.05 to 300 seconds, has a
-bounded periodic check-in interval, and permits at most 120 check-ins. One
-session may own only one active wait, so concurrent model calls cannot hide
-multiple independent sleepers behind the same conversation.
+start or occupy a shell process. The TypeScript/Core tool is the product owner
+and is the only default registered definition. The old Python
+`arforge.tools.wait_tools` module remains an explicit compatibility import for
+legacy loops and fixtures, but is excluded from the default Python registry so
+it cannot compete on schema, permission metadata, or output ownership. A wait
+lasts from 0.05 to 300 seconds, has a bounded periodic check-in interval, and
+permits at most 120 check-ins. One session may own only one active wait, so
+concurrent model calls cannot hide multiple independent sleepers behind the
+same conversation.
 
 The runtime emits `wait.started`, periodic `wait.check_in`, and exactly one
 terminal event: `wait.completed`, `wait.woken`, `wait.cancelled`, or

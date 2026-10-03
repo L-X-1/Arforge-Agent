@@ -17,6 +17,14 @@ const location = {
 export const makeLearningGroup = <I extends HttpApiMiddleware.AnyId, S>(locationMiddleware: Context.Key<I, S>) =>
   HttpApiGroup.make("server.learning")
     .add(
+      HttpApiEndpoint.get("learning.dream", "/api/learning/dream", {
+        query: location,
+        success: Schema.Struct({ data: Learning.Dream }),
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
       HttpApiEndpoint.get("learning.status", "/api/learning/status", {
         query: location,
         success: Schema.Struct({ data: Learning.Status }),

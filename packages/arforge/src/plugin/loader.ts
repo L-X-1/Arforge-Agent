@@ -11,6 +11,16 @@ import {
 import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPluginV1 } from "@arforge-ai/core/v1/config/plugin"
 import { InstallationVersion } from "@arforge-ai/core/installation/version"
+import {
+  parsePluginManifestMetadata,
+  pluginTreeDigest,
+  scanPluginDirectory,
+  verifyPluginSignature,
+} from "@arforge-ai/core/plugin-contract"
+import { existsSync, readFileSync, statSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { dirname, join, resolve as pathResolve } from "node:path"
+import { isRecord } from "@/util/record"
 
 export namespace PluginLoader {
   // A normalized plugin declaration derived from config before any filesystem or npm work happens.
@@ -66,6 +76,80 @@ export namespace PluginLoader {
     if (!error || typeof error !== "object") return ""
     const message = "message" in error && typeof error.message === "string" ? error.message : ""
     return message
+  }
+
+  type SecuritySnapshot = {
+    readonly root: string
+    readonly digest: string
+  }
+
+  function pluginRoot(target: string) {
+    const resolved = target.startsWith("file://") ? fileURLToPath(target) : target
+    try {
+      const stat = statSync(resolved)
+      return pathResolve(stat.isDirectory() ? resolved : dirname(resolved))
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Managed/native plugin manifests are the Core trust boundary.  Legacy
+   * development modules without plugin.json deliberately keep their existing
+   * compatibility path; they have no declarative security claim to validate.
+   */
+  function validateManifestBeforeImport(
+    row: Resolved,
+  ): { readonly ok: true; readonly snapshot?: SecuritySnapshot } | { readonly ok: false; readonly error: Error } {
+    const root = pluginRoot(row.target)
+    if (!root) return { ok: true }
+    const manifestPath = join(root, "plugin.json")
+    if (!existsSync(manifestPath)) return { ok: true }
+
+    try {
+      const payload = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>
+      if (!isRecord(payload)) return { ok: false, error: new Error(`Plugin ${row.spec} manifest must be an object`) }
+      if (payload.enabled === false) return { ok: false, error: new Error(`Plugin ${row.spec} is disabled`) }
+
+      const problems: string[] = []
+      const metadata = parsePluginManifestMetadata(payload, problems)
+      const manifestName = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : undefined
+      const packageName =
+        typeof row.pkg?.json.name === "string" && row.pkg.json.name.trim() ? row.pkg.json.name.trim() : undefined
+      const name = manifestName ?? packageName
+      const manifestVersion =
+        typeof payload.version === "string" && payload.version.trim() ? payload.version.trim() : undefined
+      const packageVersion =
+        typeof row.pkg?.json.version === "string" && row.pkg.json.version.trim()
+          ? row.pkg.json.version.trim()
+          : undefined
+      const version = manifestVersion ?? packageVersion
+      if (!name || !version) problems.push("manifest requires a plugin name and version before import")
+
+      const signature = verifyPluginSignature(root, metadata, {
+        name: name ?? row.spec,
+        version: version ?? "unknown",
+      })
+      const security = scanPluginDirectory(root, metadata, signature)
+      if (problems.length > 0 || security.status === "blocked") {
+        const detail = [
+          ...problems,
+          ...security.findings.filter((item) => item.severity === "blocking").map((item) => item.message),
+        ]
+        return {
+          ok: false,
+          error: new Error(
+            `Plugin ${row.spec} blocked before import: ${detail.join("; ") || "security preflight failed"}`,
+          ),
+        }
+      }
+      return { ok: true, snapshot: { root, digest: pluginTreeDigest(root) } }
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error : new Error(`Plugin ${row.spec} security preflight failed`),
+      }
+    }
   }
 
   function isRetryableResolveError(stage: "install" | "entry" | "compatibility", error: unknown) {
@@ -134,6 +218,11 @@ export namespace PluginLoader {
 
   // Import the resolved module only after all earlier validation has succeeded.
   export async function load(row: Resolved): Promise<{ ok: true; value: Loaded } | { ok: false; error: unknown }> {
+    const preflight = validateManifestBeforeImport(row)
+    if (!preflight.ok) return preflight
+    if (preflight.snapshot && pluginTreeDigest(preflight.snapshot.root) !== preflight.snapshot.digest) {
+      return { ok: false, error: new Error(`Plugin ${row.spec} changed during security preflight`) }
+    }
     let mod
     try {
       mod = await import(row.entry)

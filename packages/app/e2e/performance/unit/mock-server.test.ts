@@ -20,7 +20,11 @@ test("authenticates the isolated app shell before mocked scenarios run", async (
   })
 
   await handler!({
-    request: () => ({ url: () => "http://127.0.0.1:4096/auth/session" }),
+    request: () => ({
+      method: () => "GET",
+      url: () => "http://127.0.0.1:4096/auth/session",
+      headers: () => ({}),
+    }),
     fulfill: (value) => {
       response = value
       return Promise.resolve()
@@ -59,7 +63,11 @@ test("applies message latency after a list response gate is released", async () 
   })
 
   const response = handler!({
-    request: () => ({ url: () => "http://127.0.0.1:4096/session/session/message" }),
+    request: () => ({
+      method: () => "GET",
+      url: () => "http://127.0.0.1:4096/session/session/message",
+      headers: () => ({}),
+    }),
     fulfill: () => {
       events.push("fulfill")
       return Promise.resolve()

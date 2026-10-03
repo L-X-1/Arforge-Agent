@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "protocol": "arforge-development-governance",
+  "plan_revision": "v1.3",
+  "source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "ledger_owner": "manual-dispatcher-bootstrap",
+  "ledger_writer": "manual-dispatcher-bootstrap",
+  "cards_root": "docs/evidence/implementation/cards",
+  "state_root": "docs/evidence/implementation/state.json",
+  "claims_root": "docs/evidence/implementation/claims",
+  "evidence_root": "docs/evidence/implementation",
+  "claim_protocol": "CAS",
+  "claim_version_field": "version",
+  "pre_review_claim_whitelist": [
+    "BOOTSTRAP-PROTOCOL-001",
+    "PY-001-OWNER-REGISTRY-001",
+    "PY-002-CAPABILITY-LEDGER-001",
+    "PY-005-TEST-FIXTURE-LEDGER-001",
+    "PY-007-DEPENDENCY-ARTIFACT-LEDGER-001",
+    "PY-101-TS-COMPOSITION-001",
+    "PY-105-RUNNER-NEGATIVE-001"
+  ],
+  "validators": [
+    "LP-001",
+    "LP-002",
+    "LP-003",
+    "LP-004"
+  ],
+  "gate_owner": "Plan Owner",
+  "detached_attestation_ref": "docs/evidence/implementation/attestations/protocol-bootstrap.v1.sha256"
+}

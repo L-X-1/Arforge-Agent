@@ -31,6 +31,11 @@ import { AgentCapabilityHandler } from "./handlers/agent-capability"
 import { McpHandler } from "./handlers/mcp"
 import { PrivateOperationHandler } from "./handlers/private-operation"
 import { RuntimeInsightHandler } from "./handlers/runtime-insight"
+import { PersonalJobHandler } from "./handlers/personal-job"
+import { PersonalWorkspaceHandler } from "./handlers/personal-workspace"
+import { TenantPlatformHandler } from "./handlers/tenant-platform"
+import { ArtifactHandler } from "./handlers/artifact"
+import { SubagentControlHandler } from "./handlers/subagent-control"
 
 export { RuntimeInsightPersistence } from "./handlers/runtime-insight"
 
@@ -41,6 +46,11 @@ export const handlers = Layer.mergeAll(
   SessionHandler,
   GoalHandler,
   ScheduledPromptHandler,
+  PersonalJobHandler,
+  PersonalWorkspaceHandler,
+  TenantPlatformHandler,
+  ArtifactHandler,
+  SubagentControlHandler,
   TaskGraphHandler,
   TeamHandler,
   CooperativeWaitHandler,

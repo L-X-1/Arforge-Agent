@@ -27,7 +27,7 @@ function ModelTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
   return (
     <div class="flex min-w-0 items-center gap-4">
       <span class="shrink-0 text-v2-text-text-muted">{props.name}</span>
-      <span class="ml-auto min-w-0 truncate text-right text-v2-text-text-base">{props.value}</span>
+      <span class="ml-auto min-w-0 break-words text-right text-v2-text-text-base">{props.value}</span>
     </div>
   )
 }
@@ -95,8 +95,11 @@ export const ModelTooltip: Component<{ model: ModelInfo; latest?: boolean; free?
 
   if (props.v2) {
     return (
-      <div class="flex w-[180px] flex-col gap-2">
+      <div class="flex w-[240px] max-w-[calc(100vw-32px)] flex-col gap-2">
         <ModelTooltipRow name={language.t("model.tooltip.model")} value={name()} />
+        <Show when={props.model.name !== props.model.id}>
+          <ModelTooltipRow name="ID" value={<span class="break-all font-mono text-[12px]">{props.model.id}</span>} />
+        </Show>
         <ModelTooltipRow name={language.t("model.tooltip.provider")} value={props.model.provider.name} />
         <Show when={inputs()}>
           {(value) => <ModelTooltipRow name={language.t("model.tooltip.inputs")} value={value()} />}

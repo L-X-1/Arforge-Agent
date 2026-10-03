@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
-import { join } from "node:path"
-import { createOperationsApi } from "../../src/cli/operations-api"
+import { join, resolve } from "node:path"
+import { createOperationsApi, createOperationsFetch } from "../../src/cli/operations-api"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
@@ -9,6 +10,47 @@ afterEach(async () => {
   await disposeAllInstances()
   await resetDatabase()
 })
+
+type PendingControlApproval = {
+  id: string
+  action: string
+  subject?: { location?: string }
+}
+
+async function withControlApproval<A>(directory: string, operation: () => Promise<A>): Promise<A> {
+  const pendingOperation = operation()
+  const fetch = createOperationsFetch(directory)
+  const deadline = Date.now() + 5_000
+  let approval: PendingControlApproval | undefined
+  let observed: PendingControlApproval[] = []
+
+  while (!approval && Date.now() < deadline) {
+    const response = await fetch("http://arforge.local/experimental/control-approval")
+    if (!response.ok) throw new Error(`control approval list failed with HTTP ${response.status}`)
+    const items = (await response.json()) as PendingControlApproval[]
+    observed = items
+    approval = items.find((item) => item.subject?.location === resolve(directory))
+    if (!approval) await Bun.sleep(20)
+  }
+
+  if (!approval) {
+    void pendingOperation.catch(() => undefined)
+    throw new Error(
+      `control approval was not published for ${directory}; observed ${JSON.stringify(observed)}`,
+    )
+  }
+
+  const replied = await fetch(
+    `http://arforge.local/experimental/control-approval/${encodeURIComponent(approval.id)}/reply`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reply: "once" }),
+    },
+  )
+  if (!replied.ok) throw new Error(`control approval reply failed with HTTP ${replied.status}`)
+  return pendingOperation
+}
 
 describe("CLI operations API", () => {
   test("shares Goal, Task and Prompt Queue state with the integrated server", async () => {
@@ -67,8 +109,9 @@ describe("CLI operations API", () => {
     await using workspace = await tmpdir()
     const api = createOperationsApi(workspace.path)
     const location = { location: { directory: workspace.path } }
+    const skillID = `reviewer-${randomUUID().replaceAll("-", "").slice(0, 12)}`
 
-    const skillRoot = join(workspace.path, ".arforge", "skills", "reviewer")
+    const skillRoot = join(workspace.path, ".arforge", "skills", skillID)
     const pluginRoot = join(workspace.path, ".arforge", "plugins", "local-tools")
     const workflowRoot = join(workspace.path, ".arforge", "workflows")
     await mkdir(skillRoot, { recursive: true })
@@ -76,7 +119,7 @@ describe("CLI operations API", () => {
     await mkdir(workflowRoot, { recursive: true })
     await Bun.write(
       join(skillRoot, "SKILL.md"),
-      "---\nname: reviewer\ndescription: Reviews one bounded change.\n---\n# Reviewer\n",
+      `---\nid: ${skillID}\nname: ${skillID}\ndescription: Reviews one bounded change.\n---\n# Reviewer\n`,
     )
     await Bun.write(
       join(pluginRoot, "plugin.json"),
@@ -113,24 +156,34 @@ describe("CLI operations API", () => {
 
     const skills = await api.agentCapabilities.skillList(location)
     expect(skills.data.items).toContainEqual(
-      expect.objectContaining({ id: "reviewer", enabled: true, problems: [] }),
+      expect.objectContaining({ id: skillID, enabled: true, problems: [] }),
     )
-    const disabledSkill = await api.agentCapabilities.skillSetEnabled({
-      ...location,
-      skillID: "reviewer",
-      enabled: false,
-    })
-    expect(disabledSkill.data).toMatchObject({ skill_id: "reviewer", enabled: false, changed: true })
+    try {
+      const disabledSkill = await withControlApproval(workspace.path, () =>
+        api.agentCapabilities.skillSetEnabled({
+          ...location,
+          skillID,
+          enabled: false,
+        }),
+      )
+      expect(disabledSkill.data).toMatchObject({ skill_id: skillID, enabled: false, changed: true })
+    } finally {
+      await withControlApproval(workspace.path, () =>
+        api.agentCapabilities.skillSetEnabled({ ...location, skillID, enabled: true }),
+      ).catch(() => undefined)
+    }
 
     const plugins = await api.agentCapabilities.pluginList(location)
     expect(plugins.data.items).toContainEqual(
       expect.objectContaining({ name: "local-tools", managed: true, enabled: true, problems: [] }),
     )
-    const disabledPlugins = await api.agentCapabilities.pluginSetEnabled({
-      ...location,
-      name: "local-tools",
-      enabled: false,
-    })
+    const disabledPlugins = await withControlApproval(workspace.path, () =>
+      api.agentCapabilities.pluginSetEnabled({
+        ...location,
+        name: "local-tools",
+        enabled: false,
+      }),
+    )
     expect(disabledPlugins.data.items).toContainEqual(
       expect.objectContaining({ name: "local-tools", enabled: false }),
     )
@@ -159,21 +212,27 @@ describe("CLI operations API", () => {
       selection_required: false,
       candidates: [{ name: "installed-tools", version: "2.0.0" }],
     })
-    const installed = await api.agentCapabilities.pluginApply({
-      ...location,
-      token: inspection.data.token,
-      name: "installed-tools",
-    })
+    const installed = await withControlApproval(workspace.path, () =>
+      api.agentCapabilities.pluginApply({
+        ...location,
+        token: inspection.data.token,
+        name: "installed-tools",
+      }),
+    )
     expect(installed.data.plugins.items).toContainEqual(
       expect.objectContaining({ name: "installed-tools", managed: true, enabled: false }),
     )
-    const removed = await api.agentCapabilities.pluginRemove({ ...location, name: "installed-tools" })
+    const removed = await withControlApproval(workspace.path, () =>
+      api.agentCapabilities.pluginRemove({ ...location, name: "installed-tools" }),
+    )
     const transaction = removed.data.transaction as { recovery?: { recovery_id?: string } }
     expect(transaction.recovery?.recovery_id).toBeString()
-    const restored = await api.agentCapabilities.pluginRestore({
-      ...location,
-      recoveryID: transaction.recovery!.recovery_id!,
-    })
+    const restored = await withControlApproval(workspace.path, () =>
+      api.agentCapabilities.pluginRestore({
+        ...location,
+        recoveryID: transaction.recovery!.recovery_id!,
+      }),
+    )
     expect(restored.data.plugins.items).toContainEqual(
       expect.objectContaining({ name: "installed-tools", managed: true, enabled: false }),
     )

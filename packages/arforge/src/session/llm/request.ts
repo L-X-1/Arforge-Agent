@@ -33,6 +33,7 @@ type PrepareInput = {
   readonly plugin: Plugin.Interface
   readonly flags: RuntimeFlags.Info
   readonly isWorkflow: boolean
+  readonly maxOutputTokens?: number
 }
 
 export type Prepared = {
@@ -130,6 +131,20 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       options,
     },
   )
+  const durableOutputLimit =
+    input.maxOutputTokens !== undefined && Number.isFinite(input.maxOutputTokens) && input.maxOutputTokens > 0
+      ? Math.floor(input.maxOutputTokens)
+      : undefined
+  const configuredOutputLimit =
+    params.maxOutputTokens !== undefined && Number.isFinite(params.maxOutputTokens) && params.maxOutputTokens > 0
+      ? Math.floor(params.maxOutputTokens)
+      : undefined
+  const maxOutputTokens =
+    durableOutputLimit === undefined
+      ? configuredOutputLimit
+      : configuredOutputLimit === undefined
+        ? durableOutputLimit
+        : Math.min(durableOutputLimit, configuredOutputLimit)
 
   const { headers } = yield* input.plugin.trigger(
     "chat.headers",
@@ -164,7 +179,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system,
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
-    params,
+    params: { ...params, maxOutputTokens },
     messageTransformOptions: options,
     headers: {
       ...(input.model.providerID.startsWith("arforge")

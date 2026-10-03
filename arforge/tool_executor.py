@@ -1,13 +1,22 @@
-"""Tool execution facade — unified entry point for tool matching and execution."""
+"""Legacy Python tool execution facade.
+
+The product runtime is TypeScript/Core.  This facade remains for old Python
+embeddings and explicitly opts into compatibility wrappers after loading the
+default Python tools; it must not be mistaken for a second product registry.
+"""
 
 from __future__ import annotations
 
 from arforge.tool_registry import REGISTRY, ToolResult
-from arforge.tools import load_builtin_tools
+from arforge.tools import load_builtin_tools, load_compatibility_tools
 
 # Register the same built-in surface used by the Bridge before any direct CLI
 # matching or explicit function call is attempted.
 load_builtin_tools()
+# ``tool_executor`` is itself the legacy Python compatibility boundary.  Keep
+# old direct calls working without putting the TaskGraphV2 replacement back in
+# the default bootstrap used by product paths.
+load_compatibility_tools()
 
 
 def run_tool_if_match(user_input: str) -> ToolResult | None:

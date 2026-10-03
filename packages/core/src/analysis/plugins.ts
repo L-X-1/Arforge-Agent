@@ -11,13 +11,35 @@ export * as Plugins from "./plugins"
  * sources are rejected with PLUGIN_SOURCE_UNSUPPORTED.
  */
 
-import { createHash, randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { randomBytes } from "node:crypto"
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { tmpdir } from "node:os"
+import {
+  MAX_PLUGIN_ENTRIES,
+  MAX_PLUGIN_EXPANDED_BYTES,
+  parsePluginManifestMetadata,
+  pluginTreeDigest,
+  scanPluginDirectory,
+  verifyPluginSignature,
+  type PluginCompatibility,
+  type PluginManifestMetadata,
+  type PluginSecurityReport,
+  type PluginSignatureInfo,
+} from "../plugin-contract"
 
-const INSPECTION_TTL_SECONDS = 3600
+const INSPECTION_TTL_SECONDS = 1800
 const MAX_ARCHIVE_BYTES = 10 * 1024 * 1024
 const SAFE_NAME = /^[a-z][a-z0-9_.-]{0,63}$/
 const SAFE_TOKEN = /^[0-9a-f]{32}$/
@@ -53,6 +75,14 @@ export interface DiscoveredPlugin {
   readonly tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>
   readonly manifest_path: string
   readonly entrypoint: string
+  readonly source: "profile" | "workspace" | "external"
+  readonly sha256: string
+  readonly permissions: PluginManifestMetadata["permissions"]
+  readonly egress: PluginManifestMetadata["egress"]
+  readonly secrets: PluginManifestMetadata["secrets"]
+  readonly compatibility: PluginCompatibility
+  readonly signature: PluginSignatureInfo
+  readonly security: PluginSecurityReport
   readonly enabled: boolean
   readonly problems: string[]
   readonly managed: boolean
@@ -78,6 +108,7 @@ export interface PluginTransaction {
   readonly path: string
   readonly source: string
   readonly sha256: string
+  readonly security: PluginSecurityReport
   readonly enabled: boolean
   readonly updated: boolean
   readonly recovery: Record<string, unknown> | null
@@ -95,6 +126,8 @@ export interface PluginRestore {
   readonly restored: boolean
   readonly path: string
   readonly enabled: boolean
+  /** Recovery entry for the version replaced by an update rollback. */
+  readonly recovery: Record<string, unknown> | null
 }
 
 export function defaultPluginRoots(home?: string): string[] {
@@ -120,17 +153,47 @@ export function defaultHome(home?: string): string {
 // Manifest validation (native port of PluginRegistry._read_manifest)
 // ---------------------------------------------------------------------------
 
-function validateManifest(manifestPath: string, root: string): { name: string; version: string; description: string; hooks: string[]; tools: PluginToolSpec[]; entrypoint: string; enabled: boolean; problems: string[] } {
+interface ParsedManifest extends PluginManifestMetadata {
+  readonly name: string
+  readonly version: string
+  readonly description: string
+  readonly hooks: string[]
+  readonly tools: PluginToolSpec[]
+  readonly entrypoint: string
+  readonly enabled: boolean
+  readonly problems: string[]
+}
+
+function invalidManifest(name: string, problems: string[]): ParsedManifest {
+  return {
+    name,
+    version: "",
+    description: "",
+    hooks: [],
+    tools: [],
+    entrypoint: "",
+    enabled: false,
+    permissions: [],
+    egress: [],
+    secrets: [],
+    compatibility: { api_version: -1, platforms: [] },
+    problems,
+  }
+}
+
+function validateManifest(manifestPath: string, root: string): ParsedManifest {
   const fallbackName = dirname(manifestPath).split(/[\\/]/).pop()?.toLowerCase() ?? ""
   const problems: string[] = []
   let payload: Record<string, unknown>
   try {
     payload = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>
   } catch (error) {
-    return { name: fallbackName, version: "", description: "", hooks: [], tools: [], entrypoint: "", enabled: false, problems: [`invalid manifest: ${error instanceof Error ? error.message : String(error)}`] }
+    return invalidManifest(fallbackName, [
+      `invalid manifest: ${error instanceof Error ? error.message : String(error)}`,
+    ])
   }
   if (typeof payload !== "object" || payload === null) {
-    return { name: fallbackName, version: "", description: "", hooks: [], tools: [], entrypoint: "", enabled: false, problems: ["manifest must be a JSON object"] }
+    return invalidManifest(fallbackName, ["manifest must be a JSON object"])
   }
   let name = typeof payload.name === "string" ? payload.name : ""
   let version = typeof payload.version === "string" ? payload.version : ""
@@ -139,6 +202,16 @@ function validateManifest(manifestPath: string, root: string): { name: string; v
   const hooks = payload.hooks === undefined ? [] : payload.hooks
   const tools = payload.tools
   let enabled = typeof payload.enabled === "boolean" ? payload.enabled : true
+  const metadata = parsePluginManifestMetadata(payload, problems)
+  const compatiblePlatforms = metadata.compatibility.platforms.map((platform) => platform.toLowerCase())
+  if (
+    compatiblePlatforms.length > 0 &&
+    !compatiblePlatforms.includes(process.platform.toLowerCase()) &&
+    !compatiblePlatforms.includes("all") &&
+    !compatiblePlatforms.includes("*")
+  ) {
+    problems.push(`compatibility.platforms must include the current platform (${process.platform})`)
+  }
 
   if (typeof name !== "string" || !SAFE_PLUGIN_NAME.test(name)) {
     problems.push("name must be lowercase and URL-safe")
@@ -179,8 +252,10 @@ function validateManifest(manifestPath: string, root: string): { name: string; v
     }
   }
   const toolSpecs = validateTools(tools, manifestPath, problems)
-  const cleanHooks = Array.isArray(hooks) ? hooks.filter((item): item is string => typeof item === "string").map((item) => item.slice(0, 128)) : []
-  return { name, version, description, hooks: cleanHooks, tools: toolSpecs, entrypoint, enabled, problems }
+  const cleanHooks = Array.isArray(hooks)
+    ? hooks.filter((item): item is string => typeof item === "string").map((item) => item.slice(0, 128))
+    : []
+  return { name, version, description, hooks: cleanHooks, tools: toolSpecs, entrypoint, enabled, problems, ...metadata }
 }
 
 function validateTools(raw: unknown, manifestPath: string, problems: string[]): PluginToolSpec[] {
@@ -199,7 +274,9 @@ function validateTools(raw: unknown, manifestPath: string, problems: string[]): 
       continue
     }
     const record = item as Record<string, unknown>
-    const unexpected = Object.keys(record).filter((key) => !["name", "description", "command", "parameters"].includes(key))
+    const unexpected = Object.keys(record).filter(
+      (key) => !["name", "description", "command", "parameters"].includes(key),
+    )
     if (unexpected.length > 0) {
       problems.push(`${prefix} contains unsupported fields`)
       continue
@@ -225,7 +302,9 @@ function validateTools(raw: unknown, manifestPath: string, problems: string[]): 
       !Array.isArray(command) ||
       command.length < 1 ||
       command.length > 32 ||
-      !command.every((part) => typeof part === "string" && part.length > 0 && part.length <= 1024 && !part.includes("\0"))
+      !command.every(
+        (part) => typeof part === "string" && part.length > 0 && part.length <= 1024 && !part.includes("\0"),
+      )
     ) {
       problems.push(`${prefix}.command must contain 1 to 32 bounded argument strings`)
       continue
@@ -245,7 +324,9 @@ function validateTools(raw: unknown, manifestPath: string, problems: string[]): 
           TOOL_NAME_PATTERN.test(key) &&
           typeof schema === "object" &&
           schema !== null &&
-          ["string", "integer", "number", "boolean", "array", "object"].includes(String((schema as Record<string, unknown>).type ?? "string")),
+          ["string", "integer", "number", "boolean", "array", "object"].includes(
+            String((schema as Record<string, unknown>).type ?? "string"),
+          ),
       ) ||
       !Array.isArray(required) ||
       !required.every((item) => typeof item === "string" && item in (properties as Record<string, unknown>))
@@ -265,7 +346,12 @@ function validateTools(raw: unknown, manifestPath: string, problems: string[]): 
       problems.push(`tool ${name}: ${error instanceof Error ? error.message : String(error)}`)
       continue
     }
-    tools.push({ name: name as string, description: (description as string).trim(), command: command as string[], parameters: normalized })
+    tools.push({
+      name: name as string,
+      description: (description as string).trim(),
+      command: command as string[],
+      parameters: normalized,
+    })
   }
   return tools
 }
@@ -315,7 +401,11 @@ function persistPluginOverrides(overrides: Record<string, boolean>, home?: strin
   mkdirSync(dirname(path), { recursive: true })
   const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`
   try {
-    writeFileSync(temporary, `${JSON.stringify({ schema_version: 1, enabled_overrides: overrides }, null, 2)}\n`, "utf8")
+    writeFileSync(
+      temporary,
+      `${JSON.stringify({ schema_version: 1, enabled_overrides: overrides }, null, 2)}\n`,
+      "utf8",
+    )
     renameSync(temporary, path)
   } finally {
     try {
@@ -359,17 +449,51 @@ export function listPlugins(options: { home?: string; roots?: string[] } = {}): 
       if (override !== undefined) enabled = override
       const resolvedManifest = resolve(manifestPath)
       const parts = relative(managedRoot, resolvedManifest).split(sep).filter(Boolean)
-      const managed = parts.length === 2 && parts[1] === "plugin.json" && !parts[0].startsWith(".") && !relative(managedRoot, resolvedManifest).startsWith(`..${sep}`)
+      const managed =
+        parts.length === 2 &&
+        parts[1] === "plugin.json" &&
+        !parts[0].startsWith(".") &&
+        !relative(managedRoot, resolvedManifest).startsWith(`..${sep}`)
+      const pluginRoot = dirname(resolvedManifest)
+      const sha256 = pluginTreeDigest(pluginRoot)
+      const signature = verifyPluginSignature(
+        pluginRoot,
+        parsed,
+        { name: parsed.name, version: parsed.version },
+        options.home,
+      )
+      const security = scanPluginDirectory(pluginRoot, parsed, signature)
+      if (parsed.problems.length > 0 || security.status === "blocked") enabled = false
+      const source: DiscoveredPlugin["source"] = managed
+        ? "profile"
+        : isWithin(process.cwd(), root)
+          ? "workspace"
+          : "external"
       const item: DiscoveredPlugin = {
         name: parsed.name,
         version: parsed.version,
         description: parsed.description,
         hooks: parsed.hooks,
-        tools: parsed.tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+        tools: parsed.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
         manifest_path: resolve(manifestPath),
         entrypoint: parsed.entrypoint,
+        source,
+        sha256,
+        permissions: parsed.permissions,
+        egress: parsed.egress,
+        secrets: parsed.secrets,
+        compatibility: parsed.compatibility,
+        signature,
+        security,
         enabled,
-        problems: parsed.problems,
+        problems: [
+          ...parsed.problems,
+          ...security.findings.filter((finding) => finding.severity === "blocking").map((finding) => finding.message),
+        ],
         managed,
       }
       const existing = seen.get(item.name)
@@ -406,6 +530,144 @@ export class PluginInstallRuntime {
     this.cacheRoot = options.cacheRoot ?? join(this.profileRoot, "cache", "plugins")
     this.pluginsRoot = options.pluginsRoot ?? join(this.profileRoot, "plugins")
     this.trashRoot = options.trashRoot ?? join(this.profileRoot, "trash", "plugins")
+  }
+
+  /** Rebuilds a safe receipt after a worker crash or a completed replay. */
+  replayApply(name?: string): PluginTransaction {
+    const item = this.replayPlugin(name)
+    return {
+      name: item.name,
+      version: item.version,
+      path: item.manifest_path,
+      source: "replay",
+      sha256: item.sha256,
+      security: item.security,
+      enabled: item.enabled,
+      updated: false,
+      recovery: null,
+    }
+  }
+
+  replayRemove(name: string): PluginRemoval {
+    const normalized = String(name ?? "")
+      .trim()
+      .toLowerCase()
+    const recovery = this.latestRecovery(normalized)
+    if (!recovery)
+      throw new PluginInstallError("RECOVERY_NOT_FOUND", `plugin removal receipt was not found: ${normalized}`)
+    return { name: normalized, removed: true, recoverable: true, recovery }
+  }
+
+  replayRestore(recoveryID: string): PluginRestore {
+    const recovery = String(recoveryID ?? "").trim()
+    const metadata = this.readRecoveryOrRestoredReceipt(recovery)
+    const name = metadata.name
+    if (typeof name !== "string" || !SAFE_NAME.test(name))
+      throw new PluginInstallError("INVALID_RECOVERY", "plugin recovery metadata is invalid")
+    const item = this.replayPlugin(name)
+    const rollbackRecovery = metadata.rollback_recovery
+    return {
+      name,
+      restored: true,
+      path: item.manifest_path.replace(/[\\/]plugin\.json$/, ""),
+      enabled: item.enabled,
+      recovery:
+        rollbackRecovery !== null && typeof rollbackRecovery === "object" && !Array.isArray(rollbackRecovery)
+          ? (rollbackRecovery as Record<string, unknown>)
+          : null,
+    }
+  }
+
+  private replayPlugin(name?: string): DiscoveredPlugin {
+    const normalized = name?.trim().toLowerCase()
+    const items = listPlugins({ home: this.profileRoot, roots: [this.pluginsRoot] }).items.filter(
+      (item) => item.managed && (normalized === undefined || item.name === normalized),
+    )
+    if (items.length !== 1)
+      throw new PluginInstallError("PLUGIN_NOT_FOUND", `managed plugin replay target was not unique: ${name ?? ""}`)
+    return items[0]
+  }
+
+  private readRecovery(recoveryID: string): Record<string, unknown> {
+    if (!RECOVERY_PATTERN.test(recoveryID))
+      throw new PluginInstallError("INVALID_RECOVERY_ID", "invalid plugin recovery identifier")
+    const source = resolve(join(this.trashRoot, recoveryID))
+    if (!isWithin(this.trashRoot, source))
+      throw new PluginInstallError("INVALID_RECOVERY_ID", "recovery path escaped the plugin trash root")
+    try {
+      return JSON.parse(readFileSync(join(source, ".recovery.json"), "utf8")) as Record<string, unknown>
+    } catch {
+      throw new PluginInstallError("RECOVERY_NOT_FOUND", "plugin recovery entry was not found")
+    }
+  }
+
+  private readRecoveryOrRestoredReceipt(recoveryID: string): Record<string, unknown> {
+    try {
+      return this.readRecovery(recoveryID)
+    } catch {
+      if (!RECOVERY_PATTERN.test(recoveryID))
+        throw new PluginInstallError("INVALID_RECOVERY_ID", "invalid plugin recovery identifier")
+      const receipt = resolve(join(this.trashRoot, `${recoveryID}.restored.json`))
+      if (!isWithin(this.trashRoot, receipt))
+        throw new PluginInstallError("INVALID_RECOVERY_ID", "recovery receipt escaped the plugin trash root")
+      try {
+        return JSON.parse(readFileSync(receipt, "utf8")) as Record<string, unknown>
+      } catch {
+        throw new PluginInstallError("RECOVERY_NOT_FOUND", "plugin recovery entry was not found")
+      }
+    }
+  }
+
+  private latestRecovery(name: string): Record<string, unknown> | undefined {
+    if (!existsSync(this.trashRoot)) return undefined
+    const matches = readdirSync(this.trashRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((id) => RECOVERY_PATTERN.test(id))
+      .map((id) => {
+        try {
+          const metadata = this.readRecovery(id)
+          return metadata.name === name ? metadata : undefined
+        } catch {
+          return undefined
+        }
+      })
+      .filter((item): item is Record<string, unknown> => item !== undefined)
+      .sort((left, right) => String(right.removed_at ?? "").localeCompare(String(left.removed_at ?? "")))
+    return matches[0]
+  }
+
+  setEnabled(
+    name: string,
+    enabled: boolean,
+    expected?: { readonly version: string; readonly sha256: string },
+  ): void {
+    const normalized = String(name ?? "")
+      .trim()
+      .toLowerCase()
+    if (!SAFE_NAME.test(normalized)) {
+      throw new PluginInstallError("INVALID_PLUGIN_NAME", "plugin name must be lowercase and URL-safe")
+    }
+    const matches = listPlugins({ home: this.profileRoot, roots: [this.pluginsRoot] }).items.filter(
+      (item) => item.name.toLowerCase() === normalized,
+    )
+    if (matches.length !== 1) {
+      throw new PluginInstallError("PLUGIN_NOT_FOUND", `managed plugin was not found: ${normalized}`)
+    }
+    const current = matches[0]
+    if (expected && (current.version !== expected.version || current.sha256 !== expected.sha256)) {
+      throw new PluginInstallError(
+        "PLUGIN_VERSION_CHANGED",
+        `managed plugin changed after review and must be reviewed again: ${normalized}`,
+      )
+    }
+    if (enabled && (current.problems.length > 0 || current.security.status === "blocked")) {
+      throw new PluginInstallError(
+        "PLUGIN_SECURITY_BLOCKED",
+        `managed plugin cannot be enabled because its manifest or security review is blocked: ${normalized}`,
+      )
+    }
+    setPluginEnabled(current.manifest_path, enabled, this.profileRoot)
   }
 
   inspect(source: string): PluginInspection {
@@ -446,9 +708,14 @@ export class PluginInstallRuntime {
 
   apply(token: string, pluginName = "", replace = false): PluginTransaction {
     const inspection = this.loadInspection(token)
-    const metadata = JSON.parse(readFileSync(join(inspection, "inspection.json"), "utf8")) as { candidates: Array<Record<string, unknown>>; source?: unknown }
+    const metadata = JSON.parse(readFileSync(join(inspection, "inspection.json"), "utf8")) as {
+      candidates: Array<Record<string, unknown>>
+      source?: unknown
+    }
     const candidates = metadata.candidates
-    const selectedName = String(pluginName ?? "").trim().toLowerCase()
+    const selectedName = String(pluginName ?? "")
+      .trim()
+      .toLowerCase()
     let matches: Array<Record<string, unknown>>
     if (selectedName) {
       matches = candidates.filter((item) => String(item.name ?? "").toLowerCase() === selectedName)
@@ -461,14 +728,24 @@ export class PluginInstallRuntime {
       throw new PluginInstallError("PLUGIN_NOT_FOUND", `inspected package does not contain plugin: ${pluginName}`)
     }
     const selected = matches[0]
+    const selectedProblems = Array.isArray(selected.problems)
+      ? selected.problems.filter((problem): problem is string => typeof problem === "string")
+      : []
+    if (selectedProblems.length > 0) {
+      throw new PluginInstallError("INVALID_PLUGIN_MANIFEST", selectedProblems.join(", "))
+    }
     const name = String(selected.name ?? "")
-    if (!SAFE_NAME.test(name)) throw new PluginInstallError("INVALID_PLUGIN_NAME", "plugin name must be lowercase and URL-safe")
+    if (!SAFE_NAME.test(name))
+      throw new PluginInstallError("INVALID_PLUGIN_NAME", "plugin name must be lowercase and URL-safe")
     const sourceDir = resolve(join(inspection, "payload", String(selected.relative_path ?? "")))
     if (!isWithin(join(inspection, "payload"), sourceDir)) {
       throw new PluginInstallError("INVALID_INSPECTION", "inspection candidate escaped its staging directory")
     }
-    if (treeDigest(sourceDir) !== String(selected.sha256 ?? "")) {
-      throw new PluginInstallError("INSPECTION_CHANGED", "inspected plugin files changed before installation; inspect the package again")
+    if (pluginTreeDigest(sourceDir) !== String(selected.sha256 ?? "")) {
+      throw new PluginInstallError(
+        "INSPECTION_CHANGED",
+        "inspected plugin files changed before installation; inspect the package again",
+      )
     }
     mkdirSync(this.pluginsRoot, { recursive: true })
     const target = join(this.pluginsRoot, name)
@@ -481,17 +758,25 @@ export class PluginInstallRuntime {
       throw new PluginInstallError("PLUGIN_NOT_INSTALLED", `plugin is not installed and cannot be updated: ${name}`)
     }
     if (existsSync(target) && !existsSync(join(target, "plugin.json"))) {
-      throw new PluginInstallError("PLUGIN_TARGET_CONFLICT", `profile plugin target exists without a valid manifest: ${name}`)
+      throw new PluginInstallError(
+        "PLUGIN_TARGET_CONFLICT",
+        `profile plugin target exists without a valid manifest: ${name}`,
+      )
     }
     if (existsSync(stage) || existsSync(backup)) {
       throw new PluginInstallError("PLUGIN_INSTALL_BUSY", "a plugin transaction with this token already exists")
     }
     copyTree(sourceDir, stage)
     try {
-      if (treeDigest(stage) !== String(selected.sha256 ?? "")) {
-        throw new PluginInstallError("INSPECTION_CHANGED", "plugin files changed while staging; inspect the package again")
+      if (pluginTreeDigest(stage) !== String(selected.sha256 ?? "")) {
+        throw new PluginInstallError(
+          "INSPECTION_CHANGED",
+          "plugin files changed while staging; inspect the package again",
+        )
       }
-      const staged = listPlugins({ roots: [this.pluginsRoot] }).items.find((item) => dirname(item.manifest_path) === stage)
+      const staged = listPlugins({ roots: [this.pluginsRoot] }).items.find(
+        (item) => dirname(item.manifest_path) === stage,
+      )
       if (!staged || staged.problems.length > 0) {
         const detail = staged ? staged.problems.join(", ") : "staged manifest was not discoverable"
         throw new PluginInstallError("INVALID_PLUGIN_MANIFEST", detail)
@@ -516,7 +801,8 @@ export class PluginInstallRuntime {
         version: String(selected.version ?? ""),
         path: target,
         source: String(metadata.source ?? ""),
-        sha256: treeDigest(target),
+        sha256: pluginTreeDigest(target),
+        security: staged.security,
         enabled: false,
         updated: Boolean(replace),
         recovery,
@@ -528,7 +814,9 @@ export class PluginInstallRuntime {
   }
 
   remove(name: string): PluginRemoval {
-    const normalized = String(name ?? "").trim().toLowerCase()
+    const normalized = String(name ?? "")
+      .trim()
+      .toLowerCase()
     if (!SAFE_NAME.test(normalized)) {
       throw new PluginInstallError("INVALID_PLUGIN_NAME", "plugin name must be lowercase and URL-safe")
     }
@@ -564,18 +852,78 @@ export class PluginInstallRuntime {
       throw new PluginInstallError("INVALID_RECOVERY", "plugin recovery metadata is invalid")
     }
     const target = join(this.pluginsRoot, name)
-    if (existsSync(target)) {
+    const replacesInstalledVersion = existsSync(target)
+    const recoveryReason = String(recoveryMetadata.reason ?? "")
+    if (replacesInstalledVersion && recoveryReason !== "update" && recoveryReason !== "rollback") {
       throw new PluginInstallError("PLUGIN_ALREADY_INSTALLED", `plugin is already installed: ${name}`)
     }
-    rmSync(join(source, ".recovery.json"), { force: true })
-    try {
-      renameSync(source, target)
-    } catch (error) {
-      writeFileSync(join(source, ".recovery.json"), `${JSON.stringify(recoveryMetadata, null, 2)}\n`, "utf8")
-      throw new PluginInstallError("PLUGIN_RESTORE_FAILED", `plugin restore failed: ${error instanceof Error ? error.message : String(error)}`)
+    if (replacesInstalledVersion && !existsSync(join(target, "plugin.json"))) {
+      throw new PluginInstallError("PLUGIN_TARGET_CONFLICT", `plugin target exists without a valid manifest: ${name}`)
     }
+    mkdirSync(this.pluginsRoot, { recursive: true })
+    const stage = join(this.pluginsRoot, `.restore-${recovery}-${name}`)
+    const backup = join(this.pluginsRoot, `.rollback-${recovery}-${name}`)
+    if (existsSync(stage) || existsSync(backup))
+      throw new PluginInstallError("PLUGIN_INSTALL_BUSY", "a plugin restore is already staged")
+    let rollbackRecovery: Record<string, unknown> | null = null
+    try {
+      copyTree(source, stage)
+      rmSync(join(stage, ".recovery.json"), { force: true })
+      const staged = listPlugins({ home: this.profileRoot, roots: [this.pluginsRoot] }).items.find(
+        (item) => dirname(item.manifest_path) === stage,
+      )
+      if (!staged || staged.problems.length > 0) {
+        const detail = staged ? staged.problems.join(", ") : "restored manifest was not discoverable"
+        throw new PluginInstallError("INVALID_PLUGIN_MANIFEST", detail)
+      }
+      if (replacesInstalledVersion) {
+        setPluginEnabled(join(target, "plugin.json"), false, this.profileRoot)
+        renameSync(target, backup)
+      }
+      try {
+        renameSync(stage, target)
+      } catch (error) {
+        if (existsSync(backup) && !existsSync(target)) renameSync(backup, target)
+        throw error
+      }
+      if (existsSync(backup)) {
+        try {
+          rollbackRecovery = this.moveToTrash(backup, name, "rollback")
+        } catch (error) {
+          // The original recovery source still exists, so restore the currently
+          // installed version if preserving its rollback copy fails.
+          renameSync(target, stage)
+          renameSync(backup, target)
+          rmSync(stage, { recursive: true, force: true })
+          throw error
+        }
+      }
+      rmSync(source, { recursive: true, force: true })
+    } catch (error) {
+      rmSync(stage, { recursive: true, force: true })
+      if (existsSync(backup) && !existsSync(target)) renameSync(backup, target)
+      if (error instanceof PluginInstallError) throw error
+      throw new PluginInstallError(
+        "PLUGIN_RESTORE_FAILED",
+        `plugin restore failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    writeFileSync(
+      join(this.trashRoot, `${recovery}.restored.json`),
+      `${JSON.stringify(
+        {
+          ...recoveryMetadata,
+          restored_at: new Date().toISOString(),
+          path: target,
+          rollback_recovery: rollbackRecovery,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    )
     setPluginEnabled(join(target, "plugin.json"), false, this.profileRoot)
-    return { name, restored: true, path: target, enabled: false }
+    return { name, restored: true, path: target, enabled: false, recovery: rollbackRecovery }
   }
 
   private materialize(source: string, payloadRoot: string, inspection: string): void {
@@ -592,7 +940,10 @@ export class PluginInstallRuntime {
         rmSync(archive, { force: true })
         return
       }
-      throw new PluginInstallError("PLUGIN_SOURCE_UNSUPPORTED", "remote plugin sources must be an HTTPS .zip archive; git clones are not supported by the native runtime")
+      throw new PluginInstallError(
+        "PLUGIN_SOURCE_UNSUPPORTED",
+        "remote plugin sources must be an HTTPS .zip archive; git clones are not supported by the native runtime",
+      )
     }
     const local = resolve(source.replace(/^~(?=[\\/])/, homedir()))
     if (existsSync(local) && statSync(local).isDirectory()) {
@@ -604,7 +955,10 @@ export class PluginInstallRuntime {
       mkdirSync(payloadRoot)
       extractZip(local, payloadRoot)
     } else {
-      throw new PluginInstallError("PLUGIN_SOURCE_NOT_FOUND", "local plugin source must be an existing directory or ZIP archive")
+      throw new PluginInstallError(
+        "PLUGIN_SOURCE_NOT_FOUND",
+        "local plugin source must be an existing directory or ZIP archive",
+      )
     }
   }
 
@@ -621,35 +975,61 @@ export class PluginInstallRuntime {
     const seen = new Set<string>()
     for (const manifestPath of manifestPaths.sort()) {
       const parsed = validateManifest(manifestPath, payloadRoot)
-      if (parsed.problems.length > 0) {
+      const structuralProblems = parsed.problems.filter(
+        (problem) => !problem.startsWith("compatibility.platforms must include the current platform"),
+      )
+      if (structuralProblems.length > 0) {
         throw new PluginInstallError("INVALID_PLUGIN_MANIFEST", `${manifestPath}: ${parsed.problems.join(", ")}`)
       }
       if (seen.has(parsed.name)) {
         throw new PluginInstallError("INVALID_PLUGIN_PACKAGE", `duplicate plugin name: ${parsed.name}`)
       }
       seen.add(parsed.name)
+      const pluginRoot = dirname(manifestPath)
+      const signature = verifyPluginSignature(
+        pluginRoot,
+        parsed,
+        { name: parsed.name, version: parsed.version },
+        this.profileRoot,
+      )
       candidates.push({
         name: parsed.name,
         version: parsed.version,
         description: parsed.description,
         hooks: parsed.hooks,
-        tools: parsed.tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
+        tools: parsed.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
         manifest_path: resolve(manifestPath),
         entrypoint: parsed.entrypoint,
+        source: "external" as const,
+        permissions: parsed.permissions,
+        egress: parsed.egress,
+        secrets: parsed.secrets,
+        compatibility: parsed.compatibility,
+        signature,
         enabled: parsed.enabled,
         problems: parsed.problems,
-        relative_path: dirname(manifestPath).replace(payloadRoot, "").replace(/^[\\/]/, ""),
-        sha256: treeDigest(dirname(manifestPath)),
+        security: scanPluginDirectory(pluginRoot, parsed, signature),
+        relative_path: pluginRoot.replace(payloadRoot, "").replace(/^[\\/]/, ""),
+        sha256: pluginTreeDigest(pluginRoot),
       })
     }
     if (candidates.length === 0) {
-      throw new PluginInstallError("PLUGIN_MANIFEST_NOT_FOUND", "plugin package must contain plugin.json at its root or in an immediate subdirectory")
+      throw new PluginInstallError(
+        "PLUGIN_MANIFEST_NOT_FOUND",
+        "plugin package must contain plugin.json at its root or in an immediate subdirectory",
+      )
     }
     return candidates
   }
 
   private loadInspection(token: string): string {
-    const normalized = String(token ?? "").trim().toLowerCase()
+    const normalized = String(token ?? "")
+      .trim()
+      .toLowerCase()
     if (!SAFE_TOKEN.test(normalized)) {
       throw new PluginInstallError("INVALID_INSPECTION", "invalid plugin inspection token")
     }
@@ -733,35 +1113,42 @@ function isWithin(parent: string, child: string): boolean {
   return target === base || target.startsWith(`${base}${sep}`)
 }
 
-function treeDigest(root: string): string {
-  const hash = createHash("sha256")
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const full = join(dir, entry.name)
-      hash.update(entry.name)
-      if (entry.isDirectory()) {
-        hash.update("/")
-        walk(full)
-      } else if (entry.isFile()) {
-        hash.update(readFileSync(full))
-      }
-    }
-  }
-  walk(root)
-  return hash.digest("hex")
-}
+type TreeLimits = { entries: number; bytes: number }
 
-function copyTree(source: string, destination: string): void {
+function copyTree(source: string, destination: string, limits: TreeLimits = { entries: 0, bytes: 0 }): void {
   mkdirSync(destination, { recursive: true })
   for (const entry of readdirSync(source, { withFileTypes: true })) {
     const src = join(source, entry.name)
     const dst = join(destination, entry.name)
-    if (entry.isDirectory()) copyTree(src, dst)
-    else if (entry.isFile()) {
+    if (entry.isSymbolicLink()) {
+      throw new PluginInstallError("UNSAFE_PLUGIN_PACKAGE", `plugin package contains a link: ${entry.name}`)
+    }
+    const stats = lstatSync(src)
+    if (stats.isDirectory()) {
+      limits.entries += 1
+      assertTreeLimits(limits, entry.name)
+      copyTree(src, dst, limits)
+    } else if (entry.isFile()) {
+      limits.entries += 1
+      limits.bytes += stats.size
+      assertTreeLimits(limits, entry.name)
       mkdirSync(dirname(dst), { recursive: true })
       writeFileSync(dst, readFileSync(src))
     }
   }
+}
+
+function assertTreeLimits(limits: TreeLimits, name: string): void {
+  if (limits.entries > MAX_PLUGIN_ENTRIES)
+    throw new PluginInstallError(
+      "PLUGIN_PACKAGE_TOO_LARGE",
+      `plugin package exceeds ${MAX_PLUGIN_ENTRIES} entries near ${name}`,
+    )
+  if (limits.bytes > MAX_PLUGIN_EXPANDED_BYTES)
+    throw new PluginInstallError(
+      "PLUGIN_PACKAGE_TOO_LARGE",
+      `expanded plugin package exceeds ${MAX_PLUGIN_EXPANDED_BYTES} bytes near ${name}`,
+    )
 }
 
 function extractZip(archive: string, destination: string): void {
@@ -771,22 +1158,45 @@ function extractZip(archive: string, destination: string): void {
   const eocd = findEocd(data)
   if (eocd < 0) throw new PluginInstallError("INVALID_PLUGIN_ARCHIVE", "plugin archive is not a valid ZIP file")
   let offset = data.readUInt32LE(eocd + 16)
+  const limits: TreeLimits = { entries: 0, bytes: 0 }
   while (offset < eocd) {
-    if (data.readUInt32LE(offset) !== 0x04034b50) throw new PluginInstallError("INVALID_PLUGIN_ARCHIVE", "plugin archive has an invalid local header")
+    if (data.readUInt32LE(offset) !== 0x04034b50)
+      throw new PluginInstallError("INVALID_PLUGIN_ARCHIVE", "plugin archive has an invalid local header")
     const method = data.readUInt16LE(offset + 8)
     const compressedSize = data.readUInt32LE(offset + 18)
     const uncompressedSize = data.readUInt32LE(offset + 22)
     const nameLength = data.readUInt16LE(offset + 26)
     const extraLength = data.readUInt16LE(offset + 28)
     const name = data.subarray(offset + 30, offset + 30 + nameLength).toString("utf8")
-    const payload = data.subarray(offset + 30 + nameLength + extraLength, offset + 30 + nameLength + extraLength + compressedSize)
+    if (
+      !name ||
+      name.includes("\0") ||
+      /^[\\/]/.test(name) ||
+      /^[A-Za-z]:[\\/]/.test(name) ||
+      name.split(/[\\/]/).some((part) => part === "..")
+    ) {
+      throw new PluginInstallError("UNSAFE_PLUGIN_ARCHIVE", "plugin archive contains an absolute or traversal path")
+    }
+    const payload = data.subarray(
+      offset + 30 + nameLength + extraLength,
+      offset + 30 + nameLength + extraLength + compressedSize,
+    )
     const target = resolve(destination, name)
     if (!isWithin(destination, target)) {
       throw new PluginInstallError("UNSAFE_PLUGIN_ARCHIVE", "plugin archive contains paths escaping the payload root")
     }
+    if (uncompressedSize > MAX_PLUGIN_EXPANDED_BYTES || limits.bytes + uncompressedSize > MAX_PLUGIN_EXPANDED_BYTES) {
+      throw new PluginInstallError(
+        "PLUGIN_PACKAGE_TOO_LARGE",
+        `expanded plugin archive exceeds ${MAX_PLUGIN_EXPANDED_BYTES} bytes near ${name}`,
+      )
+    }
     if (name.endsWith("/")) {
+      limits.entries += 1
+      assertTreeLimits(limits, name)
       mkdirSync(target, { recursive: true })
     } else {
+      limits.entries += 1
       mkdirSync(dirname(target), { recursive: true })
       const { inflateRawSync } = require("node:zlib") as typeof import("node:zlib")
       if (method === 0) {
@@ -794,8 +1204,13 @@ function extractZip(archive: string, destination: string): void {
       } else if (method === 8) {
         writeFileSync(target, inflateRawSync(payload))
       } else {
-        throw new PluginInstallError("INVALID_PLUGIN_ARCHIVE", `plugin archive uses unsupported compression method: ${method}`)
+        throw new PluginInstallError(
+          "INVALID_PLUGIN_ARCHIVE",
+          `plugin archive uses unsupported compression method: ${method}`,
+        )
       }
+      limits.bytes += statSync(target).size
+      assertTreeLimits(limits, name)
     }
     offset += 30 + nameLength + extraLength + compressedSize
   }
@@ -818,7 +1233,9 @@ function downloadZip(source: string, destination: string): void {
     windowsHide: true,
   })
   if (result.status !== 0 || !existsSync(output)) {
-    const detail = String(result.stderr ?? result.error?.message ?? "download failed").trim().slice(0, 500)
+    const detail = String(result.stderr ?? result.error?.message ?? "download failed")
+      .trim()
+      .slice(0, 500)
     rmSync(output, { force: true })
     throw new PluginInstallError("PLUGIN_DOWNLOAD_FAILED", `plugin download failed: ${detail}`)
   }

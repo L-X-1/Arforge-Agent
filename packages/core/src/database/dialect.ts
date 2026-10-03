@@ -9,7 +9,21 @@ import * as sqlite from "drizzle-orm/sqlite-core"
  * modules therefore share one query model while the runtime tables use the
  * correct dialect.
  */
-export const usesPostgres = Boolean(process.env.ARFORGE_DB_URL?.trim()) && !process.env.ARFORGE_DB
+/**
+ * Recognise only PostgreSQL connection URLs as the PostgreSQL backend.
+ *
+ * The Python compatibility test harness (and a number of local integrations)
+ * deliberately use `ARFORGE_DB_URL=sqlite://...` to describe an isolated
+ * SQLite store. Treating every non-empty value as PostgreSQL makes the TS
+ * process try to open the PostgreSQL pool and schema gate for those callers,
+ * even though no PostgreSQL connection was requested. Keeping the protocol
+ * check here also prevents a malformed/unknown URL from silently changing the
+ * SQL dialect at module load time.
+ */
+export const isPostgresUrl = (value: string | undefined): boolean =>
+  typeof value === "string" && /^(?:postgres|postgresql):\/\//i.test(value.trim())
+
+export const usesPostgres = !process.env.ARFORGE_DB && isPostgresUrl(process.env.ARFORGE_DB_URL)
 
 const pgJsonText = pg.customType<{
   data: unknown
@@ -48,6 +62,10 @@ export const index: typeof sqlite.index = (usesPostgres ? pg.index : sqlite.inde
 export const uniqueIndex: typeof sqlite.uniqueIndex = (
   usesPostgres ? pg.uniqueIndex : sqlite.uniqueIndex
 ) as typeof sqlite.uniqueIndex
+export const check: typeof sqlite.check = (usesPostgres ? pg.check : sqlite.check) as typeof sqlite.check
+export const foreignKey: typeof sqlite.foreignKey = (
+  usesPostgres ? pg.foreignKey : sqlite.foreignKey
+) as typeof sqlite.foreignKey
 export const primaryKey: typeof sqlite.primaryKey = (
   usesPostgres ? pg.primaryKey : sqlite.primaryKey
 ) as typeof sqlite.primaryKey

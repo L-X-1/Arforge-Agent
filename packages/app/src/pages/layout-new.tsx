@@ -11,6 +11,11 @@ import { setNavigate } from "@/utils/notification-click"
 import { setV2Toast, ToastRegion } from "@/utils/toast"
 import { WorkspaceSidebar } from "@/pages/layout/workspace-sidebar"
 import { TitlebarVerticalTabs } from "@/components/titlebar-vertical-tabs"
+import { settingsRoute } from "@/components/settings-dialog-context"
+import { createMediaQuery } from "@solid-primitives/media"
+import { SHELL_DRAWER_QUERY } from "./layout/workspace-shell-state"
+import { SessionNavigationProvider } from "./home/session-navigation"
+import "./layout/workspace-shell.css"
 
 export default function NewLayout(props: ParentProps) {
   const platform = usePlatform()
@@ -18,11 +23,22 @@ export default function NewLayout(props: ParentProps) {
   const layout = useLayout()
   const command = useCommand()
   const language = useLanguage()
+  const narrow = createMediaQuery(SHELL_DRAWER_QUERY)
   const debugToolsEnabled = import.meta.env.DEV && import.meta.env.VITE_ARFORGE_DEBUG_TOOLS === "1"
   setNavigate(navigate)
   // Keep diagnostics opt-in. The debug HUD updates on every animation frame and
   // should never be part of the default product surface users are validating.
   const [state, setState] = createStore({ debugTools: false })
+
+  // Keep the originating Session when the workspace settings page is opened
+  // from inside a Session.  Settings is a real route in the new layout, so
+  // the route itself must carry the owner context instead of relying on the
+  // unmounted Session header.
+  const openSettings = () => {
+    const route = layout.route()
+    const sessionID = route.type === "session" ? route.sessionId : undefined
+    navigate(settingsRoute(sessionID))
+  }
 
   createEffect(() => setV2Toast(true))
 
@@ -32,7 +48,14 @@ export default function NewLayout(props: ParentProps) {
       title: language.t("command.sidebar.toggle"),
       category: language.t("command.category.view"),
       keybind: "mod+b",
-      onSelect: () => layout.sidebar.toggle(),
+      onSelect: () => narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle(),
+    },
+    {
+      id: "settings.open",
+      title: language.t("command.settings.open"),
+      category: language.t("command.category.settings"),
+      keybind: "mod+comma",
+      onSelect: openSettings,
     },
   ])
 
@@ -47,7 +70,9 @@ export default function NewLayout(props: ParentProps) {
   }
 
   return (
+    <SessionNavigationProvider>
     <div
+      data-component="workspace-shell"
       data-arforge-atmosphere
       class="relative flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
       style={{
@@ -64,14 +89,15 @@ export default function NewLayout(props: ParentProps) {
         }
       />
       <div class="flex min-h-0 min-w-0 flex-1">
-        <WorkspaceSidebar />
         <TitlebarVerticalTabs />
-        <main class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
+        <WorkspaceSidebar />
+        <main id="workspace-main" tabIndex={-1} class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-strict">
           {props.children}
         </main>
       </div>
       {debugToolsEnabled && state.debugTools && <DebugBar inline />}
       <ToastRegion v2 />
     </div>
+    </SessionNavigationProvider>
   )
 }

@@ -74,6 +74,21 @@ jobs:
         run: >-
           ./scripts/write_desktop_signed_candidate_evidence.ps1
           -Installer packages/desktop/dist/arforge-desktop-win-x64.exe
+      - name: Generate reproducible release SBOM and provenance
+        run: >-
+          bun run release:evidence --
+          --output desktop/release-evidence
+          --channel beta
+          --artifact packages/desktop/dist/arforge-desktop-win-x64.exe
+          --signature-evidence desktop/release-evidence/signed-candidate.json
+          --require-clean
+          --require-signed
+      - name: Verify release evidence checksums and signed binding
+        run: >-
+          bun run script/release-evidence.ts --
+          --verify
+          --output desktop/release-evidence
+          --require-signed
       - name: Upload private signed Beta candidate and evidence
         uses: actions/upload-artifact@v4
         with:
@@ -84,5 +99,10 @@ jobs:
             desktop/release-evidence/signed-candidate.json
             desktop/release-evidence/*.timestamp-proof.json
             desktop/release-evidence/SHA256SUMS.signed-beta
+            desktop/release-evidence/SHA256SUMS
+            desktop/release-evidence/release-manifest.json
+            desktop/release-evidence/sbom.cdx.json
+            desktop/release-evidence/provenance.json
+            desktop/release-evidence/signature-status.json
           if-no-files-found: error
           retention-days: 14

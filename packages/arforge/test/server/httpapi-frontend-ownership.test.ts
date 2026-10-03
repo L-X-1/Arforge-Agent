@@ -7,8 +7,7 @@ import {
   legacyHttpOperations,
   legacyHttpOwnership,
 } from "../../src/server/frontend-ownership"
-import "./httpapi-exercise/environment"
-import { runtime } from "./httpapi-exercise/runtime"
+import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 
 const root = resolve(import.meta.dir, "../../../..")
 const methods = ["get", "post", "put", "patch", "delete"] as const
@@ -16,8 +15,7 @@ const methods = ["get", "post", "put", "patch", "delete"] as const
 test(
   "assigns every compatibility SDK route to exactly one Scheme B frontend owner",
   async () => {
-    const modules = await runtime()
-    const spec = OpenApi.fromApi(modules.PublicApi)
+    const spec = OpenApi.fromApi(PublicApi)
     const operations = Object.entries(spec.paths ?? {}).flatMap(([path, item]) =>
       methods.flatMap((method) => {
         const route = item[method]
@@ -29,7 +27,10 @@ test(
     )
     const mapped = legacyHttpOperations()
 
-    expect(operations.length).toBe(131)
+    // Keep this contract tied to the generated public surface. The count is
+    // intentionally asserted against the ownership table below so adding a
+    // compatibility operation cannot silently bypass Scheme B ownership.
+    expect(operations.length).toBe(legacyHttpOperations().length)
     expect(new Set(operations).size).toBe(operations.length)
     expect(mapped.length).toBe(operations.length)
     expect(new Set(mapped).size).toBe(mapped.length)

@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js"
-import { For, Index, Show, createEffect, createMemo, onCleanup, onMount } from "solid-js"
+import { For, Index, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { Icon } from "@arforge-ai/ui/icon"
@@ -27,6 +27,8 @@ import {
 } from "./execution-animation-model"
 import { dragonRigAsset, type DragonRigPart } from "./execution-dragon-rig"
 import "./session-execution-dock.css"
+import "@/components/preview/workbench-review.css"
+import { ExecutionStepDetail } from "./execution-step-detail"
 
 type Copy = ReturnType<typeof copy>
 const petPositionStorageKey = "arforge.execution-pet.position.v1"
@@ -47,6 +49,7 @@ function copy(locale: string) {
         empty: "开始执行后，这里会实时展示推理摘要、工具调用和文件变更。",
         detail: "查看详情",
         hideDetail: "收起详情",
+        resizeTimeline: "拖动以调节上下区域高度；方向键可微调",
         completed: "已完成",
         failed: "失败",
         current: "进行中",
@@ -95,6 +98,7 @@ function copy(locale: string) {
         empty: "Reasoning summaries, tool calls, and file changes will appear here as the task runs.",
         detail: "Show details",
         hideDetail: "Hide details",
+        resizeTimeline: "Drag to resize the upper area; use arrow keys for fine adjustments",
         completed: "Completed",
         failed: "Failed",
         current: "In progress",
@@ -219,10 +223,14 @@ function DragonPuppet(props: { form: ExecutionMascotForm; class?: string }) {
 export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (opened: boolean) => void }) {
   const language = useLanguage()
   const sync = useSync()
-  const { params } = useSessionLayout()
+  const { params, sessionKey } = useSessionLayout()
   const words = createMemo(() => copy(language.locale()))
+  const [mascotHeight, setMascotHeight] = createSignal<number>()
+  const [dividerResizing, setDividerResizing] = createSignal(false)
   const [state, setState] = createStore({
     expanded: {} as Record<string, boolean>,
+    selectedStep: undefined as string | null | undefined,
+    selectionScope: "",
     turn: undefined as string | undefined,
     runningTurn: undefined as string | undefined,
     celebratedTurn: undefined as string | undefined,
@@ -240,6 +248,12 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
     petDragOffsetX: 0,
     petDragOffsetY: 0,
   })
+  let dockElement: HTMLElement | undefined
+  let mascotElement: HTMLElement | undefined
+  let dividerPointer: number | undefined
+  let dividerStartY = 0
+  let dividerStartHeight = 0
+  let dividerMaxHeight = 350
   let petElement: HTMLElement | undefined
   let celebrationTimer = 0
 
@@ -260,6 +274,13 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
     trace().steps.findLast((step) => step.status === "running" || step.status === "pending"),
   )
   const currentStep = createMemo(() => activeStep() ?? trace().steps.at(-1))
+  const selectedStep = createMemo(() => state.selectedStep === null ? undefined :
+    trace().steps.find((step) => step.id === state.selectedStep || step.sections?.some((section) => section.source === state.selectedStep)) ?? currentStep())
+  createEffect(() => {
+    const scope = sessionKey() + "\u0000" + (trace().userMessageID ?? "")
+    if (state.selectionScope === scope) return
+    setState({ selectionScope: scope, selectedStep: undefined })
+  })
   const currentVariant = createMemo(() => {
     const user = messages().findLast((message) => message.role === "user")
     return user?.role === "user" ? user.model.variant : undefined
@@ -300,6 +321,44 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
     if (!step) return headline()
     return `${words().kinds[step.kind]}${step.count > 1 ? ` × ${step.count}` : ""}`
   })
+
+  const mascotHeightValue = () => mascotHeight() ?? mascotElement?.getBoundingClientRect().height ?? 300
+  const maxMascotHeight = () => Math.max(180, (dockElement?.getBoundingClientRect().height ?? 534) - 64 - 140)
+  const setBoundedMascotHeight = (height: number, max = maxMascotHeight()) => {
+    setMascotHeight(Math.round(Math.min(Math.max(height, 180), max)))
+  }
+
+  const beginDividerResize = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    dividerPointer = event.pointerId
+    dividerStartY = event.clientY
+    dividerStartHeight = mascotHeightValue()
+    dividerMaxHeight = maxMascotHeight()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDividerResizing(true)
+  }
+
+  const moveDividerResize = (event: PointerEvent) => {
+    if (event.pointerId !== dividerPointer) return
+    setBoundedMascotHeight(dividerStartHeight + event.clientY - dividerStartY, dividerMaxHeight)
+  }
+
+  const finishDividerResize = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+    if (event.pointerId !== dividerPointer) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    dividerPointer = undefined
+    setDividerResizing(false)
+  }
+
+  const resizeMascotWithKeyboard = (event: KeyboardEvent) => {
+    const step = event.shiftKey ? 32 : 16
+    const delta = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : undefined
+    if (delta === undefined) return
+    event.preventDefault()
+    setBoundedMascotHeight(mascotHeightValue() + delta)
+  }
 
   const beginPetDrag = (event: PointerEvent & { currentTarget: HTMLDivElement }) => {
     if (!state.petFreeRoam || event.button !== 0) return
@@ -548,7 +607,8 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
   return (
     <aside
       id="execution-trace-panel"
-      class="execution-dock shrink-0 min-h-0 h-full rounded-[10px] border border-v2-border-border-muted bg-v2-background-bg-base overflow-hidden"
+      ref={(element) => (dockElement = element)}
+      class="arforge-review-workbench execution-dock shrink-0 min-h-0 h-full rounded-l-[16px] rounded-r-none border border-r-0 border-v2-border-border-muted bg-v2-background-bg-base overflow-hidden"
       classList={{ "execution-dock--open": props.opened, "execution-dock--running": running() }}
       aria-label={words().title}
     >
@@ -655,6 +715,7 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
           </header>
 
           <section
+            ref={(element) => (mascotElement = element)}
             class="execution-mascot"
             classList={{
               "execution-mascot--running": visualMode() === "battle",
@@ -666,6 +727,7 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
             data-clip={dragonState().clip}
             data-state={visualMode()}
             aria-label={`${words().formLabel} ${mascotForm()}: ${actionLabel()}`}
+            style={{ height: mascotHeight() ? `${mascotHeight()}px` : undefined }}
           >
             <div class="execution-mascot__halo" aria-hidden="true" />
             <div class="execution-mascot__particles" aria-hidden="true">
@@ -761,6 +823,25 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
             </div>
           </section>
 
+          <div
+            class="execution-dock__splitter"
+            data-resizing={dividerResizing()}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label={words().resizeTimeline}
+            aria-valuemin={180}
+            aria-valuemax={Math.round(maxMascotHeight())}
+            aria-valuenow={Math.round(mascotHeightValue())}
+            tabIndex={0}
+            onPointerDown={beginDividerResize}
+            onPointerMove={moveDividerResize}
+            onPointerUp={finishDividerResize}
+            onPointerCancel={finishDividerResize}
+            onKeyDown={resizeMascotWithKeyboard}
+          >
+            <span aria-hidden="true" />
+          </div>
+
           <Show when={trace().steps.length > 0} fallback={<div class="execution-dock__empty">{words().empty}</div>}>
             <div class="execution-dock__summary">
               <span>
@@ -772,15 +853,15 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                 </span>
               </Show>
             </div>
-            <ol class="execution-dock__steps" aria-live="polite">
+            <div class="execution-workbench">
+            <ol class="execution-dock__steps" aria-label={words().title}>
               {/* Trace objects are rebuilt for every streaming packet. Preserve each existing DOM slot so its
                   entrance animation runs once instead of replaying across the whole list. */}
               <Index each={trace().steps}>
                 {(step, index) => {
                   const expandable = () => !!step().detail
-                  const expanded = () => state.expanded[step().id]
-                  const label = () =>
-                    `${words().kinds[step().kind]}${step().count > 1 ? ` × ${step().count}` : ""}`
+                  const expanded = () => selectedStep()?.id === step().id
+                  const label = () => `${words().kinds[step().kind]}${step().count > 1 ? ` × ${step().count}` : ""}`
                   return (
                     <li
                       class="execution-step"
@@ -802,7 +883,7 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                         aria-label={
                           expandable() ? `${expanded() ? words().hideDetail : words().detail}: ${label()}` : label()
                         }
-                        onClick={() => expandable() && setState("expanded", step().id, !expanded())}
+                        onClick={() => expandable() && setState("selectedStep", expanded() ? null : step().sections?.[0]?.source ?? step().id)}
                       >
                         <span class="execution-step__topline">
                           <span class="execution-step__title">{label()}</span>
@@ -823,14 +904,13 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                           </Show>
                         </span>
                       </button>
-                      <Show when={expanded() && step().detail}>
-                        <pre class="execution-step__detail">{step().detail}</pre>
-                      </Show>
                     </li>
                   )
                 }}
               </Index>
             </ol>
+            <Show when={selectedStep()}>{(step) => <ExecutionStepDetail step={step()} chinese={language.locale().startsWith("zh")} />}</Show>
+            </div>
           </Show>
         </div>
       </Show>

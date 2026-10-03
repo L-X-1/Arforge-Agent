@@ -264,6 +264,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
   const issuer = options.issuer ?? ISSUER
   const codexApiEndpoint = options.codexApiEndpoint ?? CODEX_API_ENDPOINT
   let websocketFetchInstalled = false
+  let codexOauthInstalled = false
   const websocketFetches: Array<ReturnType<typeof OpenAIWebSocketPool.createWebSocketFetch>> = []
 
   return {
@@ -321,6 +322,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
       provider: "openai",
       async loader(getAuth) {
         const auth = await getAuth()
+        codexOauthInstalled = auth.type === "oauth"
         const websocketFetch = options.experimentalWebSockets
           ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: fetch })
           : undefined
@@ -340,18 +342,6 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization")
-                init.headers.delete("Authorization")
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(([key]) => key.toLowerCase() !== "authorization")
-              } else {
-                delete init.headers["authorization"]
-                delete init.headers["Authorization"]
-              }
-            }
-
             const currentAuth = await getAuth()
             if (currentAuth.type !== "oauth")
               return websocketFetch ? websocketFetch(requestInput, init) : fetch(requestInput, init)
@@ -412,7 +402,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                 ? requestInput
                 : new URL(typeof requestInput === "string" ? requestInput : requestInput.url)
             const url =
-              parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
+              parsed.pathname.endsWith("/v1/responses") || parsed.pathname.endsWith("/chat/completions")
                 ? new URL(codexApiEndpoint)
                 : parsed
 
@@ -548,16 +538,18 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
     },
     "chat.headers": async (input, output) => {
       if (input.model.providerID !== "openai") return
-      output.headers.originator = "arforge"
-      output.headers["User-Agent"] = `arforge/${InstallationVersion} (${os.platform()} ${os.release()}; ${os.arch()})`
-      output.headers["session-id"] = input.sessionID
+      if (codexOauthInstalled) {
+        output.headers.originator = "arforge"
+        output.headers["User-Agent"] = `arforge/${InstallationVersion} (${os.platform()} ${os.release()}; ${os.arch()})`
+      }
+      if (codexOauthInstalled || websocketFetchInstalled) output.headers["session-id"] = input.sessionID
       // Temporary fetch-layer hack: title generation currently shares the conversation
       // session ID, so the OpenAI plugin marks it for HTTP fallback until transport
       // context can be passed directly instead of smuggled through headers.
       if (websocketFetchInstalled && input.agent === "title") output.headers[OpenAIWebSocketPool.TITLE_HEADER] = "true"
     },
     "chat.params": async (input, output) => {
-      if (input.model.providerID !== "openai") return
+      if (input.model.providerID !== "openai" || !codexOauthInstalled) return
       // Match codex cli
       output.maxOutputTokens = undefined
     },

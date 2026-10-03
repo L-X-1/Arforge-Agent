@@ -510,6 +510,17 @@ class ArforgeAgent:
         project_rules_prompt = build_project_rules_system_prompt(
             required=is_project_workspace() or is_development_request(user_content)
         )
+        # Project conventions (AGENTS.md / .arforgerules / .cursorrules) are
+        # complementary to project rules and never duplicate them.
+        try:
+            from arforge.core.project_context import discover_project_conventions
+            from arforge.workspace_context import current_workspace
+
+            conventions_prompt = discover_project_conventions(
+                current_workspace(Path.cwd())
+            )
+        except Exception:
+            conventions_prompt = ""
         self.refresh_memory_text(user_content)
 
         use_reasoning = (
@@ -529,6 +540,8 @@ class ArforgeAgent:
         volatile_sections: list[str] = []
         if project_rules_prompt:
             volatile_sections.append(project_rules_prompt)
+        if conventions_prompt:
+            volatile_sections.append(conventions_prompt)
         if self.memory_text:
             volatile_sections.append(f"## Relevant Memory\n{self.memory_text}")
 

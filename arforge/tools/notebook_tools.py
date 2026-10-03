@@ -1,4 +1,11 @@
-"""Structured notebook tools."""
+"""Explicit Python compatibility wrappers for structured notebook tools.
+
+The TypeScript/Core ``notebook_read`` and ``notebook_edit`` tools are the sole
+product owner for workspace resolution, SHA-256 stale protection, permission
+metadata, and durable tool events. These wrappers remain importable for legacy
+Python callers and migration fixtures, but are excluded from the default
+Python registry so they cannot become a second notebook tool path.
+"""
 
 from __future__ import annotations
 

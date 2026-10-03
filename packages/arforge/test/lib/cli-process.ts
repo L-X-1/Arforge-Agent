@@ -61,6 +61,10 @@ function forkStderrDrain(stream: ReadableStream<Uint8Array>, into: string[]) {
 
 function isolatedEnv(home: string, configJson: string): Record<string, string> {
   return {
+    // xdg-basedir resolves to the host profile on Windows even when the XDG
+    // variables are overridden. Force Arforge's complete global profile into
+    // this fixture so protected state cannot leak between tests.
+    ARFORGE_HOME: home,
     ARFORGE_TEST_HOME: home,
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
@@ -74,6 +78,11 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     ARFORGE_DISABLE_AUTOCOMPACT: "1",
     ARFORGE_DISABLE_MODELS_FETCH: "1",
     ARFORGE_AUTH_CONTENT: "{}",
+    // The CLI child is a real production-mode process. On Windows this keeps
+    // protected state on the stable current-user DPAPI provider instead of
+    // generating a different in-memory test key for every child process.
+    NODE_ENV: "production",
+    BUN_ENV: "production",
   }
 }
 
@@ -89,7 +98,12 @@ export type RunHandle = {
   readonly result: Effect.Effect<RunResult>
 }
 
-export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<string, string> }
+export type SpawnOpts = {
+  readonly timeoutMs?: number
+  readonly env?: Record<string, string>
+  /** Optional UTF-8 stdin payload for JSONL/text compatibility tests. */
+  readonly stdin?: string
+}
 
 // Typed equivalent of constructing argv for `arforge run`. New flags should
 // land here so tests stay grep-able and refactor-safe.
@@ -207,6 +221,33 @@ export function withCliFixture<A, E>(
     const spawn = Effect.fn("arforge.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
       const timeoutMs = opts?.timeoutMs ?? 30_000
+      if (opts?.stdin !== undefined) {
+        const stdin = opts.stdin
+        return yield* Effect.promise(async () => {
+          const child = Bun.spawn([process.execPath, "run", "--conditions=browser", cliEntry, ...args], {
+            cwd: home,
+            env: { ...env, ...opts.env },
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          child.stdin.write(stdin)
+          child.stdin.end()
+          const timeout = setTimeout(() => child.kill(), timeoutMs)
+          const [stdout, stderr, exitCode] = await Promise.all([
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+            child.exited,
+          ])
+          clearTimeout(timeout)
+          return {
+            exitCode,
+            stdout: normalizeLines(stdout),
+            stderr: normalizeLines(stderr),
+            durationMs: Date.now() - start,
+          }
+        })
+      }
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to

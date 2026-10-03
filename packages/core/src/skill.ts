@@ -11,6 +11,7 @@ import { PermissionV2 } from "./permission"
 import { AbsolutePath } from "./schema"
 import { SkillDiscovery } from "./skill/discovery"
 import { State } from "./state"
+import { canonicalHash } from "./util/canonical-hash"
 
 export const DirectorySource = Skill.DirectorySource
 export type DirectorySource = Skill.DirectorySource
@@ -27,6 +28,19 @@ export type Source = typeof Source.Type
 export const Info = Skill.Info
 export type Info = Skill.Info
 
+/** The materialized skill view used by one turn. */
+export interface SnapshotSource {
+  readonly type: Source["type"]
+  readonly locator: string
+}
+
+export interface Snapshot {
+  readonly revision: number
+  readonly digest: string
+  readonly sources: ReadonlyArray<SnapshotSource>
+  readonly skills: ReadonlyArray<Info>
+}
+
 export const available = (skills: ReadonlyArray<Info>, agent: AgentV2.Info) =>
   skills.filter((skill) => PermissionV2.evaluate("skill", skill.name, agent.permissions).effect !== "deny")
 
@@ -36,6 +50,41 @@ const Frontmatter = Schema.Struct({
   slash: Schema.Boolean.pipe(Schema.optional),
 })
 const decodeFrontmatter = Schema.decodeUnknownOption(Frontmatter)
+
+const freezeInfo = (info: Info): Info => Object.freeze({ ...info })
+
+const sourceLocator = (source: Source): SnapshotSource => {
+  if (source.type === "embedded") return Object.freeze({ type: source.type, locator: `embedded:${source.skill.name}` })
+  if (source.type === "directory") return Object.freeze({ type: source.type, locator: String(source.path) })
+  try {
+    const url = new URL(source.url)
+    // A URL may contain credentials or query parameters used for
+    // authentication. They must not be exposed in provenance/snapshots.
+    return Object.freeze({ type: source.type, locator: `${url.origin}${url.pathname}` })
+  } catch {
+    return Object.freeze({ type: source.type, locator: "invalid-url" })
+  }
+}
+
+const sourceIdentity = (source: Source) =>
+  source.type === "embedded"
+    ? { type: source.type, name: source.skill.name, content: source.skill.content }
+    : source.type === "directory"
+      ? { type: source.type, path: String(source.path) }
+      : { type: source.type, url: source.url }
+
+/**
+ * Resolve source precedence in one place. Sources are applied in registration
+ * order and later sources replace an earlier same-named skill while retaining
+ * the first insertion position for deterministic prompt ordering.
+ */
+export const resolveVisible = (entries: ReadonlyArray<ReadonlyArray<Info>>): Info[] => {
+  const visible = new Map<string, Info>()
+  for (const skills of entries) {
+    for (const skill of skills) visible.set(skill.name, freezeInfo(skill))
+  }
+  return [...visible.values()]
+}
 
 export type Data = {
   sources: Types.DeepMutable<Source>[]
@@ -49,6 +98,7 @@ export type Draft = {
 export interface Interface extends State.Transformable<Draft> {
   readonly sources: () => Effect.Effect<Source[]>
   readonly list: () => Effect.Effect<Info[]>
+  readonly snapshot: () => Effect.Effect<Snapshot>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/Skill") {}
@@ -101,30 +151,91 @@ const layer = Layer.effect(
           })
         }
       }
-      return skills
+      return Object.freeze(skills.map(freezeInfo))
     })
 
-    // QUESTION(Dax): Should local skill sources invalidate on filesystem watch
-    // events, following the reload policy chosen for other context sources?
-    const cache = new Map<string, Info[]>()
+    // A source cache is only valid for the materialized State revision. A
+    // reload must clear it before the next turn can observe a skill; otherwise
+    // edits to a directory or a refreshed URL remain invisible indefinitely.
+    const cache = new Map<string, ReadonlyArray<Info>>()
+    let revision = 0
+    let sourceSignature: string | undefined
+    const invalidate = Effect.sync(() => {
+      cache.clear()
+      sourceSignature = undefined
+      revision += 1
+    })
+    const syncSourceSignature = () => {
+      const signature = state
+        .get()
+        .sources.map((source) => Source.key(source))
+        .join("\u0000")
+      if (signature === sourceSignature) return
+      cache.clear()
+      sourceSignature = signature
+      revision += 1
+    }
     const list = Effect.fn("SkillV2.list")(function* () {
-      const skills = new Map<string, Info>()
+      syncSourceSignature()
+      const loadedEntries: Array<ReadonlyArray<Info>> = []
       for (const source of state.get().sources) {
         const key = Source.key(source)
         const loaded = cache.get(key) ?? (yield* load(source))
         cache.set(key, loaded)
-        for (const skill of loaded) skills.set(skill.name, skill)
+        loadedEntries.push(loaded)
       }
-      return Array.from(skills.values())
+      return resolveVisible(loadedEntries)
+    })
+
+    const reload = Effect.fn("SkillV2.reload")(function* () {
+      yield* state.reload()
+      yield* invalidate
+    })
+
+    const transform = Effect.fn("SkillV2.transform")(function* (update: (draft: Draft) => Effect.Effect<void> | void) {
+      const registration = yield* state.transform(update)
+      yield* invalidate
+      let active = true
+      return {
+        dispose: Effect.ensuring(
+          registration.dispose,
+          Effect.sync(() => {
+            if (!active) return
+            active = false
+            cache.clear()
+            sourceSignature = undefined
+            revision += 1
+          }),
+        ),
+      }
+    })
+
+    const snapshot = Effect.fn("SkillV2.snapshot")(function* () {
+      const skills = Object.freeze([...(yield* list())].map(freezeInfo))
+      const sources = Object.freeze(state.get().sources.map(sourceLocator))
+      const identity = {
+        sources: state.get().sources.map(sourceIdentity),
+        skills: skills.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          slash: skill.slash,
+          location: String(skill.location),
+          content: skill.content,
+        })),
+      }
+      const digest = canonicalHash(identity)
+      if (!digest) return yield* Effect.die(new Error("skill snapshot is not canonicalizable"))
+      return Object.freeze({ revision, digest, sources, skills })
     })
 
     return Service.of({
-      transform: state.transform,
-      reload: state.reload,
+      transform,
+      reload,
       sources: Effect.fn("SkillV2.sources")(function* () {
-        return state.get().sources
+        return [...state.get().sources]
       }),
       list,
+      snapshot,
     })
   }),
 )

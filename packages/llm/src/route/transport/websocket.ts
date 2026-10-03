@@ -1,7 +1,8 @@
-import { Cause, Context, Effect, Layer, Queue, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Queue, Schema, Stream } from "effect"
 import { Headers } from "effect/unstable/http"
 import { LLMError, TransportReason } from "../../schema"
 import * as HttpTransport from "./http"
+import { describeEndpoint } from "../executor"
 import type { Transport } from "./index"
 
 export interface WebSocketRequest {
@@ -224,6 +225,10 @@ export interface JsonTransport<Body, Message> extends Transport<Body, JsonPrepar
 }
 
 export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransport<Body, Message> => ({
+  describe: (prepared) => ({
+    body: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(prepared.message),
+    endpoint: describeEndpoint(prepared.url),
+  }),
   id: "websocket-json",
   with: (patch) => json({ ...input, ...patch }),
   prepare: (prepareInput) =>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { FileSystem, Integration, Permission, Project, Reference, Session, Workspace } from "../src"
+import { AgentRuntime, FileSystem, Integration, Permission, Project, Reference, Session, Workspace } from "../src"
 import { EventManifest } from "../src/event-manifest"
 import { IdeEvent } from "../src/ide-event"
 import { SessionEvent } from "../src/session-event"
@@ -9,8 +9,8 @@ import { WorkspaceEvent } from "../src/workspace-event"
 
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
-    expect(EventManifest.ServerDefinitions.length).toBe(79)
-    expect(EventManifest.Definitions.length).toBe(109)
+    expect(EventManifest.ServerDefinitions.length).toBe(128)
+    expect(EventManifest.Definitions.length).toBe(160)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
       SessionV1.Event.Updated,
@@ -23,8 +23,8 @@ describe("public event manifest", () => {
       SessionV1.Event.Diff,
       SessionV1.Event.Error,
     ])
-    expect(EventManifest.Latest.size).toBe(109)
-    expect(EventManifest.Durable.size).toBe(40)
+    expect(EventManifest.Latest.size).toBe(160)
+    expect(EventManifest.Durable.size).toBe(95)
   })
 
   test("uses canonical definitions for current public events", () => {
@@ -55,5 +55,8 @@ describe("public event manifest", () => {
     expect(EventManifest.Durable.get("session.next.step.ended.2")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Durable.get("session.next.memory.context.prepared.1")).toBe(SessionEvent.MemoryContextPrepared)
     expect(EventManifest.Durable.get("session.next.context.fusion.prepared.1")).toBe(SessionEvent.ContextFusionPrepared)
+    expect(EventManifest.Durable.get("agent.action.authorization-granted.1")).toBe(
+      AgentRuntime.Event.ActionAuthorizationGranted,
+    )
   })
 })

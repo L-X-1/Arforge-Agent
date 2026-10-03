@@ -4,7 +4,7 @@ import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useMarked } from "@arforge-ai/ui/context/marked"
 import { useQuery, useQueryClient } from "@tanstack/solid-query"
 import { DateTime } from "luxon"
-import { type Accessor, createEffect, createMemo, createRoot, type JSX, startTransition } from "solid-js"
+import { type Accessor, createEffect, createMemo, createRoot, type JSX, on, onCleanup, startTransition } from "solid-js"
 import { produce } from "solid-js/store"
 import { useCommand } from "@/context/command"
 import {
@@ -19,6 +19,21 @@ import { sessionHasOpenTab, useTabs } from "@/context/tabs"
 import { displayName, errorMessage, projectForSession } from "@/pages/layout/helpers"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
 import { pathKey } from "@/utils/path-key"
+import { normalizeSessionInfo } from "@/utils/session"
+import { createCompatibleApi } from "@/utils/server-compat"
+import {
+  applyPinnedNavigationEvent,
+  filterRemovedNavigationSessions,
+  loadPinnedNavigationSessions,
+  mergePinnedNavigationSessions,
+  pinnedNavigationEventsKey,
+  pinnedNavigationQueryKey,
+  pinnedNavigationRemoved,
+  pinnedNavigationRevision,
+  retainPinnedNavigationRecords,
+  type NavigationTarget,
+  type PinnedNavigationEvents,
+} from "../layout/workspace-shell-state"
 import { showToast } from "@/utils/toast"
 import { Binary } from "@arforge-ai/core/util/binary"
 import { archiveHomeSession } from "../home-session-archive"
@@ -40,7 +55,10 @@ export type HomeSessionGroup = {
 
 export type OpenSessionOptions = { background?: boolean }
 
-export function createHomeSessionsController(home: HomeController) {
+export function createHomeSessionsController(
+  home: HomeController,
+  options: { navigationOnly?: boolean; enabled?: () => boolean; pins?: () => NavigationTarget[] } = {},
+) {
   const tabs = useTabs()
   const command = useCommand()
   const dialog = useDialog()
@@ -64,7 +82,7 @@ export function createHomeSessionsController(home: HomeController) {
   }))
   const sessionLoad = useQuery(() => ({
     queryKey: homeSessions().indexKey,
-    enabled: !!home.server.focusedContext(),
+    enabled: !!home.server.focusedContext() && (options.enabled?.() ?? true),
     queryFn: async ({ signal }) => {
       const ctx = home.server.focusedContext()
       if (!ctx) return { sessions: [], eventSequence: 0 }
@@ -83,13 +101,72 @@ export function createHomeSessionsController(home: HomeController) {
     refetchOnMount: true,
     refetchOnReconnect: true,
   }))
-  const indexedSessions = createMemo(() =>
-    retainHomeSessions(
-      homeSessions().sessions(sessionLoad.data, sessionEventLoad.data),
-      HOME_SESSION_LIMIT,
-      Date.now(),
-    ),
-  )
+  const focusedKey = () => {
+    const conn = home.server.focused()
+    return conn ? ServerConnection.key(conn) : ""
+  }
+  const pinTargets = createMemo(() => {
+    const allowed = new Set(projectDirectories().map(pathKey))
+    return (options.pins?.() ?? []).filter((target) =>
+      target.server === focusedKey() && allowed.has(pathKey(target.directory)))
+  })
+  const pinnedEventsLoad = useQuery(() => ({
+    queryKey: pinnedNavigationEventsKey(focusedKey()),
+    queryFn: async (): Promise<PinnedNavigationEvents> => ({}),
+    initialData: {} as PinnedNavigationEvents,
+    enabled: false,
+  }))
+  const pinnedLoad = useQuery(() => {
+    // Capture both context and targets before awaiting; never resolve via a later selection.
+    const ctx = home.server.focusedContext()
+    const targets = pinTargets()
+    return {
+      queryKey: pinnedNavigationQueryKey(focusedKey(), targets),
+      enabled: !!ctx && targets.length > 0 && (options.enabled?.() ?? true),
+      queryFn: ({ signal }: { signal: AbortSignal }) => loadPinnedNavigationSessions<Session>(
+        ctx ? targets.filter((target) => !pinnedNavigationRemoved(queryClient, target)) : [],
+        async (target) => {
+          const api = createCompatibleApi({
+            protocol: ctx!.sdk.protocol,
+            current: ctx!.sdk.currentApi,
+            legacy: (directory) => ctx!.sdk.createClient({ directory: directory ?? target.directory, throwOnError: true }),
+            directory: target.directory,
+          })
+          return normalizeSessionInfo(await api.session.get({ sessionID: target.sessionID }))
+        },
+        signal,
+        (target) => pinnedNavigationRevision(queryClient, target),
+      ),
+      retry: false,
+      staleTime: 30_000,
+      refetchOnMount: true,
+      refetchOnReconnect: true,
+    }
+  })
+  createEffect(on(home.server.list, (servers) => {
+    const disposers = servers.map((conn) => {
+      const server = ServerConnection.key(conn)
+      return home.server.context(conn).sdk.event.listen(({ details }) => {
+        if (details.type === "session.created" || details.type === "session.updated" || details.type === "session.deleted")
+          applyPinnedNavigationEvent(queryClient, server, details)
+      })
+    })
+    onCleanup(() => disposers.forEach((dispose) => dispose()))
+  }))
+  const indexedSessions = createMemo(() => {
+    const indexed = homeSessions().sessions(sessionLoad.data, sessionEventLoad.data)
+    return filterRemovedNavigationSessions(
+      mergePinnedNavigationSessions(
+        retainHomeSessions(indexed, HOME_SESSION_LIMIT, Date.now()),
+        indexed,
+        pinnedLoad.isPending ? [] : (pinnedLoad.data?.entries ?? []),
+        pinTargets(),
+        focusedKey(),
+      ),
+      focusedKey(),
+      pinnedEventsLoad.data ?? {},
+    )
+  })
   const allRecords = createMemo(() =>
     buildHomeSessionRecords({
       sessions: indexedSessions,
@@ -98,11 +175,12 @@ export function createHomeSessionsController(home: HomeController) {
       projectByID,
     }),
   )
-  const records = createMemo(() => allRecords().slice(0, HOME_SESSION_LIMIT))
+  const records = createMemo(() => retainPinnedNavigationRecords(allRecords(), pinTargets(), focusedKey(), HOME_SESSION_LIMIT))
   const groups = createMemo(() => groupSessions(records(), language))
   const prefetched = new Set<string>()
 
   createEffect(() => {
+    if (options.navigationOnly) return
     const ctx = home.server.focusedContext()
     const conn = home.server.focused()
     if (!ctx || !conn) return
@@ -135,7 +213,7 @@ export function createHomeSessionsController(home: HomeController) {
       })
   })
 
-  command.register("home.palette", () => [
+  if (!options.navigationOnly) command.register("home.palette", () => [
     {
       id: "command.palette",
       title: language.t("command.palette"),
@@ -175,6 +253,9 @@ export function createHomeSessionsController(home: HomeController) {
       records,
       groups,
       loading: () => sessionLoad.isLoading,
+      error: () => sessionLoad.error,
+      pinFailures: () => pinnedLoad.error ? 1 : pinnedLoad.isPending ? 0 : (pinnedLoad.data?.failures.length ?? 0),
+      retry: () => Promise.all([sessionLoad.refetch(), pinnedLoad.refetch()]),
       searchRecords: allRecords,
     },
     session: {
@@ -224,10 +305,14 @@ export function createHomeSessionsController(home: HomeController) {
                 if (match.found) draft.session.splice(match.index, 1)
               }),
             ),
-          onArchived: () =>
-            queryClient.invalidateQueries({
-              queryKey: homeArchivedSessionsKey(ServerConnection.key(conn)),
-            }),
+          onArchived: async () => {
+            const server = ServerConnection.key(conn)
+            applyPinnedNavigationEvent(queryClient, server, {
+              type: "session.updated",
+              properties: { info: { ...session, time: { ...session.time, archived: Date.now() } } },
+            })
+            await queryClient.invalidateQueries({ queryKey: homeArchivedSessionsKey(server) })
+          },
           onError: (cause) =>
             showToast({
               title: language.t("common.requestFailed"),
@@ -255,7 +340,7 @@ function buildHomeSessionRecords(input: {
 }) {
   const directories = new Set(input.projectDirectories().map(pathKey))
   const sessions = input.sessions().filter((session) => directories.has(pathKey(session.directory)))
-  return [...new Map(sessions.map((session) => [session.id, session] as const)).values()]
+  return [...new Map(sessions.map((session) => [JSON.stringify([pathKey(session.directory), session.id]), session] as const)).values()]
     .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
     .flatMap((session) => {
       const directory = pathKey(session.directory)

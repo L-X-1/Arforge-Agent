@@ -1,3 +1,5 @@
+/** @jsxImportSource @opentui/solid */
+
 import { render, TimeToFirstDraw, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerArforgeSpinner } from "./component/register-spinner"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
@@ -14,6 +16,7 @@ import { RouteProvider, useRoute } from "./context/route"
 import {
   Switch,
   Match,
+  createComponent,
   createEffect,
   createMemo,
   ErrorBoundary,
@@ -181,6 +184,15 @@ function isVersionGreater(left: string, right: string) {
   return a.prerelease.localeCompare(b.prerelease, undefined, { numeric: true }) > 0
 }
 
+function withChildren(component: any, props: Record<string, any>, children: () => any) {
+  return createComponent(component, {
+    ...props,
+    get children() {
+      return children()
+    },
+  })
+}
+
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const global = yield* Global.Service
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
@@ -240,113 +252,148 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
         if (renderer.isDestroyed) return
 
-        await render(() => {
-          return (
-            <ExitProvider
-              exit={(reason) => {
-                if (renderer.isDestroyed) return
-                exit.reason = reason
-                destroyRenderer(renderer)
-              }}
-            >
-              <EpilogueProvider set={(value) => (exit.epilogue = value)}>
-                <ErrorBoundary fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}>
-                  <TuiPathsProvider
-                    value={{
-                      cwd: process.cwd(),
-                      home: global.home,
-                      state: global.state,
-                      worktree: global.data + "/worktree",
-                    }}
-                  >
-                    <TuiTerminalEnvironmentProvider
-                      value={{
-                        platform: process.platform,
-                        multiplexer: process.env.TMUX ? "tmux" : process.env.STY ? "screen" : undefined,
-                        displayServer: process.env.WAYLAND_DISPLAY
-                          ? "wayland"
-                          : process.env.DISPLAY
-                            ? "x11"
-                            : undefined,
-                      }}
-                    >
-                      <TuiStartupProvider
-                        value={{
-                          initialRoute: process.env.ARFORGE_ROUTE ? JSON.parse(process.env.ARFORGE_ROUTE) : undefined,
-                          skipInitialLoading: Boolean(process.env.ARFORGE_FAST_BOOT),
-                        }}
-                      >
-                        <ClipboardProvider>
-                          <ArforgeKeymapProvider keymap={keymap}>
-                            <ArgsProvider {...input.args}>
-                              <KVProvider>
-                                <ToastProvider>
-                                  <RouteProvider
-                                    initialRoute={
-                                      input.args.continue
-                                        ? {
-                                            type: "session",
-                                            sessionID: "dummy",
-                                          }
-                                        : undefined
-                                    }
-                                  >
-                                    <TuiConfigProvider config={input.config}>
-                                      <PluginRuntimeProvider value={pluginRuntime}>
-                                        <SDKProvider
-                                          url={input.url}
-                                          directory={input.directory}
-                                          fetch={input.fetch}
-                                          headers={input.headers}
-                                          events={input.events}
-                                        >
-                                          <PermissionProvider>
-                                            <ProjectProvider>
-                                              <SyncProvider>
-                                                <DataProvider>
-                                                  <ThemeProvider mode={mode}>
-                                                    <LocalProvider>
-                                                      <PromptStashProvider>
-                                                        <DialogProvider>
-                                                          <FrecencyProvider>
-                                                            <PromptHistoryProvider>
-                                                              <PromptRefProvider>
-                                                                <EditorContextProvider>
-                                                                  <LocationProvider>
-                                                                    <App
-                                                                      onSnapshot={input.onSnapshot}
-                                                                      pluginHost={input.pluginHost}
-                                                                    />
-                                                                  </LocationProvider>
-                                                                </EditorContextProvider>
-                                                              </PromptRefProvider>
-                                                            </PromptHistoryProvider>
-                                                          </FrecencyProvider>
-                                                        </DialogProvider>
-                                                      </PromptStashProvider>
-                                                    </LocalProvider>
-                                                  </ThemeProvider>
-                                                </DataProvider>
-                                              </SyncProvider>
-                                            </ProjectProvider>
-                                          </PermissionProvider>
-                                        </SDKProvider>
-                                      </PluginRuntimeProvider>
-                                    </TuiConfigProvider>
-                                  </RouteProvider>
-                                </ToastProvider>
-                              </KVProvider>
-                            </ArgsProvider>
-                          </ArforgeKeymapProvider>
-                        </ClipboardProvider>
-                      </TuiStartupProvider>
-                    </TuiTerminalEnvironmentProvider>
-                  </TuiPathsProvider>
-                </ErrorBoundary>
-              </EpilogueProvider>
-            </ExitProvider>
-          )
-        }, renderer)
+        await render(
+          () => (
+            <box flexGrow={1} minHeight={0}>
+              {withChildren(
+              ExitProvider,
+              {
+                exit: (reason: unknown) => {
+                  if (renderer.isDestroyed) return
+                  exit.reason = reason
+                  destroyRenderer(renderer)
+                },
+              },
+              () =>
+                withChildren(
+                  EpilogueProvider,
+                  { set: (value: string | undefined) => (exit.epilogue = value) },
+                  () =>
+                    withChildren(
+                      ErrorBoundary,
+                      {
+                        fallback: (error: unknown, reset: () => void) => (
+                          <ErrorComponent
+                            error={error instanceof Error ? error : new Error(errorFormat(error), { cause: error })}
+                            reset={reset}
+                            mode={mode}
+                          />
+                        ),
+                      },
+                      () =>
+                        withChildren(
+                          TuiPathsProvider,
+                          {
+                            value: {
+                              cwd: process.cwd(),
+                              home: global.home,
+                              state: global.state,
+                              worktree: global.data + "/worktree",
+                            },
+                          },
+                          () =>
+                            withChildren(
+                              TuiTerminalEnvironmentProvider,
+                              {
+                                value: {
+                                  platform: process.platform,
+                                  multiplexer: process.env.TMUX ? "tmux" : process.env.STY ? "screen" : undefined,
+                                  displayServer: process.env.WAYLAND_DISPLAY
+                                    ? "wayland"
+                                    : process.env.DISPLAY
+                                      ? "x11"
+                                      : undefined,
+                                },
+                              },
+                              () =>
+                                withChildren(
+                                  TuiStartupProvider,
+                                  {
+                                    value: {
+                                      initialRoute: process.env.ARFORGE_ROUTE
+                                        ? JSON.parse(process.env.ARFORGE_ROUTE)
+                                        : undefined,
+                                      skipInitialLoading: Boolean(process.env.ARFORGE_FAST_BOOT),
+                                    },
+                                  },
+                                  () =>
+                                    withChildren(ClipboardProvider, {}, () =>
+                                      withChildren(ArforgeKeymapProvider, { keymap }, () =>
+                                        withChildren(ArgsProvider, input.args, () =>
+                                          withChildren(KVProvider, {}, () =>
+                                            withChildren(ToastProvider, {}, () =>
+                                              withChildren(
+                                                RouteProvider,
+                                                {
+                                                  initialRoute: input.args.continue
+                                                    ? {
+                                                        type: "session",
+                                                        sessionID: "dummy",
+                                                      }
+                                                    : undefined,
+                                                },
+                                                () =>
+                                                  withChildren(TuiConfigProvider, { config: input.config }, () =>
+                                                    withChildren(PluginRuntimeProvider, { value: pluginRuntime }, () =>
+                                                      withChildren(
+                                                        SDKProvider,
+                                                        {
+                                                          url: input.url,
+                                                          directory: input.directory,
+                                                          fetch: input.fetch,
+                                                          headers: input.headers,
+                                                          events: input.events,
+                                                        },
+                                                        () =>
+                                                          withChildren(PermissionProvider, {}, () =>
+                                                            withChildren(ProjectProvider, {}, () =>
+                                                              withChildren(SyncProvider, {}, () =>
+                                                                withChildren(DataProvider, {}, () =>
+                                                                  withChildren(ThemeProvider, { mode }, () =>
+                                                                    withChildren(LocalProvider, {}, () =>
+                                                                      withChildren(PromptStashProvider, {}, () =>
+                                                                        withChildren(DialogProvider, {}, () =>
+                                                                          withChildren(FrecencyProvider, {}, () =>
+                                                                            withChildren(PromptHistoryProvider, {}, () =>
+                                                                              withChildren(PromptRefProvider, {}, () =>
+                                                                                withChildren(EditorContextProvider, {}, () =>
+                                                                                  withChildren(LocationProvider, {}, () =>
+                                                                                    createComponent(App, {
+                                                                                      onSnapshot: input.onSnapshot,
+                                                                                      pluginHost: input.pluginHost,
+                                                                                    }),
+                                                                                  ),
+                                                                                ),
+                                                                              ),
+                                                                            ),
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+              )}
+            </box>
+          ),
+          renderer,
+        )
       })
       yield* Deferred.await(shutdown)
       return { epilogue: exit.epilogue, reason: exit.reason }
@@ -1094,25 +1141,23 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       <Show when={Flag.ARFORGE_SHOW_TTFD}>
         <TimeToFirstDraw />
       </Show>
-      <Show when={ready()}>
-        <box flexGrow={1} minHeight={0} flexDirection="column">
-          <Switch>
-            <Match when={route.data.type === "home"}>
-              <Home />
-            </Match>
-            <Match when={route.data.type === "session"}>
-              <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                {(_) => <Session />}
-              </Show>
-            </Match>
-          </Switch>
-          {plugin()}
-        </box>
-        <box flexShrink={0}>
-          <pluginRuntime.Slot name="app_bottom" />
-        </box>
-        <pluginRuntime.Slot name="app" />
-      </Show>
+      <box flexGrow={1} minHeight={0} flexDirection="column">
+        <Switch>
+          <Match when={route.data.type === "home"}>
+            <Home />
+          </Match>
+          <Match when={route.data.type === "session"}>
+            <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
+              {(_) => <Session />}
+            </Show>
+          </Match>
+        </Switch>
+        {plugin()}
+      </box>
+      <box flexShrink={0}>
+        <pluginRuntime.Slot name="app_bottom" />
+      </box>
+      <pluginRuntime.Slot name="app" />
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>

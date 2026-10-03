@@ -8,10 +8,10 @@ import { FileSystem } from "../filesystem"
 import { Location } from "../location"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
-import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
+import { automaticRead } from "./effect-semantics"
 
 export const name = "glob"
 
@@ -37,16 +37,20 @@ export const toModelOutput = (output: ModelOutput) => {
 /** Glob leaf that defaults its filesystem root to the active Location. */
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const tools = yield* Tools.Service
+    const tools = yield* Tools.BuiltIns
     const ripgrep = yield* Ripgrep.Service
     const location = yield* Location.Service
-    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
         [name]: Tool.make({
           description:
             "Find files by glob pattern within the active Location. Returns concise relative file resources. Use a relative path to narrow the search and limit to bound the result count.",
+          effects: (input) =>
+            automaticRead({
+              filesystemScope: [input.path ?? "."],
+              successCriteria: ["matching file list is returned within the requested limit"],
+            }),
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [
@@ -59,7 +63,7 @@ const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             Effect.gen(function* () {
-              yield* permission.assert({
+              yield* context.permission.assert({
                 action: name,
                 resources: [input.pattern],
                 save: ["*"],
@@ -90,7 +94,11 @@ const layer = Layer.effectDiscard(
                   ),
                 )
             }).pipe(
-              Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              Effect.mapError(
+                (error) =>
+                  Tool.toToolFailure(error) ??
+                  new ToolFailure({ message: `Unable to find files matching ${input.pattern}` }),
+              ),
             ),
         }),
       })
@@ -101,5 +109,5 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/glob",
   layer,
-  deps: [ToolRegistry.node, Ripgrep.node, Location.node, PermissionV2.node],
+  deps: [ToolRegistry.node, ToolRegistry.builtInsNode, Ripgrep.node, Location.node],
 })

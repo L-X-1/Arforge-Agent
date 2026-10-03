@@ -2,7 +2,7 @@ export * as TuiConfig from "."
 
 import { createBindingLookup } from "@opentui/keymap/extras"
 import { Schema } from "effect"
-import { createContext, type JSX, useContext } from "solid-js"
+import { createComponent, createContext, type JSX, useContext } from "solid-js"
 import { TuiKeybind } from "./keybind"
 
 export const AttentionSoundName = Schema.Literals([
@@ -119,7 +119,12 @@ export function resolve(input: Info, options: ResolveOptions): Resolved {
 const ConfigContext = createContext<Resolved>()
 
 export function TuiConfigProvider(props: { config: Resolved; children: JSX.Element }) {
-  return <ConfigContext.Provider value={props.config}>{props.children}</ConfigContext.Provider>
+  return createComponent(ConfigContext.Provider, {
+    value: props.config,
+    get children() {
+      return props.children
+    },
+  })
 }
 
 export function useTuiConfig() {

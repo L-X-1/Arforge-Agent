@@ -4,7 +4,7 @@ import { PermissionV1 } from "@arforge-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { serviceUse } from "@arforge-ai/core/effect/service-use"
-import { Context, Effect, Layer } from "effect"
+import { Context, DateTime, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent } from "@arforge-ai/llm"
@@ -29,6 +29,13 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import * as MatureRequestBinding from "./llm/mature-binding"
+import { RuntimeInsight } from "@arforge-ai/core/runtime/insight"
+import * as RuntimeInvariants from "@arforge-ai/core/runtime/invariants"
+import * as RunnerInvariants from "@arforge-ai/core/session/runner/invariants"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { SessionEvent } from "@arforge-ai/schema/session-event"
+import { SkillV2 } from "@arforge-ai/core/skill"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +52,14 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  /** Hard upper bound supplied by the owning durable run for this call. */
+  maxOutputTokens?: number
+  /** Optional metadata-only identity tying this mature call to a durable attempt. */
+  requestBinding?: MatureRequestBinding.RequestBindingContext
+  /** Digest of the admitted user prompt; never the prompt body itself. */
+  promptDigest?: string
+  /** Digest of the immutable SkillV2 snapshot used to assemble this call. */
+  skillSnapshotDigest?: string
 }
 
 export type StreamRequest = StreamInput & {
@@ -81,6 +96,11 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
+    // Keep compatibility graphs that do not install the global registry
+    // working, while production compositions still share the Core runner
+    // invariant owner when it is present.
+    const invariants = Option.getOrUndefined(yield* Effect.serviceOption(RuntimeInvariants.Service))
+    if (invariants) RunnerInvariants.registerInvariants(invariants)
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       yield* Effect.logInfo("stream", {
@@ -111,6 +131,115 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+
+      const skillService = yield* Effect.serviceOption(SkillV2.Service)
+      const observedSkillSnapshotDigest = Option.isNone(skillService)
+        ? undefined
+        : (yield* skillService.value.snapshot()).digest
+      const suppliedSkillSnapshotDigest = input.skillSnapshotDigest ?? input.requestBinding?.skillSnapshotDigest
+      if (
+        suppliedSkillSnapshotDigest !== undefined &&
+        observedSkillSnapshotDigest !== undefined &&
+        suppliedSkillSnapshotDigest !== observedSkillSnapshotDigest
+      )
+        return yield* Effect.die(
+          new Error("Mature request Skill snapshot changed before provider preparation; start a new turn"),
+        )
+      const skillSnapshotDigest = suppliedSkillSnapshotDigest ?? observedSkillSnapshotDigest
+      const effectiveRequestBinding = input.requestBinding
+        ? {
+            ...input.requestBinding,
+            ...(skillSnapshotDigest === undefined ? {} : { skillSnapshotDigest }),
+          }
+        : undefined
+
+      // Mature calls may be owned by a DurableRun attempt. Build a bounded
+      // metadata projection before selecting the transport so both native and
+      // AI-SDK paths share the same run/attempt/step identity. The projection
+      // contains digests only; it never leaves the request body in RuntimeInsight.
+      const preparedBinding = effectiveRequestBinding
+        ? MatureRequestBinding.fromPrepared({
+            model: input.model,
+            system: prepared.system,
+            messages: ProviderTransform.message(input.messages, input.model, prepared.messageTransformOptions),
+            tools: prepared.tools,
+            toolChoice: ProviderTransform.toolChoice(input.model, input.toolChoice),
+            temperature: prepared.params.temperature,
+            topP: prepared.params.topP,
+            topK: prepared.params.topK,
+            maxOutputTokens: prepared.params.maxOutputTokens,
+            providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
+            binding: effectiveRequestBinding,
+            promptDigest: input.promptDigest,
+          })
+        : undefined
+
+      const recordMatureBinding = (
+        binding: MatureRequestBinding.Binding,
+        runtime: "native" | "ai-sdk",
+        reason?: string,
+      ) =>
+        Effect.gen(function* () {
+          if (invariants)
+            yield* RunnerInvariants.assert(invariants, {
+              kind: "request-projection",
+              sessionID: input.sessionID,
+              runtime: "mature",
+              projection: {
+                schemaVersion: 1,
+                runID: binding.runID,
+                turnStep: binding.turnStep,
+                attempt: binding.attempt,
+                requestDigest: binding.requestDigest,
+                contextDigest: binding.contextDigest,
+                toolSetRevision: binding.toolSetRevision,
+                routeConfigRevision: binding.routeConfigRevision,
+                ...(binding.skillSnapshotDigest === undefined
+                  ? {}
+                  : { skillSnapshotDigest: binding.skillSnapshotDigest }),
+                compilerRevision: binding.compilerRevision,
+              },
+            })
+          const timestamp = yield* DateTime.now
+          RuntimeInsight.auditRecord({
+            actor: "runtime",
+            action: "mature.request.binding.prepared",
+            resource: `run:${binding.runID}`,
+            reason: reason ?? "bounded mature provider attempt",
+            metadata: {
+              runtime,
+              schemaVersion: binding.schemaVersion,
+              mode: binding.mode,
+              runID: binding.runID,
+              attempt: binding.attempt,
+              turnStep: binding.turnStep,
+              requestDigest: binding.requestDigest,
+              contextDigest: binding.contextDigest,
+              toolSetRevision: binding.toolSetRevision,
+              routeConfigRevision: binding.routeConfigRevision,
+              ...(binding.skillSnapshotDigest === undefined
+                ? {}
+                : { skillSnapshotDigest: binding.skillSnapshotDigest }),
+              compilerRevision: binding.compilerRevision,
+            },
+          })
+          yield* events.publish(SessionEvent.RequestBindingPrepared, {
+            sessionID: SessionID.make(input.sessionID),
+            timestamp,
+            runID: AgentRuntime.RunID.make(binding.runID),
+            turnStep: binding.turnStep,
+            attempt: binding.attempt,
+            schemaVersion: binding.schemaVersion,
+            runtime,
+            mode: binding.mode,
+            requestDigest: binding.requestDigest,
+            contextDigest: binding.contextDigest,
+            toolSetRevision: binding.toolSetRevision,
+            routeConfigRevision: binding.routeConfigRevision,
+            ...(binding.skillSnapshotDigest === undefined ? {} : { skillSnapshotDigest: binding.skillSnapshotDigest }),
+            compilerRevision: binding.compilerRevision,
+          })
+        })
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via arforge's tool system
@@ -239,8 +368,14 @@ const live: Layer.Layer<
           providerOptions: prepared.params.options,
           headers: prepared.headers,
           abort: input.abort,
+          requestBinding: effectiveRequestBinding,
+          promptDigest: input.promptDigest,
         })
         if (native.type === "supported") {
+          if (input.requestBinding) {
+            if (!native.binding) throw new Error("Native mature runtime did not return request binding metadata")
+            yield* recordMatureBinding(native.binding, "native")
+          }
           yield* Effect.logInfo("llm runtime selected", {
             "llm.runtime": "native",
             "llm.provider": input.model.providerID,
@@ -266,7 +401,12 @@ const live: Layer.Layer<
           mode: input.agent.mode,
           reason: native.reason,
         })
+        if (preparedBinding)
+          yield* recordMatureBinding(preparedBinding, "ai-sdk", `native runtime unavailable: ${native.reason}`)
       }
+
+      if (preparedBinding && !flags.experimentalNativeLlm)
+        yield* recordMatureBinding(preparedBinding, "ai-sdk", "native runtime is disabled")
 
       yield* Effect.logInfo("llm runtime selected", {
         "llm.runtime": "ai-sdk",

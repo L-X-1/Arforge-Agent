@@ -32,7 +32,7 @@ test("session settings use the remote server context", async ({ page }) => {
     .poll(() =>
       permissionRequests.some((request) => {
         const url = new URL(request)
-        return url.origin === serverB && url.searchParams.get("directory") === directoryB
+        return url.origin === serverB && requestDirectory(url) === directoryB
       }),
     )
     .toBe(true)
@@ -67,7 +67,7 @@ test("auto-accept responds for an unfocused server session", async ({ page }) =>
     .poll(() =>
       permissionRequests.some((request) => {
         const url = new URL(request)
-        return url.origin === serverA && url.searchParams.get("directory") === directoryA
+        return url.origin === serverA && requestDirectory(url) === directoryA
       }),
     )
     .toBe(true)
@@ -164,31 +164,53 @@ async function configureServers(page: Page, tabs: { type: "session"; server: str
 async function mockServers(page: Page, permissionRequests: string[], permissionResponses: PermissionResponse[] = []) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(route) })
+    if (url.pathname === "/auth/session") return json(route, { authenticated: true, mode: "private" })
     if (url.origin !== serverA && url.origin !== serverB) return route.fallback()
     const remote = url.origin === serverB
     const directory = remote ? directoryB : directoryA
     const sessions = remote ? [sessionB] : [sessionA, childSessionA]
-    const requestDirectory = url.searchParams.get("directory")
+    const requestedDirectory = requestDirectory(url, route.request().headers())
+    const permissionReply = url.pathname.match(/^\/api\/session\/([^/]+)\/permission\/([^/]+)\/reply$/)
+    if (route.request().method() === "POST" && permissionReply) {
+      permissionResponses.push({
+        origin: url.origin,
+        directory: requestedDirectory ?? directory,
+        sessionID: permissionReply[1]!,
+        permissionID: permissionReply[2]!,
+        body: normalizePermissionBody(route.request().postDataJSON()),
+      })
+      return json(route, { location: { directory }, data: true })
+    }
     const response = url.pathname.match(/^\/session\/([^/]+)\/permissions\/([^/]+)$/)
     if (route.request().method() === "POST" && response) {
       permissionResponses.push({
         origin: url.origin,
-        directory: requestDirectory ?? undefined,
+        directory: requestedDirectory ?? undefined,
         sessionID: response[1]!,
         permissionID: response[2]!,
-        body: route.request().postDataJSON(),
+        body: normalizePermissionBody(route.request().postDataJSON()),
       })
       return json(route, true)
     }
-    if (requestDirectory && requestDirectory !== directory) return json(route, { name: "InvalidDirectory" }, 500)
+    if (requestedDirectory && requestedDirectory !== directory) return json(route, { name: "InvalidDirectory" }, 500)
     if (url.pathname === "/global/event" || url.pathname === "/event" || url.pathname === "/api/event")
       return sse(route)
-    if (url.pathname === "/global/health") return json(route, { healthy: true })
-    if (url.pathname === "/api/provider" || url.pathname === "/api/model" || url.pathname === "/api/agent")
-      return json(route, { data: [] })
+    // Exercise the current v2 transport; v1 legacy servers are covered by the
+    // compatibility tests and use a different response envelope.
+    if (url.pathname === "/global/health") return json(route, {}, 404)
+    if (url.pathname === "/api/provider")
+      return json(route, { location: { directory }, data: [v2Provider(remote ? "server-b" : "server-a")] })
+    if (url.pathname === "/api/model")
+      return json(route, { location: { directory }, data: [v2Model(remote ? "server-b" : "server-a")] })
+    if (url.pathname === "/api/agent") return json(route, { location: { directory }, data: [] })
     if (url.pathname === "/api/model/default") return json(route, { data: null })
-    if (["/api/command", "/api/reference", "/api/permission/request", "/api/question/request"].includes(url.pathname))
+    if (["/api/command", "/api/reference", "/api/question/request"].includes(url.pathname))
       return json(route, { location: { directory }, data: [] })
+    if (url.pathname === "/api/permission/request") {
+      permissionRequests.push(url.toString())
+      return json(route, { location: { directory }, data: [] })
+    }
     if (url.pathname === "/api/mcp") return json(route, { location: { directory }, data: [] })
     if (url.pathname === "/api/mcp/resource")
       return json(route, { location: { directory }, data: { resources: [], templates: [] } })
@@ -207,6 +229,10 @@ async function mockServers(page: Page, permissionRequests: string[], permissionR
       return json(route, { id: remote ? sessionB.projectID : "project-server-a", directory })
     if (url.pathname === "/api/session") return json(route, { data: sessions.map(currentSession), cursor: {} })
     if (url.pathname === "/api/session/active") return json(route, { data: {} })
+    // The v1 compatibility path uses the SDK's legacy `/session` endpoint,
+    // whose response is a raw v2-shaped session array (the `/api` endpoint
+    // above is the v2 promise-client envelope).
+    if (url.pathname === "/session") return json(route, sessions)
     const currentSessionInfo = sessions.find((session) => url.pathname === `/api/session/${session.id}`)
     if (currentSessionInfo) return json(route, { data: currentSession(currentSessionInfo) })
     if (sessions.some((session) => url.pathname === `/api/session/${session.id}/message`))
@@ -253,6 +279,24 @@ async function mockServers(page: Page, permissionRequests: string[], permissionR
   })
 }
 
+function requestDirectory(url: URL, headers?: Record<string, string>) {
+  const header = headers?.["x-arforge-directory"]
+  if (header) {
+    try {
+      return decodeURIComponent(header)
+    } catch {
+      return header
+    }
+  }
+  return url.searchParams.get("directory") ?? url.searchParams.get("location[directory]")
+}
+
+function normalizePermissionBody(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body
+  const value = body as Record<string, unknown>
+  return "reply" in value && !("response" in value) ? { response: value.reply } : body
+}
+
 function session(id: string, directory: string, title: string) {
   return {
     id,
@@ -288,15 +332,55 @@ function provider(id: string) {
   }
 }
 
+function v2Provider(id: string) {
+  const name = id === "server-b" ? "Server B" : "Server A"
+  return {
+    id,
+    name: `${name} Provider`,
+    api: { type: "native", settings: {} },
+    request: { headers: {}, body: {} },
+  }
+}
+
+function v2Model(id: string) {
+  const name = id === "server-b" ? "Server B" : "Server A"
+  return {
+    id,
+    providerID: id,
+    family: id,
+    name: `${name} Model`,
+    api: { id, type: "native", settings: {} },
+    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    request: { headers: {}, body: {} },
+    variants: [],
+    time: { released: Date.parse("2026-01-01") },
+    cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
+    status: "active",
+    enabled: true,
+    limit: { context: 200_000, output: 16_000 },
+  }
+}
+
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
     contentType: "application/json",
-    headers: { "access-control-allow-origin": "*" },
+    headers: corsHeaders(route),
     body: JSON.stringify(body),
   })
 }
 
 function sse(route: Route) {
-  return route.fulfill({ status: 200, contentType: "text/event-stream", body: ": ok\n\n" })
+  return route.fulfill({ status: 200, contentType: "text/event-stream", headers: corsHeaders(route), body: ": ok\n\n" })
+}
+
+function corsHeaders(route: Route) {
+  const origin = route.request().headers().origin
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+    "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers":
+      route.request().headers()["access-control-request-headers"] ?? "authorization,content-type,x-arforge-directory",
+  }
 }

@@ -54,6 +54,8 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
   name: "Tabs",
   gate: false,
   init: () => {
+    const textDraftLanguage = useTextDraftLanguage()
+    const confirmFileDrafts = () => textDocumentCloseGuard.confirm(undefined, textDraftLanguage.locale().startsWith("zh"))
     const server = useServer()
     const platform = usePlatform()
     const fallback = server.key
@@ -254,13 +256,16 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
           removeDraftPersisted(draftID)
         })
       },
-      removeTab,
+      removeTab(index: number) {
+        if (!store[index] || !confirmFileDrafts()) return
+        removeTab(index)
+      },
       // User-initiated close: records the tab so it can be reopened.
       // Cleanup paths (missing sessions, archive, server removal) go through
       // removeTab and friends directly and are not recorded.
       closeTab(index: number) {
         const tab = store[index]
-        if (!tab) return
+        if (!tab || !confirmFileDrafts()) return
         if (tab.type === "session") updateClosed((stack) => pushClosedTab(stack, tab, index))
         removeTab(index)
       },
@@ -392,3 +397,5 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     return { ...actions, store, info, ready, recentReady }
   },
 })
+import { textDocumentCloseGuard } from "@/components/preview/text-document-close-guard"
+import { useLanguage as useTextDraftLanguage } from "./language"

@@ -334,9 +334,14 @@ function createServerPermissionState(input: { sdk: ServerSDK; sync: ServerSync }
   }
 
   function shouldAutoRespond(permission: PermissionRequest, directory?: string) {
+    // Full-access mode is an L2 convenience, not an L3 approval. This flag
+    // comes from the trusted PermissionV2 service when `forceAsk` was used;
+    // it must never be reconstructed from command text or presentation
+    // metadata, and it always requires an explicit user reply.
+    if (requiresHumanConfirmation(permission)) return false
     if (!directory) return autoRespondsPermission(store.autoAccept, sessions(directory), permission, directory)
     const current = mode(permission.sessionID, directory)
-    return permissionModeAutoRespond(current, permission.permission)
+    return permissionModeAutoRespond(current, permission.permission, requiresHumanConfirmation(permission))
   }
 
   function isPending(permission: PermissionRequest) {
@@ -345,6 +350,7 @@ function createServerPermissionState(input: { sdk: ServerSDK; sync: ServerSync }
   }
 
   async function shouldAutoRespondResolved(permission: PermissionRequest, directory?: string) {
+    if (requiresHumanConfirmation(permission)) return false
     const override = sessionAutoAccept(store.autoAccept, sessions(directory), permission, directory)
     if (override !== undefined) return override
     if (input.sync.session.lineage.peek(permission.sessionID)) return shouldAutoRespond(permission, directory)
@@ -498,7 +504,7 @@ function createServerPermissionState(input: { sdk: ServerSDK; sync: ServerSync }
       const pending = await list(directory)
       if (meta.disposed || modeVersion.get(key) !== version) return
       for (const permission of pending) {
-        if (!permissionModeAutoRespond(next, permission.permission)) continue
+        if (!permissionModeAutoRespond(next, permission.permission, requiresHumanConfirmation(permission))) continue
         void respondPending(
           permission,
           directory,
@@ -587,4 +593,11 @@ function createServerPermissionState(input: { sdk: ServerSDK; sync: ServerSync }
       return hasPermissionPromptRules(childStore.config.permission)
     },
   }
+}
+
+function requiresHumanConfirmation(permission: PermissionRequest) {
+  return (
+    "requiresHumanConfirmation" in permission &&
+    (permission as PermissionRequest & { requiresHumanConfirmation?: unknown }).requiresHumanConfirmation === true
+  )
 }

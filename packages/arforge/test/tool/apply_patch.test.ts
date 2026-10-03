@@ -13,10 +13,41 @@ import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { failingEventPublish, failingLsp } from "./post-process-failure"
 
 const it = testEffect(
   LayerNode.compile(
     LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+  ),
+)
+
+const postProcessFailure = Layer.succeed(
+  Format.Service,
+  Format.Service.of({
+    init: () => Effect.void,
+    status: () => Effect.succeed([]),
+    file: () => Effect.die(new Error("formatter post-process failed")),
+  }),
+)
+
+const failingPostProcessIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[Format.node, postProcessFailure]],
+  ),
+)
+
+const failingLspIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[LSP.node, failingLsp]],
+  ),
+)
+
+const failingEventIt = testEffect(
+  LayerNode.compile(
+    LayerNode.group([LSP.node, FSUtil.node, Format.node, EventV2Bridge.node, Truncate.node, Agent.node]),
+    [[EventV2Bridge.node, failingEventPublish]],
   ),
 )
 
@@ -27,7 +58,7 @@ const baseCtx = {
   agent: "build",
   abort: AbortSignal.any([]),
   messages: [],
-  metadata: () => Effect.void,
+  metadata: (_input?: { metadata?: Record<string, unknown> }) => Effect.void,
 }
 
 type AskInput = {
@@ -61,15 +92,20 @@ const execute = Effect.fn("ApplyPatchToolTest.execute")(function* (params: { pat
 
 const makeCtx = () => {
   const calls: AskInput[] = []
+  const metadata: Record<string, unknown>[] = []
   const ctx: ToolCtx = {
     ...baseCtx,
     ask: (input) =>
       Effect.sync(() => {
         calls.push(input)
       }),
+    metadata: (input) =>
+      Effect.sync(() => {
+        if (input?.metadata) metadata.push(input.metadata)
+      }),
   }
 
-  return { ctx, calls }
+  return { ctx, calls, metadata }
 }
 
 const readText = (filepath: string) => Effect.promise(() => fs.readFile(filepath, "utf-8"))
@@ -298,17 +334,108 @@ describe("tool.apply_patch freeform", () => {
     }),
   )
 
-  it.instance("adds file overwriting existing file", () =>
+  it.instance("rejects add when the target already exists", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      const { ctx } = makeCtx()
+      const { ctx, metadata } = makeCtx()
       const target = path.join(test.directory, "duplicate.txt")
       yield* writeText(target, "old content\n")
 
       const patchText = "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch"
 
-      yield* execute({ patchText }, ctx)
-      expect(yield* readText(target)).toBe("new content\n")
+      yield* expectFailure(execute({ patchText }, ctx), "File changed after permission approval")
+      expect(metadata.at(-1)).toMatchObject({
+        kind: "file_conflict",
+        code: "target_exists",
+        path: target,
+      })
+      expect(yield* readText(target)).toBe("old content\n")
+    }),
+  )
+
+  it.instance("rejects an update when the file changes after permission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "raced.txt")
+      yield* writeText(target, "before\n")
+      const patchText = "*** Begin Patch\n*** Update File: raced.txt\n@@\n-before\n+after\n*** End Patch"
+      const metadata: Record<string, unknown>[] = []
+      const ctx: ToolCtx = {
+        ...baseCtx,
+        ask: () => writeText(target, "external\n"),
+        metadata: (input) =>
+          Effect.sync(() => {
+            if (input?.metadata) metadata.push(input.metadata)
+          }),
+      }
+
+      yield* expectFailure(execute({ patchText }, ctx), "File changed after permission approval")
+      expect(metadata.at(-1)).toMatchObject({
+        kind: "file_conflict",
+        code: "observed_version_mismatch",
+        path: target,
+      })
+      expect(yield* readText(target)).toBe("external\n")
+    }),
+  )
+
+  it.instance("rolls back earlier file mutations when a later commit conflicts", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const raced = path.join(test.directory, "raced-after-add.txt")
+      const created = path.join(test.directory, "created-before-conflict.txt")
+      yield* writeText(raced, "before\n")
+      const patchText =
+        "*** Begin Patch\n*** Add File: created-before-conflict.txt\n+created\n*** Update File: raced-after-add.txt\n@@\n-before\n+after\n*** End Patch"
+      const ctx: ToolCtx = {
+        ...baseCtx,
+        ask: () => writeText(raced, "external\n"),
+      }
+
+      yield* expectFailure(execute({ patchText }, ctx), "File changed after permission approval")
+      yield* expectReadFailure(created)
+      expect(yield* readText(raced)).toBe("external\n")
+    }),
+  )
+
+  failingPostProcessIt.instance("rolls back committed files when post-processing fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "post-process-race.txt")
+      yield* writeText(target, "before\n")
+      const { ctx } = makeCtx()
+      const patchText = "*** Begin Patch\n*** Update File: post-process-race.txt\n@@\n-before\n+after\n*** End Patch"
+
+      yield* expectFailure(execute({ patchText }, ctx), "Patch post-processing failed")
+      expect(yield* readText(target)).toBe("before\n")
+    }),
+  )
+
+  failingLspIt.instance("rolls back committed files when LSP refresh fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "lsp-post-process-race.txt")
+      yield* writeText(target, "before\n")
+      const { ctx } = makeCtx()
+      const patchText =
+        "*** Begin Patch\n*** Update File: lsp-post-process-race.txt\n@@\n-before\n+after\n*** End Patch"
+
+      yield* expectFailure(execute({ patchText }, ctx), "Patch post-processing failed")
+      expect(yield* readText(target)).toBe("before\n")
+    }),
+  )
+
+  failingEventIt.instance("rolls back committed files when watcher publication fails", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const target = path.join(test.directory, "event-post-process-race.txt")
+      yield* writeText(target, "before\n")
+      const { ctx } = makeCtx()
+      const patchText =
+        "*** Begin Patch\n*** Update File: event-post-process-race.txt\n@@\n-before\n+after\n*** End Patch"
+
+      yield* expectFailure(execute({ patchText }, ctx), "Patch post-processing failed")
+      expect(yield* readText(target)).toBe("before\n")
     }),
   )
 

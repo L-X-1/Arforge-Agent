@@ -1,0 +1,14 @@
+Command: bun test test/mcp/lifecycle.test.ts --timeout 30000 --rerun-every
+Exit: 1
+37 pass
+2 fail
+116 expect() calls
+Ran 39 tests across 1 file. [29.06s]
+
+Known environment/runtime failures (not converted to a pass):
+1. local mcp cwd resolves relative paths against instance directory
+   error: 本地 MCP 在读取启动目录时退出。请检查运行时是否支持当前沙箱，以及入口文件和依赖是否位于已授权路径；未自动扩大权限或降级沙箱。
+2. local stdio timeout terminates the real server process
+   error: stdio fixture did not publish its pid
+
+Independent reproduction recorded separately: the Windows native BaseContainer child using the default Bun 1.3.14 exits with `error loading current directory` / `CouldntReadCurrentDirectory` even when cwd and roots are the authorized isolated directory. The same helper payload with `baseContainer=false` can spawn, but that is a partial/legacy boundary and is not used to claim full sandbox support.

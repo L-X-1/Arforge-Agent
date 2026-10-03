@@ -3,6 +3,7 @@ export * as ConfigProvider from "./provider"
 import { Schema } from "effect"
 import { ProviderV2 } from "../provider"
 import { ModelV2 } from "../model"
+import { Billing } from "@arforge-ai/schema/billing"
 
 export class Request extends Schema.Class<Request>("ConfigV2.Provider.Request")({
   headers: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
@@ -48,6 +49,7 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
   family: ModelV2.Family.pipe(Schema.optional),
   name: Schema.String.pipe(Schema.optional),
   api: ModelApi.pipe(Schema.optional),
+  profile: ModelV2.Profile.pipe(Schema.optional),
   capabilities: ModelV2.Capabilities.pipe(Schema.optional),
   request: Schema.Struct({
     ...Request.fields,
@@ -58,6 +60,8 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
     ...Request.fields,
   }).pipe(Schema.Array, Schema.optional),
   cost: Schema.Union([Cost, Cost.pipe(Schema.Array)]).pipe(Schema.optional),
+  /** Explicit currency-bound catalog; legacy cost remains non-authoritative. */
+  priceCatalog: Billing.PriceCatalog.pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),
   limit: Limit.pipe(Schema.optional),
 }) {}

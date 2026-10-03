@@ -8,6 +8,7 @@ import { Truncate } from "@/tool/truncate"
 import { WebFetchTool } from "../../src/tool/webfetch"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
+import { ContextFirewall } from "@arforge-ai/core/context-firewall"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
@@ -92,7 +93,7 @@ describe("tool.webfetch", () => {
       (url) =>
         Effect.gen(function* () {
           const result = yield* exec({ url: new URL("/file.txt", url).toString(), format: "text" })
-          expect(result.output).toBe("hello from webfetch")
+          expect(result.output).toBe(ContextFirewall.untrusted("web", "hello from webfetch"))
           expect(result.attachments).toBeUndefined()
         }),
     ),
@@ -111,7 +112,7 @@ describe("tool.webfetch", () => {
       (url) =>
         Effect.gen(function* () {
           const result = yield* exec({ url: new URL("/page.html", url).toString(), format: "text" })
-          expect(result.output).toBe("Hello world")
+          expect(result.output).toBe(ContextFirewall.untrusted("web", "Hello world"))
           expect(result.attachments).toBeUndefined()
         }),
     ),

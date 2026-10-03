@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "artifact_kind": "python_leaf_consumer_audit",
+  "status": "migration-window",
+  "canonical_runtime": "typescript",
+  "canonical_cli_entry": "packages/arforge/src/index.ts",
+  "python_cli_entry": "arforge.cli_bridge",
+  "python_ledger_attestation": "sha256:1725a1ad51a234576be1601b3dade3b468d9f29adce31732dbe87203ccec2482",
+  "ts_runtime_python_imports": [],
+  "targets": [
+    {
+      "module": "arforge.trust_screen",
+      "file_path": "arforge/trust_screen.py",
+      "source_digest": "bd5118bd2b4442f99f37cab856b48866316403bd6fa30c395e84094d45ae90ab",
+      "disposition": "MERGE",
+      "owner": {
+        "path": "packages/core/src/workspace-roots.ts",
+        "symbols": [
+          "isPersistedWorkspaceTrusted",
+          "isWorkspaceTrusted"
+        ]
+      },
+      "cli_owner": {
+        "path": "packages/arforge/src/cli/cmd/workspace.ts",
+        "symbols": [
+          "WorkspaceCommand"
+        ]
+      },
+      "replacement_contract": "read-only Core workspace trust projection; persistent writes remain ActionGateway/CAS gated",
+      "consumers": [],
+      "consumer_count": 0,
+      "retirement_ready": false,
+      "retirement_blockers": [
+        "retain the importable compatibility leaf until an explicit migration-window retirement decision",
+        "workspace trust/add/remove durable writer remains fail-closed by policy"
+      ]
+    },
+    {
+      "module": "arforge.workspace_roots",
+      "file_path": "arforge/workspace_roots.py",
+      "source_digest": "13a078926b2ce3b5193be1dbd520aa33831d2d740d0983cf32e4425bfbd3ee62",
+      "disposition": "MERGE",
+      "owner": {
+        "path": "packages/core/src/workspace-roots.ts",
+        "symbols": [
+          "configuredWorkspaceRoots",
+          "authorizedWorkspaceRoots",
+          "workspaceRootsReport"
+        ]
+      },
+      "cli_owner": {
+        "path": "packages/arforge/src/cli/cmd/workspace.ts",
+        "symbols": [
+          "WorkspaceCommand"
+        ]
+      },
+      "replacement_contract": "metadata-only workspace root report; trust/add/remove stay fail-closed until the durable writer gate",
+      "consumers": [],
+      "consumer_count": 0,
+      "retirement_ready": false,
+      "retirement_blockers": [
+        "retain the importable compatibility leaf until an explicit migration-window retirement decision",
+        "workspace trust/add/remove durable writer remains fail-closed by policy"
+      ]
+    }
+  ],
+  "remaining_consumer_count": 0,
+  "retirement_review": {
+    "kind": "python-leaf-retirement-review",
+    "status": "blocked",
+    "consumer_free": true,
+    "deletion_authorized": false,
+    "target_count": 2,
+    "blockers": [
+      "compatibility-boundary-retained",
+      "workspace-writer-gate-disabled"
+    ],
+    "review_digest": "ad2fa81153d752d7199db88797d70ad5565a9dc10ca9f434e94e74d47493a3fc"
+  },
+  "retirement_policy": {
+    "direct_python_owner": "forbidden",
+    "deletion_gate": [
+      "consumer_count=0 for the target leaf",
+      "TypeScript/Core owner symbols remain present and typechecked",
+      "Python CLI/bridge compatibility tests remain green",
+      "legacy Python ledgers are regenerated and attested",
+      "no TS runtime import or executable fallback points back to Python"
+    ],
+    "current_decision": "retain-compatibility-boundary"
+  }
+}

@@ -1,7 +1,7 @@
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { base64Encode } from "@arforge-ai/core/util/encode"
 import { useParams } from "@solidjs/router"
-import { batch, createEffect, createMemo, startTransition } from "solid-js"
+import { batch, createEffect, createMemo, startTransition, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useModels } from "@/context/models"
 import { useSettings } from "@/context/settings"
@@ -13,6 +13,7 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
+import { resolveModelChoice, ModelChoiceError } from "@/components/dialog-select-model-state"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
 
@@ -71,15 +72,29 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const agentsVisible = createMemo(() => settings.visibility.customAgents() || hasCustomAgent(list()))
     const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
 
-    const [saved, setSaved, , savedReady] = persisted(
-      {
-        ...Persist.serverWorkspace(serverSDK().scope, sdk().directory, "model-selection", ["model-selection.v1"]),
-        migrate,
-      },
-      createStore<Saved>({
-        session: {},
-      }),
+    const selectionTarget = createMemo(
+      () => ({ scope: serverSDK().scope, directory: sdk().directory }),
+      undefined,
+      { equals: (previous, next) => previous.scope === next.scope && previous.directory === next.directory },
     )
+    const selectionPersistence = createMemo(() => {
+      const target = selectionTarget()
+      // Keep the memo's owner so scope changes dispose its resources, but never
+      // subscribe construction to the store snapshot or ready resource it creates.
+      return untrack(() => persisted(
+        {
+          ...Persist.serverWorkspace(target.scope, target.directory, "model-selection", ["model-selection.v1"]),
+          migrate,
+        },
+        createStore<Saved>({ session: {} }),
+      ))
+    })
+    const saved = () => selectionPersistence()[0]
+    const saveSession = (session: string, state: State | undefined) =>
+      untrack(() => selectionPersistence()[1]("session", session, state))
+    const savedReady = Object.defineProperty(() => selectionPersistence()[3](), "promise", {
+      get: () => selectionPersistence()[3].promise,
+    }) as (() => boolean) & { readonly promise: Promise<unknown> | undefined }
 
     const [store, setStore] = createStore<{
       current?: string
@@ -102,14 +117,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       return !!provider?.models[model.modelID] && connected().has(model.providerID)
     }
 
-    const firstModel = (...items: Array<() => ModelKey | undefined>) => {
-      for (const item of items) {
-        const model = item()
-        if (!model) continue
-        if (validModel(model)) return model
-      }
-    }
-
     const pickAgent = (name: string | undefined) => {
       return resolveAgent(list(), name)
     }
@@ -127,7 +134,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const scope = createMemo<State | undefined>(() => {
       const session = id()
       if (!session) return store.draft ?? store.promoting
-      return saved.session[session] ?? handoff.get(handoffKey(serverSDK().scope, sdk().directory, session))
+      return saved().session[session] ?? handoff.get(handoffKey(serverSDK().scope, sdk().directory, session))
     })
 
     createEffect(() => {
@@ -137,13 +144,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const key = handoffKey(serverSDK().scope, sdk().directory, session)
       const next = handoff.get(key)
       if (!next) return
-      if (saved.session[session] !== undefined) {
+      if (saved().session[session] !== undefined) {
         handoff.delete(key)
         setStore("promoting", undefined)
         return
       }
 
-      setSaved("session", session, clone(next))
+      saveSession(session, clone(next))
       handoff.delete(key)
       setStore("promoting", undefined)
     })
@@ -151,9 +158,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const configuredModel = () => {
       const configured = sync().data.config.model
       if (!configured) return
-      const [providerID, modelID] = configured.split("/")
-      const model = { providerID, modelID }
-      if (validModel(model)) return model
+      const separator = configured.indexOf("/")
+      if (separator < 1) return
+      return { providerID: configured.slice(0, separator), modelID: configured.slice(separator + 1) }
     }
 
     const recentModel = () => {
@@ -162,7 +169,21 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
     }
 
-    const fallback = createMemo<ModelKey | undefined>(() => configuredModel() ?? recentModel())
+    const defaultModel = () => {
+      const value = providers.default()
+      const explicit = value as Record<string, string | undefined>
+      if (explicit.providerID && explicit.modelID) {
+        const model = { providerID: explicit.providerID, modelID: explicit.modelID }
+        if (validModel(model)) return model
+      }
+      for (const [providerID, modelID] of Object.entries(value)) {
+        if (!modelID || providerID === "providerID" || providerID === "modelID") continue
+        const model = { providerID, modelID }
+        if (validModel(model)) return model
+      }
+    }
+
+    const fallback = createMemo<ModelKey | undefined>(() => configuredModel() ?? recentModel() ?? defaultModel())
 
     const agent = {
       list,
@@ -193,7 +214,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           } satisfies State
           const session = id()
           if (session) {
-            setSaved("session", session, next)
+            saveSession(session, next)
             return
           }
           setStore("draft", next)
@@ -215,15 +236,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
-    const current = () => {
-      const item = firstModel(
-        () => scope()?.model,
-        () => agent.current()?.model,
-        fallback,
-      )
-      if (!item) return
-      return models.find(item)
-    }
+    const selectedModelKey = () => scope()?.model ?? agent.current()?.model ?? fallback()
+    const selectionScope = () => ScopedKey.from(serverSDK().scope, sdk().directory, id() ?? "__draft__")
+    const current = () => resolveModelChoice(selectedModelKey(), validModel, models.find)
 
     const configured = () => {
       const item = agent.current()
@@ -254,7 +269,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       const session = id()
       if (session) {
-        setSaved("session", session, state)
+        saveSession(session, state)
         return
       }
       setStore("draft", state)
@@ -284,8 +299,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         model.set({ providerID: entry.provider.id, modelID: entry.id })
       },
       set(item: ModelKey | undefined, options?: { recent?: boolean }) {
-        startTransition(() =>
-          batch(() => {
+        batch(() => {
             setStore("last", {
               type: "model",
               agent: agent.current()?.name,
@@ -297,8 +311,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             models.setVisibility(item, true)
             if (!options?.recent) return
             models.recent.push(item)
-          }),
-        )
+        })
       },
       visible(item: ModelKey) {
         return models.visible(item)
@@ -361,6 +374,26 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       slug: createMemo(() => base64Encode(sdk().directory)),
       model,
       agent,
+      // Local selection is a next-submit binding. It never edits an in-flight
+      // request, durable queue entry, or the configured new-session default.
+      modelSelection: {
+        key: selectedModelKey,
+        scope: selectionScope,
+        ready: savedReady,
+        unavailable() {
+          const key = selectedModelKey()
+          if (!key) return
+          const provider = providers.all().get(key.providerID)
+          if (!provider) return "provider" as const
+          if (!connected().has(key.providerID)) return "disconnected" as const
+          if (!provider.models[key.modelID]) return "removed" as const
+        },
+        select(item: ModelKey, expectedScope: string) {
+          if (selectionScope() !== expectedScope) throw new ModelChoiceError("scope-changed")
+          if (!savedReady() || !models.ready() || !validModel(item)) throw new ModelChoiceError("unavailable")
+          model.set(item, { recent: false })
+        },
+      },
       session: {
         ready: savedReady,
         reset() {
@@ -373,7 +406,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           handoff.set(key, next)
 
           if (dir === sdk().directory) {
-            setSaved("session", session, next)
+            saveSession(session, next)
           }
 
           setStore("promoting", next)
@@ -383,10 +416,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const session = id()
           if (!session) return
           if (msg.sessionID !== session) return
-          if (saved.session[session] !== undefined) return
+          if (saved().session[session] !== undefined) return
           if (handoff.has(handoffKey(serverSDK().scope, sdk().directory, session))) return
 
-          setSaved("session", session, {
+          saveSession(session, {
             agent: msg.agent,
             model: msg.model,
             variant: msg.model?.variant ?? null,

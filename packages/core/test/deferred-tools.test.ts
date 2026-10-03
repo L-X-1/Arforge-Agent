@@ -3,6 +3,8 @@ import { Effect, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { SessionV2 } from "@arforge-ai/core/session"
+import { Location } from "@arforge-ai/core/location"
+import { AbsolutePath } from "@arforge-ai/core/schema"
 import { DeferredTools } from "@arforge-ai/core/tool/deferred"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { Tool } from "@arforge-ai/core/tool/tool"
@@ -12,11 +14,21 @@ import { ToolSearchTool } from "@arforge-ai/core/tool/search"
 import { Config } from "@arforge-ai/core/config"
 import { ConfigExperimental } from "@arforge-ai/core/config/experimental"
 import { testEffect } from "./lib/effect"
+import { location } from "./fixture/location"
+
+const boundLocation = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+)
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([DeferredTools.node, ToolRegistry.node, ToolRegistry.toolsNode]), [
-    [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
-  ]),
+  AppNodeBuilder.build(
+    LayerNode.group([DeferredTools.node, ToolRegistry.node, ToolRegistry.toolsNode, ToolRegistry.builtInsNode]),
+    [
+      [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, boundLocation],
+    ],
+  ),
 )
 const deferredConfig = Layer.succeed(
   Config.Service,
@@ -37,10 +49,12 @@ const toolSearchIt = testEffect(
       DeferredTools.configNode,
       ToolRegistry.node,
       ToolRegistry.toolsNode,
+      ToolRegistry.builtInsNode,
       ToolSearchTool.node,
     ]),
     [
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, boundLocation],
       [Config.node, deferredConfig],
     ],
   ),
@@ -70,7 +84,7 @@ describe("DeferredTools", () => {
     Effect.gen(function* () {
       const deferred = yield* DeferredTools.Service
       const registry = yield* ToolRegistry.Service
-      const tools = yield* Tools.Service
+      const tools = yield* Tools.BuiltIns
       yield* deferred.configure(true)
       yield* tools.register({
         read: tool("Read a local file"),
@@ -112,7 +126,7 @@ describe("DeferredTools", () => {
     Effect.gen(function* () {
       const deferred = yield* DeferredTools.Service
       const registry = yield* ToolRegistry.Service
-      const tools = yield* Tools.Service
+      const tools = yield* Tools.BuiltIns
       yield* deferred.configure(true)
       yield* tools.register({
         read: tool("Read a local file"),
@@ -120,12 +134,8 @@ describe("DeferredTools", () => {
       })
       yield* registry.materialize([{ action: "webfetch", resource: "*", effect: "deny" }], sessionID)
 
-      expect(
-        yield* registry.discover({ sessionID, query: "web", limit: 5 }),
-      ).toEqual({ tools: [], activated: [] })
-      expect(
-        yield* Effect.flip(registry.discover({ sessionID, query: "select:webfetch", limit: 5 })),
-      ).toMatchObject({
+      expect(yield* registry.discover({ sessionID, query: "web", limit: 5 })).toEqual({ tools: [], activated: [] })
+      expect(yield* Effect.flip(registry.discover({ sessionID, query: "select:webfetch", limit: 5 }))).toMatchObject({
         _tag: "ToolRegistry.DiscoverError",
         message: "One or more selected tools are unavailable",
       })

@@ -1,0 +1,476 @@
+R08 native Task owner / receipt evidence, 2026-09-13
+Working directory: E:/Arforge-Agent
+Command: bun run audit:tool-pipeline
+Exit code: 0
+Raw captured output:
+
+$ bun run script/arforge-tool-pipeline-topology.ts --root . --require-canonical
+{
+  "schema_version": "1.0",
+  "valid": true,
+  "fully_canonical": true,
+  "counts": {
+    "canonical": 43,
+    "definitions": 18,
+    "transport_only": 4,
+    "transitional": 0
+  },
+  "sites": [
+    {
+      "path": "packages/arforge/src/session/llm/native-runtime.ts",
+      "line": 191,
+      "kind": "native-transport-adapter",
+      "disposition": "transport-only",
+      "expression": "NativeTool.make"
+    },
+    {
+      "path": "packages/arforge/src/session/llm/native-runtime.ts",
+      "line": 199,
+      "kind": "native-transport-adapter",
+      "disposition": "transport-only",
+      "expression": "item.execute"
+    },
+    {
+      "path": "packages/arforge/src/session/tools.ts",
+      "line": 171,
+      "kind": "provider-tool-transport-adapter",
+      "disposition": "transport-only",
+      "expression": "tool"
+    },
+    {
+      "path": "packages/arforge/src/tool/apply_patch.ts",
+      "line": 23,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/code-mode.ts",
+      "line": 128,
+      "kind": "sandbox-interpreter-adapter",
+      "disposition": "transport-only",
+      "expression": "SandboxTool.make"
+    },
+    {
+      "path": "packages/arforge/src/tool/code-mode.ts",
+      "line": 184,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/core-bridge.ts",
+      "line": 188,
+      "kind": "core-source-adapter",
+      "disposition": "canonical",
+      "expression": "tool.execute"
+    },
+    {
+      "path": "packages/arforge/src/tool/core-bridge.ts",
+      "line": 320,
+      "kind": "core-source-adapter",
+      "disposition": "canonical",
+      "expression": "CoreTool.make"
+    },
+    {
+      "path": "packages/arforge/src/tool/core-bridge.ts",
+      "line": 425,
+      "kind": "core-source-adapter",
+      "disposition": "canonical",
+      "expression": "CoreTool.make"
+    },
+    {
+      "path": "packages/arforge/src/tool/core-bridge.ts",
+      "line": 480,
+      "kind": "core-source-adapter",
+      "disposition": "canonical",
+      "expression": "CoreTool.make"
+    },
+    {
+      "path": "packages/arforge/src/tool/core-bridge.ts",
+      "line": 562,
+      "kind": "core-source-adapter",
+      "disposition": "canonical",
+      "expression": "CoreTool.make"
+    },
+    {
+      "path": "packages/arforge/src/tool/edit.ts",
+      "line": 47,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/glob.ts",
+      "line": 17,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/grep.ts",
+      "line": 20,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/invalid.ts",
+      "line": 9,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/lsp.ts",
+      "line": 56,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/plan.ts",
+      "line": 15,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/plugin-source-adapter.ts",
+      "line": 92,
+      "kind": "plugin-source-definition",
+      "disposition": "definition",
+      "expression": "validated.execute"
+    },
+    {
+      "path": "packages/arforge/src/tool/question.ts",
+      "line": 14,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/read.ts",
+      "line": 64,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/shell.ts",
+      "line": 554,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/skill.ts",
+      "line": 12,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/task.ts",
+      "line": 1142,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/todo.ts",
+      "line": 14,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/webfetch.ts",
+      "line": 35,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/websearch.ts",
+      "line": 121,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/arforge/src/tool/write.ts",
+      "line": 59,
+      "kind": "mature-definition",
+      "disposition": "definition",
+      "expression": "Tool.define"
+    },
+    {
+      "path": "packages/core/src/tool/apply-patch.ts",
+      "line": 76,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/bash.ts",
+      "line": 108,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/cooperative-wait.ts",
+      "line": 28,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/edit.ts",
+      "line": 100,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/glob.ts",
+      "line": 46,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/goal-update.ts",
+      "line": 35,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/grep.ts",
+      "line": 62,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/multimodal-diagnose.ts",
+      "line": 24,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/notebook.ts",
+      "line": 76,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/notebook.ts",
+      "line": 101,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/primary-delivery.ts",
+      "line": 46,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/question.ts",
+      "line": 54,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/read.ts",
+      "line": 39,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/search.ts",
+      "line": 42,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/skill.ts",
+      "line": 64,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/structured-output.ts",
+      "line": 535,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 34,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 57,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 77,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 96,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 123,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 145,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/task-graph.ts",
+      "line": 166,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 54,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 75,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 92,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 122,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 154,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 181,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 210,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 240,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/team.ts",
+      "line": 265,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/todowrite.ts",
+      "line": 32,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/trigger.ts",
+      "line": 44,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/trigger.ts",
+      "line": 73,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/webfetch.ts",
+      "line": 219,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/websearch.ts",
+      "line": 229,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    },
+    {
+      "path": "packages/core/src/tool/write.ts",
+      "line": 62,
+      "kind": "core-definition",
+      "disposition": "canonical",
+      "expression": "Tool.make"
+    }
+  ],
+  "findings": []
+}

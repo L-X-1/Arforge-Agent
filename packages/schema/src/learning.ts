@@ -24,6 +24,12 @@ export type PatternID = typeof PatternID.Type
 export const Outcome = Schema.Struct({
   id: OutcomeID,
   sessionID: SessionID.pipe(optional),
+  runID: Schema.String.pipe(optional),
+  actionID: Schema.String.pipe(optional),
+  evaluationID: Schema.String.pipe(optional),
+  evidenceIDs: Schema.Array(Schema.String).pipe(optional),
+  terminal: Schema.Boolean.pipe(optional),
+  verifierPassed: Schema.Boolean.pipe(optional),
   projectID: Schema.NonEmptyString,
   workspacePath: Schema.NonEmptyString,
   turnIndex: NonNegativeInt,
@@ -95,6 +101,44 @@ export const Status = Schema.Struct({
   impact: Impact,
 }).annotate({ identifier: "Learning.Status" })
 export interface Status extends Schema.Schema.Type<typeof Status> {}
+
+/**
+ * A deterministic, read-only reflection of the current learning status.
+ *
+ * The historical Python `learning dream` command first mutated its local
+ * pattern store through consolidation and then returned a reflection.  The
+ * TypeScript contract deliberately separates those concerns: this projection
+ * only observes the already scoped Learning status.  A future transactional
+ * consolidation operation, if needed, must be introduced as its own typed
+ * ActionGateway contract rather than hidden behind a read command.
+ */
+export const Dream = Schema.Struct({
+  consolidation: Schema.Struct({
+    status: Schema.Literal("not_run"),
+    patternsFound: NonNegativeInt,
+    savedNew: NonNegativeInt,
+    updatedExisting: NonNegativeInt,
+    patterns: NonNegativeInt,
+    breakdown: Schema.Struct({
+      failure: NonNegativeInt,
+      fix: NonNegativeInt,
+      preference: NonNegativeInt,
+    }),
+    reason: Schema.String,
+  }),
+  dream: Schema.Struct({
+    totalTurns: NonNegativeInt,
+    totalFailures: NonNegativeInt,
+    totalPatterns: NonNegativeInt,
+    insights: Schema.Array(Schema.String),
+    suggestions: Schema.Array(Schema.String),
+    timestamp: Schema.String,
+  }),
+  executionMode: Schema.Literal("read-only-core-projection"),
+  sideEffects: Schema.Literal("none"),
+  caveat: Schema.String,
+}).annotate({ identifier: "Learning.Dream" })
+export interface Dream extends Schema.Schema.Type<typeof Dream> {}
 
 export const UndoResult = Schema.Struct({
   outcomeID: OutcomeID,

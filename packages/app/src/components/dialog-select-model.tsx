@@ -32,6 +32,8 @@ import { handleDocumentSearchKeydown } from "@/utils/search-keydown"
 import { createEventListener } from "@solid-primitives/event-listener"
 import { matchesModelSearch } from "./dialog-select-model-search"
 import { afterModelMenuClose } from "./dialog-select-model-dismissal"
+import type { ModelSelectionBinding } from "./dialog-select-model-binding"
+import { createModelDialogSelection } from "./dialog-select-model-controller"
 
 const isFree = (provider: string, cost: { input: number } | undefined) =>
   provider === "arforge" && (!cost || cost.input === 0)
@@ -60,25 +62,51 @@ const ModelList: Component<{
   onSelect: () => void
   action?: JSX.Element
   model?: ModelState
+  binding?: ModelSelectionBinding
 }> = (props) => {
-  const model = props.model ?? useLocal().model
+  const selection = createModelDialogSelection({
+    get model() { return props.model },
+    get binding() { return props.binding },
+    onSelect: () => props.onSelect(),
+  })
+  const model = selection.model
   const language = useLanguage()
+  const current = createMemo(() => {
+    const choice = selection.currentChoice()
+    return choice ? model().list().find((item) => item.provider.id === choice.providerID && item.id === choice.modelID) : undefined
+  })
 
   const models = createMemo(() =>
-    model
+    model()
       .list()
-      .filter((m) => model.visible({ modelID: m.id, providerID: m.provider.id }))
+      .filter((m) => model().visible({ modelID: m.id, providerID: m.provider.id }))
       .filter((m) => (props.provider ? m.provider.id === props.provider : true)),
   )
 
   return (
+    <>
+    <Show when={selection.unavailable()}>{(reason) => <div class="px-3 pb-2 text-13-regular text-text-base" role="status">
+      <div>{selection.copy()[reason()]}</div>
+      <div class="break-all font-mono">{selection.currentChoice()?.providerID} / {selection.currentChoice()?.modelID}</div>
+    </div>}</Show>
+    <Show when={selection.state.error || selection.state.catalogError}>
+      <div class="px-3 pb-2 text-13-regular text-text-base" role="alert">{selection.state.error || selection.copy().stale}</div>
+    </Show>
+    <Show when={!selection.ready() && !selection.state.stale}>
+      <div class="px-3 pb-2 text-13-regular text-text-base" role="status">{language.t("common.loading")}</div>
+    </Show>
+    <Show when={selection.unavailable() || selection.state.error || selection.state.catalogError}>
+      <Button variant="ghost" class="self-start" disabled={selection.busy() || selection.state.stale} onClick={() => void selection.refresh()}>
+        {selection.state.refreshing ? language.t("common.loading") : selection.copy().retry}
+      </Button>
+    </Show>
     <List
       class={`flex-1 px-3 min-h-0 [&_[data-slot=list-scroll]]:flex-1 [&_[data-slot=list-scroll]]:min-h-0 ${props.class ?? ""}`}
       search={{ placeholder: language.t("dialog.model.search.placeholder"), autofocus: true, action: props.action }}
       emptyMessage={language.t("dialog.model.empty")}
       key={(x) => `${x.provider.id}:${x.id}`}
       items={models}
-      current={model.current()}
+      current={current()}
       filterKeys={["provider.name", "name", "id"]}
       sortBy={(a, b) => a.name.localeCompare(b.name)}
       groupBy={(x) => x.provider.name}
@@ -101,14 +129,11 @@ const ModelList: Component<{
         </Tooltip>
       )}
       onSelect={(x) => {
-        model.set(x ? { modelID: x.id, providerID: x.provider.id } : undefined, {
-          recent: true,
-        })
-        props.onSelect()
+        if (x) void selection.select(x)
       }}
     >
       {(i) => (
-        <div class="w-full flex items-center gap-x-2 text-13-regular">
+        <div class="w-full flex items-center gap-x-2 text-13-regular" aria-disabled={!selection.ready() || selection.busy()}>
           <span class="truncate">{i.name}</span>
           <Show when={isFree(i.provider.id, i.cost)}>
             <Tag>{language.t("model.tag.free")}</Tag>
@@ -119,6 +144,7 @@ const ModelList: Component<{
         </div>
       )}
     </List>
+    </>
   )
 }
 
@@ -128,6 +154,7 @@ type Dismiss = "escape" | "outside" | "select" | "manage" | "provider"
 export function ModelSelectorPopover(props: {
   provider?: string
   model?: ModelState
+  binding?: ModelSelectionBinding
   children?: JSX.Element
   triggerAs?: ValidComponent
   triggerProps?: ModelSelectorTriggerProps
@@ -202,6 +229,7 @@ export function ModelSelectorPopover(props: {
           <ModelList
             provider={props.provider}
             model={props.model}
+            binding={props.binding}
             onSelect={() => close("select")}
             class="p-1"
             action={
@@ -235,287 +263,9 @@ export function ModelSelectorPopover(props: {
   )
 }
 
-export function ModelSelectorPopoverV2(props: {
-  provider?: string
-  model?: ModelState
-  children?: JSX.Element
-  triggerAs?: ValidComponent
-  triggerProps?: ModelSelectorTriggerProps
-  onClose?: () => void
-}) {
-  const model = props.model ?? useLocal().model
-  const language = useLanguage()
-  const dialog = useDialog()
-  const [store, setStore] = createStore({ open: false, search: "", active: "" })
-  let searchRef: HTMLInputElement | undefined
-  let contentRef: HTMLDivElement | undefined
-  let restoreTrigger = true
+export { ModelSelectorPopoverV2, type ModelSelectionBinding } from "./dialog-select-model-v2"
 
-  const allModels = createMemo(() =>
-    model
-      .list()
-      .filter((item) => model.visible({ modelID: item.id, providerID: item.provider.id }))
-      .filter((item) => (props.provider ? item.provider.id === props.provider : true)),
-  )
-  const models = createMemo(() => {
-    const search = store.search.trim()
-    const filtered = search
-      ? allModels().filter((item) => matchesModelSearch(search, [item.name, item.id, item.provider.name]))
-      : allModels()
-
-    return [...filtered].sort((a, b) => a.name.localeCompare(b.name))
-  })
-  const groups = createMemo(() => {
-    const byProvider = new Map<string, ModelItem[]>()
-    for (const item of models()) {
-      byProvider.set(item.provider.id, [...(byProvider.get(item.provider.id) ?? []), item])
-    }
-    return Array.from(byProvider, ([category, items]) => ({ category, items })).sort(sortModelGroups)
-  })
-  const keys = () => [...models().map(modelKey), manageKey]
-  const current = () => {
-    const value = model.current()
-    return value ? `${value.provider.id}:${value.id}` : undefined
-  }
-  const initialActive = () => {
-    const selected = current()
-    const options = keys()
-    if (selected && options.includes(selected)) return selected
-    return options[0] ?? ""
-  }
-  const activeItem = () =>
-    store.active ? contentRef?.querySelector<HTMLElement>(`[data-option-key="${CSS.escape(store.active)}"]`) : undefined
-  const afterClose = (callback: () => void) => {
-    afterModelMenuClose(callback)
-  }
-  const setOpen = (open: boolean) => {
-    if (open) {
-      restoreTrigger = true
-      setStore({ open: true, active: initialActive() })
-      setTimeout(() =>
-        requestAnimationFrame(() => {
-          searchRef?.focus()
-          activeItem()?.scrollIntoView({ block: "nearest" })
-        }),
-      )
-      return
-    }
-    setStore({ open: false, search: "", active: "" })
-  }
-  const select = (item: ModelItem) => {
-    model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
-    props.onClose?.()
-  }
-  const selectModel = (item: ModelItem) => {
-    restoreTrigger = false
-    setOpen(false)
-    afterClose(() => select(item))
-  }
-  const manage = () => {
-    restoreTrigger = false
-    setOpen(false)
-    afterClose(() => {
-      void import("./dialog-manage-models").then((x) => {
-        dialog.show(() => <x.DialogManageModelsV2 />)
-      })
-    })
-  }
-  const selectActive = () => {
-    const item = models().find((item) => modelKey(item) === store.active)
-    if (item) {
-      selectModel(item)
-      return
-    }
-    if (store.active === manageKey) manage()
-  }
-  const moveActive = (delta: number) => {
-    const options = keys()
-    if (options.length === 0) return
-    const index = options.indexOf(store.active)
-    const start = index === -1 ? 0 : index
-    setStore("active", options[(start + delta + options.length) % options.length])
-    queueMicrotask(() => activeItem()?.scrollIntoView({ block: "nearest" }))
-  }
-  const setSearch = (value: string) => {
-    const search = value.trim()
-    const first = [...allModels()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .find((item) => matchesModelSearch(search, [item.name, item.id, item.provider.name]))
-    setStore({ search: value, active: first ? modelKey(first) : manageKey })
-  }
-
-  createEffect(() => {
-    if (!store.open) return
-    createEventListener(
-      document,
-      "keydown",
-      (event: KeyboardEvent) => handleDocumentSearchKeydown(searchRef, event, store.search, setSearch),
-      true,
-    )
-  })
-
-  return (
-    <MenuV2 open={store.open} modal={false} placement="top-start" gutter={6} onOpenChange={setOpen}>
-      <MenuV2.Trigger as={props.triggerAs ?? "div"} {...props.triggerProps}>
-        {props.children}
-      </MenuV2.Trigger>
-      <MenuV2.Portal>
-        <MenuV2.Content
-          ref={(el: HTMLDivElement) => (contentRef = el)}
-          class="w-[284px] overflow-hidden rounded-md border-0 bg-v2-background-bg-layer-01 !p-0 shadow-[var(--v2-elevation-floating)] focus:outline-none"
-          onPointerDownOutside={() => (restoreTrigger = false)}
-          onFocusOutside={() => (restoreTrigger = false)}
-          onCloseAutoFocus={(event) => {
-            if (!restoreTrigger) event.preventDefault()
-          }}
-        >
-          <div class="flex flex-col p-0.5">
-            <div class="flex h-7 items-center gap-2 rounded-sm pl-3 pr-2.5 text-v2-icon-icon-muted">
-              <Icon name="magnifying-glass" size="small" class="shrink-0" />
-              <input
-                ref={(el) => (searchRef = el)}
-                value={store.search}
-                placeholder={language.t("dialog.model.search.placeholder")}
-                class="h-7 min-w-0 flex-1 border-0 bg-transparent text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
-                spellcheck={false}
-                autocorrect="off"
-                autocomplete="off"
-                autocapitalize="off"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => event.stopPropagation()}
-                onInput={(event) => setSearch(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Tab") return
-                  event.stopPropagation()
-                  if (event.key === "Escape") {
-                    event.preventDefault()
-                    restoreTrigger = false
-                    setOpen(false)
-                    afterClose(() => props.onClose?.())
-                    return
-                  }
-                  if (event.altKey || event.metaKey) return
-                  if (event.key === "ArrowDown") {
-                    event.preventDefault()
-                    moveActive(1)
-                    return
-                  }
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault()
-                    moveActive(-1)
-                    return
-                  }
-                  if (event.key === "Enter" && !event.isComposing) {
-                    event.preventDefault()
-                    selectActive()
-                  }
-                }}
-              />
-              <Show when={store.search.trim()}>
-                <button
-                  type="button"
-                  class="flex size-5 items-center justify-center rounded-sm text-v2-icon-icon-muted hover:bg-v2-overlay-simple-overlay-hover"
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={() => setSearch("")}
-                  aria-label={language.t("common.clear")}
-                >
-                  <Icon name="close" size="small" />
-                </button>
-              </Show>
-            </div>
-          </div>
-          <div class="h-px bg-v2-border-border-muted" />
-          <ScrollView data-slot="model-selector-scroll" class="max-h-[220px] min-h-0">
-            <div class="flex flex-col p-0.5 pt-0">
-              <Show
-                when={models().length > 0}
-                fallback={
-                  <div class="flex h-12 items-center px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-faint">
-                    {language.t("dialog.model.empty")}
-                  </div>
-                }
-              >
-                <For each={groups()}>
-                  {(group) => (
-                    <MenuV2.Group>
-                      <MenuV2.GroupLabel class="gap-2 px-3">
-                        <span class="min-w-0 truncate">{group.items[0].provider.name}</span>
-                      </MenuV2.GroupLabel>
-                      <MenuV2.RadioGroup
-                        value={current()}
-                        onChange={(value) => {
-                          const item = models().find((candidate) => modelKey(candidate) === value)
-                          if (item) selectModel(item)
-                        }}
-                      >
-                        <For each={group.items}>
-                          {(item) => (
-                            <TooltipV2
-                              class="w-full"
-                              placement="right-start"
-                              gutter={6}
-                              openDelay={0}
-                              value={
-                                <ModelTooltip
-                                  model={item}
-                                  latest={item.latest}
-                                  free={isFree(item.provider.id, item.cost)}
-                                  v2
-                                />
-                              }
-                            >
-                              <MenuV2.RadioItem
-                                value={modelKey(item)}
-                                data-option-key={modelKey(item)}
-                                data-selected-model={current() === modelKey(item) ? true : undefined}
-                                class="scroll-my-6 w-full"
-                                classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === modelKey(item) }}
-                                onMouseEnter={() => {
-                                  setStore("active", modelKey(item))
-                                  setTimeout(() => searchRef?.focus())
-                                }}
-                                closeOnSelect
-                              >
-                                <span class="min-w-0 truncate leading-5">{item.name}</span>
-                                <Show when={isFree(item.provider.id, item.cost)}>
-                                  <TagV2 class="shrink-0">{language.t("model.tag.free")}</TagV2>
-                                </Show>
-                                <Show when={item.latest}>
-                                  <TagV2 class="shrink-0">{language.t("model.tag.latest")}</TagV2>
-                                </Show>
-                              </MenuV2.RadioItem>
-                            </TooltipV2>
-                          )}
-                        </For>
-                      </MenuV2.RadioGroup>
-                    </MenuV2.Group>
-                  )}
-                </For>
-              </Show>
-            </div>
-          </ScrollView>
-          <div class="h-px bg-v2-border-border-muted" />
-          <div class="flex flex-col p-0.5">
-            <MenuV2.Item
-              data-option-key={manageKey}
-              classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === manageKey }}
-              onMouseEnter={() => {
-                setStore("active", manageKey)
-                setTimeout(() => searchRef?.focus())
-              }}
-              onSelect={manage}
-            >
-              <Icon name="outline-sliders" size="small" />
-              <span class="min-w-0 flex-1 truncate leading-5">{language.t("dialog.model.manage")}</span>
-            </MenuV2.Item>
-          </div>
-        </MenuV2.Content>
-      </MenuV2.Portal>
-    </MenuV2>
-  )
-}
-
-export const DialogSelectModel: Component<{ provider?: string; model?: ModelState }> = (props) => {
+export const DialogSelectModel: Component<{ provider?: string; model?: ModelState; binding?: ModelSelectionBinding }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
   const local = useLocal()
@@ -542,7 +292,7 @@ export const DialogSelectModel: Component<{ provider?: string; model?: ModelStat
         </Button>
       }
     >
-      <ModelList provider={props.provider} model={props.model} onSelect={() => dialog.close()} />
+      <ModelList provider={props.provider} model={props.model} binding={props.binding} onSelect={() => dialog.close()} />
       <Button variant="ghost" class="ml-3 mt-5 mb-6 text-text-base self-start" onClick={manage}>
         {language.t("dialog.model.manage")}
       </Button>

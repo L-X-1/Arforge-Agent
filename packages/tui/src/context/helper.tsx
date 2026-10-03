@@ -1,4 +1,4 @@
-import { createContext, Show, useContext, type ParentProps } from "solid-js"
+import { createComponent, createContext, useContext, type ParentProps } from "solid-js"
 
 export function createSimpleContext<T, Props extends Record<string, any>>(input: {
   name: string
@@ -10,12 +10,12 @@ export function createSimpleContext<T, Props extends Record<string, any>>(input:
     context: ctx,
     provider: (props: ParentProps<Props>) => {
       const init = input.init(props)
-      return (
-        // @ts-expect-error
-        <Show when={init.ready === undefined || init.ready === true}>
-          <ctx.Provider value={init}>{props.children}</ctx.Provider>
-        </Show>
-      )
+      return createComponent(ctx.Provider, {
+        value: init,
+        get children() {
+          return props.children
+        },
+      })
     },
     use() {
       const value = useContext(ctx)

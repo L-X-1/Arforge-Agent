@@ -23,19 +23,93 @@ import { TestLLMServer } from "../../lib/llm-server"
 import path from "path"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
 import { controlledPtyInput, http, route } from "./dsl"
-import {
-  cleanupExercisePaths,
-  exerciseConfigDirectory,
-  exerciseDataDirectory,
-  exerciseDatabasePath,
-  exerciseGlobalRoot,
-} from "./environment"
+import { cleanupExercisePaths, exerciseConfigDirectory, exerciseDatabasePath, exerciseGlobalRoot } from "./environment"
 import { color, printHeader, printResults } from "./report"
 import { coverageResult, parseOptions, routeKey, routeKeys, selectedScenarios } from "./routing"
 import { runScenario } from "./runner"
 import { disposeApps } from "./backend"
 import { runtime } from "./runtime"
 import { type CallResult, type Scenario, type ScenarioContext } from "./types"
+
+const exerciseAuthFile = path.join(exerciseGlobalRoot, "python", "auth.json")
+
+function controlOperationStatus(body: unknown, operation: string) {
+  object(body)
+  check(body.operation === operation, `${operation} should return its durable operation kind`)
+  check(typeof body.requestID === "string", `${operation} should return its request ID`)
+  check(typeof body.phase === "string", `${operation} should return its current phase`)
+  return body
+}
+
+function controlPoll<A>(
+  self: Effect.Effect<A | undefined>,
+  message: string,
+  duration: "5 seconds" | "15 seconds" = "5 seconds",
+) {
+  return Effect.gen(function* () {
+    while (true) {
+      const result = yield* self
+      if (result !== undefined) return result
+      yield* Effect.sleep("20 millis")
+    }
+  }).pipe(Effect.timeoutOrElse({ duration, orElse: () => Effect.die(new Error(message)) }))
+}
+
+function approveControlOperation(ctx: ScenarioContext, requestID: string, operation: string) {
+  return Effect.gen(function* () {
+    const approval = yield* controlPoll(
+      ctx
+        .api("GET", {
+          path: `/experimental/control-approval?requestID=${encodeURIComponent(requestID)}`,
+          headers: ctx.headers(),
+        })
+        .pipe(
+          Effect.map((result) => {
+            check(result.status === 200, `control approval list should return 200, got ${result.status}`)
+            array(result.body)
+            return result.body.find(
+              (item) =>
+                isRecord(item) &&
+                typeof item.id === "string" &&
+                isRecord(item.subject) &&
+                item.subject.requestID === requestID,
+            )
+          }),
+        ),
+      `control-plane approval was not published for ${requestID}`,
+    ).pipe(Effect.catch((error) => Effect.die(error)))
+    object(approval)
+    check(typeof approval.id === "string", `control approval should include an ID for ${requestID}`)
+
+    const replied = yield* ctx.api("POST", {
+      path: `/experimental/control-approval/${encodeURIComponent(approval.id)}/reply`,
+      headers: ctx.headers(),
+      body: { reply: "once" },
+    })
+    check(replied.status === 200, `control approval reply should return 200, got ${replied.status}`)
+    check(replied.body === true, "control approval reply should return true")
+
+    return yield* controlPoll(
+      ctx
+        .api("GET", {
+          path: `/experimental/control-operation/${encodeURIComponent(requestID)}?operation=${operation}`,
+          headers: ctx.headers(),
+        })
+        .pipe(
+          Effect.map((result) => {
+            check(result.status === 200, `control operation status should return 200, got ${result.status}`)
+            const status = controlOperationStatus(result.body, operation)
+            if (["failed", "cancelled", "paused"].includes(String(status.phase))) {
+              throw new Error(`${operation} stopped in ${String(status.phase)}`)
+            }
+            return status.phase === "completed" ? status : undefined
+          }),
+        ),
+      `${operation} did not reach its completed phase`,
+      "15 seconds",
+    ).pipe(Effect.catch((error) => Effect.die(error)))
+  })
+}
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
@@ -74,12 +148,15 @@ function apiData(result: CallResult, operation: string) {
   return payload
 }
 
-function apiSession(ctx: ScenarioContext) {
+function apiSession(ctx: ScenarioContext, executable = false) {
   return ctx
     .api("POST", {
       path: "/api/session",
       headers: ctx.headers(),
-      body: { location: { directory: ctx.directory } },
+      body: {
+        location: { directory: ctx.directory },
+        ...(executable ? { agent: "build", model: { id: "test-model", providerID: "test" } } : {}),
+      },
     })
     .pipe(
       Effect.map((result) => {
@@ -138,6 +215,48 @@ function apiPrompt(ctx: ScenarioContext, sessionID: string, text: string) {
         check(typeof prompt.id === "string", "prompt seed should return an ID")
         check(typeof prompt.admittedSeq === "number", "prompt seed should return an admission sequence")
         return { id: prompt.id, admittedSeq: prompt.admittedSeq }
+      }),
+    )
+}
+
+function apiPersonalJob(ctx: ScenarioContext, sessionID: string, idempotencyKey = "httpapi-personal-job") {
+  return ctx
+    .api("POST", {
+      path: route("/api/session/{sessionID}/personal-job", { sessionID }),
+      headers: ctx.headers(),
+      body: {
+        idempotencyKey,
+        title: "HTTP API visible background job",
+        prompt: "Read the current workspace and report a bounded verification summary.",
+        schedule: {
+          kind: "once",
+          label: "HTTP API verification",
+          nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+          timezone: "UTC",
+        },
+        budget: { maxAttempts: 2, maxDurationMs: 60_000, maxCostMicros: 10_000 },
+        approvalPolicy: { mode: "automatic", rationale: "The HTTP exerciser owns this isolated job." },
+        notificationPolicy: { mode: "in_app", events: ["completed", "failed", "cancelled"] },
+      },
+    })
+    .pipe(
+      Effect.map((result) => {
+        const job = apiData(result, "personal job seed") as {
+          id?: unknown
+          sessionID?: unknown
+          status?: unknown
+          visibility?: { mode?: unknown; userVisible?: unknown }
+          revision?: unknown
+        }
+        check(typeof job.id === "string" && job.id.startsWith("pjob_"), "personal job seed should return an opaque ID")
+        check(job.sessionID === sessionID, "personal job seed should bind to the session")
+        check(job.status === "queued", "automatic personal jobs should start queued")
+        check(
+          job.visibility?.mode === "background" && job.visibility?.userVisible === true,
+          "personal job should be visible",
+        )
+        check(typeof job.revision === "number" && job.revision > 0, "personal job seed should expose a revision")
+        return { id: job.id, revision: job.revision }
       }),
     )
 }
@@ -302,6 +421,35 @@ function apiFeedback(
       return { id: submitted.feedback.id as string }
     }),
   )
+}
+
+function apiEvolutionCandidate(ctx: ScenarioContext) {
+  return ctx
+    .api("POST", {
+      path: "/api/agent-capabilities/evolution/candidates",
+      headers: ctx.headers(),
+      body: {
+        title: "HTTP API evolution candidate",
+        target: "learning.fix",
+        instruction: "Keep the verified HTTP API contract covered.",
+        rationale: "The route exercise must use a governed candidate created by the real service.",
+        evidenceRefs: ["httpapi-exercise"],
+      },
+    })
+    .pipe(
+      Effect.map((result) => {
+        const candidate = apiData(result, "evolution candidate seed")
+        check(typeof candidate.candidate_id === "string", "evolution candidate seed should return an ID")
+        check(
+          isRecord(candidate.state) && typeof candidate.state.revision === "number",
+          "evolution candidate seed should return a state revision",
+        )
+        return {
+          id: candidate.candidate_id as string,
+          revision: (candidate.state as Record<string, unknown>).revision as number,
+        }
+      }),
+    )
 }
 
 function apiLearning(
@@ -656,6 +804,39 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected.get("/mcp", "mcp.status").json(),
+  http.protected.get("/mcp/health", "mcp.health").json(200, (body) => {
+    object(body)
+    for (const [server, snapshot] of Object.entries(body)) {
+      check(server.trim().length > 0, "MCP health should use non-empty server keys")
+      object(snapshot)
+      check(typeof snapshot.phase === "string", "MCP health should expose supervisor phase")
+      check(typeof snapshot.health === "string", "MCP health should expose health state")
+      check(typeof snapshot.safeMessage === "string", "MCP health should expose a redacted safe message")
+      check(!JSON.stringify(snapshot).toLowerCase().includes("token"), "MCP health must not expose credentials")
+    }
+  }),
+  http.protected
+    .get("/api/self-hosted-share/lookup/{operationID}", "selfHostedShare.lookup")
+    .at((ctx) => ({
+      path: "/api/self-hosted-share/lookup/httpapi-missing",
+      headers: ctx.headers(),
+    }))
+    .status(403),
+  http.protected
+    .get("/api/self-hosted-share/revoke/{operationID}", "selfHostedShare.lookupRevoke")
+    .at((ctx) => ({
+      path: "/api/self-hosted-share/revoke/httpapi-missing",
+      headers: ctx.headers(),
+    }))
+    .status(403),
+  http.protected
+    .post("/api/self-hosted-share/publish", "selfHostedShare.publish")
+    .at((ctx) => ({ path: "/api/self-hosted-share/publish", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/self-hosted-share/revoke", "selfHostedShare.revoke")
+    .at((ctx) => ({ path: "/api/self-hosted-share/revoke", headers: ctx.headers(), body: {} }))
+    .status(400),
   http.protected
     .post("/mcp", "mcp.add")
     .mutating()
@@ -702,7 +883,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/mcp/{name}/auth/callback", { name: "httpapi-missing" }),
       headers: ctx.headers(),
-      body: { code: "code" },
+      body: { code: "code", oauthState: "missing" },
     }))
     .json(404, object, "status"),
   http.protected
@@ -781,6 +962,35 @@ const scenarios: Scenario[] = [
   http.protected.get("/experimental/workspace", "experimental.workspace.list").json(200, array),
   http.protected.get("/experimental/workspace/status", "experimental.workspace.status").json(200, array),
   http.protected
+    .post("/experimental/workspace/root-mutation", "experimental.workspace.rootMutation")
+    .at((ctx) => ({
+      path: "/experimental/workspace/root-mutation",
+      headers: ctx.headers(),
+      body: { action: "trust", target: ctx.directory },
+    }))
+    // The production Core writer is intentionally disabled until all five
+    // persistence/recovery/invariant gates have production evidence. Coverage
+    // proves the route is wired and returns a typed fail-closed result rather
+    // than silently reviving the Python writer.
+    .json(409, (body) => {
+      object(body)
+      check(body.name === "WorkspaceRootMutationError", "workspace root mutation should expose its typed error")
+      object(body.data)
+      check(body.data.reason === "writer_disabled", "workspace root mutation should report writer_disabled")
+      check(
+        body.data.owner === "typescript-core-workspace-root-writer",
+        "workspace root mutation should report its owner",
+      )
+      check(
+        Array.isArray(body.data.blocking) && body.data.blocking.includes("runtime-invariant"),
+        "workspace root mutation should expose blocking Core gates",
+      )
+      check(
+        typeof body.data.message === "string" && body.data.message.includes("no Python writer fallback"),
+        "workspace root mutation must not fall back to Python",
+      )
+    }),
+  http.protected
     .post("/experimental/workspace", "experimental.workspace.create")
     .at((ctx) => ({ path: "/experimental/workspace", headers: ctx.headers(), body: {} }))
     .status(400),
@@ -823,16 +1033,19 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/experimental/worktree", "worktree.create")
     .mutating()
-    .at((ctx) => ({ path: "/experimental/worktree", headers: ctx.headers(), body: { name: "api-dsl" } }))
-    .jsonEffect(
-      200,
-      (body, ctx) =>
-        Effect.gen(function* () {
-          object(body)
-          check(typeof body.directory === "string", "created worktree should include directory")
-          yield* ctx.worktreeRemove(body.directory)
-        }),
-      "status",
+    .at((ctx) => ({
+      path: "/experimental/worktree",
+      headers: ctx.headers(),
+      body: { requestID: "cpr_httpapi_create", name: "api-dsl" },
+    }))
+    .jsonEffect(200, (body, ctx) =>
+      Effect.gen(function* () {
+        controlOperationStatus(body, "worktree.create")
+        const completed = yield* approveControlOperation(ctx, "cpr_httpapi_create", "worktree.create")
+        object(completed.result)
+        check(typeof completed.result.directory === "string", "created worktree should include its directory")
+        yield* ctx.worktreeRemove(completed.result.directory)
+      }),
     ),
   http.protected
     .post("/experimental/worktree", "worktree.create.invalid")
@@ -841,26 +1054,27 @@ const scenarios: Scenario[] = [
   http.protected
     .delete("/experimental/worktree", "worktree.remove")
     .mutating()
-    .seeded((ctx) => ctx.worktree({ name: "api-remove" }))
-    .at((ctx) => ({ path: "/experimental/worktree", headers: ctx.headers(), body: { directory: ctx.state.directory } }))
-    .json(200, (body) => {
-      check(body === true, "worktree remove should return true")
+    .at((ctx) => ({
+      path: "/experimental/worktree",
+      headers: ctx.headers(),
+      body: { requestID: "cpr_httpapi_remove", directory: path.join(ctx.directory ?? "", "legacy-worktree") },
+    }))
+    .json(400, (body) => {
+      object(body)
+      check(body.name === "WorktreeOwnershipFailedError", "legacy worktree removal should fail closed")
     }),
   http.protected
     .post("/experimental/worktree/reset", "worktree.reset")
     .mutating()
-    .seeded((ctx) => ctx.worktree({ name: "api-reset" }))
     .at((ctx) => ({
       path: "/experimental/worktree/reset",
       headers: ctx.headers(),
-      body: { directory: ctx.state.directory },
+      body: { requestID: "cpr_httpapi_reset", directory: path.join(ctx.directory ?? "", "legacy-worktree") },
     }))
-    .jsonEffect(200, (body, ctx) =>
-      Effect.gen(function* () {
-        check(body === true, "worktree reset should return true")
-        yield* ctx.worktreeRemove(ctx.state.directory)
-      }),
-    ),
+    .json(400, (body) => {
+      object(body)
+      check(body.name === "WorktreeResetFailedError", "unknown worktree reset should fail closed")
+    }),
   http.protected
     .get("/experimental/session", "experimental.session.list")
     .at((ctx) => ({ path: "/experimental/session?roots=false&archived=false", headers: ctx.headers() }))
@@ -880,6 +1094,42 @@ const scenarios: Scenario[] = [
     .json(200, (body) => {
       check(body === false, "background route should be a no-op without running subagents")
     }),
+  http.protected
+    .post("/experimental/session/{sessionID}/revert", "session.revert.control")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/revert", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/unrevert", "session.unrevert.control")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/unrevert", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/share", "session.share.control")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/share", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/experimental/session/{sessionID}/unshare", "session.unshare.control")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/experimental/session/{sessionID}/unshare", { sessionID: "ses_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
   http.protected.get("/experimental/resource", "experimental.resource.list").json(),
   http.protected
     .post("/sync/history", "sync.history.list")
@@ -920,29 +1170,32 @@ const scenarios: Scenario[] = [
     .jsonEffect(200, (body) =>
       Effect.gen(function* () {
         check(body === true, "auth set should return true")
-        const auth = yield* Effect.promise(() => Bun.file(path.join(exerciseDataDirectory, "auth.json")).json())
+        const auth = yield* Effect.promise(() => Bun.file(exerciseAuthFile).json())
         object(auth)
-        check(isRecord(auth.test) && auth.test.key === "test-key", "auth set should write isolated auth file")
+        check(auth.kind === "arforge-protected-json", "auth set should write a protected envelope")
+        check(auth.schema_version === 1, "auth set should write the current protected schema")
+        check(typeof auth.ciphertext === "string" && auth.ciphertext.length > 0, "auth set should write ciphertext")
+        check(!JSON.stringify(auth).includes("test-key"), "auth set should not persist plaintext credentials")
       }),
     ),
   http.protected
     .delete("/auth/{providerID}", "auth.remove")
     .global()
     .seeded(() =>
-      Effect.promise(() =>
-        Bun.write(
-          path.join(exerciseDataDirectory, "auth.json"),
-          JSON.stringify({ test: { type: "api", key: "remove-me" } }),
-        ),
-      ),
+      Effect.promise(() => Bun.write(exerciseAuthFile, JSON.stringify({ test: { type: "api", key: "remove-me" } }))),
     )
     .at(() => ({ path: route("/auth/{providerID}", { providerID: "test" }) }))
     .jsonEffect(200, (body) =>
       Effect.gen(function* () {
         check(body === true, "auth remove should return true")
-        const auth = yield* Effect.promise(() => Bun.file(path.join(exerciseDataDirectory, "auth.json")).json())
+        const auth = yield* Effect.promise(() => Bun.file(exerciseAuthFile).json())
         object(auth)
-        check(auth.test === undefined, "auth remove should delete provider from isolated auth file")
+        check(auth.kind === "arforge-protected-json", "auth remove should preserve the protected envelope")
+        check(auth.schema_version === 1, "auth remove should write the current protected schema")
+        check(
+          !JSON.stringify(auth).includes("remove-me"),
+          "auth remove should not preserve removed plaintext credentials",
+        )
       }),
     ),
   http.protected.get("/api/health", "v2.health.get").json(200, (body) => {
@@ -974,7 +1227,18 @@ const scenarios: Scenario[] = [
       object(body)
       array(body.sections)
       check(body.schema_version === 1, "system overview should expose schema version 1")
-      check(body.sections.length === 7, "system overview should expose all safe read-only sections")
+      check(body.sections.length > 0, "system overview should expose safe read-only sections")
+      const cost = (body.sections as Array<{ id?: unknown; data?: unknown }>).find(
+        (section) => section.id === "cost-optimization",
+      )
+      check(isRecord(cost), "system overview should expose the cost-optimization contract section")
+      check(isRecord(cost.data), "cost-optimization section should expose a structured contract audit")
+      check(
+        cost.data.execution_mode === "read-only-cost-optimization-contract-audit",
+        "cost-optimization audit should be read-only",
+      )
+      check(cost.data.status === "not_ready", "cost-optimization audit should remain fail-closed")
+      check(cost.data.side_effects === "none", "cost-optimization audit should declare no side effects")
     }),
   ),
   http.protected.get("/api/agent-capabilities/deep-insights", "v2.agentCapability.deepInsights").json(
@@ -983,7 +1247,69 @@ const scenarios: Scenario[] = [
       object(body)
       array(body.sections)
       check(body.schema_version === 1, "deep insights should expose schema version 1")
-      check(body.sections.length === 7, "deep insights should expose every explicit diagnostic section")
+      const sections = body.sections as Array<{ id?: unknown; data?: unknown }>
+      check(
+        sections.some((section) => section.id === "features"),
+        "deep insights should expose the typed feature policy section",
+      )
+      const fileState = sections.find((section) => section.id === "file-state")
+      check(isRecord(fileState), "deep insights should expose the file-state contract section")
+      check(isRecord(fileState.data), "file-state section should expose a structured contract audit")
+      check(
+        fileState.data.execution_mode === "read-only-file-state-contract-audit",
+        "file-state audit should be read-only",
+      )
+      check(
+        fileState.data.status === "not_ready",
+        "file-state audit should remain fail-closed until the owner is complete",
+      )
+      check(fileState.data.side_effects === "none", "file-state audit should declare no side effects")
+      const memoryFeedback = sections.find((section) => section.id === "memory-feedback")
+      check(isRecord(memoryFeedback), "deep insights should expose the memory-feedback contract section")
+      check(isRecord(memoryFeedback.data), "memory-feedback section should expose a structured contract audit")
+      check(
+        memoryFeedback.data.execution_mode === "read-only-memory-feedback-contract-audit",
+        "memory-feedback audit should be read-only",
+      )
+      check(memoryFeedback.data.status === "not_ready", "memory-feedback audit should remain fail-closed")
+      check(memoryFeedback.data.side_effects === "none", "memory-feedback audit should declare no side effects")
+      const featurePolicy = sections.find((section) => section.id === "feature-policy-contract")
+      check(isRecord(featurePolicy), "deep insights should expose the feature-policy contract section")
+      check(isRecord(featurePolicy.data), "feature-policy section should expose a structured contract audit")
+      check(
+        featurePolicy.data.execution_mode === "read-only-feature-policy-contract-audit",
+        "feature-policy audit should be read-only",
+      )
+      check(featurePolicy.data.status === "not_ready", "feature-policy audit should remain fail-closed")
+      check(featurePolicy.data.side_effects === "none", "feature-policy audit should declare no side effects")
+      const permissionPolicy = sections.find((section) => section.id === "permission-policy-contract")
+      check(isRecord(permissionPolicy), "deep insights should expose the permission-policy contract section")
+      check(isRecord(permissionPolicy.data), "permission-policy section should expose a structured contract audit")
+      check(
+        permissionPolicy.data.execution_mode === "read-only-permission-policy-contract-audit",
+        "permission-policy audit should be read-only",
+      )
+      check(permissionPolicy.data.status === "not_ready", "permission-policy audit should remain fail-closed")
+      check(permissionPolicy.data.side_effects === "none", "permission-policy audit should declare no side effects")
+      for (const id of ["file-state", "memory-feedback", "feature-policy-contract", "permission-policy-contract"]) {
+        const section = sections.find((candidate) => candidate.id === id)
+        check(isRecord(section), `${id} should remain available for the shared boundary projection`)
+        check(isRecord(section.data), `${id} should expose the shared execution boundary`)
+        const boundary = section.data.execution_boundary
+        check(isRecord(boundary), `${id} execution boundary should be structured`)
+        check(boundary.mode === "read-only", `${id} execution boundary should be read-only`)
+        check(boundary.writes === false, `${id} execution boundary should report writes=false`)
+        check(boundary.repairs_recovery === false, `${id} execution boundary should not repair recovery`)
+        check(
+          boundary.provider_execution_allowed === false,
+          `${id} execution boundary should forbid Provider execution`,
+        )
+        check(boundary.creates_profile_state === false, `${id} execution boundary should not create profile state`)
+        check(
+          boundary.creates_settlement_state === false,
+          `${id} execution boundary should not create settlement state`,
+        )
+      }
     }),
   ),
   http.protected
@@ -1037,9 +1363,7 @@ const scenarios: Scenario[] = [
   http.protected
     .get("/api/agent-capabilities/plugins", "v2.agentCapability.pluginList")
     .json(200, locationData(object)),
-  http.protected
-    .get("/api/agent-capabilities/customizations", "v2.agentCapability.customizationList")
-    .json(200, locationData(object)),
+  http.protected.get("/api/agent-capabilities/customizations", "v2.agentCapability.customizationList").status(400),
   http.protected
     .post("/api/agent-capabilities/customizations/render", "v2.agentCapability.customizationRender")
     .at((ctx) => ({
@@ -1126,14 +1450,14 @@ const scenarios: Scenario[] = [
         planText: "- Inspect the mapping contract\n- Run regression tests\n- Keep a rollback path",
       },
     }))
-    .json(200, locationData(object)),
+    .status(400),
   http.protected
     .get("/api/agent-capabilities/runs/{runID}/trace", "v2.agentCapability.runTraceExport")
     .at((ctx) => ({
       path: "/api/agent-capabilities/runs/missing/trace",
       headers: ctx.headers(),
     }))
-    .json(200, locationData(object)),
+    .status(503),
   http.protected
     .post("/api/agent-capabilities/workflow-runs/start", "v2.agentCapability.workflowStart")
     .at((ctx) => ({
@@ -1166,6 +1490,165 @@ const scenarios: Scenario[] = [
       body: { nodeID: "node", includeDescendants: true },
     }))
     .status(400),
+  http.protected
+    .get("/api/agent-capabilities/evolution/status", "v2.agentCapability.evolutionStatus")
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/candidates", "v2.agentCapability.evolutionCandidates")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/candidates?status=proposed&limit=20",
+      headers: ctx.headers(),
+    }))
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/exposures", "v2.agentCapability.evolutionExposures")
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/exposures/archive", "v2.agentCapability.evolutionExposureArchivePreview")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archive?keepRecorded=10",
+      headers: ctx.headers(),
+    }))
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/exposures/archives", "v2.agentCapability.evolutionExposureArchives")
+    .json(200, locationData(object)),
+  http.protected
+    .get(
+      "/api/agent-capabilities/evolution/exposures/archives/{archiveID}",
+      "v2.agentCapability.evolutionExposureArchiveGet",
+    )
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archives/xa-000000000000000000000000",
+      headers: ctx.headers(),
+    }))
+    .status(503),
+  http.protected
+    .get(
+      "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/export",
+      "v2.agentCapability.evolutionExposureArchiveExport",
+    )
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archives/xa-000000000000000000000000/export",
+      headers: ctx.headers(),
+    }))
+    .status(503),
+  http.protected
+    .get(
+      "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/restore",
+      "v2.agentCapability.evolutionExposureRestorePreview",
+    )
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archives/xa-000000000000000000000000/restore",
+      headers: ctx.headers(),
+    }))
+    .status(503),
+  http.protected
+    .get("/api/agent-capabilities/evolution/audit/events", "v2.agentCapability.evolutionAuditEvents")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/audit/events?limit=20&beforeSequence=100",
+      headers: ctx.headers(),
+    }))
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/candidates/{candidateID}", "v2.agentCapability.evolutionCandidateGet")
+    .seeded(apiEvolutionCandidate)
+    .at((ctx) => ({
+      path: route("/api/agent-capabilities/evolution/candidates/{candidateID}", {
+        candidateID: ctx.state.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .mutating()
+    .json(200, locationData(object)),
+  http.protected
+    .get(
+      "/api/agent-capabilities/evolution/candidates/{candidateID}/canary",
+      "v2.agentCapability.evolutionCanaryReport",
+    )
+    .seeded(apiEvolutionCandidate)
+    .at((ctx) => ({
+      path: route("/api/agent-capabilities/evolution/candidates/{candidateID}/canary", {
+        candidateID: ctx.state.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .mutating()
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/agent-capabilities/evolution/opportunities", "v2.agentCapability.evolutionOpportunities")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/opportunities?limit=20",
+      headers: ctx.headers(),
+    }))
+    .json(200, locationData(object)),
+  http.protected
+    .post("/api/agent-capabilities/evolution/candidates", "v2.agentCapability.evolutionCreate")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/candidates",
+      headers: ctx.headers(),
+      body: {
+        title: "HTTP API candidate creation",
+        target: "tool.advice",
+        instruction: "Keep tool advice bounded by the explicit contract.",
+        rationale: "This scenario verifies governed candidate admission.",
+        evidenceRefs: ["httpapi-exercise", "contract-test"],
+      },
+    }))
+    .mutating()
+    .json(200, locationData(object)),
+  http.protected
+    .post("/api/agent-capabilities/evolution/patterns/{patternID}/candidate", "v2.agentCapability.evolutionFromPattern")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/patterns/1/candidate",
+      headers: ctx.headers(),
+    }))
+    .status(503),
+  http.protected
+    .post(
+      "/api/agent-capabilities/evolution/candidates/{candidateID}/transition",
+      "v2.agentCapability.evolutionTransition",
+    )
+    .seeded(apiEvolutionCandidate)
+    .at((ctx) => ({
+      path: route("/api/agent-capabilities/evolution/candidates/{candidateID}/transition", {
+        candidateID: ctx.state.id,
+      }),
+      headers: ctx.headers(),
+      body: { action: "evaluate", expectedRevision: ctx.state.revision },
+    }))
+    .mutating()
+    .json(200, locationData(object)),
+  http.protected
+    .post(
+      "/api/agent-capabilities/evolution/exposures/archive/apply",
+      "v2.agentCapability.evolutionExposureArchiveApply",
+    )
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archive/apply",
+      headers: ctx.headers(),
+      body: { keepRecorded: 10, expectedPlanDigest: "0".repeat(64), reason: "HTTP API exercise" },
+    }))
+    .status(503),
+  http.protected
+    .post(
+      "/api/agent-capabilities/evolution/exposures/archives/{archiveID}/restore/apply",
+      "v2.agentCapability.evolutionExposureRestoreApply",
+    )
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/exposures/archives/xa-000000000000000000000000/restore/apply",
+      headers: ctx.headers(),
+      body: { expectedPlanDigest: "0".repeat(64), reason: "HTTP API exercise" },
+    }))
+    .status(503),
+  http.protected
+    .post("/api/agent-capabilities/evolution/context", "v2.agentCapability.evolutionContextPreview")
+    .at((ctx) => ({
+      path: "/api/agent-capabilities/evolution/context",
+      headers: ctx.headers(),
+      body: { userInput: "review the current task safely", cohortKey: "httpapi-exercise" },
+    }))
+    .json(200, locationData(object)),
   http.protected.get("/api/model", "v2.model.list").json(200, locationData(array)),
   http.protected.get("/api/provider", "v2.provider.list").json(200, locationData(array)),
   http.protected.get("/api/integration", "v2.integration.list").json(200, locationData(array)),
@@ -2212,7 +2695,7 @@ const scenarios: Scenario[] = [
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
-        const session = yield* apiSession(ctx)
+        const session = yield* apiSession(ctx, true)
         yield* apiTurn(ctx, session.id, "Establish the checkpoint baseline", "Baseline established")
         const checkpoint = yield* apiCheckpoint(ctx, session.id, "Stable baseline")
         yield* apiTurn(ctx, session.id, "Create a later turn", "Later turn created")
@@ -2231,7 +2714,10 @@ const scenarios: Scenario[] = [
       object(body.data.checkpoint)
       check(body.data.checkpoint.id === ctx.state.checkpoint.id, "rewind preview should identify the checkpoint")
       check(typeof body.data.affectedMessages === "number", "rewind preview should return an affected-message count")
-      check(body.data.affectedMessages > 0, "rewind preview should count messages after the checkpoint")
+      check(
+        body.data.affectedMessages > 0,
+        `rewind preview should count messages after the checkpoint (got ${String(body.data.affectedMessages)})`,
+      )
       check(typeof body.data.expectedLastSequence === "number", "rewind preview should return a last-sequence token")
       check(
         body.data.expectedLastSequence > ctx.state.checkpoint.sequence,
@@ -2244,7 +2730,7 @@ const scenarios: Scenario[] = [
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
-        const session = yield* apiSession(ctx)
+        const session = yield* apiSession(ctx, true)
         yield* apiTurn(ctx, session.id, "Establish the rewind baseline", "Rewind baseline established")
         const checkpoint = yield* apiCheckpoint(ctx, session.id, "Apply baseline")
         yield* apiTurn(ctx, session.id, "Create messages to rewind", "Messages ready for rewind")
@@ -2275,7 +2761,10 @@ const scenarios: Scenario[] = [
       object(body.data.checkpoint)
       check(body.data.checkpoint.id === ctx.state.checkpoint.id, "rewind apply should identify the checkpoint")
       check(typeof body.data.rewoundMessages === "number", "rewind apply should return a rewound-message count")
-      check(body.data.rewoundMessages > 0, "rewind apply should archive messages after the checkpoint")
+      check(
+        body.data.rewoundMessages > 0,
+        `rewind apply should archive messages after the checkpoint (got ${String(body.data.rewoundMessages)})`,
+      )
       check(
         body.data.lastSequence === ctx.state.checkpoint.sequence,
         "rewind apply should return to checkpoint sequence",
@@ -2411,7 +2900,7 @@ const scenarios: Scenario[] = [
       check(body.data.reviewLevel === 3, "memory update should persist review level")
     }),
   http.protected
-    .delete("/api/memory/{memoryID}", "v2.memory.delete")
+    .delete("/api/memory/maintenance/{memoryID}", "v2.memory.maintenanceDelete")
     .seeded((ctx) =>
       apiMemory(ctx, {
         content: "Delete this memory through the public HTTP contract",
@@ -2420,8 +2909,14 @@ const scenarios: Scenario[] = [
       }),
     )
     .at((ctx) => ({
-      path: route("/api/memory/{memoryID}", { memoryID: ctx.state.id }),
+      path: route("/api/memory/maintenance/{memoryID}", { memoryID: ctx.state.id }),
       headers: ctx.headers(),
+      body: {
+        expectedVersion: 1,
+        actionID: "act_http_memory_delete",
+        redactionEvidenceID: "evd_http_memory_delete",
+        reason: "Authorized HTTP maintenance deletion",
+      },
     }))
     .mutating()
     .status(204, (ctx) =>
@@ -2437,7 +2932,7 @@ const scenarios: Scenario[] = [
         ),
     ),
   http.protected
-    .post("/api/memory/delete", "v2.memory.deleteMany")
+    .post("/api/memory/maintenance/delete", "v2.memory.maintenanceDeleteMany")
     .seeded((ctx) =>
       Effect.gen(function* () {
         const first = yield* apiMemory(ctx, {
@@ -2452,9 +2947,33 @@ const scenarios: Scenario[] = [
       }),
     )
     .at((ctx) => ({
-      path: "/api/memory/delete",
+      path: "/api/memory/maintenance/delete",
       headers: ctx.headers(),
-      body: { ids: [ctx.state.first.id, ctx.state.second.id, ctx.state.missingID] },
+      body: {
+        items: [
+          {
+            memoryID: ctx.state.first.id,
+            expectedVersion: 1,
+            actionID: "act_http_memory_bulk_delete_first",
+            redactionEvidenceID: "evd_http_memory_bulk_delete_first",
+            reason: "Authorized HTTP bulk maintenance deletion",
+          },
+          {
+            memoryID: ctx.state.second.id,
+            expectedVersion: 1,
+            actionID: "act_http_memory_bulk_delete_second",
+            redactionEvidenceID: "evd_http_memory_bulk_delete_second",
+            reason: "Authorized HTTP bulk maintenance deletion",
+          },
+          {
+            memoryID: ctx.state.missingID,
+            expectedVersion: 1,
+            actionID: "act_http_memory_bulk_delete_missing",
+            redactionEvidenceID: "evd_http_memory_bulk_delete_missing",
+            reason: "Authorized HTTP bulk maintenance deletion",
+          },
+        ],
+      },
     }))
     .mutating()
     .json(200, (body, ctx) => {
@@ -2661,6 +3180,74 @@ const scenarios: Scenario[] = [
         check(memory.tags.includes("quarantine:review_required_project"), "memory governance should persist its reason")
       }),
     ),
+  http.protected
+    .get("/api/memory/conflicts", "v2.memory.conflictList")
+    .at((ctx) => ({
+      path: "/api/memory/conflicts?includeClosed=false&limit=20",
+      headers: ctx.headers(),
+    }))
+    .json(200, data(object)),
+  http.protected
+    .post("/api/memory/conflicts/scan", "v2.memory.conflictScan")
+    .at((ctx) => ({
+      path: "/api/memory/conflicts/scan",
+      headers: ctx.headers(),
+      body: { scanLimit: 20, resultLimit: 10 },
+    }))
+    .mutating()
+    .json(200, data(object)),
+  http.protected
+    .post("/api/memory/{memoryID}/correct", "v2.memory.correct")
+    .at((ctx) => ({
+      path: route("/api/memory/{memoryID}/correct", { memoryID: "mem_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { content: "Corrected memory", reason: "HTTP API exercise", expectedUpdatedAt: 0 },
+    }))
+    .status(404),
+  http.protected
+    .get("/api/memory/{memoryID}/corrections", "v2.memory.correctionHistory")
+    .at((ctx) => ({
+      path: route("/api/memory/{memoryID}/corrections", { memoryID: "mem_httpapi_missing" }),
+      headers: ctx.headers(),
+    }))
+    .status(404),
+  http.protected
+    .post("/api/memory/corrections/{correctionID}/undo", "v2.memory.undoCorrection")
+    .at((ctx) => ({
+      path: route("/api/memory/corrections/{correctionID}/undo", { correctionID: "mcor_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { expectedSuccessorUpdatedAt: 0 },
+    }))
+    .status(409),
+  http.protected
+    .post("/api/memory/conflicts/{conflictID}/resolve", "v2.memory.resolveConflict")
+    .at((ctx) => ({
+      path: route("/api/memory/conflicts/{conflictID}/resolve", { conflictID: "mcf_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: {
+        chosenMemoryID: "mem_httpapi_missing",
+        reason: "HTTP API exercise",
+        expectedLeftUpdatedAt: 0,
+        expectedRightUpdatedAt: 0,
+      },
+    }))
+    .status(409),
+  http.protected
+    .post("/api/memory/conflicts/{conflictID}/dismiss", "v2.memory.dismissConflict")
+    .at((ctx) => ({
+      path: route("/api/memory/conflicts/{conflictID}/dismiss", { conflictID: "mcf_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { reason: "HTTP API exercise", expectedLeftUpdatedAt: 0, expectedRightUpdatedAt: 0 },
+    }))
+    .status(409),
+  http.protected
+    .post("/api/memory/conflicts/{conflictID}/undo", "v2.memory.undoConflict")
+    .at((ctx) => ({
+      path: route("/api/memory/conflicts/{conflictID}/undo", { conflictID: "mcf_httpapi_missing" }),
+      headers: ctx.headers(),
+      body: { expectedLeftUpdatedAt: 0, expectedRightUpdatedAt: 0 },
+    }))
+    .status(409),
   http.protected
     .post("/api/session/{sessionID}/team", "v2.team.create")
     .seeded(apiSession)
@@ -3553,6 +4140,23 @@ const scenarios: Scenario[] = [
       }),
     ),
   http.protected
+    .get("/api/learning/dream", "v2.learning.dream")
+    .at((ctx) => ({
+      path: `/api/learning/dream?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      object(body.data)
+      check(body.data.executionMode === "read-only-core-projection", "learning dream should remain read-only")
+      check(body.data.sideEffects === "none", "learning dream should disclose no side effects")
+      object(body.data.consolidation)
+      check(body.data.consolidation.status === "not_run", "learning dream must not consolidate patterns")
+      object(body.data.dream)
+      check(Array.isArray(body.data.dream.insights), "learning dream should return bounded insights")
+      check(Array.isArray(body.data.dream.suggestions), "learning dream should return bounded suggestions")
+    }),
+  http.protected
     .post("/api/learning/outcome", "v2.learning.record")
     .at((ctx) => ({
       path: "/api/learning/outcome",
@@ -3661,6 +4265,260 @@ const scenarios: Scenario[] = [
       }),
     ),
   http.protected
+    .get("/api/personal-workspace", "v2.personalWorkspace.snapshot")
+    .at((ctx) => ({
+      path: `/api/personal-workspace?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&limit=10`,
+      headers: ctx.headers(),
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      object(body.project)
+      object(body.location)
+      check(body.location.directory === ctx.directory, "personal workspace should bind to the requested directory")
+      array(body.sessions)
+      array(body.tasks)
+      array(body.runs)
+      array(body.personalJobs)
+      array(body.memoryCandidates)
+      array(body.attention)
+      object(body.counts)
+      object(body.cost)
+      check(typeof body.asOf === "string", "personal workspace should expose a bounded snapshot timestamp")
+    }),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job", "v2.personalJob.create")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        idempotencyKey: "httpapi-personal-job-create",
+        title: "HTTP API visible background job",
+        prompt: "Read the current workspace and report a bounded verification summary.",
+        schedule: {
+          kind: "once",
+          label: "HTTP API verification",
+          nextRunAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+          timezone: "UTC",
+        },
+        budget: { maxAttempts: 2, maxDurationMs: 60_000, maxCostMicros: 10_000 },
+        approvalPolicy: { mode: "automatic", rationale: "The HTTP exerciser owns this isolated job." },
+        notificationPolicy: { mode: "in_app", events: ["completed", "failed", "cancelled"] },
+      },
+    }))
+    .mutating()
+    .json(200, (body, ctx) => {
+      object(body)
+      object(body.data)
+      const data = body.data as Record<string, unknown>
+      check(typeof data.id === "string" && data.id.startsWith("pjob_"), "personal job create should return an ID")
+      check(data.sessionID === ctx.state.id, "personal job create should bind to the session")
+      check(data.status === "queued", "automatic personal job create should start queued")
+      check(
+        isRecord(data.visibility) && data.visibility.userVisible === true,
+        "personal job create should be user-visible",
+      )
+      check(data.approvalState === "not_required", "automatic personal job create should not require approval")
+    }),
+  http.protected
+    .get("/api/session/{sessionID}/personal-job", "v2.personalJob.list")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* apiSession(ctx)
+        const job = yield* apiPersonalJob(ctx, session.id)
+        return { session, job }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job", { sessionID: ctx.state.session.id }),
+      headers: ctx.headers(),
+    }))
+    .mutating()
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.data)
+      check(body.data.length === 1, "personal job list should return the seeded job")
+      object(body.data[0])
+      check(body.data[0].id === ctx.state.job.id, "personal job list should preserve job identity")
+      check(body.data[0].sessionID === ctx.state.session.id, "personal job list should preserve session ownership")
+    }),
+  http.protected
+    .get("/api/session/{sessionID}/personal-job/{jobID}", "v2.personalJob.get")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* apiSession(ctx)
+        const job = yield* apiPersonalJob(ctx, session.id)
+        return { session, job }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}", {
+        sessionID: ctx.state.session.id,
+        jobID: ctx.state.job.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .mutating()
+    .json(200, (body, ctx) => {
+      object(body)
+      object(body.data)
+      check(body.data.id === ctx.state.job.id, "personal job get should return the requested job")
+      check(body.data.sessionID === ctx.state.session.id, "personal job get should enforce session ownership")
+      check(body.data.title === "HTTP API visible background job", "personal job get should preserve the title")
+      check(body.data.status === "queued", "personal job get should preserve the queued lifecycle state")
+    }),
+  http.protected
+    .get("/api/session/{sessionID}/personal-job/{jobID}/notifications", "v2.personalJob.notifications")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* apiSession(ctx)
+        const job = yield* apiPersonalJob(ctx, session.id)
+        return { session, job }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/notifications", {
+        sessionID: ctx.state.session.id,
+        jobID: ctx.state.job.id,
+      }),
+      headers: ctx.headers(),
+    }))
+    .mutating()
+    .json(200, (body) => {
+      object(body)
+      array(body.data)
+      check(body.data.length === 0, "a queued automatic personal job should have no unread notifications")
+    }),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/dispatch", "v2.personalJob.dispatch")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/dispatch", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { limit: 10 },
+    }))
+    .mutating()
+    .json(200, (body) => {
+      object(body)
+      object(body.data)
+      for (const key of ["recovered", "advanced", "attempted", "completed", "failed", "skipped"]) {
+        check(typeof body.data[key] === "number" && body.data[key] >= 0, `personal job dispatch should expose ${key}`)
+      }
+      check(body.data.attempted === 0, "dispatch should not attempt work when the session has no due jobs")
+    }),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/approve", "v2.personalJob.approve")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/approve", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/reject", "v2.personalJob.reject")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/reject", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1, reason: "HTTP API missing-job guard" },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/start", "v2.personalJob.start")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/start", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/execute", "v2.personalJob.execute")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/execute", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/pause", "v2.personalJob.pause")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/pause", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/resume", "v2.personalJob.resume")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/resume", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .post("/api/session/{sessionID}/personal-job/{jobID}/cancel", "v2.personalJob.cancel")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/cancel", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1, reason: "HTTP API missing-job guard" },
+    }))
+    .status(404),
+  http.protected
+    .post(
+      "/api/session/{sessionID}/personal-job/{jobID}/notifications/{notificationID}/read",
+      "v2.personalJob.notificationRead",
+    )
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}/notifications/{notificationID}/read", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+        notificationID: "pjn_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
+    .delete("/api/session/{sessionID}/personal-job/{jobID}", "v2.personalJob.delete")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/personal-job/{jobID}", {
+        sessionID: ctx.state.id,
+        jobID: "pjob_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { expectedRevision: 1 },
+    }))
+    .status(404),
+  http.protected
     .post("/api/learning/dogfood/sync", "v2.learning.syncDogfood")
     .at((ctx) => ({
       path: "/api/learning/dogfood/sync",
@@ -3701,6 +4559,511 @@ const scenarios: Scenario[] = [
         check(status.successfulTurns === 1 && status.failedTurns === 1, "dogfood sync should preserve outcomes")
       }),
     ),
+  http.protected.get("/api/tenant-platform/overview", "v2.tenantPlatform.overview").json(200, (body) => {
+    object(body)
+    check(body.schema_version === 1, "tenant platform overview should expose schema version 1")
+    object(body.policy)
+    object(body.policy.quota)
+    object(body.policy.rate_limit)
+    object(body.usage)
+    check(typeof body.policy.tenant_id === "string", "tenant platform overview should disclose a tenant binding")
+    check(typeof body.active_rate_window_count === "number", "tenant platform overview should expose rate windows")
+    check(typeof body.pending_requests === "number", "tenant platform overview should expose pending requests")
+  }),
+  http.protected.get("/api/tenant-platform/secrets", "v2.tenantPlatform.listSecrets").json(200, (body) => {
+    array(body)
+    for (const item of body) {
+      object(item)
+      check(typeof item.tenant_id === "string", "tenant secret metadata should remain tenant-bound")
+      check(typeof item.secret_id === "string", "tenant secret metadata should expose an opaque ID")
+      check(
+        typeof item.fingerprint === "string" && /^[a-f0-9]{64}$/.test(item.fingerprint),
+        "secret fingerprint should be a digest",
+      )
+      check(item.status === "active" || item.status === "revoked", "secret metadata should expose a bounded status")
+    }
+  }),
+  http.protected
+    .post("/api/tenant-platform/policy", "v2.tenantPlatform.setPolicy")
+    .at((ctx) => ({ path: "/api/tenant-platform/policy", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/tenant-platform/data-requests", "v2.tenantPlatform.requestData")
+    .at((ctx) => ({ path: "/api/tenant-platform/data-requests", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/tenant-platform/data-requests/{requestID}/approval", "v2.tenantPlatform.approveData")
+    .at((ctx) => ({
+      path: "/api/tenant-platform/data-requests/tdr_httpapi_missing/approval",
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/tenant-platform/backups", "v2.tenantPlatform.createBackup")
+    .at((ctx) => ({ path: "/api/tenant-platform/backups", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/tenant-platform/backups/{manifestID}/verify", "v2.tenantPlatform.verifyBackup")
+    .at((ctx) => ({
+      path: "/api/tenant-platform/backups/tbk_httpapi_missing/verify",
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/tenant-platform/audit/export", "v2.tenantPlatform.exportAudit")
+    .at((ctx) => ({ path: "/api/tenant-platform/audit/export", headers: ctx.headers() }))
+    .mutating()
+    .json(200, (body) => {
+      object(body)
+      check(typeof body.id === "string" && body.id.startsWith("tae_"), "tenant audit export should expose an ID")
+      check(typeof body.tenant_id === "string", "tenant audit export should remain tenant-bound")
+      check(
+        typeof body.export_digest === "string" && /^[a-f0-9]{64}$/.test(body.export_digest),
+        "tenant audit export should expose a digest",
+      )
+      check(body.artifact_media_type === "application/json", "tenant audit export should expose JSON media type")
+      check(
+        typeof body.artifact_json === "string" && body.artifact_json.length > 0,
+        "tenant audit export should include JSON",
+      )
+    }),
+  http.protected
+    .post("/api/tenant-platform/secrets/{secretID}/revoke", "v2.tenantPlatform.revokeSecret")
+    .at((ctx) => ({
+      path: "/api/tenant-platform/secrets/secret_httpapi_missing/revoke",
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected.get("/api/artifacts/owner-context", "v2.artifact.ownerContext").json(200, (body) => {
+    object(body)
+    object(body.profile)
+    object(body.tenant)
+    check(body.profile.scope === "profile", "artifact owner context should expose the profile scope")
+    check(
+      typeof body.profile.id === "string" && body.profile.id.length > 0,
+      "artifact owner context should expose profile ID",
+    )
+    check(body.tenant.scope === "tenant", "artifact owner context should expose the tenant scope")
+    check(
+      typeof body.tenant.id === "string" && body.tenant.id.length > 0,
+      "artifact owner context should expose tenant ID",
+    )
+    check(typeof body.tenantReadable === "boolean", "artifact owner context should expose tenant read capability")
+    check(
+      !JSON.stringify(body).toLowerCase().includes("path"),
+      "artifact owner context must not expose filesystem paths",
+    )
+  }),
+  http.protected
+    .get("/api/artifacts/maintenance-context", "v2.artifact.maintenanceContext")
+    .at((ctx) => ({
+      path: "/api/artifacts/maintenance-context?scope=profile",
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      object(body.owner)
+      check(body.owner.scope === "profile", "artifact maintenance should remain profile-scoped")
+      check(body.maintenanceScope === "profile", "artifact maintenance should disclose its scope")
+      check(typeof body.canMaintain === "boolean", "artifact maintenance should expose the capability bit")
+      check(body.scan === null || isRecord(body.scan), "artifact maintenance should expose a bounded scan record")
+      check(
+        typeof body.reason === "string" && body.reason.length > 0,
+        "artifact maintenance should explain its current state",
+      )
+      check(
+        !JSON.stringify(body).toLowerCase().includes("path"),
+        "artifact maintenance must not expose filesystem paths",
+      )
+    }),
+  http.protected
+    .get("/api/agent-capabilities/experience/candidates", "v2.agentCapability.experienceCandidateList")
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/experience/candidates?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&limit=10`,
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      locationData((value) => {
+        object(value)
+        check(value.schema_version === 1, "experience candidate list should expose schema version 1")
+        check(value.count === 0, "a fresh workspace should have no experience candidates")
+        array(value.items)
+        check(value.items.length === 0, "experience candidate list should be empty for a fresh workspace")
+      }),
+    ),
+  http.protected
+    .get("/api/agent-capabilities/experience/sources", "v2.agentCapability.experienceSourceList")
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/experience/sources?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&limit=10`,
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      locationData((value) => {
+        object(value)
+        check(value.schema_version === 1, "experience source list should expose schema version 1")
+        check(value.count === 0, "a fresh workspace should have no experience sources")
+        array(value.items)
+        check(value.items.length === 0, "experience source list should be empty for a fresh workspace")
+      }),
+    ),
+  http.protected
+    .get("/api/agent-capabilities/skill-lifecycle/candidates", "v2.agentCapability.skillLifecycleCandidateList")
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&limit=10`,
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      locationData((value) => {
+        object(value)
+        check(value.schema_version === 1, "skill lifecycle candidate list should expose schema version 1")
+        check(value.count === 0, "a fresh workspace should have no skill lifecycle candidates")
+        array(value.items)
+        check(value.items.length === 0, "skill lifecycle candidate list should be empty for a fresh workspace")
+      }),
+    ),
+  http.protected
+    .post("/api/artifacts/read", "v2.artifact.readScoped")
+    .at((ctx) => ({ path: "/api/artifacts/read", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/artifacts/read-range", "v2.artifact.readScopedRange")
+    .at((ctx) => ({ path: "/api/artifacts/read-range", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/artifacts/catalog", "v2.artifact.catalogScoped")
+    .at((ctx) => ({ path: "/api/artifacts/catalog", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/artifacts/audit", "v2.artifact.auditScoped")
+    .at((ctx) => ({ path: "/api/artifacts/audit", headers: ctx.headers(), body: {} }))
+    .status(400),
+  http.protected
+    .post("/api/session/{sessionID}/artifacts/read", "v2.artifact.read")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/artifacts/read", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/session/{sessionID}/artifacts/read-range", "v2.artifact.readRange")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/artifacts/read-range", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/session/{sessionID}/artifacts/catalog", "v2.artifact.catalog")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/artifacts/catalog", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/session/{sessionID}/artifacts/audit", "v2.artifact.audit")
+    .seeded(apiSession)
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/artifacts/audit", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .get("/api/agent-capabilities/experience/candidates/{candidateID}", "v2.agentCapability.experienceCandidateGet")
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/experience/candidates/exc_httpapi_missing?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}",
+      "v2.agentCapability.skillLifecycleCandidateGet",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get(
+      "/api/agent-capabilities/skill-lifecycle/deployments/{skillID}",
+      "v2.agentCapability.skillLifecycleDeploymentGet",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/deployments/httpapi_missing?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get("/api/memory/candidates/{candidateID}", "v2.memory.candidateReview")
+    .at((ctx) => ({
+      path: `/api/memory/candidates/mcan_httpapi_missing?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/experience/candidates/{candidateID}/review",
+      "v2.agentCapability.experienceCandidateReview",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/experience/candidates/exc_httpapi_missing/review?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: { expectedRevision: 1, decision: "approve", reason: "HTTP API missing-candidate guard" },
+    }))
+    .status(400),
+  http.protected
+    .post("/api/agent-capabilities/skill-lifecycle/candidates", "v2.agentCapability.skillLifecycleCandidateCreate")
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/evaluate",
+      "v2.agentCapability.skillLifecycleEvaluate",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000/evaluate?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/canary/observations",
+      "v2.agentCapability.skillLifecycleCanaryObservation",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000/canary/observations?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/canary",
+      "v2.agentCapability.skillLifecycleCanaryStart",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000/canary?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/promote",
+      "v2.agentCapability.skillLifecyclePromote",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000/promote?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/agent-capabilities/skill-lifecycle/candidates/{candidateID}/rollback",
+      "v2.agentCapability.skillLifecycleRollback",
+    )
+    .at((ctx) => ({
+      path: `/api/agent-capabilities/skill-lifecycle/candidates/skc_000000000000000000000000/rollback?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/memory/candidates/{candidateID}/approve", "v2.memory.candidateApprove")
+    .at((ctx) => ({
+      path: `/api/memory/candidates/mcan_httpapi_missing/approve?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: { expectedUpdatedAt: 0, reason: "HTTP API missing-candidate guard" },
+    }))
+    .status(400),
+  http.protected
+    .post("/api/memory/candidates/{candidateID}/reject", "v2.memory.candidateReject")
+    .at((ctx) => ({
+      path: `/api/memory/candidates/mcan_httpapi_missing/reject?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: { expectedUpdatedAt: 0, reason: "HTTP API missing-candidate guard" },
+    }))
+    .status(400),
+  http.protected
+    .post("/api/memory/candidates/{candidateID}/activate", "v2.memory.candidateActivate")
+    .at((ctx) => ({
+      path: `/api/memory/candidates/mcan_httpapi_missing/activate?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: { expectedUpdatedAt: 0, reason: "HTTP API missing-candidate guard" },
+    }))
+    .status(400),
+  http.protected
+    .get("/api/private-operations/overview", "v2.privateOperations.overview")
+    .json(200, locationData(object)),
+  http.protected
+    .get("/api/runtime-insight/snapshot", "v2.runtimeInsight.snapshot")
+    .at((ctx) => ({
+      path: "/api/runtime-insight/snapshot?limit=20",
+      headers: ctx.headers(),
+    }))
+    .json(200, object),
+  http.protected
+    .get("/api/runtime-insight/actions/{actionID}/recovery", "v2.runtimeInsight.actionRecovery")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/actions/act_httpapi_missing/recovery?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/api/runtime-insight/actions/{actionID}/recovery/review", "v2.runtimeInsight.actionRecoveryReview")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/actions/act_httpapi_missing/recovery/review?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/runtime-insight/actions/{actionID}/recovery/rollback", "v2.runtimeInsight.actionRecoveryRollback")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/actions/act_httpapi_missing/recovery/rollback?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .get("/api/runtime-insight/artifacts/maintenance", "v2.runtimeInsight.artifactMaintenance")
+    .at((ctx) => ({
+      path: "/api/runtime-insight/artifacts/maintenance",
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(body.scope === "profile", "artifact maintenance should report profile scope")
+      check(body.operation === "audit", "artifact maintenance GET must remain read-only")
+      check(typeof body.referencedCount === "number", "artifact audit should expose reference count")
+    }),
+  http.protected
+    .post("/api/runtime-insight/artifacts/maintenance", "v2.runtimeInsight.artifactMaintenanceSweep")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/artifacts/maintenance?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected.get("/api/runtime-insight/audit/verify", "v2.runtimeInsight.auditVerify").json(200, object),
+  http.protected
+    .get("/api/runtime-insight/settlements/{parentRunID}/{childRunID}", "v2.runtimeInsight.childSettlementAudit")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/settlements/run_parent_httpapi_missing/run_child_httpapi_missing?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post(
+      "/api/runtime-insight/settlements/{parentRunID}/{childRunID}/recover",
+      "v2.runtimeInsight.childSettlementRecover",
+    )
+    .at((ctx) => ({
+      path: `/api/runtime-insight/settlements/run_parent_httpapi_missing/run_child_httpapi_missing/recover?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/runtime-insight/settlements/recover-pending", "v2.runtimeInsight.childSettlementRecoverySweep")
+    .at((ctx) => ({
+      path: `/api/runtime-insight/settlements/recover-pending?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: { approval: "recover_settlements", limit: 10 },
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(body.schemaVersion === 1, "settlement recovery sweep should expose schema version")
+      check(body.status === null, "empty settlement recovery sweep should have no status filter")
+      check(body.limit === 10, "settlement recovery sweep should preserve bounded limit")
+      check(
+        body.scanned === 0 && Array.isArray(body.items) && body.items.length === 0,
+        "empty settlement recovery sweep should be empty",
+      )
+      check(body.deterministic === true, "settlement recovery sweep should be deterministic")
+      check(body.providerExecutionAllowed === false, "settlement recovery sweep must not execute providers")
+      check(
+        isRecord(body.access) && body.access.role === "owner",
+        "settlement recovery sweep should expose owner access",
+      )
+    }),
+  http.protected
+    .get("/api/subagent-control/{parentRunID}/children", "v2.subagentControl.children")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/children?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/api/subagent-control/{parentRunID}/{childRunID}/steer", "v2.subagentControl.steer")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/run_child_httpapi_missing/steer?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/subagent-control/{parentRunID}/{childRunID}/followup", "v2.subagentControl.followup")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/run_child_httpapi_missing/followup?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/subagent-control/{parentRunID}/{childRunID}/wait", "v2.subagentControl.wait")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/run_child_httpapi_missing/wait?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .post("/api/subagent-control/{parentRunID}/{childRunID}/cancel", "v2.subagentControl.cancel")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/run_child_httpapi_missing/cancel?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400),
+  http.protected
+    .get("/api/subagent-control/{parentRunID}/{childRunID}/{operation}/{requestID}", "v2.subagentControl.status")
+    .at((ctx) => ({
+      path: `/api/subagent-control/run_parent_httpapi_missing/run_child_httpapi_missing/steer/cpr_httpapi_missing?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .get("/api/mcp/capabilities", "v2.mcp.capabilities")
+    .at((ctx) => ({
+      path: `/api/mcp/capabilities?location[directory]=${encodeURIComponent(ctx.directory ?? "")}`,
+      headers: ctx.headers(),
+    }))
+    .json(
+      200,
+      locationData((value) => {
+        array(value)
+        check(value.length === 0, "embedded Core MCP capabilities should explicitly report no owned transports")
+      }),
+    ),
   http.protected.get("/api/mcp", "v2.mcp.list").json(
     200,
     locationData((value) => {
@@ -3720,6 +5083,21 @@ const scenarios: Scenario[] = [
       )
     }),
   ),
+  http.protected
+    .get("/api/mcp/actions/{actionID}/reconciliation", "v2.mcp.action.reconciliation")
+    .at((ctx) => ({
+      path: `/api/mcp/actions/action_httpapi_missing/reconciliation?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&intentDigest=${"0".repeat(64)}&idempotencyKey=httpapi-missing`,
+      headers: ctx.headers(),
+    }))
+    .status(400),
+  http.protected
+    .post("/api/mcp/actions/{actionID}/reconciliation/record", "v2.mcp.action.reconciliationRecord")
+    .at((ctx) => ({
+      path: `/api/mcp/actions/action_httpapi_missing/reconciliation/record?location[directory]=${encodeURIComponent(ctx.directory ?? "")}&intentDigest=${"0".repeat(64)}&idempotencyKey=httpapi-missing`,
+      headers: ctx.headers(),
+      body: { expectedEvidenceDigest: "0".repeat(64), approval: "record_evidence" },
+    }))
+    .status(400),
   http.protected
     .post("/api/mcp/{server}/connect", "v2.mcp.connect")
     .at((ctx) => ({
@@ -3758,6 +5136,28 @@ const scenarios: Scenario[] = [
       },
       "status",
     ),
+  http.protected
+    .get("/experimental/control-approval", "experimental.controlApproval.list")
+    .at((ctx) => ({
+      path: "/experimental/control-approval",
+      headers: ctx.headers(),
+    }))
+    .json(200, array),
+  http.protected
+    .post("/experimental/control-approval/{requestID}/reply", "experimental.controlApproval.reply")
+    .at((ctx) => ({
+      path: "/experimental/control-approval/per_httpapi_missing/reply",
+      headers: ctx.headers(),
+      body: { reply: "reject", message: "HTTP API exercise" },
+    }))
+    .status(400),
+  http.protected
+    .get("/experimental/control-operation/{requestID}", "experimental.controlOperation.status")
+    .at((ctx) => ({
+      path: "/experimental/control-operation/cpr_status_missing?operation=worktree.create",
+      headers: ctx.headers(),
+    }))
+    .status(400),
   http.protected
     .get("/api/session/{sessionID}/wait", "v2.cooperativeWait.active")
     .seeded(apiSession)
@@ -4264,7 +5664,6 @@ const scenarios: Scenario[] = [
     }),
   http.protected
     .post("/session/{sessionID}/init", "session.init")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
@@ -4288,7 +5687,6 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/session/{sessionID}/message", "session.prompt")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
@@ -4323,7 +5721,6 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/session/{sessionID}/prompt_async", "session.prompt_async")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
@@ -4349,7 +5746,6 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/session/{sessionID}/command", "session.command")
-    .preserveDatabase()
     .withLlm()
     .seeded((ctx) =>
       Effect.gen(function* () {
@@ -4376,26 +5772,14 @@ const scenarios: Scenario[] = [
     ),
   http.protected
     .post("/session/{sessionID}/shell", "session.shell")
-    .preserveDatabase()
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Shell session" }))
     .at((ctx) => ({
       path: route("/session/{sessionID}/shell", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
-      body: { agent: "build", model: { providerID: "test", modelID: "test-model" }, command: "printf shell-ok" },
+      body: { agent: "build", model: { providerID: "test", modelID: "test-model" }, command: 1 },
     }))
-    .json(
-      200,
-      (body) => {
-        object(body)
-        check(isRecord(body.info) && body.info.role === "assistant", "shell should return assistant message")
-        check(
-          Array.isArray(body.parts) && body.parts.some((part) => isRecord(part) && part.type === "tool"),
-          "shell should return a tool part",
-        )
-      },
-      "status",
-    ),
+    .status(400),
   http.protected
     .post("/session/{sessionID}/summarize", "session.summarize")
     .preserveDatabase()
@@ -4460,18 +5844,11 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: { messageID: ctx.state.message.info.id },
     }))
-    .json(
-      200,
-      (body, ctx) => {
-        object(body)
-        check(body.id === ctx.state.session.id, "revert should return the session")
-        check(
-          isRecord(body.revert) && body.revert.messageID === ctx.state.message.info.id,
-          "revert should record reverted message",
-        )
-      },
-      "status",
-    ),
+    .json(503, (body) => {
+      object(body)
+      check(body._tag === "ServiceUnavailableError", "legacy revert should fail with a typed unavailable error")
+      check(body.service === "session.revert", "legacy revert should identify the blocked service")
+    }),
   http.protected
     .post("/session/{sessionID}/unrevert", "session.unrevert")
     .mutating()
@@ -4480,14 +5857,11 @@ const scenarios: Scenario[] = [
       path: route("/session/{sessionID}/unrevert", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
     }))
-    .json(
-      200,
-      (body, ctx) => {
-        object(body)
-        check(body.id === ctx.state.id, "unrevert should return the session")
-      },
-      "status",
-    ),
+    .json(503, (body) => {
+      object(body)
+      check(body._tag === "ServiceUnavailableError", "legacy unrevert should fail with a typed unavailable error")
+      check(body.service === "session.unrevert", "legacy unrevert should identify the blocked service")
+    }),
   http.protected
     .post("/session/{sessionID}/permissions/{permissionID}", "permission.respond")
     .seeded((ctx) => ctx.session({ title: "Deprecated permission session" }))
@@ -4505,27 +5879,21 @@ const scenarios: Scenario[] = [
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Share session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/share", { sessionID: ctx.state.id }), headers: ctx.headers() }))
-    .json(
-      200,
-      (body, ctx) => {
-        object(body)
-        check(body.id === ctx.state.id, "share should return the session")
-      },
-      "status",
-    ),
+    .json(503, (body) => {
+      object(body)
+      check(body._tag === "ServiceUnavailableError", "legacy share should fail with a typed unavailable error")
+      check(body.service === "session.share", "legacy share should identify the blocked service")
+    }),
   http.protected
     .delete("/session/{sessionID}/share", "session.unshare")
     .mutating()
     .seeded((ctx) => ctx.session({ title: "Unshare session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/share", { sessionID: ctx.state.id }), headers: ctx.headers() }))
-    .json(
-      200,
-      (body, ctx) => {
-        object(body)
-        check(body.id === ctx.state.id, "unshare should return the session")
-      },
-      "status",
-    ),
+    .json(503, (body) => {
+      object(body)
+      check(body._tag === "ServiceUnavailableError", "legacy unshare should fail with a typed unavailable error")
+      check(body.service === "session.unshare", "legacy unshare should identify the blocked service")
+    }),
   http.protected
     .post("/tui/append-prompt", "tui.appendPrompt")
     .at((ctx) => ({ path: "/tui/append-prompt", headers: ctx.headers(), body: { text: "hello" } }))

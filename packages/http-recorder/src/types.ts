@@ -11,6 +11,8 @@ export interface RequestSnapshot {
   readonly headers: Record<string, string>
   /** Request body after redaction. */
   readonly body: string
+  /** Encoding used by `body`; omitted for ordinary text and empty bodies. */
+  readonly bodyEncoding?: "text" | "base64" | "multipart"
 }
 
 /** @internal */
@@ -26,11 +28,33 @@ export interface ResponseSnapshot {
 }
 
 /** @internal */
-export interface HttpInteraction {
+interface HttpInteractionBase {
   readonly transport: "http"
   readonly request: RequestSnapshot
-  readonly response: ResponseSnapshot
 }
+
+/** @internal */
+export interface HttpSuccessInteraction extends HttpInteractionBase {
+  readonly response: ResponseSnapshot
+  readonly error?: never
+}
+
+/** A stable, deliberately bounded representation of an upstream network failure. */
+export const RECORDED_TRANSPORT_FAILURE = "Recorded upstream transport failure" as const
+
+export interface HttpFailureSnapshot {
+  readonly kind: "transport"
+  readonly description: typeof RECORDED_TRANSPORT_FAILURE
+}
+
+/** @internal */
+export interface HttpFailureInteraction extends HttpInteractionBase {
+  readonly response?: never
+  readonly error: HttpFailureSnapshot
+}
+
+/** @internal */
+export type HttpInteraction = HttpSuccessInteraction | HttpFailureInteraction
 
 /** @internal */
 export type WebSocketEvent =
@@ -83,6 +107,8 @@ export interface RecorderOptions {
   readonly redact?: RedactOptions
   /** Custom HTTP request equivalence. */
   readonly match?: RequestMatcher
+  /** Maximum request body captured for deterministic reconstruction. Defaults to 16 MiB. */
+  readonly maxRequestBodyBytes?: number
 }
 
 /** @internal */

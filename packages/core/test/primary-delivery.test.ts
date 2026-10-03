@@ -7,6 +7,7 @@ import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
 import { GoalV2 } from "@arforge-ai/core/goal"
+import { Global } from "@arforge-ai/core/global"
 import { Location } from "@arforge-ai/core/location"
 import { LocationMutation } from "@arforge-ai/core/location-mutation"
 import { PermissionV2 } from "@arforge-ai/core/permission"
@@ -98,6 +99,7 @@ const withDelivery = <A, E, R>(
           [Location.node, activeLocation],
           [PermissionV2.node, permission],
           [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+          [Global.node, Global.layerWith({ data: directory, state: path.join(directory, "state") })],
         ],
       ),
     ),
@@ -172,7 +174,12 @@ describe("PrimaryDelivery", () => {
               ).delivery.attachments[0]!
               expect(artifact.sha256).toBe("55721654f9f5ee40e2acd466f488de43bcf890ee0d7fcb20272c5bfd0708ea8c")
               expect(artifact.artifactID).toBe(`msg-${artifact.sha256.slice(0, 16)}`)
-              expect(permissions.map((item) => item.action)).toEqual(["deliver_user_message", "read", "read"])
+              expect((artifact as { artifactRef?: { kind: string; owner: { scope: string; id: string }; digest: string } }).artifactRef).toMatchObject({
+                kind: "primary_delivery",
+                owner: { scope: "session", id: sessionID },
+                digest: artifact.sha256,
+              })
+              expect(permissions.map((item) => item.action)).toEqual(["deliver_user_message", "read"])
             }),
           )
         }),

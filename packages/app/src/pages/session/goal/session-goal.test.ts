@@ -72,4 +72,13 @@ describe("session Goal mode", () => {
       if (locale !== "en") expect(copy.menuDescription).not.toBe(sessionGoalText.en.menuDescription)
     }
   })
+
+  test("keeps the primary Chinese goal controls in user language", () => {
+    const simplified = JSON.stringify(sessionGoalText.zh)
+    const traditional = JSON.stringify(sessionGoalText.zht)
+    expect(simplified).not.toContain("Goal")
+    expect(traditional).not.toContain("Goal")
+    expect(sessionGoalText.zh.status.blocked).toBe("已阻塞")
+    expect(sessionGoalText.zht.status.queued).toBe("排隊中")
+  })
 })

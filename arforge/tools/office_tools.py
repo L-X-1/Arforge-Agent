@@ -20,6 +20,14 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from arforge.tool_registry import ParamSchema, register_tool
+from arforge.tools.file_tools import register_legacy_write_docx
+
+
+# Office wrappers are an explicit Python compatibility seam.  The product
+# boot path deliberately does not import this module: TypeScript/Core owns the
+# canonical ``write`` and multimodal document tools.  An old Python caller can
+# still opt in with ``import arforge.tools.office_tools``.
+register_legacy_write_docx()
 
 
 _MAX_ROWS = 2_000

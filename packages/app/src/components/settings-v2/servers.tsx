@@ -1,3 +1,4 @@
+import { managementCopy } from "./management-state"
 import { Tag } from "@arforge-ai/ui/v2/badge-v2"
 import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
 import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
@@ -76,6 +77,7 @@ export const SettingsServersV2: Component = () => {
                 variant="ghost-muted"
                 size="small"
                 class="settings-v2-tab-search-clear"
+                aria-label={managementCopy(language.locale()).clearSearch}
                 icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
                 onClick={() => setStore("filter", "")}
               />
@@ -88,7 +90,7 @@ export const SettingsServersV2: Component = () => {
         <Show
           when={filtered().length > 0 || wslServers().length > 0}
           fallback={
-            <div class="settings-v2-servers-status">
+            <div class="settings-v2-servers-status" role="status" aria-live="polite">
               <span>{store.filter ? language.t("palette.empty") : language.t("dialog.server.empty")}</span>
               <Show when={store.filter}>
                 <span class="settings-v2-servers-status-filter">&quot;{store.filter}&quot;</span>

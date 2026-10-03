@@ -1,15 +1,35 @@
 import * as Tool from "./tool"
-import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js"
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js"
 import { Cause, Effect, Schema } from "effect"
 import { CodeMode, Tool as SandboxTool, toolError } from "@arforge-ai/codemode"
 import { MCP } from "@/mcp"
 import { McpCatalog } from "@/mcp/catalog"
+import { McpGatewayAdapter, mcpCallViaGateway } from "@/mcp/gateway-adapter"
+import { AgentV2 } from "@arforge-ai/core/agent"
+import { SessionMessage } from "@arforge-ai/core/session/message"
+import { SessionSchema } from "@arforge-ai/core/session/schema"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 
 export const CODE_MODE_TOOL = "execute"
+
+/**
+ * Host-owned safety budget for one CodeMode invocation.
+ *
+ * The generic CodeMode package deliberately leaves limits unset because it
+ * cannot know its host's cancellation and output policy.  Arforge has a
+ * durable Tool/Gateway boundary, so the adapter supplies a finite wall-clock
+ * bound, nested-call cap and model-facing byte cap.  Leaf MCP calls still
+ * carry their own Gateway budgets; these limits only bound the orchestration
+ * program itself.
+ */
+export const CODE_MODE_EXECUTION_LIMITS = Object.freeze({
+  timeoutMs: 120_000,
+  maxToolCalls: 128,
+  maxOutputBytes: 1_048_576,
+}) satisfies CodeMode.ExecutionLimits
 
 const DESCRIPTION = "Run a confined orchestration script with access to connected MCP tools."
 
@@ -132,57 +152,49 @@ function toolTree(catalog: readonly CatalogEntry[], run: (entry: CatalogEntry) =
 }
 
 const invokeChildTool = Effect.fn("CodeMode.invokeChildTool")(function* (input: {
+  mcp: MCP.Interface
   plugin: Plugin.Interface
   entry: CatalogEntry
   args: Record<string, unknown>
   callID: string
   ctx: Tool.Context
+  declaredScopes?: McpGatewayAdapter.DeclaredMcpScopes
 }) {
-  yield* input.plugin.trigger(
-    "tool.execute.before",
-    { tool: input.entry.key, sessionID: input.ctx.sessionID, callID: input.callID },
-    { args: input.args },
-  )
-  const result: CallToolResult = yield* Effect.gen(function* () {
-    yield* input.ctx.ask({ permission: input.entry.key, metadata: {}, patterns: ["*"], always: ["*"] })
-    // Deliberately mirrors McpCatalog.convertTool's transport call so the MCP service stays free of tool-loop concerns.
-    return yield* Effect.promise(async () => {
-      const raw = await input.entry.tool.client.callTool(
-        { name: input.entry.tool.def.name, arguments: input.args },
-        CallToolResultSchema,
-        {
-          resetTimeoutOnProgress: true,
-          signal: input.ctx.abort,
-          timeout: input.entry.tool.timeout,
-          // The MCP SDK only sends a progress token when this hook is present, enabling timeout resets.
-          onprogress: () => {},
-        },
-      )
-      if (raw.isError)
-        throw new Error(
-          raw.content
-            .flatMap((item) => (item.type === "text" ? [item.text] : []))
-            .filter((text) => text.trim())
-            .join("\n\n") || "MCP tool returned an error",
-        )
-      return raw
+  if (!input.ctx.gateway || !input.ctx.parentAction)
+    return yield* Effect.fail(
+      new Error(
+        "code-mode child calls require the Action Gateway parent binding; the execute tool must run through the session tool guard.",
+      ),
+    )
+  // Every real MCP call runs as its own child Durable Action through the
+  // shared gateway adapter; there is no direct unpersisted client.callTool
+  // path here.
+  if (input.entry.tool.generation !== undefined && input.mcp.assertCapability)
+    yield* input.mcp.assertCapability({
+      id: input.entry.key,
+      server: input.entry.server,
+      generation: input.entry.tool.generation,
+      kind: "tool",
     })
-  }).pipe(
-    Effect.withSpan("Tool.execute", {
-      attributes: {
-        "tool.name": input.entry.key,
-        "tool.call_id": input.callID,
-        "session.id": input.ctx.sessionID,
-        "message.id": input.ctx.messageID,
-      },
-    }),
-  )
-  yield* input.plugin.trigger(
-    "tool.execute.after",
-    { tool: input.entry.key, sessionID: input.ctx.sessionID, callID: input.callID, args: input.args },
-    result,
-  )
-  return result
+  return yield* mcpCallViaGateway({
+    gateway: input.ctx.gateway,
+    plugin: input.plugin,
+    sessionID: SessionSchema.ID.make(input.ctx.sessionID),
+    agent: AgentV2.ID.make(input.ctx.agent),
+    assistantMessageID: SessionMessage.ID.make(input.ctx.messageID),
+    invocation: input.callID,
+    parentActionID: input.ctx.parentAction.actionID,
+    ...(input.ctx.parentAction.runID ? { parentRunID: input.ctx.parentAction.runID } : {}),
+    server: input.entry.server,
+    key: input.entry.key,
+    toolName: input.entry.tool.def.name,
+    client: input.entry.tool.client,
+    args: input.args,
+    timeout: input.entry.tool.timeout,
+    abort: input.ctx.abort,
+    traceID: input.ctx.parentAction.runID,
+    declaredScopes: input.declaredScopes,
+  })
 })
 
 export const CodeModeTool = Tool.define(
@@ -196,6 +208,7 @@ export const CodeModeTool = Tool.define(
     const init: Tool.DefWithoutID<typeof Parameters, Metadata> = {
       description: DESCRIPTION,
       parameters: Parameters,
+      origin: { kind: "code-mode", permission: CODE_MODE_TOOL },
       execute: Effect.fn("CodeMode.execute")(function* (params, ctx) {
         if (ctx.abort.aborted) {
           return {
@@ -208,7 +221,9 @@ export const CodeModeTool = Tool.define(
         const session = yield* sessions.get(ctx.sessionID).pipe(Effect.orDie)
         const ruleset = Permission.merge(agent.permission, session.permission ?? [])
         const mcpTools = Permission.visibleTools(yield* mcp.tools(), ruleset)
-        const servers = Object.keys(yield* mcp.clients()).map(McpCatalog.sanitize)
+        const mcpClients = yield* mcp.clients()
+        const servers = Object.keys(mcpClients).map(McpCatalog.sanitize)
+        const nativeBySanitized = new Map(Object.keys(mcpClients).map((name) => [McpCatalog.sanitize(name), name]))
         const catalog = [...groupByServer(mcpTools, servers).values()].flat()
 
         const calls: CallEntry[] = []
@@ -220,12 +235,16 @@ export const CodeModeTool = Tool.define(
         const callTool = (entry: CatalogEntry) => (input: unknown) =>
           Effect.gen(function* () {
             childCalls += 1
+            const nativeServer = nativeBySanitized.get(entry.server) ?? entry.server
+            const declaredScopes = yield* mcp.declaredScope(nativeServer)
             const result = yield* invokeChildTool({
+              mcp,
               plugin,
               entry,
               args: (input ?? {}) as Record<string, unknown>,
               callID: `${ctx.callID ?? entry.key}/${childCalls}`,
               ctx,
+              declaredScopes,
             })
             return projectMcpResult(result, (attachment: Attachment) => void attachments.push(attachment))
           }).pipe(
@@ -238,6 +257,7 @@ export const CodeModeTool = Tool.define(
 
         const runtime = CodeMode.make({
           tools: toolTree(catalog, callTool),
+          limits: CODE_MODE_EXECUTION_LIMITS,
           onToolCallStart: ({ index, name, input }) =>
             Effect.suspend(() => {
               const shown = (() => {

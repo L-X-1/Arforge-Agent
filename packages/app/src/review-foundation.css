@@ -1,0 +1,38 @@
+/* Fonts are bundled locally for offline desktop and Web deployments. */
+@font-face {
+  font-family: "Noto Sans SC";
+  src: url("@arforge-ai/ui/fonts/NotoSansSC.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Serif SC";
+  src: url("@arforge-ai/ui/fonts/NotoSerifSC.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("@arforge-ai/ui/fonts/JetBrainsMono.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+/* Existing explicit inline font preferences retain cascade precedence. */
+:root {
+  --font-family-text: var(--font-family-sans);
+  --v2-font-family-sans: var(--font-family-sans);
+}
+
+/* Keep text readable in forced colors without removing action boundaries. */
+@media (forced-colors: active) {
+  :is(button, a, input, textarea, select, [role="button"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 3px;
+  }
+}

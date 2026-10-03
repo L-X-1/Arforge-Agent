@@ -61,7 +61,8 @@ CLI examples:
 ```text
 arforge workflows list
 arforge workflows validate .arforge/workflows/engineering_delivery.json
-arforge workflows run .arforge/workflows/engineering_delivery.json --execute
+arforge workflows run .arforge/workflows/engineering_delivery.json --report .arforge/reports/preview.json
+arforge workflows run .arforge/workflows/engineering_delivery.json --execute --report .arforge/reports/run.json
 arforge workflows runs
 arforge workflows status <run-id>
 arforge workflows approve <run-id> approval "Reviewed"
@@ -70,6 +71,14 @@ arforge workflows pause <run-id>
 arforge workflows resume <run-id>
 arforge workflows cancel <run-id>
 ```
+
+`workflows run` is an argv-compatible spelling of the typed `workflow run`
+owner. Without `--execute` it writes a deterministic preview report; with
+`--execute` it starts the durable graph through the same HTTP/SDK operation and
+waits for completion, pause, or approval. A relative `--report` path must stay
+inside the selected workspace; if omitted, the report is stored under the
+profile data directory. The command never invokes the retired Python workflow
+executor or creates a second graph journal.
 
 The desktop `工作流图` panel exposes the same Bridge methods, graph state,
 approval controls, node retry, progress, dependencies, and audit events.

@@ -1,0 +1,12 @@
+Command: bun run audit:session-owner
+Exit: 0
+valid=true; owner=SessionExecution; findings=[]; formal_default.ready=true; selected_owner=formal
+
+Command: bun run audit:tool-pipeline
+Exit: 0
+valid=true; fully_canonical=true; canonical=43; definitions=18; transport_only=4; transitional=0; findings=[]
+
+Command: bun run audit:migration-freshness
+Exit: 0
+valid=true; source-inputs input_count=7564; python-capabilities=5080; python-tests=3394;
+python-dependency-leaves=7500; ts-composition source_file_count=1757; source-inputs=7565; capability-links=4.

@@ -35,6 +35,42 @@ export function formatServerError(error: unknown, translate?: Translator, fallba
   return tr(translate, "error.chain.unknown", "Unknown error")
 }
 
+/**
+ * HTTP 499 is emitted by the local server when the browser closes a request
+ * while a page is being replaced or unmounted. It is not an actionable server
+ * failure, so bootstrap code can ignore it without hiding other 4xx/5xx
+ * responses. The generated clients keep the status under `error.cause`, while
+ * the SDK interceptor also exposes it in the human-readable error message;
+ * support both shapes and bounded nested causes.
+ */
+export function isClientClosedRequestError(error: unknown): boolean {
+  const seen = new Set<unknown>()
+
+  const visit = (value: unknown, depth: number): boolean => {
+    if (value === null || value === undefined || depth > 4) return false
+    if (typeof value === "string") return clientClosedMessage.test(value)
+    if (typeof value !== "object" && typeof value !== "function") return false
+    if (seen.has(value)) return false
+    seen.add(value)
+
+    const record = value as Record<string, unknown>
+    for (const key of ["status", "statusCode"]) {
+      const status = record[key]
+      if (status === 499 || status === "499") return true
+    }
+
+    if (typeof record.message === "string" && clientClosedMessage.test(record.message)) return true
+    for (const key of ["cause", "error", "response", "body"]) {
+      if (visit(record[key], depth + 1)) return true
+    }
+    return false
+  }
+
+  return visit(error, 0)
+}
+
+const clientClosedMessage = /(?:→|->)\s*499\b|\bHTTP\s*499\b|\bstatus(?:\s+code)?\s*[:=]?\s*499\b/i
+
 function unwrapNamedError(error: unknown): unknown {
   if (error instanceof Error && error.cause && typeof error.cause === "object" && "body" in error.cause) {
     return (error.cause as Record<string, unknown>).body

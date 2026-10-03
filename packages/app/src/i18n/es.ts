@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "Sugerido",
   "command.category.view": "Ver",
   "command.category.project": "Proyecto",
@@ -319,6 +322,8 @@ export const dict = {
   "mcp.status.connected": "conectado",
   "mcp.status.failed": "fallido",
   "mcp.status.needs_auth": "necesita auth",
+  "mcp.status.needs_client_registration": "necesita registro del cliente",
+  "mcp.status.needs_approval": "necesita aprobación",
   "mcp.auth.clickToAuthenticate": "Haz clic para autenticar",
   "mcp.status.disabled": "deshabilitado",
 
@@ -1319,7 +1324,7 @@ export const dict = {
   "controlCenter.m174": "Restaurar",
   "controlCenter.m175": "Historial de ejecución persistente",
   "controlCenter.m176":
-    "Lea los artefactos de mensajes, rastreo y transacciones de Python Core a través del tipo compartido Server API. Los informes son de solo lectura y siguen siendo propiedad de una fuente persistente.",
+    "Lea los artefactos de mensajes, rastreo y transacciones de Arforge Core a través del tipo compartido Server API. Los informes son de solo lectura y siguen siendo propiedad de una fuente persistente.",
   "controlCenter.m177": "Límite",
   "controlCenter.m178": "Actualizar",
   "controlCenter.m179": "archivos ·",
@@ -1372,6 +1377,19 @@ export const dict = {
   "controlCenter.m222": "Error de diagnóstico profundo desconocido",
   "controlCenter.m223": "Evolución gobernada",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Revisa candidatos de políticas propuestos a partir de evidencias de aprendizaje y controla los cambios de capacidad mediante evaluación aislada, aprobación humana, despliegue gradual y reversión.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Revisa candidatos de políticas propuestos a partir de evidencias de aprendizaje y controla los cambios de capacidad mediante evaluación aislada, aprobación humana, despliegue gradual y reversión.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

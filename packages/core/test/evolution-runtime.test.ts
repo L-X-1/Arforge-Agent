@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import {
+  ConstitutionKernel,
   ConstitutionViolation,
   EvolutionConflict,
   EvolutionRuntime,
@@ -21,7 +22,7 @@ function tempRoot(): string {
 
 function withRuntime<T>(run: (runtime: EvolutionRuntime, root: string) => T): T {
   const root = tempRoot()
-  const runtime = new EvolutionRuntime({ root: join(root, "evolution") })
+  const runtime = new EvolutionRuntime({ root: join(root, "evolution"), legacyWriteMode: "test-only" })
   try {
     return run(runtime, join(root, "evolution"))
   } finally {
@@ -45,9 +46,33 @@ function passingRunner(): (candidate: unknown, workspace: string) => EvaluationC
     const materialized = JSON.parse(readFileSync(join(workspace, "candidate.json"), "utf8")) as Record<string, unknown>
     expect(materialized.target).toBe("tool.advice")
     return [
-      { case_id: "quality", category: "quality", passed: true, score: 1.0, baseline_score: 0.7, detail: "targeted recovery", required: true },
-      { case_id: "regression", category: "regression", passed: true, score: 1.0, baseline_score: 1.0, detail: "no regression", required: true },
-      { case_id: "safety", category: "safety", passed: true, score: 1.0, baseline_score: 1.0, detail: "constitution intact", required: true },
+      {
+        case_id: "quality",
+        category: "quality",
+        passed: true,
+        score: 1.0,
+        baseline_score: 0.7,
+        detail: "targeted recovery",
+        required: true,
+      },
+      {
+        case_id: "regression",
+        category: "regression",
+        passed: true,
+        score: 1.0,
+        baseline_score: 1.0,
+        detail: "no regression",
+        required: true,
+      },
+      {
+        case_id: "safety",
+        category: "safety",
+        passed: true,
+        score: 1.0,
+        baseline_score: 1.0,
+        detail: "constitution intact",
+        required: true,
+      },
     ]
   }
 }
@@ -55,8 +80,19 @@ function passingRunner(): (candidate: unknown, workspace: string) => EvaluationC
 function advanceToCanary(runtime: EvolutionRuntime, trafficPercent = 50): CandidateView {
   const created = createSampleCandidate(runtime)
   const evaluated = runtime.evaluateCandidate(created.manifest.candidate_id, created.state.revision, passingRunner())
-  const approved = runtime.approveCandidate(evaluated.candidate_id, evaluated.state.revision, "user:owner", "reviewed evidence and evaluation")
-  return runtime.startCanary(approved.candidate_id, approved.state.revision, "user:owner", "bounded production validation", trafficPercent)
+  const approved = runtime.approveCandidate(
+    evaluated.candidate_id,
+    evaluated.state.revision,
+    "user:owner",
+    "reviewed evidence and evaluation",
+  )
+  return runtime.startCanary(
+    approved.candidate_id,
+    approved.state.revision,
+    "user:owner",
+    "bounded production validation",
+    trafficPercent,
+  )
 }
 
 describe("EvolutionRuntime", () => {
@@ -65,7 +101,9 @@ describe("EvolutionRuntime", () => {
       const created = createSampleCandidate(runtime)
       expect(created.manifest.candidate_id).toMatch(/^ev-[0-9a-f]{16}$/)
       expect(created.manifest.artifact_digest).toHaveLength(64)
+      expect(created.manifest.evolution_level).toBe("L2")
       expect(created.state.status).toBe("proposed")
+      expect(created.state.evolution_level).toBe("L2")
 
       const manifestPath = join(runtime.root, "candidates", created.manifest.candidate_id, "manifest.json")
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>
@@ -76,10 +114,30 @@ describe("EvolutionRuntime", () => {
     })
   })
 
-  test("constitution kernel rejects protected and unknown targets", () => {
-    for (const target of ["authority.override", "permission.root", "security.disable", "evolution.self", "random.target"]) {
+  test("constitution kernel permanently protects every non-evolvable domain", () => {
+    const protectedTargets = [
+      "identity.owner",
+      "ownership.transfer",
+      "permission.grant",
+      "policy.override",
+      "privacy.retention",
+      "secret.export",
+      "audit.disable",
+      "event.integrity.rewrite",
+      "evolution.gate.disable",
+      "constitution.protected-prefixes",
+      "source.write.enable",
+      "source.authority.delegate",
+      "release.publish",
+      "signing.key.rotate",
+      "rollback.disable",
+      "budget.hard.limit.raise",
+      "security.disable",
+      "sandbox.escape",
+    ]
+    for (const target of protectedTargets) {
       expect(() => {
-        const runtime = new EvolutionRuntime({ root: tempRoot() })
+        const runtime = new EvolutionRuntime({ root: tempRoot(), legacyWriteMode: "test-only" })
         runtime.createCandidate({
           title: "bad",
           target,
@@ -88,21 +146,57 @@ describe("EvolutionRuntime", () => {
           evidenceRefs: ["evidence:1"],
           createdBy: "user:owner",
         })
-      }).toThrow(ConstitutionViolation)
+      }).toThrow(/protected by the Constitution Kernel/)
     }
+
+    expect(() => ConstitutionKernel.validateTarget("random.target")).toThrow(ConstitutionViolation)
+    expect(() => ConstitutionKernel.validateTarget(undefined)).toThrow(ConstitutionViolation)
+    expect(ConstitutionKernel.validateTarget("learning.failure")).toBe("learning.failure")
+  })
+
+  test("ordinary callers cannot mutate Constitution target or protection lists", () => {
+    const publicView = ConstitutionKernel.public()
+    publicView.allowed_targets.splice(0, publicView.allowed_targets.length, "permission.grant")
+    publicView.protected_prefixes.splice(0, publicView.protected_prefixes.length, "learning")
+
+    expect(Object.isFrozen(ConstitutionKernel)).toBe(true)
+    expect(Object.isFrozen(ConstitutionKernel.prototype)).toBe(true)
+    expect(Object.isFrozen(ConstitutionKernel.ALLOWED_TARGETS)).toBe(true)
+    expect(Object.isFrozen(ConstitutionKernel.PROTECTED_PREFIXES)).toBe(true)
+    expect(Object.isFrozen(ConstitutionKernel.HUMAN_ACTOR_PREFIXES)).toBe(true)
+    expect(() => Reflect.apply(Array.prototype.push, ConstitutionKernel.ALLOWED_TARGETS, ["permission.grant"])).toThrow(
+      TypeError,
+    )
+    expect(() => Reflect.apply(Array.prototype.splice, ConstitutionKernel.PROTECTED_PREFIXES, [0])).toThrow(TypeError)
+    expect(() => Reflect.apply(Array.prototype.push, ConstitutionKernel.HUMAN_ACTOR_PREFIXES, ["runtime:"])).toThrow(
+      TypeError,
+    )
+    expect(ConstitutionKernel.validateTarget("learning.failure")).toBe("learning.failure")
+    expect(() => ConstitutionKernel.validateTarget("permission.grant")).toThrow(ConstitutionViolation)
+    expect(() => ConstitutionKernel.requireHuman("runtime:self")).toThrow(ConstitutionViolation)
+    expect(() => ConstitutionKernel.requireHuman(null)).toThrow(ConstitutionViolation)
   })
 
   test("lifecycle uses expected revision and rejects autonomous approval", () => {
     withRuntime((runtime) => {
       const created = createSampleCandidate(runtime)
       expect(() =>
-        runtime.approveCandidate(created.manifest.candidate_id, created.state.revision, "runtime:self", "self approval"),
+        runtime.approveCandidate(
+          created.manifest.candidate_id,
+          created.state.revision,
+          "runtime:self",
+          "self approval",
+        ),
       ).toThrow(ConstitutionViolation)
       expect(() =>
         runtime.approveCandidate(created.manifest.candidate_id, created.state.revision + 1, "user:owner", "stale"),
       ).toThrow(EvolutionConflict)
 
-      const evaluated = runtime.evaluateCandidate(created.manifest.candidate_id, created.state.revision, passingRunner())
+      const evaluated = runtime.evaluateCandidate(
+        created.manifest.candidate_id,
+        created.state.revision,
+        passingRunner(),
+      )
       expect(evaluated.state.status).toBe("evaluated")
       expect(evaluated.evaluation?.gate_passed).toBe(true)
     })
@@ -112,13 +206,21 @@ describe("EvolutionRuntime", () => {
     withRuntime((runtime) => {
       const created = createSampleCandidate(runtime)
       const runner = () => [
-        { case_id: "safety", category: "safety", passed: false, score: 0.0, baseline_score: 1.0, detail: "boundary crossed", required: true },
+        {
+          case_id: "safety",
+          category: "safety",
+          passed: false,
+          score: 0.0,
+          baseline_score: 1.0,
+          detail: "boundary crossed",
+          required: true,
+        },
       ]
       const evaluated = runtime.evaluateCandidate(created.manifest.candidate_id, created.state.revision, runner)
       expect(evaluated.evaluation?.gate_passed).toBe(false)
-      expect(() => runtime.approveCandidate(evaluated.candidate_id, evaluated.state.revision, "user:owner", "approve")).toThrow(
-        EvolutionStateError,
-      )
+      expect(() =>
+        runtime.approveCandidate(evaluated.candidate_id, evaluated.state.revision, "user:owner", "approve"),
+      ).toThrow(EvolutionStateError)
     })
   })
 
@@ -145,6 +247,7 @@ describe("EvolutionRuntime", () => {
   test("canary cohort is stable and only exposed context is rendered", () => {
     withRuntime((runtime) => {
       const canary = advanceToCanary(runtime, 50)
+      expect(canary.state.evolution_level).toBe("L3")
       const key = "session-cohort-key"
       const first = runtime.cohortFor(canary.candidate_id, key)
       const second = runtime.cohortFor(canary.candidate_id, key)
@@ -227,12 +330,12 @@ describe("EvolutionRuntime", () => {
     })
   })
 
-  test("promotion requires real canary and control observations", () => {
+  test("legacy filesystem promotion remains retired even after canary evidence passes", () => {
     withRuntime((runtime) => {
       const canary = advanceToCanary(runtime, 50)
-      expect(() => runtime.promoteCandidate(canary.candidate_id, canary.state.revision, "user:owner", "promote")).toThrow(
-        EvolutionStateError,
-      )
+      expect(() =>
+        runtime.promoteCandidate(canary.candidate_id, canary.state.revision, "user:owner", "promote"),
+      ).toThrow(EvolutionStateError)
 
       // traffic=50 mixes cohorts deterministically per cohort key; record
       // outcomes across many keys so both candidate and control rows reach
@@ -254,9 +357,10 @@ describe("EvolutionRuntime", () => {
       expect(report.control_observations).toBeGreaterThanOrEqual(5)
       expect(report.checks.minimum_control_observations).toBe(true)
 
-      const promoted = runtime.promoteCandidate(canary.candidate_id, canary.state.revision, "user:owner", "gate passed")
-      expect(promoted.state.status).toBe("promoted")
-      expect((promoted.state.deployment as Record<string, unknown>).stage).toBe("promoted")
+      expect(() =>
+        runtime.promoteCandidate(canary.candidate_id, canary.state.revision, "user:owner", "gate passed"),
+      ).toThrow("L4 promotion requires the durable DB Promotion Gate")
+      expect(runtime.getCandidate(canary.candidate_id).state.status).toBe("canary")
     })
   })
 
@@ -299,8 +403,14 @@ describe("EvolutionRuntime", () => {
   test("manual rollback is idempotently inactive but not repeatable", () => {
     withRuntime((runtime) => {
       const canary = advanceToCanary(runtime, 100)
-      const rolledBack = runtime.rollbackCandidate(canary.candidate_id, canary.state.revision, "user:owner", "behavioral regression")
+      const rolledBack = runtime.rollbackCandidate(
+        canary.candidate_id,
+        canary.state.revision,
+        "user:owner",
+        "behavioral regression",
+      )
       expect(rolledBack.state.status).toBe("rolled_back")
+      expect(rolledBack.state.evolution_level).toBe("L2")
       expect((rolledBack.state.rollback as Record<string, unknown>).automatic).toBe(false)
       expect(() =>
         runtime.rollbackCandidate(canary.candidate_id, rolledBack.state.revision, "user:owner", "again"),
@@ -345,7 +455,7 @@ describe("EvolutionRuntime", () => {
       expect(archives.valid_count).toBe(1)
       expect(archives.invalid_count).toBe(0)
 
-      const restorePreview = runtime.previewExposureRestore((applied.archive_id as string))
+      const restorePreview = runtime.previewExposureRestore(applied.archive_id as string)
       expect((restorePreview.counts as Record<string, number>).missing).toBe(3)
       const restored = runtime.applyExposureRestore({
         archiveId: applied.archive_id as string,
@@ -387,7 +497,7 @@ describe("EvolutionRuntime", () => {
       const status = runtime.status()
       expect(status.counts.canary).toBe(1)
       expect(status.active).toBe(1)
-      expect(status.constitution).toMatchObject({ version: "1.0", self_approval_allowed: false })
+      expect(status.constitution).toMatchObject({ version: "2.0", self_approval_allowed: false })
       expect(status.audit.valid).toBe(true)
       expect(status.policy.default_traffic_percent).toBe(10)
     })

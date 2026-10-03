@@ -1,6 +1,7 @@
 export * as EventManifest from "./event-manifest"
 
 import { Catalog } from "./catalog"
+import { AgentRuntime } from "./agent-runtime"
 import { Durable } from "./durable-event-manifest"
 import { Event } from "./event"
 import { FileSystem } from "./filesystem"
@@ -9,6 +10,7 @@ import { Goal } from "./goal"
 import { InstallationEvent } from "./installation-event"
 import { Integration } from "./integration"
 import { LegacyEvent } from "./legacy-event"
+import { Mailbox } from "./mailbox"
 import { LspEvent } from "./lsp-event"
 import { McpEvent } from "./mcp-event"
 import { ModelsDev } from "./models-dev"
@@ -48,6 +50,7 @@ const foundationDefinitions = Event.inventory(
 )
 
 const featureDefinitions = Event.inventory(
+  ...AgentRuntime.Event.Definitions,
   ...FileSystem.Event.Definitions,
   ...Goal.Event.Definitions,
   ...Reference.Event.Definitions,
@@ -59,6 +62,7 @@ const featureDefinitions = Event.inventory(
   ...Question.Event.Definitions,
   ...TaskGraph.Event.Definitions,
   ...Team.Event.Definitions,
+  ...Mailbox.Event.Definitions,
   ...CooperativeWait.Event.Definitions,
 )
 

@@ -82,8 +82,10 @@ benchmark.describe("performance: home and tab navigation", () => {
     expect(reviewObservedMs).toBeLessThan(1_000)
   })
 
-  benchmark("closes the only session tab and paints home", async ({ page, report }) => {
-    await setup(page, [fixture.sourceID])
+benchmark("closes the only session tab and paints home", async ({ page, report }) => {
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  await setup(page, [fixture.sourceID])
     const href = stressSessionHref(fixture.sourceID)
     await page.goto(href)
     await expectSessionTitle(page, fixture.expected.sourceTitle)
@@ -100,11 +102,12 @@ benchmark.describe("performance: home and tab navigation", () => {
       },
       navigate: async () => {
         await close.click()
-        await expect(page).toHaveURL("/")
-      },
-    })
-    report(result)
+      await expect(page).toHaveURL("/")
+    },
   })
+  expect(pageErrors).toEqual([])
+  report(result)
+})
 })
 
 async function setup(page: Parameters<typeof mockStressTimeline>[0], sessionIDs: string[]) {

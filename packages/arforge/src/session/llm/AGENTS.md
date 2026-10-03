@@ -16,6 +16,7 @@ src/session/
   llm/
     AGENTS.md               boundary notes for the adapter layer
     ai-sdk.ts               AI SDK fullStream -> @arforge-ai/llm LLMEvent adapter
+    mature-binding.ts       metadata-only run/attempt/request binding projection
     native-request.ts       arforge/AI SDK-shaped input -> @arforge-ai/llm LLMRequest
     native-runtime.ts       native runtime gate, tool bridge, and LLMClient handoff
 ```
@@ -25,6 +26,12 @@ Integration points:
 - `../llm.ts` imports `LLMClient` from `@arforge-ai/llm/route`; native execution is the only path that calls it directly.
 - `../llm.ts` imports `LLMAISDK` from `./llm/ai-sdk`; the AI SDK path still calls `streamText(...)` locally, then adapts `result.fullStream` into shared `LLMEvent`s.
 - `../llm.ts` imports `LLMNativeRuntime` from `./llm/native-runtime`; this is the runtime-selection seam. Unsupported native requests return a reason and fall back to AI SDK.
+- `mature-binding.ts` is the only mature-side binding projection. It hashes
+  the exact native RequestEnvelope transiently (or normalized AI-SDK input on
+  fallback) and returns bounded digests only; `llm.ts` may publish the
+  `SessionEvent.RequestBindingPrepared` durable metadata projection, but it
+  must never return or persist message bodies, tool arguments, headers, auth,
+  or executor functions.
 - `native-runtime.ts` imports `LLMNative` from `./native-request`; this keeps request lowering separate from transport and tool execution.
 - `native-request.ts` is the only adapter file that should construct `LLM.request(...)`, `LLM.model(...)`, `Message.*`, `SystemPart`, `ToolCallPart`, `ToolResultPart`, or `ToolDefinition` values from `@arforge-ai/llm`.
 - `ai-sdk.ts` and `native-runtime.ts` both emit `@arforge-ai/llm` `LLMEvent`s so downstream session processing does not care which runtime handled the request.

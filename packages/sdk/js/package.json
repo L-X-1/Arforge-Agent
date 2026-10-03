@@ -8,7 +8,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsgo --noEmit",
-    "build": "bun ./script/build.ts"
+    "build": "bun ./script/build-entry.ts"
   },
   "exports": {
     ".": "./src/index.ts",

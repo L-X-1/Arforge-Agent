@@ -1,7 +1,7 @@
 # Cognitive Runtime Foundation — Pre-change Baseline
 
 Date: 2026-08-03  
-Workspace: `E:\Arforge-Agent`  
+Workspace: `%ARFORGE_REPO%`
 Purpose: freeze the existing behavior of AgentRun, entity/lifecycle contracts, Task Ledger, message checkpoints, run transactions/rollback, and portable run traces before cognitive-runtime production changes.
 
 ## Command

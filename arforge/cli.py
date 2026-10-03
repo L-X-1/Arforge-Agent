@@ -1050,21 +1050,33 @@ def _run_cli_side_question(
 
 
 def _entry_flow(lang: str, *, quiet: bool = False) -> bool:
-    """Common entry sequence: Logo → Trust Screen → (Onboarding if new).
+    """Common migration entry gate: TS/Core trust → (Onboarding if new).
 
     Returns True if the user can proceed to the main flow.
-    Returns False if the user declined trust or exited.
-    """
-    from arforge.trust_screen import show_entry_screen
+    Returns False when the canonical TS/Core owner cannot prove trust.
 
-    # 1. Logo + Trust screen (combined view with screen replacement)
-    if not show_entry_screen(lang, quiet=quiet):
+    The historical interactive trust screen is intentionally not called here:
+    it could write the retired Python trust store.  Executable Python entry
+    points already use ``cli_bridge``; this helper remains only for importable
+    compatibility callers and therefore fails closed with an actionable
+    message when no TS/Core trust projection is available.
+    """
+    from arforge.custom_agent_profiles import typescript_workspace_trusted
+
+    if not typescript_workspace_trusted(Path.cwd()):
+        message = (
+            "该 Python 兼容入口不会再写入工作区信任状态；请使用 canonical TypeScript CLI/Core 授权流程，"
+            "或在受控自动化中明确设置 ARFORGE_TRUST_WORKSPACE=1。"
+        )
+        if quiet or not sys.stdin.isatty():
+            print(message, file=sys.stderr)
+        else:
+            print_info(message)
         return False
 
-    # 2. First-run onboarding (only for new users without API key)
+    # First-run onboarding (only for new users without API key).
     from arforge.onboarding import is_first_run, run_onboarding
     if is_first_run():
-        import sys
         if quiet:
             print("First-run model setup is required before batch execution.", file=sys.stderr)
             return False
@@ -2852,60 +2864,40 @@ def _run_workflows(
 
 
 def _run_workspace(args: list[str] | None = None, *, json_output: bool = False) -> int:
-    """Manage the explicit trust and authorization of additional directories."""
-    args = args or []
-    action = args[0].casefold() if args else "list"
-    from arforge.trust_screen import is_workspace_trusted, trust_workspace
-    from arforge.workspace_roots import (
-        WorkspaceRootError,
-        add_workspace_root,
-        authorized_workspace_roots,
-        remove_workspace_root,
-    )
+    """Forward the migration-era workspace surface to the canonical TS CLI.
+
+    The old Python implementation used to write ``trusted_workspaces.json``
+    and ``workspace_roots.json`` directly.  Keeping that path would create a
+    second state owner even though the executable Python entry already uses
+    ``cli_bridge``.  The compatibility function therefore forwards the exact
+    argv to TypeScript/Core; the TS workspace command owns the read-only
+    projection and keeps trust/add/remove fail-closed until its durable writer
+    gate is enabled.
+    """
+    from arforge.cli_compat import invoke
 
     primary = Path.cwd().resolve()
-    if action == "list" and (len(args) == 1 or not args):
-        roots = authorized_workspace_roots(primary)
-        payload = {
-            "primary": str(primary),
-            "roots": [{"path": str(root), "primary": root == primary, "trusted": is_workspace_trusted(root)} for root in roots],
-        }
-        if json_output:
-            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        else:
-            print("\n" + section_header("Authorized Workspaces"))
-            for root in roots:
-                suffix = " (primary)" if root == primary else ""
-                print(f"  {root}{suffix}")
-            print()
-        return 0
-    if action not in {"trust", "add", "remove"} or len(args) != 2:
-        print_error("Usage: arforge workspace [list|trust <directory>|add <directory>|remove <directory>]")
-        return 2
-    target = Path(args[1]).expanduser().resolve()
-    if action == "trust":
-        if not target.is_dir():
-            print_error("Workspace trust target must be an existing directory.")
-            return 2
-        trust_workspace(target)
-        payload = {"trusted": True, "path": str(target)}
-    elif action == "add":
-        try:
-            root = add_workspace_root(target, primary=primary)
-        except WorkspaceRootError as exc:
-            print_error(str(exc))
-            return 2
-        payload = {"added": True, "path": str(root)}
-    else:
-        payload = {"removed": remove_workspace_root(target), "path": str(target)}
-        if not payload["removed"]:
-            print_error("Additional workspace root was not configured.")
-            return 1
-    if json_output:
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    else:
-        print_ok(f"Workspace {action} completed: {target}")
-    return 0
+    forwarded = ["workspace", *(args or [])]
+    if json_output and "--json" not in forwarded:
+        forwarded.append("--json")
+    result = invoke(
+        forwarded,
+        cwd=str(primary),
+        env={
+            # Workspace projection is metadata-only; do not let a legacy host
+            # PostgreSQL URL alter the canonical TS/Core read path.
+            "ARFORGE_DB": ":memory:",
+            "ARFORGE_DB_URL": "",
+            "DATABASE_URL": "",
+            "NO_COLOR": "1",
+        },
+        timeout=30,
+    )
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    return result.returncode
 
 def _run_custom_agents(args: list[str] | None = None, *, json_output: bool = False) -> int:
     """Inspect data-only project specialized agent profiles without running them."""
@@ -2918,13 +2910,17 @@ def _run_custom_agents(args: list[str] | None = None, *, json_output: bool = Fal
         load_custom_agent_profile,
         profile_directory,
     )
-    from arforge.trust_screen import _auto_trust_enabled, is_workspace_trusted
+    from arforge.custom_agent_profiles import typescript_workspace_trusted
 
     workspace = Path.cwd().resolve()
     if action == "status" and len(args) <= 1:
         payload = {
             "directory": str(profile_directory(workspace)),
-            "workspace_trusted": _auto_trust_enabled() or is_workspace_trusted(workspace),
+            # The legacy handler is only a compatibility surface.  Read the
+            # canonical TS/Core projection instead of consulting the retired
+            # Python trust store, so this command cannot create a second
+            # workspace-policy owner during the migration window.
+            "workspace_trusted": typescript_workspace_trusted(workspace),
             "enabled": custom_agents_enabled(workspace),
             "activation": "ARFORGE_ENABLE_CUSTOM_AGENTS=1",
         }
@@ -5324,4 +5320,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ``python -m arforge.cli`` is a migration-era module entry.  Keep the
+    # importable helper API above for embedded callers/tests, but make the
+    # executable module enter the same TypeScript/Core owner as ``python -m
+    # arforge`` and the installed console script.
+    from arforge.cli_bridge import main as unified_main
+
+    raise SystemExit(unified_main())

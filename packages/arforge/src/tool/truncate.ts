@@ -12,6 +12,22 @@ import { TRUNCATION_DIR } from "./truncation-dir"
 
 const RETENTION = Duration.days(7)
 
+// Identifier stores the timestamp in six bytes after multiplying milliseconds
+// by 0x1000, leaving 36 timestamp bits. Compare ages on that ring so cleanup
+// remains correct when the encoded value wraps roughly every 795 days.
+export const IDENTIFIER_TIMESTAMP_PERIOD_MS = 2 ** 36
+
+export function identifierTimestampAge(timestamp: number, now: number) {
+  const period = IDENTIFIER_TIMESTAMP_PERIOD_MS
+  const halfPeriod = period / 2
+  const normalizedNow = ((now % period) + period) % period
+  const normalizedTimestamp = ((timestamp % period) + period) % period
+  let age = normalizedNow - normalizedTimestamp
+  if (age < -halfPeriod) age += period
+  else if (age > halfPeriod) age -= period
+  return age
+}
+
 export const MAX_LINES = 2000
 export const MAX_BYTES = 50 * 1024
 export const DIR = TRUNCATION_DIR
@@ -52,16 +68,30 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
 
     const cleanup = Effect.fn("Truncate.cleanup")(function* () {
-      const cutoff = Identifier.timestamp(
-        Identifier.create("tool", "ascending", Date.now() - Duration.toMillis(RETENTION)),
-      )
+      const now = Date.now()
+      const retentionMs = Duration.toMillis(RETENTION)
       const entries = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
         Effect.map((all) => all.filter((name) => name.startsWith("tool_"))),
         Effect.catch(() => Effect.succeed([])),
       )
       for (const entry of entries) {
-        if (Identifier.timestamp(entry) >= cutoff) continue
-        yield* fs.remove(path.join(TRUNCATION_DIR, entry)).pipe(Effect.catch(() => Effect.void))
+        let timestamp: number
+        try {
+          timestamp = Identifier.timestamp(entry)
+        } catch {
+          continue
+        }
+        const file = path.join(TRUNCATION_DIR, entry)
+        const mtimeAge = yield* fs.stat(file).pipe(
+          Effect.map((info) => Option.getOrUndefined(Option.map(info.mtime, (mtime) => now - mtime.getTime()))),
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
+        if (
+          identifierTimestampAge(timestamp, now) <= retentionMs &&
+          (mtimeAge === undefined || mtimeAge <= retentionMs)
+        )
+          continue
+        yield* fs.remove(file).pipe(Effect.catch(() => Effect.void))
       }
     })
 

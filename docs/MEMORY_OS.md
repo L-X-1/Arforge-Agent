@@ -90,6 +90,14 @@ query fingerprint, algorithm version, counts, latency and bounded result
 IDs/scores. `record_recall_feedback` accepts useful and irrelevant IDs only if
 they were actually returned by that retrieval.
 
+The paragraph above is the historical Python `MemoryOS` reference contract.
+The current TypeScript/Core `MemoryV2` path records only bounded in-process
+`RuntimeInsight` observations and does not yet persist a cross-process
+retrieval event. Therefore the canonical `arforge memory feedback` command
+only validates the legacy syntax and remains exit-code-2 fail-closed until the
+durable UID, returned-set, workspace/identity, authorization and transaction
+contract is implemented; it never writes the retired Python store.
+
 `recall_quality` reports actual empty-recall rate, mean result count, feedback
 coverage, useful-recall rate, stale/inactive result rate and conflicting-result
 rate. This report is explicitly separate from the existing synthetic
@@ -125,6 +133,9 @@ fixed actor identity:
 - `memory.forget|restore {memory_id, expected_version, reason}`
 - `memory.candidate.activate|reject {memory_id, expected_version, reason}`
 - `memory.recall.feedback {retrieval_uid, useful_memory_ids?, irrelevant_memory_ids?}`
+  remains a legacy reference method; the TypeScript/Core bridge does not expose
+  it until its durable cross-process producer and authorization contract is
+  proven.
 
 Callers cannot supply an actor through the bridge and therefore cannot
 impersonate a runtime or policy authority.

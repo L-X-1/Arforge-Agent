@@ -61,6 +61,7 @@ export type HomeProjectsViewProps = {
   onOpenArchive: () => void
   onOpenSettings: () => void
   onOpenHelp: () => void
+  renderProjectChildren?: (server: ServerConnection.Any, project: LocalProject) => JSX.Element
 }
 
 export function HomeProjectsView(props: HomeProjectsViewProps & { embedded?: boolean }) {
@@ -238,41 +239,11 @@ function HomeServerRow(props: {
     <div class="group/server relative flex h-7 min-w-0 items-center rounded-[6px]">
       <HomeProjectNavButton
         type="button"
-        class="pr-16 disabled:opacity-60"
+        class="pl-8 pr-16 disabled:opacity-60"
         data-selected={props.selected ? "" : undefined}
         disabled={!healthy()}
         onClick={() => props.onFocusServer(props.server)}
       >
-        <span
-          data-action="home-server-collapse"
-          class={`
-            -ml-0.5 -mr-1.5 inline-flex size-5 shrink-0 items-center justify-center
-            rounded-[4px] text-v2-icon-icon-muted
-          `}
-          classList={{
-            "hover:bg-v2-overlay-simple-overlay-hover": canToggle(),
-            "cursor-default opacity-40": !canToggle(),
-          }}
-          aria-label={
-            props.collapsed ? props.language.t("home.server.expand") : props.language.t("home.server.collapse")
-          }
-          aria-disabled={!canToggle()}
-          aria-expanded={canToggle() ? !props.collapsed : undefined}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            if (!canToggle()) return
-            props.onToggleCollapsed(props.server)
-          }}
-          onPointerDown={(event) => event.preventDefault()}
-        >
-          <IconV2
-            name="chevron-down"
-            size="small"
-            class="transition-transform duration-150 ease-in-out"
-            style={{ transform: `rotate(${props.collapsed ? -90 : 0}deg)` }}
-          />
-        </span>
         <div class="flex size-4 shrink-0 items-center justify-center -mr-0.5">
           <ServerHealthIndicator health={props.health} />
         </div>
@@ -292,6 +263,17 @@ function HomeServerRow(props: {
           </Show>
         </span>
       </HomeProjectNavButton>
+      <button
+        type="button"
+        data-action="home-server-collapse"
+        class="absolute left-0 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md"
+        aria-label={props.collapsed ? props.language.t("home.server.expand") : props.language.t("home.server.collapse")}
+        aria-expanded={!props.collapsed}
+        disabled={!canToggle()}
+        onClick={() => props.onToggleCollapsed(props.server)}
+      >
+        <IconV2 name="chevron-down" size="small" style={{ transform: `rotate(${props.collapsed ? -90 : 0}deg)` }} />
+      </button>
       <div
         class={`
           hover-reveal absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1
@@ -392,6 +374,7 @@ function HomeProjectSlot(
   return (
     <Show when={project()}>
       {(item) => (
+        <>
         <HomeProjectRow
           {...props}
           project={item()}
@@ -405,6 +388,8 @@ function HomeProjectSlot(
           }
           unseen={props.unseenCount(props.server, item())}
         />
+        {props.renderProjectChildren?.(props.server, item())}
+        </>
       )}
     </Show>
   )

@@ -8,39 +8,119 @@
   `packages/desktop`，分别承载共享契约、CLI/Server、前端和 Electron。
 - 特色能力：`arforge/` 中的 Agent、记忆、多智能体、评测、办公与自动化能力，
   通过工程自有 capability bridge 逐域接入统一主线。
-- 兼容基线：旧 Python CLI 和 Tauri 客户端仅用于迁移对照，不再是默认入口。
+- 兼容基线：旧 Python CLI API 和 Tauri 客户端仅用于迁移对照；`python -m arforge`
+  与 Python console script 已改为无 shell 的 TS CLI 转发，不再运行第二套 Python
+  命令解析/会话状态。
 - 数据边界：私有 PostgreSQL 是持久数据主路径；SQLite 仅用于隔离测试、显式
   本地模式和仍未迁移的兼容能力。
 
 ## 能力映射
 
-| 能力域 | Arforge 实现 | 本地项目状态 |
-| --- | --- | --- |
-| 多步编码循环 | TypeScript Session Runner + Python capability bridge、自纠错与交付验证 | 就绪 |
-| 上下文与压缩 | 项目规则发现、代码检索、LSP、文件状态、自动压缩、会话级上下文隔离 | 就绪 |
-| 文件与命令 | 受信工作区、读写工具、补丁计划、后台命令、超时、取消和进程树清理 | 就绪 |
-| Git 与工作树 | 状态、差异、分支、受管工作树、保留或显式丢弃退出 | 就绪 |
-| 测试与质量 | 项目类型识别、测试运行、失败解析、自纠错、质量门禁和运行报告 | 就绪 |
-| 会话 | 统一 Session API、PostgreSQL 持久化、恢复、分叉、重命名、检查点和导出 | 就绪 |
-| 计划与任务 | Plan Mode、持久任务图、依赖、领取、状态、调度提示和触发器 | 就绪 |
-| 目标与提示队列 | Goal 全生命周期、持久 FIFO、逐提示模型/代理路由和同一成熟执行锁 | 就绪 |
-| 工作流 | 数据型 JSON 图、预览、审批、暂停/恢复、分支重试和重启恢复 | 就绪 |
-| 插件与技能 | 单一类型化管理 API、来源可见、启停、重扫、两阶段插件安装和可恢复删除 | 就绪 |
-| 多智能体 | 八个内置角色、自定义角色、并发调度、团队邮箱、截止时间和取消传播 | 就绪 |
-| 工具发现 | 核心工具常驻、重型工具延迟发现、MCP 动态刷新和调用隔离 | 就绪 |
-| MCP | stdio、HTTP、SSE、会话、资源、提示、采样、认证、重连和限流 | 就绪 |
-| 权限与沙箱 | 请求批准、自动审批、完全访问、规则记忆、路径边界和网络白名单 | 就绪 |
-| 记忆与学习 | 项目/工作区作用域、混合检索、质量基线、反思、撤销和用户删除 | 就绪 |
-| 长任务 | 后台命令、协作等待、外部唤醒、周期检查、计划任务和守护进程 | 就绪 |
-| 桌面交互 | 流式消息、工具时间线、审批、差异、任务、会话运营、语音输入和附件 | 就绪 |
-| 可观测性 | 结构化 trace、重放、运行报告、token/成本指标、脱敏日志 | 就绪 |
-| 自动化入口 | 统一 CLI、JSON/SSE API、本地 Server、ACP/MCP 和 capability bridge | 就绪 |
+| 能力域          | Arforge 实现                                                                                                                                                                                                                                                                                                                                          | 本地项目状态                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 多步编码循环    | TypeScript Session Runner + Python capability bridge、自纠错与交付验证                                                                                                                                                                                                                                                                                | 就绪                                                                                                                              |
+| 上下文与压缩    | 项目规则发现、代码检索、TS canonical LSP、文件状态、自动压缩、会话级上下文隔离                                                                                                                                                                                                                                                                        | 就绪（LSP 无 server 时使用受限 TS fallback；Python 编译诊断已覆盖确定性语法子集，类型/语义检查仍依赖服务器）                      |
+| 文件与命令      | 受信工作区、读写工具、补丁计划、后台命令、超时、取消和进程树清理                                                                                                                                                                                                                                                                                      | 就绪                                                                                                                              |
+| Git 与工作树    | 状态、差异、分支、受管工作树、保留或显式丢弃退出                                                                                                                                                                                                                                                                                                      | 就绪                                                                                                                              |
+| 测试与质量      | 项目类型识别、测试运行、失败解析、自纠错、质量门禁和运行报告                                                                                                                                                                                                                                                                                          | 就绪                                                                                                                              |
+| 会话            | 统一 Session API、PostgreSQL 持久化、恢复、分叉、重命名、检查点和导出                                                                                                                                                                                                                                                                                 | 就绪                                                                                                                              |
+| 计划与任务      | TS/Core `todowrite` 会话待办、Plan Mode、持久任务图、依赖、领取、状态、调度提示和触发器                                                                                                                                                                                                                                                               | 就绪（Python `plan_tools.update_plan` 仅显式兼容导入，不进入默认注册表）                                                          |
+| 目标与提示队列  | Goal 全生命周期、持久 FIFO、逐提示模型/代理路由和同一成熟执行锁                                                                                                                                                                                                                                                                                       | 就绪                                                                                                                              |
+| 工作流          | 数据型 JSON 图、预览、审批、暂停/恢复、分支重试和重启恢复                                                                                                                                                                                                                                                                                             | 就绪                                                                                                                              |
+| 插件与技能      | 单一类型化管理 API、来源可见、启停、重扫、两阶段插件安装和可恢复删除                                                                                                                                                                                                                                                                                  | 就绪                                                                                                                              |
+| 多智能体        | 八个内置角色、自定义角色、并发调度、团队邮箱、截止时间和取消传播                                                                                                                                                                                                                                                                                      | 就绪                                                                                                                              |
+| 工具发现        | 核心工具常驻、重型工具延迟发现、MCP 动态刷新和调用隔离                                                                                                                                                                                                                                                                                                | 就绪（`code_symbols` 仅保留一个 Python 兼容注册实现；旧 `symbol_tools` 为显式导入转发，TS 产品使用统一 LSP 符号操作）             |
+| MCP             | TypeScript/Core 唯一 MCP client、stdio/HTTP/SSE、会话、资源/提示目录、采样、认证、重连、代际能力和限流                                                                                                                                                                                                                                                | 就绪（Python `mcp_client_tools` 仅显式兼容导入，不进入默认注册表）                                                                |
+| Office/文档提取 | TS/Core 与成熟 Arforge `write` 共享同一组有界确定性 XLSX、Markdown-like DOCX/PDF、JSON-slide PPTX 编码器，并复用权限、CAS journal、FileMutation、事件/观察者结算；`multimodal_diagnose` 读取 OOXML/PDF/CSV/TSV；无 Office 进程、无网络，二进制输出跳过文本专用 formatter/BOM/LSP；Python `office_tools`/DOCX wrapper 仅显式兼容导入，不进入默认注册表 | 部分就绪（DOCX/PPTX/PDF 完整 parity、Python `read_office_document`/`write_*` 仍是迁移兼容面；复杂 Artifact/Sandbox 真实旅程待补） |
+| 权限与沙箱      | 请求批准、自动审批、完全访问、规则记忆、路径边界和网络白名单                                                                                                                                                                                                                                                                                          | 就绪                                                                                                                              |
+| 记忆与学习      | 项目/工作区作用域、混合检索、质量基线、反思、撤销和用户删除                                                                                                                                                                                                                                                                                           | 就绪                                                                                                                              |
+| 长任务          | 后台命令、TypeScript/Core 协作等待 owner、外部唤醒、周期检查、计划任务和守护进程                                                                                                                                                                                                                                                                      | 就绪（Python `wait_tools` 仅显式兼容导入，不进入默认注册表）                                                                      |
+| 桌面交互        | 流式消息、工具时间线、审批、差异、任务、会话运营、语音输入和附件                                                                                                                                                                                                                                                                                      | 就绪（TS/Core `deliver_user_message` 为唯一默认 owner；Python wrapper 仅显式兼容）                                                |
+| 可观测性        | 结构化 trace、重放、运行报告、token/成本指标、脱敏日志                                                                                                                                                                                                                                                                                                | 就绪                                                                                                                              |
+| 自动化入口      | 统一 CLI、JSON/SSE API、本地 Server、ACP/MCP 和 capability bridge；Python console script/`python -m arforge` 只转发 TS CLI                                                                                                                                                                                                                           | 就绪                                                                                                                              |
 
 ## 有意采用等价实现的能力
 
 CLI、Web 和 Electron Desktop 使用同一套 Session/Provider/Permission
 契约；Python 特性不再拥有第二套桌面会话状态。编辑器通过 ACP/MCP 和本地
 API 接入。远程工作区由受控 SSH、附加工作区根和会话工作树承担。
+TS/Core `NotebookTools` 统一 notebook 读写、工作区权限、SHA-256 防陈旧覆盖和事件投影；
+Python `notebook_tools` 仅保留为显式兼容包装，不进入默认注册表。
+TS/Core `question` 统一会话问题、权限、事件和桌面结算；Python `ask_user` 的
+`multi_select`/文本答案仅在显式兼容包装中保留，不能成为第二默认交互状态机。
+TS/Core MCP service 与 native ToolRegistry projections 统一连接健康、代际
+能力目录、资源/提示读取和动态 schema；Python `mcp_client_tools` 仅保留为
+显式兼容包装，不进入默认注册表。
+TS/Core `multimodal_diagnose` 统一承载本地文档、前端和 JavaScript 诊断：默认
+错误模式读取 PDF/Office/CSV/TSV；`mode=frontend|javascript` 读取工作区内
+HTML/JS/Vue 并返回有界、结构化的标签、脚本、分隔符、Vue mount/router/icon
+与外部资源引用检查。所有模式都是本地只读，不联网、不执行 JavaScript、不写文件；
+外部资源可达性必须另走带 egress 授权的 `webfetch`。PDF 走受限的
+`pdftotext` 能力，DOCX/XLSX/PPTX 走无第三方依赖的有界 OOXML 读取，CSV/TSV
+走 UTF-8 文本读取；压缩包路径、大小、ZIP64、加密、CRC-32 完整性和压缩算法均
+fail-closed，XML 命名空间前缀变化不会改变提取结果。
+Desktop Control Center 的同一诊断工作台提供三模式选择、模式提示、可理解的
+成功/发现项摘要、建议和“高级原始证据”折叠面板；进行中的请求可由用户取消，
+取消只显示“未修改文件”的状态，不创建重放或写入。
+读取切片不启动 Office、不联网；XLSX 写入切片只接受有界 JSON 行数据，DOCX/PDF
+写入切片只接受有界 Markdown-like 文本，PPTX 写入切片只接受有界 JSON slide
+数组，均先完成 XML/PDF/ZIP 校验后再复用既有权限、ActionGateway 与 FileMutation。
+该切片不宣称已经完成 Python Office artifact writer 迁移；DOCX/PPTX/PDF 完整
+parity、复杂版式/嵌入对象及剩余兼容消费者仍必须接入同一 Core Artifact/Sandbox
+管线。
+
+旧 Python `validate_frontend`、`validate_js` 仅保留显式兼容导入，不进入默认
+registry；旧 `download_asset`/`download_all_cdn` 同样不进入默认 registry，待
+未来把 `webfetch` egress、分阶段暂存、`write` CAS 和 rollback artifact 融合为
+同一 TypeScript 操作后再恢复产品入口，避免 TLS 绕过或直接写文件形成第二 owner。
+
+当前已先落地纯规划 seam `@arforge-ai/core/runtime/asset-localization`：它只提取
+外部 script/link 资源，限制 HTML、引用和下载字节上限，拒绝凭据/错误 MIME/嵌套外部
+CSS，绑定重定向链的每个 URL，按 SHA-256 去重，并生成 workspace-relative staged targets、
+HTML CAS 预期摘要和 ActionGateway scope descriptor。`discover()` 会在任何下载授权前
+固定 HTML fingerprint、引用顺序、URL scope 与 request digest；`plan()` 对新鲜 HTML
+重新计算并在发生漂移时 fail-closed。该 seam 不联网、不写文件、不执行 JavaScript；只有
+后续 adapter 能把它与同一 `webfetch` egress、FileMutation CAS、rollback artifact 和
+durable mutation intent 绑定后，才可开放产品入口。当前已新增内部
+`@arforge-ai/core/runtime/asset-localization-action` adapter：它以 discovery digest
+构造唯一 ActionGateway 请求，使用 `file-prefix:` 有界目标范围，从已验证 capability
+派生 egress，复用 `WebFetchTool.fetchRawAsset` 的原始字节/重定向链，并在 `prepared`
+前完成所有 inverse artifact 暂存；写入只走 Core FileMutation 的 create/CAS，失败按同一
+mutation-intent journal 回滚。该 adapter 目前只提供可测试的运行时组合合同，不新增模型
+工具或 endpoint；真实产品入口仍需 Browser/Desktop 审批、取消、重启恢复和多角色错误旅程
+证据后再开放。
+
+当前已用真实 `Database.layerFromPath()`/`DurableAction` 做 SQLite 隔离验收：允许/审批会持久化
+单一 settled mutation manifest；权限拒绝、下载失败和审批取消均在写入前停止且不留半成品；模拟
+settlement 记录丢失会明确投影为 `outcome_unknown`，保留已提交文件并禁止自动重试。另有资产专用
+SIGKILL 验收：真实 Core `FileMutation` 与 profile rollback artifact 在子进程中把 `committed` intent
+和文件落盘后终止；重启进程重新打开同一 SQLite/工作区，以 fresh postimage 指纹和明确
+`reviewMutationIntent(settle_postimage)` 人工复核结算，重放计数为 0，后续调用仍被恢复门禁阻止。
+这闭合了 Core 崩溃/重启边界，但不等同于 Browser/Desktop 多角色旅程已完成，因此产品入口仍关闭。
+
+Runtime Insight 现在在快照和单动作恢复响应中返回请求级 `access` 能力投影：
+只暴露当前角色及“可复核、可回滚、可维护工件、可记录 MCP 证据”四个布尔能力，
+不暴露用户/租户/配置空间 ID。成员可以检查目标并记录只写证据的复核决定；受保护
+回滚、逆向工件维护和 MCP 证据记录由服务端统一限制为 owner/admin，浏览器和桌面
+控制中心据此禁用不适用按钮并显示可理解的原因。该角色旅程已用 Chrome 浏览器
+fixture 验证成员→owner 切换；资产适配器本身仍未注册为产品入口。
+
+Desktop 的 runtime-insight acceptance 现在在同一隔离 SQLite 与 workspace 中执行真实
+`AssetLocalizationAction`，由 Electron 读取持久化 `asset-localization` 动作并确认
+settled 卡片、HTML 的 content-addressed 重写和 staged 资产文件；下载使用确定性本地
+fixture，仍会经过 Gateway 派生的 egress。该证据只关闭“真实动作投影”，不等同于产品
+入口已经开放；资产审批等待、进度、取消和重启后的专用 UI 仍需在同一 owner 下补齐。
+
+成熟 Arforge 的模型-facing `write(filePath, content)` 已接入上述同一
+encoder：Office/PDF 输出会先通过编辑权限与目标 CAS，再进入统一 mutation
+journal；可用时把旧字节存入 profile-owned rollback artifact，失败时仍沿用
+原有补偿路径。普通文本继续保留 formatter/BOM/LSP 后处理，二进制 Office/PDF
+明确跳过这些文本专用阶段，避免把归档损坏成文本。
+
+工作树能力同样以 TypeScript/Core `Worktree.Service` 为唯一 owner：创建、移除、
+重置均先经过 durable `ControlOperation`、不可变 preflight/ownership 检查和 Desktop
+审批/状态投影；旧 Python `worktree_tools` 只保留显式兼容导入，不进入默认 registry，
+因此不会产生第二套 Git worktree 状态或删除路径。
 
 ## 明确不融合的部分
 
@@ -56,7 +136,9 @@ API 接入。远程工作区由受控 SSH、附加工作区根和会话工作树
    `%USERPROFILE%\.config\arforge\arforge.json` 明确选择
    `provider/model`；密钥只写入用户私有配置或操作系统安全存储。
 3. 对将要修改的项目执行一次工作区信任确认。
-4. Git、语言服务器和外部 MCP 服务均为按需能力；缺失时显式降级。私有持久
+4. Git、语言服务器和外部 MCP 服务均为按需能力；缺失时显式降级。TS LSP
+   当前无 server 时对受支持源码使用有界 index/lexical fallback，Python 额外提供
+   无进程语法诊断子集；越界、不可读或超大文件 fail-closed；私有持久
    模式要求 PostgreSQL 可用，隔离测试可显式使用 SQLite/内存数据库。
 
 ## 验收记录（2026-07-27）
@@ -113,6 +195,13 @@ API 接入。远程工作区由受控 SSH、附加工作区根和会话工作树
   私人目录、PostgreSQL 和 Agent 引擎 5/5 检查；`agents` 返回 7 个角色，
   `tools` 返回 12 个当前可见工具；日志保留默认只预览，凭据扫描不输出凭据值。
   相关纯函数回归 `4 passed, 0 failed`。
+- Python 旧启动入口已并入 TS CLI：`python -m arforge privacy` 与安装后的
+  `arforge privacy` 通过 `cli_bridge` 启动同一 `PrivacyCommand`；元数据审计
+  不读取文件内容、不跟随链接，`tests/test_cli_ts_bridge.py`、Core privacy
+  operations 与 Python 全量回归均通过。
+- 旧 CLI 的 `chat`、`ask`、`config` 命令名已分别融合为 TS TUI、TS `run`、
+  canonical config loader 的别名；`chat --no-replay` 等不适用组合在无 TTY
+  环境也会先给出明确用法错误，不会启动半成品交互界面。
 - 所有者批准的方案 C 已落地为两阶段 `clear-data`：workspace/all 都先盘点并
   生成 AES-256-CBC + HMAC-SHA256 加密备份，再凭 15 分钟有效的一次性短语
   执行；all 强制独立管理角色，账号、凭据和迁移账本默认保留。安全回归

@@ -25,6 +25,17 @@ from arforge.user_message_runtime import (
 )
 
 
+def test_python_builtin_registry_does_not_register_legacy_delivery_wrapper():
+    """TS/Core owns the default delivery tool; Python remains explicit compatibility."""
+
+    from arforge.tools import BUILTIN_TOOL_MODULES
+    from arforge.tool_registry import REGISTRY
+
+    assert "arforge.tools.user_message_tools" not in BUILTIN_TOOL_MODULES
+    assert REGISTRY.get("deliver_user_message") is not None
+    assert REGISTRY.get("deliver_user_message").source == "arforge.tools.user_message_tools"
+
+
 @pytest.fixture
 def isolated_workspace(tmp_path, monkeypatch):
     from arforge.tools import file_tools
@@ -32,7 +43,11 @@ def isolated_workspace(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setattr(file_tools, "WORKSPACE", workspace)
-    monkeypatch.setattr("arforge.workspace_roots.configured_workspace_roots", lambda: [])
+    monkeypatch.setattr(
+        "arforge.ts_workspace.typescript_path_is_authorized",
+        lambda path, *, primary: Path(path).resolve() == Path(primary).resolve()
+        or Path(primary).resolve() in Path(path).resolve().parents,
+    )
     return workspace
 
 

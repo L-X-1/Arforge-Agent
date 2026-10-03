@@ -15,7 +15,11 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(LayerNode.compile(CrossSpawnSpawner.node), testInstanceStoreLayer))
 
-const access = <A, E>(state: InstanceState.InstanceState<A, E>, dir: string) =>
+class CleanupDependency extends Context.Service<CleanupDependency, { readonly mark: () => void }>()(
+  "@test/InstanceStateCleanupDependency",
+) {}
+
+const access = <A, E, R>(state: InstanceState.InstanceState<A, E, R>, dir: string) =>
   InstanceState.get(state).pipe(provideInstanceEffect(dir))
 
 const tmpdirGitScoped = Effect.gen(function* () {
@@ -37,6 +41,118 @@ it.live("InstanceState caches values per directory", () =>
     expect(n).toBe(1)
   }),
 )
+
+it.live("InstanceState keeps shared initialization alive when its first caller cancels", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const started = yield* Deferred.make<void>()
+    const ready = yield* Deferred.make<void>()
+    const releases: number[] = []
+    let attempts = 0
+    const state = yield* InstanceState.make(() =>
+      Effect.gen(function* () {
+        const attempt = yield* Effect.acquireRelease(
+          Effect.sync(() => ++attempts),
+          (value) =>
+            Effect.sync(() => {
+              releases.push(value)
+            }),
+        )
+        yield* Deferred.succeed(started, undefined)
+        yield* Deferred.await(ready)
+        return { attempt }
+      }),
+    )
+
+    const first = yield* access(state, dir).pipe(Effect.forkScoped)
+    yield* Deferred.await(started)
+    const readers = yield* Effect.all(
+      Array.from({ length: 8 }, () => access(state, dir)),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+    yield* Fiber.interrupt(first)
+    expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true)
+    expect(releases).toEqual([])
+    yield* Deferred.succeed(ready, undefined)
+
+    const recovered = yield* Fiber.join(readers)
+    expect(attempts).toBe(1)
+    expect(recovered[0]).toEqual({ attempt: 1 })
+    for (const value of recovered) expect(value).toBe(recovered[0])
+    expect(releases).toEqual([])
+    expect(yield* access(state, dir)).toBe(recovered[0])
+
+    yield* InstanceState.invalidate(state).pipe(provideInstanceEffect(dir))
+    expect(releases).toEqual([1])
+  }),
+)
+
+it.live("InstanceState closes pending initialization with its owning scope after a caller cancels", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const started = yield* Deferred.make<void>()
+    let releases = 0
+
+    yield* Effect.scoped(Effect.gen(function* () {
+      const state = yield* InstanceState.make(() =>
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(Effect.void, () => Effect.sync(() => { releases++ }))
+          yield* Deferred.succeed(started, undefined)
+          yield* Effect.never
+        }),
+      )
+      const caller = yield* access(state, dir).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(caller)
+      expect(Exit.hasInterrupts(yield* Fiber.await(caller))).toBe(true)
+      expect(releases).toBe(0)
+    }))
+
+    expect(releases).toBe(1)
+  }),
+)
+
+it.live("InstanceState retries an initializer that interrupts itself", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    let attempts = 0
+    const state = yield* InstanceState.make(() =>
+      Effect.gen(function* () {
+        attempts++
+        if (attempts === 1) return yield* Effect.interrupt
+        return { ready: true }
+      }),
+    )
+
+    expect(Exit.hasInterrupts(yield* Effect.exit(access(state, dir)))).toBe(true)
+    const recovered = yield* access(state, dir)
+    expect(recovered).toEqual({ ready: true })
+    expect(yield* access(state, dir)).toBe(recovered)
+    expect(attempts).toBe(2)
+  }),
+)
+
+for (const failure of ["typed failure", "defect"] as const) {
+  it.live("InstanceState preserves cached " + failure, () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      let attempts = 0
+      const state = yield* InstanceState.make(() =>
+        Effect.gen(function* () {
+          attempts++
+          return yield* failure === "typed failure" ? Effect.fail("fixture failure") : Effect.die("fixture defect")
+        }),
+      )
+
+      const first = yield* Effect.exit(access(state, dir))
+      const second = yield* Effect.exit(access(state, dir))
+      expect(Exit.isFailure(first)).toBe(true)
+      expect(second).toEqual(first)
+      expect(attempts).toBe(1)
+    }),
+  )
+}
 
 it.live("InstanceState isolates directories", () =>
   Effect.gen(function* () {
@@ -101,6 +217,37 @@ it.live("InstanceState invalidates on disposeAll", () =>
     expect(seen.sort()).toEqual([one, two].sort())
   }),
 )
+
+it.live("InstanceState invalidation preserves the construction service context", () => {
+  let cleanups = 0
+  return Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const state = yield* InstanceState.make(() =>
+      Effect.acquireRelease(Effect.succeed(true), () =>
+        Effect.gen(function* () {
+          const dependency = yield* CleanupDependency
+          yield* Effect.sync(dependency.mark)
+        }),
+      ),
+    )
+
+    yield* access(state, dir)
+    yield* disposeAllInstancesEffect
+
+    expect(cleanups).toBe(1)
+  }).pipe(
+    Effect.provide(
+      Layer.succeed(
+        CleanupDependency,
+        CleanupDependency.of({
+          mark: () => {
+            cleanups++
+          },
+        }),
+      ),
+    ),
+  )
+})
 
 it.live("InstanceState.get reads the current directory lazily", () =>
   Effect.gen(function* () {

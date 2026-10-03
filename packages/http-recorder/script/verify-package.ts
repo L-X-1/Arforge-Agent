@@ -5,8 +5,19 @@ import path from "node:path"
 import { pack } from "./pack.js"
 
 const run = async (command: ReadonlyArray<string>, cwd: string) => {
-  const process = Bun.spawn(command, { cwd, env: globalThis.process.env, stdout: "inherit", stderr: "inherit" })
-  const exitCode = await process.exited
+  const executable =
+    globalThis.process.platform === "win32" &&
+    (command[0] === "npm" || command[0]?.includes(`${path.sep}node_modules${path.sep}.bin${path.sep}`))
+      ? `${command[0]}.cmd`
+      : command[0]
+  if (!executable) throw new Error("Package verification command is empty")
+  const child = Bun.spawn([executable, ...command.slice(1)], {
+    cwd,
+    env: globalThis.process.env,
+    stdout: "inherit",
+    stderr: "inherit",
+  })
+  const exitCode = await child.exited
   if (exitCode !== 0) throw new Error(`${command.join(" ")} exited with code ${exitCode}`)
 }
 
@@ -25,7 +36,10 @@ import { Layer } from "effect"
 import { HttpClient } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 
-const options: HttpRecorder.RecorderOptions = { redact: { jsonFields: ["access_token"] } }
+const options: HttpRecorder.RecorderOptions = {
+  redact: { jsonFields: ["access_token"] },
+  maxRequestBodyBytes: 1024,
+}
 HttpRecorder.http("consumer", options) satisfies Layer.Layer<HttpClient.HttpClient>
 HttpRecorder.socket("consumer/socket", options).pipe(
   Layer.provide(NodeSocket.layerWebSocket("wss://example.test")),
@@ -41,7 +55,7 @@ HttpRecorder.socket("consumer/socket", options).pipe(
           moduleResolution: "NodeNext",
           strict: true,
           noEmit: true,
-          // Required by effect@4.0.0-beta.74: its schema.d.ts references an undeclared SchemaErrorTypeId.
+          // Required by effect@4.0.0-beta.83: its schema.d.ts references an undeclared SchemaErrorTypeId.
           skipLibCheck: true,
           lib: ["ES2022", "DOM", "ESNext.Disposable"],
         },

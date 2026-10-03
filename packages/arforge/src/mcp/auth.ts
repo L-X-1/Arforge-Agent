@@ -5,6 +5,8 @@ import { Global } from "@arforge-ai/core/global"
 import { Effect, Layer, Context, Option, Schema } from "effect"
 import { FSUtil } from "@arforge-ai/core/fs-util"
 import { EffectFlock } from "@arforge-ai/core/util/effect-flock"
+import { ProtectedJson } from "@arforge-ai/core/protected-json"
+import { SecretProvider } from "@arforge-ai/core/secret-provider"
 
 export const Tokens = Schema.Struct({
   accessToken: Schema.mutableKey(Schema.String),
@@ -60,12 +62,29 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const secrets = yield* SecretProvider.Service
     const flock = yield* EffectFlock.Service
+    const readProtected = (target: string) =>
+      ProtectedJson.read(target).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.provideService(SecretProvider.Service, secrets),
+      )
+    const writeProtected = (target: string, value: unknown, mode?: number) =>
+      ProtectedJson.write(target, value, mode).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.provideService(SecretProvider.Service, secrets),
+      )
 
     const read = Effect.fn("McpAuth.read")(function* () {
-      return yield* fs.readJson(filepath).pipe(
-        Effect.map((data): AuthData => Option.getOrElse(decodeAuthData(data), () => ({}) as AuthData) as AuthData),
-        Effect.catch(() => Effect.succeed({} as AuthData)),
+      return yield* readProtected(filepath).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () =>
+          Effect.succeed({ value: {}, needsMigration: false as const }),
+        ),
+        Effect.flatMap(({ value, needsMigration }) => {
+          const data = Option.getOrElse(decodeAuthData(value), () => ({}) as AuthData) as AuthData
+          return needsMigration ? writeProtected(filepath, data, 0o600).pipe(Effect.as(data)) : Effect.succeed(data)
+        }),
+        Effect.orDie,
       )
     })
 
@@ -77,7 +96,7 @@ const layer = Layer.effect(
       yield* Effect.gen(function* () {
         const next = update(yield* read())
         if (!next) return
-        yield* fs.writeJson(filepath, next, 0o600).pipe(Effect.orDie)
+        yield* writeProtected(filepath, next, 0o600).pipe(Effect.orDie)
       }).pipe(flock.withLock(lockKey), Effect.orDie)
     })
 
@@ -158,6 +177,10 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = LayerNode.make({ service: Service, layer: layer, deps: [FSUtil.node, EffectFlock.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [FSUtil.node, EffectFlock.node, SecretProvider.node],
+})
 
 export * as McpAuth from "./auth"

@@ -30,6 +30,10 @@ export type ProjectMeta = {
   }
 }
 
+// The v2 MCP endpoint includes `needs_approval`; the legacy client does not.
+// Keep both protocol shapes intact in the shared directory store.
+export type McpConnectionStatus = McpServer["status"] | { readonly status: "needs_approval"; readonly reason: string }
+
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]
@@ -63,7 +67,7 @@ export type State = {
   }
   mcp_ready: boolean
   mcp: {
-    [name: string]: McpServer["status"]
+    [name: string]: McpConnectionStatus
   }
   mcp_resource: {
     [key: string]: McpResource

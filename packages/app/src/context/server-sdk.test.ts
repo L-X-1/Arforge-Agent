@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { adaptServerEvent, coalesceServerEvents, enqueueServerEvent, resumeStreamAfterPageShow } from "./server-sdk"
+import {
+  adaptLegacyServerEvent,
+  adaptServerEvent,
+  coalesceServerEvents,
+  enqueueServerEvent,
+  resumeStreamAfterPageShow,
+} from "./server-sdk"
 import type { ArforgeEvent } from "@arforge-ai/client/promise"
 import type { Event } from "@arforge-ai/sdk/v2/client"
 
@@ -21,13 +27,50 @@ describe("adaptServerEvent", () => {
       id: "evt_1",
       created: 1,
       type: "permission.v2.asked",
-      data: { id: "perm_1", sessionID: "ses_1", action: "read", resources: ["src/**"] },
+      data: {
+        id: "perm_1",
+        sessionID: "ses_1",
+        action: "read",
+        resources: ["src/**"],
+        requiresHumanConfirmation: true,
+      },
     } as ArforgeEvent
 
     expect(adaptServerEvent(current)).toMatchObject({
       type: "permission.asked",
-      properties: { id: "perm_1", sessionID: "ses_1", permission: "read", patterns: ["src/**"] },
+      properties: {
+        id: "perm_1",
+        sessionID: "ses_1",
+        permission: "read",
+        patterns: ["src/**"],
+        requiresHumanConfirmation: true,
+      },
       current,
+    })
+  })
+
+  test("adapts V2 permission events carried by the legacy global stream", () => {
+    const event = {
+      id: "evt_legacy_1",
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_legacy_1",
+        sessionID: "ses_1",
+        action: "bash",
+        resources: ["node --version"],
+        requiresHumanConfirmation: true,
+      },
+    } as unknown as Event
+
+    expect(adaptLegacyServerEvent(event)).toMatchObject({
+      id: "evt_legacy_1",
+      type: "permission.asked",
+      properties: {
+        id: "per_legacy_1",
+        permission: "bash",
+        patterns: ["node --version"],
+        requiresHumanConfirmation: true,
+      },
     })
   })
 })

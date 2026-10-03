@@ -9,14 +9,23 @@ import { PermissionV2 } from "@arforge-ai/core/permission"
 import { Project } from "@arforge-ai/core/project"
 import { ProjectTable } from "@arforge-ai/core/project/sql"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Location } from "@arforge-ai/core/location"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionMessage } from "@arforge-ai/core/session/message"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { GoalUpdateTool } from "@arforge-ai/core/tool/goal-update"
 import { ToolRegistry } from "@arforge-ai/core/tool/registry"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { executeTool, toolDefinitions, toolIdentity } from "./lib/tool"
+
+// Read-only preflight resolution needs a real existing directory; the test
+// file's own directory is deterministic on every platform.
+const current = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+)
 
 const sessionID = SessionV2.ID.make("ses_goal_update_tool_test")
 const assertions: PermissionV2.AssertInput[] = []
@@ -46,6 +55,7 @@ const it = testEffect(
     [
       [PermissionV2.node, permission],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Location.node, current],
     ],
   ),
 )
@@ -115,9 +125,11 @@ describe("GoalUpdateTool", () => {
       expect(assertions).toMatchObject([
         {
           sessionID,
+          agent: "build",
           action: GoalUpdateTool.name,
           resources: [first.id],
-          save: [first.id],
+          forceAsk: true,
+          metadata: { riskTier: "L3", authority: "human" },
         },
       ])
     }),

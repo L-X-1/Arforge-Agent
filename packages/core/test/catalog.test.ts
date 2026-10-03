@@ -101,6 +101,33 @@ describe("CatalogV2", () => {
     }).pipe(Effect.provide(localCatalogLayer))
   })
 
+  it.effect("keeps migrated provider API keys available when an empty integration also exists", () => {
+    const providerID = ProviderV2.ID.make("configured")
+    const localCatalogLayer = Layer.fresh(
+      AppNodeBuilder.build(LayerNode.group([Catalog.node, Credential.node, Integration.node]), [
+        [Location.node, locationLayer],
+      ]),
+    )
+
+    return Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      yield* (yield* Integration.Service).transform((editor) =>
+        editor.update(Integration.ID.make(providerID), () => {}),
+      )
+      yield* catalog.transform((editor) =>
+        editor.provider.update(providerID, (provider) => {
+          provider.api = {
+            type: "aisdk",
+            package: "@ai-sdk/openai-compatible",
+            settings: { apiKey: "configured-key" },
+          }
+        }),
+      )
+
+      expect((yield* catalog.provider.available()).map((provider) => provider.id)).toContain(providerID)
+    }).pipe(Effect.provide(localCatalogLayer))
+  })
+
   it.effect("projects environment connections without a catalog plugin", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {

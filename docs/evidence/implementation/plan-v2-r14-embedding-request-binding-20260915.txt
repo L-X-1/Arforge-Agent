@@ -1,0 +1,66 @@
+R14 Embedding 请求绑定与外发边界（2026-09-15）
+
+结论：
+- RemoteRequest.binding 必填，包含 tenant/user principal、workspaceID、dataScope、origin、固定 POST、model、credentialIdentity 和 consent。
+- makeRequestBinding 深冻结 binding；transport 在最终 /embeddings URL 上先 exact 校验 binding，再调用 Egress.assert、SecretProvider resolver 和 fetch。
+- Memory.semantic 把当前 Database principal、canonical workspace path 和 memory:<project>:<workspace> scope 作为 expectedBinding 传给同一服务，跨主体/工作区 binding 在网络前拒绝。
+- origin/model/credential identity/consent 漂移均 fail-closed；未授权或漂移请求零网络、零凭据解析，既有 hashing fallback 与外发审计事实保持不变。
+- 审计只写 bindingDigest，不写绑定明文、API key、输入文本或 query。
+
+实现文件：
+- packages/core/src/runtime/embedding.ts
+- packages/core/test/runtime/embedding.test.ts
+- packages/core/test/memory.test.ts
+- packages/core/test/code-retrieval.test.ts
+- packages/core/src/code-retrieval.ts（embeddingExpectedBinding 接线）
+- packages/arforge/src/workspace-root-control-gateway.ts（R15 唯一 mutation adapter）
+- packages/arforge/src/cli/cmd/workspace.ts（CLI trust/add/remove 统一入口）
+- packages/arforge/test/workspace-root-control-gateway.test.ts
+
+验收：
+- embedding：14 pass / 0 fail / 44 assertions；code retrieval：4 / 0 / 17；memory：11 / 0 / 79 assertions；合计 29 pass / 0 fail / 140 assertions / exit 0。
+- 本轮增量：code retrieval：4 pass / 0 fail / 19 assertions；workspace control adapter：2 pass / 0 fail / 10 assertions；read-only CLI smoke：18 pass / 0 fail / 50 assertions（含 workspace mutation fail-closed journey）。
+- Core typecheck：exit 0。
+- Arforge typecheck 仅剩既有 packages/tui JSX/BaseRenderable 诊断；本轮无 workspace adapter/API 新诊断。根目录 scoped oxlint：0 errors / 0 warnings。
+- Prettier、git diff --check exit 0；本轮变更后按 Python dependency -> TS composition -> source snapshot 重生成，audit:migration-freshness valid=true（Python 5098/6715/6，TS 1800/3/5/3，source inputs 7707，capability links 4/4）。
+
+仍开放：生产认证上下文对主体/workspace/dataScope 的自动绑定；全部真实外发入口矩阵；审计强持久化/冷恢复；R15 writer 五门禁及 CLI/API/Desktop 实际写入旅程；R13/R16—R30；R30 后的三平台 full sandbox。测试只使用 loopback fixture 和测试凭据，未改用户数据。
+
+2026-09-15 接续切片：workspace HTTP API 统一控制入口
+- 新增 POST /experimental/workspace/root-mutation；payload 只有 action(trust/add/remove) 和有界 target，服务端从 Core owner 重读状态，不接受调用方状态数组、profile 路径或 receipt。
+- handler、CLI 与未来 Desktop 共用 workspace-root-control-gateway -> ActionGateway -> executeWorkspaceRootMutation；当前五门禁 keep-disabled，在 identity/gateway 解析前返回 409 writer_disabled，带 owner、blocking gate 和 no Python writer fallback，不创建 profile 文件。
+- HTTP coverage 新场景通过；整套 coverage 429 pass / 0 fail / 0 skip / 9 missing / exit 1，9 个 missing 是既有 /api/fs/*、/api/model/default、/api/path、/api/project*、/api/vcs 场景，本次 workspace route 无失败。
+- API schema/handler Prettier 通过，workspace API scoped Oxlint 0 errors / 0 warnings；Arforge typecheck 仍只有既有 TUI JSX/BaseRenderable 诊断。
+- 该切片只完成 R15 统一入口与 fail-closed 可观察性，不开启生产写入；真实 profile mutation、审批、CAS/rollback/outbox/audit recovery、Desktop 旅程和 R30 后 full sandbox 仍开放。
+
+2026-09-15 接续切片：R16 文件 move 进入 Core 唯一事务管线
+- Core FileMutation 新增 moveIfUnchanged：source/destination 使用规范化 lock key 稳定排序，跨进程 lease 与进程内 mutex 同时持有；source 必须匹配 expectedSource，destination 缺省时必须不存在，覆盖时必须匹配 expectedDestination。
+- 目标写入复用 atomic CAS，source 复用 conditional remove；source 删除冲突时仅在目标仍匹配本次内容时补偿，补偿失败结构化失败，不留下未审计 phantom copy。
+- apply_patch move 分支只调用该 Core 服务，write/edit/delete 仍共用同一 FileMutation owner；工具层不再拼接不受保护的 write+remove。当前语义不是跨卷原子 rename，链接/junction/UNC/长路径/跨卷及 OS enforcement 仍按 R16/R30 验收。
+- Core file-mutation：26 pass / 0 fail / 77 assertions / 9.77s；Arforge apply_patch move 筛选：2 pass / 0 fail / 4 assertions / 7.83s（完整文件此前 32 pass / 86 assertions）；Arforge tool/file-mutation：10 pass / 0 fail / 41 assertions / 2.37s。
+- Core typecheck exit 0；受影响文件 Prettier、git diff --check 通过；scoped Oxlint 0 errors（仅既有 warnings）。freshness 重生成并校验 valid=true：Python 5098/6715/6，TS 1800、composition 3/5/3，source inputs 7707；source snapshot digest 以 docs/evidence/implementation/source-snapshot.v1.json 当前内容为准，capability links 4 records / 4 missing evidence。
+- 本切片只推进 R16 文件事务融合，不关闭 R16；Shell 四类宿主、CodeMode 资源限制、链接/跨卷矩阵及 R15、R13、R17-R30 仍开放。full sandbox 继续只在 R30 后执行，未改用户数据/profile/凭据/全局 CLI。
+
+2026-09-15 接续切片：R16 Git Bash/MSYS 宿主兼容性显式化
+- Windows 真实 Git Bash 复现：补充 bash 安装目录只读根后，依赖路径可解析，但 Windows BaseContainer 仍在 MSYS 初始化阶段因 BaseNamedObjects 命名对象边界报 0xC0000022，用户命令未执行；PowerShell、Windows PowerShell、cmd 同宿主可用。
+- SandboxRunner/ShellTool 现在把 bash/sh + Windows BaseContainer 识别为明确 legacy 分支：非 unrestricted 使用 Restricted Token + Job Object，报告 enforcement=partial、host filesystem/network/process boundary、job-kill-on-close 和兼容原因；automatic/scoped/requireEnforcement 在执行前 fail-closed，人工批准才允许显式承担未隔离文件/网络边界。PowerShell/pwsh/cmd 继续使用 full SBOX，并只读挂载 shell 安装目录及父目录。
+- Runner Git Bash/MSYS：1 pass / 3 assertions；Shell 基础、MSYS、超时、非零退出、stderr、取消与 durable barrier 组合：11 pass / 0 fail / 32 assertions / 14.51s；Prettier 通过，scoped Oxlint 0 errors（既有 warnings），Core typecheck exit 0。
+- 本切片只证明边界如实报告，不是 Windows full sandbox。Git Bash 的 full containment 仍需兼容 MSYS named objects 的宿主方案；R16 其他文件/CodeMode 矩阵、R15、R13、R17-R30 仍开放，三平台 full sandbox 继续 R30 后执行，未改用户数据/profile/凭据/全局 CLI。
+
+2026-09-15 接续切片：R16 CodeMode 宿主预算接线
+- Arforge CodeMode 适配器现在为每次程序执行设置固定宿主预算：timeoutMs=120000、maxToolCalls=128、maxOutputBytes=1048576。超限保留稳定 ToolCallLimitExceeded/TimeoutExceeded 诊断并沿现有 Tool 错误投影；用户取消仍优先中断。
+- 每个 MCP 子调用继续通过既有 ActionGateway/leaf budget；没有新增权限源、执行器或独立预算状态。底层通用 @arforge-ai/codemode 仍不设置库级默认值，预算由 Arforge host policy 提供。
+- Arforge CodeMode：40 pass / 0 fail / 123 assertions（129 次循环实际只进入 Gateway 128 次）；真实 MCP transport：16 pass / 0 fail / 39 assertions；受影响文件 Prettier 通过。
+- 本切片不关闭 R16：OS CPU/内存/FD 限制、真实 CodeMode 用户旅程/跨进程恢复仍开放；R15、R13、R17-R30 和 R30 后 full sandbox 继续未完成，未改用户数据/profile/凭据/全局 CLI。
+
+2026-09-15 接续切片：R16 FileMutation 链接路径防护与重叠 move 顺序
+- apply_patch 的 create/delete/move 可直接构造绝对 lexical target，不一定经过 LocationMutation.resolve。Core FileMutation 现在在目标锁内、任何读写前遍历目标及现有父级；发现 symlink/junction 即返回结构化 FSUtil.FileSystemError，缺失叶/父级仍允许创建。write/create/remove/conditional write/remove/move/rollback 共享该唯一链接边界，未新增权限源或工作区解析器。
+- 新增跨平台替身回归：父级被标记为 link-bound 时 create 与 move 在真实读写前拒绝且无目标副作用；带空格/Unicode 的两个路径反向并发 move 按规范化 lock key 排序，仅一个 CAS 成功、另一个失败，无死锁。
+- Core file-mutation 定向链接/反向 move：3 pass / 0 fail / 10 assertions；完整文件最终 30 pass / 0 fail / 90 assertions，包含同进程和独立进程的反向重叠 move。
+- Core typecheck、受影响文件 Prettier 通过；根目录 Oxlint 0 errors / 14 warnings，告警为既有 NodeFileSystem 未使用、测试替身断言及 Effect 返回路径规则，无本切片错误。
+- 只关闭工具绕过 LocationMutation 时的链接路径逃逸边界；真实 OS junction/UNC/长路径/锁定/跨卷、Shell/CodeMode 完整用户旅程与 OS 资源限制、R15/R13/R17-R30 仍开放，三平台 full sandbox 继续 R30 后执行，未改用户数据/profile/凭据/全局 CLI。
+
+2026-09-15 接续切片：R16 缺失目标的原子 staged publish
+- 目标不存在的 move 若直接 writeFile({ flag: "wx" })，中途强杀可能留下半写文件。FSUtil 新增可复用 writeIfAbsentAtomic，复用 FileGuard.atomicWrite(..., { overwrite: false })：先临时文件写入并 sync，再 no-replace publish；FileMutation.create 与 moveIfUnchanged 缺失目标分支优先使用，目标出现竞争映射为 TargetExistsError。兼容替身缺少该可选能力时保留旧 wx 路径，不能宣称原子 staged publish。
+- Core file-mutation 完整回归：30 pass / 0 fail / 90 assertions，覆盖目标创建竞争、链接路径、同进程与独立进程反向 move、CAS、回滚；Core typecheck、受影响文件 Prettier、git diff-check 通过。迁移 freshness 按依赖→组合→源码快照重生成并验证 valid=true：Python 5099/6715/6、TS source 1801、composition 3/5/3、source inputs 7708、capability links 4 records / 4 missing evidence。
+- 该切片不宣称跨卷 rename 原子性或 OS crash durability；真实链接/junction/UNC/长路径/锁定/跨卷宿主矩阵、R15/R13/R17-R30 仍开放，三平台 full sandbox 只在 R30 后执行。

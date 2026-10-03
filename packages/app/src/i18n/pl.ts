@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "Sugerowane",
   "command.category.view": "Widok",
   "command.category.project": "Projekt",
@@ -297,6 +300,8 @@ export const dict = {
   "mcp.status.connected": "połączono",
   "mcp.status.failed": "niepowodzenie",
   "mcp.status.needs_auth": "wymaga autoryzacji",
+  "mcp.status.needs_client_registration": "wymagana rejestracja klienta",
+  "mcp.status.needs_approval": "wymagana zgoda",
   "mcp.auth.clickToAuthenticate": "Kliknij, aby się uwierzytelnić",
   "mcp.status.disabled": "wyłączone",
   "dialog.fork.empty": "Brak wiadomości do rozwidlenia",
@@ -1233,7 +1238,7 @@ export const dict = {
   "controlCenter.m174": "Przywróć",
   "controlCenter.m175": "Stała historia uruchomień",
   "controlCenter.m176":
-    "Przeczytaj artefakty transakcji, śledzenia i komunikatów Python Core za pomocą udostępnionego typu Server API. Raporty są tylko do odczytu i pozostają własnością jednego źródła trwałości.",
+    "Przeczytaj artefakty transakcji, śledzenia i komunikatów Arforge Core za pomocą udostępnionego typu Server API. Raporty są tylko do odczytu i pozostają własnością jednego źródła trwałości.",
   "controlCenter.m177": "Limit",
   "controlCenter.m178": "Odśwież",
   "controlCenter.m179": "pliki ·",
@@ -1287,6 +1292,19 @@ export const dict = {
   "controlCenter.m222": "Nieznany błąd głębokiej diagnostyki",
   "controlCenter.m223": "Kontrolowana ewolucja",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "Przeglądaj kandydatów na zasady proponowanych na podstawie dowodów z uczenia i kontroluj zmiany możliwości poprzez izolowaną ocenę, zatwierdzenie przez człowieka, stopniowe wdrażanie i wycofanie.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "Przeglądaj kandydatów na zasady proponowanych na podstawie dowodów z uczenia i kontroluj zmiany możliwości poprzez izolowaną ocenę, zatwierdzenie przez człowieka, stopniowe wdrażanie i wycofanie.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

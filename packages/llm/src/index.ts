@@ -11,6 +11,13 @@ export type {
 export * from "./schema"
 export { Tool, ToolFailure, toDefinitions } from "./tool"
 export { ToolRuntime } from "./tool-runtime"
+export { Probe } from "./probe"
+export type {
+  Adapter as ProbeAdapter,
+  Capability as ProbeCapability,
+  FailureCode as ProbeFailureCode,
+  Outcome as ProbeOutcome,
+} from "./probe"
 export type { DispatchResult as ToolDispatchResult, ToolSettlement } from "./tool-runtime"
 export type {
   AnyExecutableTool,

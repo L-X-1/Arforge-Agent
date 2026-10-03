@@ -35,6 +35,7 @@ import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
+import { SessionCompaction } from "@arforge-ai/core/session/compaction"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -51,6 +52,64 @@ function truncateToolOutput(text: string, maxChars?: number) {
   const omitted = text.length - maxChars
   return `${text.slice(0, maxChars)}\n[Tool output truncated for compaction: omitted ${omitted} chars]`
 }
+
+function compactionSummaryText(message: WithParts) {
+  return message.parts
+    .filter((part): part is SessionV1.TextPart => part.type === "text")
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim()
+}
+
+/**
+ * Lower mature V1 history into Core's canonical compaction text grammar.
+ * This is the sole compatibility projection used for both summary requests
+ * and committed checkpoint tails.
+ */
+export const serializeCompactionContext = (messages: readonly WithParts[]) =>
+  SessionCompaction.serializeContextHistory(
+    messages.flatMap((message) => {
+      if (message.info.role === "user") {
+        const text = message.parts
+          .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.ignored)
+          .map((part) => part.text)
+          .join("\n")
+        const files = message.parts
+          .filter((part): part is SessionV1.FilePart => part.type === "file")
+          .map((part) => ({ mime: part.mime, name: part.filename ?? part.url }))
+        return text || files.length > 0 ? [SessionCompaction.serializeUserContext({ text, files })] : []
+      }
+
+      const parts = message.parts.flatMap((part): SessionCompaction.AssistantContextPart[] => {
+        if (part.type === "text" || part.type === "reasoning") return [{ type: part.type, text: part.text }]
+        if (part.type !== "tool") return []
+        if (part.state.status === "completed")
+          return [
+            {
+              type: "tool",
+              name: part.tool,
+              input: part.state.input,
+              status: "completed",
+              output: part.state.output,
+            },
+          ]
+        if (part.state.status === "error")
+          return [
+            {
+              type: "tool",
+              name: part.tool,
+              input: part.state.input,
+              status: "error",
+              error: part.state.error,
+            },
+          ]
+        return [{ type: "tool", name: part.tool, input: part.state.input, status: "pending" }]
+      })
+      const text = SessionCompaction.serializeAssistantContext(parts)
+      return text ? [text] : []
+    }),
+  )
 
 export const Event = {
   Updated: SessionV1.Event.MessageUpdated,
@@ -135,6 +194,47 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
+  const committedCompactions = new Map<
+    MessageID,
+    Readonly<{ readonly assistantID: MessageID; readonly summary: string; readonly recent: string }>
+  >()
+  const committedSummaryIDs = new Set<MessageID>()
+  const retainedTailIDs = new Set<MessageID>()
+  const compactionMarkerIDs = new Set(
+    input
+      .filter((msg) => msg.info.role === "user" && msg.parts.some((part) => part.type === "compaction"))
+      .map((msg) => msg.info.id),
+  )
+  for (const [assistantIndex, msg] of input.entries()) {
+    if (msg.info.role !== "assistant" || !msg.info.summary || !msg.info.finish || msg.info.error) continue
+    const parentID = msg.info.parentID
+    if (!compactionMarkerIDs.has(parentID)) continue
+    const summary = compactionSummaryText(msg)
+    if (!summary) continue
+    const markerIndex = input.findIndex((item) => item.info.id === parentID)
+    const marker = markerIndex >= 0 ? input[markerIndex] : undefined
+    const compactionPart = marker?.parts.find((part): part is CompactionPart => part.type === "compaction")
+    const tailStartIndex = compactionPart?.tail_start_id
+      ? input.findIndex((item) => item.info.id === compactionPart.tail_start_id)
+      : -1
+    const tailEndIndex = marker
+      ? input.findIndex((item, index) => index > tailStartIndex && item.info.time.created >= marker.info.time.created)
+      : -1
+    // filterCompacted deliberately places retained historical messages after
+    // the committed summary. Fold that reordered tail into the canonical
+    // checkpoint and prevent it from being sent a second time as fresh turns.
+    const tail =
+      marker && tailStartIndex > assistantIndex
+        ? input.slice(tailStartIndex, tailEndIndex === -1 ? input.length : tailEndIndex)
+        : []
+    for (const item of tail) retainedTailIDs.add(item.info.id)
+    committedCompactions.set(parentID, {
+      assistantID: msg.info.id,
+      summary,
+      recent: serializeCompactionContext(tail),
+    })
+    committedSummaryIDs.add(msg.info.id)
+  }
   // Track media from tool results that need to be injected as user messages
   // for providers that don't support that media type in tool results.
   //
@@ -194,8 +294,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 
   for (const msg of input) {
     if (msg.parts.length === 0) continue
+    if (msg.info.role === "assistant" && committedSummaryIDs.has(msg.info.id)) continue
+    if (retainedTailIDs.has(msg.info.id)) continue
 
     if (msg.info.role === "user") {
+      const committedCompaction = committedCompactions.get(msg.info.id)
       const userMessage: UIMessage = {
         id: msg.info.id,
         role: "user",
@@ -228,7 +331,12 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "compaction") {
           userMessage.parts.push({
             type: "text",
-            text: "What did we do so far?",
+            text: committedCompaction
+              ? SessionCompaction.checkpointText({
+                  summary: committedCompaction.summary,
+                  recent: committedCompaction.recent,
+                })
+              : "What did we do so far?",
           })
         }
         if (part.type === "subtask") {
@@ -538,7 +646,13 @@ export function filterCompacted(msgs: Iterable<WithParts>) {
     }
     if (msg.info.role === "user" && completed.has(msg.info.id) && msg.parts.some((part) => part.type === "compaction"))
       break
-    if (msg.info.role === "assistant" && msg.info.summary && msg.info.finish && !msg.info.error)
+    if (
+      msg.info.role === "assistant" &&
+      msg.info.summary &&
+      msg.info.finish &&
+      !msg.info.error &&
+      compactionSummaryText(msg)
+    )
       completed.add(msg.info.parentID)
   }
   result.reverse()
@@ -577,23 +691,28 @@ export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: Ses
 
 // filterCompacted reorders messages for model consumption
 // ([compaction-user, summary, ...retained tail..., continue-user]), so array
-// position is not chronological. Derive each binding by max id (MessageID
-// is monotonic via MessageID.ascending) so a pre-compaction overflowing tail
-// assistant doesn't get mistaken for the most recent turn. tasks are
-// compaction/subtask parts attached to user messages newer than the latest
-// finished assistant — i.e. unprocessed work.
+// position is not chronological. Creation time is the primary ordering key;
+// MessageID is the deterministic tie-breaker. This keeps stable replay IDs
+// (for example, direct Shell's derived assistant ID) from masking a later
+// provider response while preserving the old monotonic-ID behavior when
+// timestamps are equal. tasks are compaction/subtask parts attached to user
+// messages newer than the latest finished assistant — i.e. unprocessed work.
+function isLaterMessage(a: User | Assistant, b: User | Assistant) {
+  return a.time.created > b.time.created || (a.time.created === b.time.created && a.id > b.id)
+}
+
 export function latest(msgs: WithParts[]) {
   let user: User | undefined
   let assistant: Assistant | undefined
   let finished: Assistant | undefined
   for (const msg of msgs) {
     const info = msg.info
-    if (info.role === "user" && (!user || info.id > user.id)) user = info
-    if (info.role === "assistant" && (!assistant || info.id > assistant.id)) assistant = info
-    if (info.role === "assistant" && info.finish && (!finished || info.id > finished.id)) finished = info
+    if (info.role === "user" && (!user || isLaterMessage(info, user))) user = info
+    if (info.role === "assistant" && (!assistant || isLaterMessage(info, assistant))) assistant = info
+    if (info.role === "assistant" && info.finish && (!finished || isLaterMessage(info, finished))) finished = info
   }
   const tasks = msgs.flatMap((m) =>
-    finished && m.info.id <= finished.id
+    finished && !isLaterMessage(m.info, finished)
       ? []
       : m.parts.filter((p): p is CompactionPart | SubtaskPart => p.type === "compaction" || p.type === "subtask"),
   )

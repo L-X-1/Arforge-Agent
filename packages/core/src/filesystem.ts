@@ -67,6 +67,14 @@ const baseLayer = Layer.effect(
       const absolute = path.resolve(location.directory, input ?? ".")
       if (!FSUtil.contains(location.directory, absolute))
         return yield* Effect.die(new Error("Path escapes the location"))
+      let component = absolute
+      while (true) {
+        if (yield* fs.isSymbolicLink(component).pipe(Effect.orDie))
+          return yield* Effect.die(new Error("Symbolic links are not followed"))
+        const parent = path.dirname(component)
+        if (parent === component) break
+        component = parent
+      }
       const real = yield* fs.realPath(absolute).pipe(Effect.orDie)
       if (!FSUtil.contains(root, real)) return yield* Effect.die(new Error("Path escapes the location"))
       return { absolute, real, directory: location.directory, root }

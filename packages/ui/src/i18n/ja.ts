@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "セッションの変更",
   "ui.sessionReview.title.git": "Gitの変更",
   "ui.sessionReview.title.branch": "ブランチの変更",
@@ -94,6 +97,7 @@ export const dict = {
 
   "ui.messagePart.questions.dismissed": "質問をスキップしました",
   "ui.messagePart.compaction": "セッションを圧縮しました",
+  "ui.messagePart.reasoningSummary": "推論の要約",
   "ui.messagePart.context.read.one": "{{count}} 件の読み取り",
   "ui.messagePart.context.read.other": "{{count}} 件の読み取り",
   "ui.messagePart.context.search.one": "{{count}} 件の検索",

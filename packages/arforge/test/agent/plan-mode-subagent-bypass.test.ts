@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@arforge-ai/core/v1/permission"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { expect } from "bun:test"
 import { Effect } from "effect"
@@ -156,5 +157,121 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
     )
 
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("explicit child capabilities become a fail-closed permission allow-list", () =>
+  Effect.sync(() => {
+    const executor = testAgent({
+      name: "executor",
+      mode: "subagent",
+      permission: { "*": "allow" },
+    })
+    const effective = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: [],
+        subagent: executor,
+        capabilities: [
+          {
+            action: "edit",
+            resources: ["workspace"],
+            access: "write",
+          } satisfies AgentRuntime.ChildCapability,
+        ],
+      }),
+    )
+
+    expect(Permission.evaluate("edit", "src/a.ts", effective).action).toBe("allow")
+    expect(Permission.evaluate("read", "src/a.ts", effective).action).toBe("deny")
+    expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
+    expect(Permission.evaluate("task", "worker", effective).action).toBe("deny")
+
+    const externalGrant = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: [{ permission: "external_directory", pattern: "*", action: "allow" }],
+        subagent: executor,
+        capabilities: [
+          {
+            action: "edit",
+            resources: ["workspace"],
+            access: "write",
+          } satisfies AgentRuntime.ChildCapability,
+        ],
+      }),
+    )
+    expect(Permission.evaluate("external_directory", "C:/outside", externalGrant).action).toBe("deny")
+  }),
+)
+
+it.effect("subagent capability grants cannot bypass a profile's own hard tool ceiling", () =>
+  Effect.sync(() => {
+    const readOnlyProfile = testAgent({
+      name: "CustomAgent.reviewer",
+      mode: "subagent",
+      permission: {
+        "*": "deny",
+        read: "allow",
+        grep: "allow",
+      },
+    })
+    const effective = Permission.merge(
+      readOnlyProfile.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({ "*": "allow" }),
+        subagent: readOnlyProfile,
+        capabilities: [{ action: "edit", resources: ["workspace"], access: "write" }],
+      }),
+    )
+
+    expect(Permission.evaluate("edit", "src/index.ts", effective).action).toBe("deny")
+    expect(Permission.evaluate("read", "src/index.ts", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("explicit child capabilities preserve parent ask as a hard ceiling", () =>
+  Effect.sync(() => {
+    const executor = testAgent({
+      name: "executor",
+      mode: "subagent",
+      permission: { "*": "allow" },
+    })
+    const effective = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({
+          "*": "allow",
+          edit: "ask",
+          external_directory: "ask",
+        }),
+        subagent: executor,
+        capabilities: [{ action: "edit", resources: ["workspace"], access: "write" }],
+      }),
+    )
+
+    expect(Permission.evaluate("edit", "src/a.ts", effective).action).toBe("ask")
+    expect(Permission.evaluate("read", "src/a.ts", effective).action).toBe("deny")
+    expect(Permission.evaluate("external_directory", "C:/outside", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("a narrower parent allow cannot widen a different child resource scope", () =>
+  Effect.sync(() => {
+    const executor = testAgent({ name: "executor", mode: "subagent", permission: { "*": "allow" } })
+    const effective = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({
+          "*": "deny",
+          read: { "src/safe/*": "allow" },
+        }),
+        subagent: executor,
+        capabilities: [{ action: "read", resources: ["src/other/*"], access: "read" }],
+      }),
+    )
+
+    expect(Permission.evaluate("read", "src/other/file.ts", effective).action).toBe("deny")
+    expect(Permission.evaluate("read", "src/safe/file.ts", effective).action).toBe("deny")
   }),
 )

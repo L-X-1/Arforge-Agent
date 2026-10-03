@@ -1,4 +1,10 @@
-"""JavaScript validation and diagnostic tools."""
+"""Explicit Python compatibility seam for the retired JavaScript validator.
+
+The canonical implementation is the local-only TypeScript/Core
+``multimodal_diagnose`` tool with ``mode="javascript"``. This module is not
+part of the default Python registry and remains importable only for callers
+that have not migrated yet.
+"""
 
 from __future__ import annotations
 

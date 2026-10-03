@@ -13,6 +13,12 @@ export const LearningOutcomeTable = sqliteTable(
     session_id: text()
       .$type<SessionSchema.ID>()
       .references(() => SessionTable.id, { onDelete: "set null" }),
+    run_id: text(),
+    action_id: text(),
+    evaluation_id: text(),
+    evidence_ids: text({ mode: "json" }).$type<ReadonlyArray<string>>(),
+    terminal: integer({ mode: "boolean" }),
+    verifier_passed: integer({ mode: "boolean" }),
     project_id: text().notNull(),
     workspace_path: text().notNull(),
     turn_index: integer().notNull().default(0),

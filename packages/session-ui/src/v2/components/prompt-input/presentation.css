@@ -1,0 +1,42 @@
+form[data-component="prompt-input-v2"] {
+  font-family: var(--font-family-sans, var(--arforge-font-sans, "Noto Sans SC", sans-serif));
+  border-radius: 16px;
+  background: var(--arforge-review-composer-background, var(--v2-background-bg-layer-01));
+  box-shadow: none;
+}
+
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-editor"],
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-placeholder"] {
+  font-size: var(--arforge-review-body-size, 17px);
+  font-weight: 400;
+  line-height: var(--arforge-review-body-line, 1.8);
+  padding: 16px 20px 8px;
+  overflow-wrap: anywhere;
+}
+
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-editor"] {
+  /* lh tracks the actual font/zoom: attachments and tools are separate siblings. */
+  box-sizing: border-box;
+  min-height: calc(2lh + 24px);
+  max-height: calc(8lh + 24px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+}
+
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] {
+  flex-shrink: 0;
+}
+
+@media (pointer: coarse) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-controls"] {
+    transition: none !important;
+  }
+}

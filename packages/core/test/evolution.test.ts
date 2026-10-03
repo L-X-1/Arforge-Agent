@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { mkdirSync } from "node:fs"
+import { existsSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -10,6 +10,11 @@ import { Effect } from "effect"
 import { it } from "./lib/effect"
 
 const evolutionLayer = (root: string) =>
+  AppNodeBuilder.build(EvolutionV2.node, [
+    [EvolutionV2.node, EvolutionV2.layer({ root, legacyWriteMode: "test-only" })],
+  ])
+
+const evolutionReadLayer = (root: string) =>
   AppNodeBuilder.build(EvolutionV2.node, [[EvolutionV2.node, EvolutionV2.layer({ root })]])
 
 const tmpEvolutionRoot = () => {
@@ -28,7 +33,15 @@ function createActiveCanary(runtime: EvolutionRuntime) {
     createdBy: "runtime:failure-miner",
   })
   const passing = () => [
-    { case_id: "quality", category: "quality", passed: true, score: 1.0, baseline_score: 0.7, detail: "ok", required: true },
+    {
+      case_id: "quality",
+      category: "quality",
+      passed: true,
+      score: 1.0,
+      baseline_score: 0.7,
+      detail: "ok",
+      required: true,
+    },
   ]
   const evaluated = runtime.evaluateCandidate(created.manifest.candidate_id, created.state.revision, passing)
   const approved = runtime.approveCandidate(evaluated.candidate_id, evaluated.state.revision, "user:owner", "ok")
@@ -37,10 +50,46 @@ function createActiveCanary(runtime: EvolutionRuntime) {
 }
 
 describe("EvolutionV2", () => {
+  it.live("keeps the explicit filesystem compatibility layer read-only by default", () => {
+    const root = tmpEvolutionRoot()
+    createActiveCanary(new EvolutionRuntime({ root, legacyWriteMode: "test-only" }))
+    expect(() =>
+      new EvolutionRuntime({ root }).createCandidate({
+        title: "must not write directly",
+        target: "tool.advice",
+        instruction: "must not write directly",
+        rationale: "compatibility reader",
+        evidenceRefs: ["test:direct-read-only"],
+        createdBy: "user:test",
+      }),
+    ).toThrow("read-only")
+    return Effect.gen(function* () {
+      const evolution = yield* EvolutionV2.Service
+      const prepared = yield* evolution.prepare({ userInput: "inspect", cohortKey: "read-only-cohort" })
+      expect(prepared.activeCandidateIDs.length).toBe(1)
+      expect(prepared.exposureID).toBeUndefined()
+      expect(existsSync(join(root, "exposures"))).toBe(false)
+      expect(
+        String(
+          yield* evolution
+            .createCandidate({
+              title: "must not write",
+              target: "tool.advice",
+              instruction: "must not write",
+              rationale: "compatibility reader",
+              evidenceRefs: ["test:read-only"],
+              createdBy: "user:test",
+            })
+            .pipe(Effect.flip),
+        ),
+      ).toContain("read-only")
+    }).pipe(Effect.provide(evolutionReadLayer(root)))
+  })
+
   it.live("prepares and records an exposure natively without the Python capability boundary", () => {
     const root = tmpEvolutionRoot()
     return Effect.gen(function* () {
-      const runtime = new EvolutionRuntime({ root })
+      const runtime = new EvolutionRuntime({ root, legacyWriteMode: "test-only" })
       createActiveCanary(runtime)
       const evolution = yield* EvolutionV2.Service
 
@@ -71,7 +120,7 @@ describe("EvolutionV2", () => {
   it.live("records a safety incident as an automatic rollback through the service", () => {
     const root = tmpEvolutionRoot()
     return Effect.gen(function* () {
-      const runtime = new EvolutionRuntime({ root })
+      const runtime = new EvolutionRuntime({ root, legacyWriteMode: "test-only" })
       const created = createActiveCanary(runtime)
       const evolution = yield* EvolutionV2.Service
 
@@ -102,7 +151,15 @@ describe("EvolutionV2", () => {
       expect((candidates as Record<string, unknown>).count).toBe(1)
 
       const opportunities = yield* evolution.listOpportunities({
-        evidence: [{ id: "lpat_native_1", type: "failure", description: "syntax failures repeat", frequency: 5, confidence: 0.9 }],
+        evidence: [
+          {
+            id: "lpat_native_1",
+            type: "failure",
+            description: "syntax failures repeat",
+            frequency: 5,
+            confidence: 0.9,
+          },
+        ],
       })
       expect((opportunities as Record<string, unknown>).items).toHaveLength(1)
     }).pipe(Effect.provide(evolutionLayer(root)))

@@ -1,3 +1,4 @@
+import { managementCopy } from "./management-state"
 import { useFilteredList } from "@arforge-ai/ui/hooks"
 import { ProviderIcon } from "@arforge-ai/ui/provider-icon"
 import { Switch } from "@arforge-ai/ui/v2/switch-v2"
@@ -65,6 +66,7 @@ export const SettingsModelsV2: Component = () => {
               variant="ghost-muted"
               size="small"
               class="settings-v2-tab-search-clear"
+              aria-label={managementCopy(language.locale()).clearSearch}
               icon={<IconV2 name="close" size="large" class="text-v2-icon-icon-muted" />}
               onClick={() => list.clear()}
             />
@@ -76,7 +78,7 @@ export const SettingsModelsV2: Component = () => {
         <Show
           when={!list.grouped.loading}
           fallback={
-            <div class="settings-v2-models-status">
+            <div class="settings-v2-models-status" role="status" aria-live="polite">
               {language.t("common.loading")}
               {language.t("common.loading.ellipsis")}
             </div>
@@ -85,7 +87,7 @@ export const SettingsModelsV2: Component = () => {
           <Show
             when={list.flat().length > 0}
             fallback={
-              <div class="settings-v2-models-status">
+              <div class="settings-v2-models-status" role="status" aria-live="polite">
                 <span>{language.t("dialog.model.empty")}</span>
                 <Show when={list.filter()}>
                   <span class="settings-v2-models-status-filter">&quot;{list.filter()}&quot;</span>

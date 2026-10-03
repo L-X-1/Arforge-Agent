@@ -14,9 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from arforge.trust_screen import _auto_trust_enabled, is_workspace_trusted
-
-
 SCHEMA_VERSION = 1
 PROFILE_DIRECTORY = Path(".arforge") / "agents"
 ROLE_PREFIX = "CustomAgent."
@@ -101,15 +98,68 @@ def profile_directory(workspace: str | Path | None = None) -> Path:
     return root / PROFILE_DIRECTORY
 
 
+def _typescript_custom_agents_status(workspace: Path) -> dict[str, Any] | None:
+    """Read custom-agent admission from the canonical TypeScript owner.
+
+    This is intentionally a one-way compatibility boundary.  The Python
+    profile parser may remain importable for migration-era callers, but trust
+    and activation policy must not fork back into a Python state owner.  A
+    bridge failure is fail-closed and never falls back to ``trust_screen``.
+    """
+
+    try:
+        from arforge.cli_compat import invoke
+
+        result = invoke(
+            ["custom-agents", "status", "--workspace", str(workspace), "--json"],
+            cwd=str(workspace),
+            env={
+                # Keep an embedded compatibility probe local and deterministic;
+                # never inherit a live PostgreSQL URL merely to read metadata.
+                "ARFORGE_DB": ":memory:",
+                "ARFORGE_DB_URL": "",
+                "DATABASE_URL": "",
+                "NO_COLOR": "1",
+            },
+            timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        payload = json.loads(result.stdout)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def typescript_workspace_trusted(workspace: str | Path | None = None) -> bool:
+    """Return the TS/Core workspace trust decision through the bridge."""
+
+    root = Path(workspace).resolve() if workspace is not None else Path.cwd().resolve()
+    status = _typescript_custom_agents_status(root)
+    return bool(status and status.get("workspace_trusted") is True)
+
+
+def typescript_custom_agents_status(workspace: str | Path | None = None) -> dict[str, Any] | None:
+    """Expose the payload-free TS custom-agent status for legacy adapters."""
+
+    root = Path(workspace).resolve() if workspace is not None else Path.cwd().resolve()
+    return _typescript_custom_agents_status(root)
+
+
 def custom_agents_enabled(workspace: str | Path | None = None) -> bool:
-    """Require an explicit opt-in as well as established workspace trust."""
+    """Require TS-owned explicit opt-in and workspace trust.
+
+    The compatibility call is metadata-only; it does not execute a profile or
+    register tools.  If the canonical TS CLI cannot be reached, activation is
+    denied rather than silently using the legacy Python trust store.
+    """
+
     enabled = os.getenv("ARFORGE_ENABLE_CUSTOM_AGENTS", "").strip().casefold()
     if enabled not in {"1", "true", "yes", "on"}:
         return False
     root = Path(workspace).resolve() if workspace is not None else Path.cwd().resolve()
-    if workspace is not None:
-        return is_workspace_trusted(root)
-    return _auto_trust_enabled() or is_workspace_trusted(root)
+    status = _typescript_custom_agents_status(root)
+    return bool(status and status.get("enabled") is True and status.get("workspace_trusted") is True)
 
 
 def known_tool_names() -> set[str]:
@@ -257,4 +307,6 @@ __all__ = [
     "load_enabled_custom_agent_profiles",
     "parse_custom_agent_profile",
     "profile_directory",
+    "typescript_custom_agents_status",
+    "typescript_workspace_trusted",
 ]

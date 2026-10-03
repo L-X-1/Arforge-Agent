@@ -1,61 +1,94 @@
 [data-titlebar-vertical-tabs] {
-  --vertical-tabs-width: 208px;
   background: var(--v2-background-bg-deep, transparent);
+  overflow: visible;
 }
 
-/* Tab pill sizing for the vertical rail. */
+/* Tab item base - follows the workspace project row surface and spacing. */
+[data-titlebar-vertical-tabs] [data-titlebar-vertical-tab-item] {
+  position: relative;
+  overflow: visible;
+}
+
 [data-titlebar-vertical-tabs] [data-titlebar-tab] {
   height: 36px;
+  width: 100%;
   border-radius: 10px;
-  padding-inline: 10px;
+  justify-content: center;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--v2-text-text-muted);
+  transition:
+    background-color 160ms ease-out,
+    color 160ms ease-out,
+    box-shadow 160ms ease-out;
 }
 
-[data-titlebar-vertical-tabs] [data-titlebar-tab]:hover {
+[data-titlebar-vertical-tabs] [data-titlebar-tab]:hover,
+[data-titlebar-vertical-tabs] [data-titlebar-tab]:focus-visible {
   background: var(--v2-overlay-simple-overlay-hover);
+  color: var(--v2-text-text-base);
+  outline: none;
 }
 
 [data-titlebar-vertical-tabs] [data-titlebar-tab][data-active="true"] {
-  background: var(--v2-overlay-simple-overlay-active);
+  background: var(--v2-overlay-simple-overlay-pressed);
+  color: var(--v2-text-text-base);
+  box-shadow: inset 0 0 0 0.5px var(--v2-border-border-muted);
 }
 
-/* Active accent bar at the rail's left edge. */
-[data-titlebar-vertical-tabs] [data-titlebar-tab-slot] {
-  position: relative;
-}
-
-[data-titlebar-vertical-tabs]
-  [data-titlebar-tab-slot][data-active="true"]::before {
+/* Active accent bar at the rail's left edge */
+[data-titlebar-vertical-tabs] [data-titlebar-vertical-tab-item]::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: -4px;
   top: 50%;
   translate: 0 -50%;
   width: 3px;
-  height: 18px;
+  height: 0;
   border-radius: 0 3px 3px 0;
   background: var(--v2-icon-icon-accent);
+  transition: height 150ms ease;
 }
 
-/* Collapsed rail: icons only, centered. */
-[data-titlebar-vertical-tabs][data-collapsed="true"] {
-  --vertical-tabs-width: 52px;
+[data-titlebar-vertical-tabs] [data-titlebar-vertical-tab-item][data-active="true"]::before {
+  height: 18px;
 }
 
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-title"],
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-close"],
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-new-label"] {
-  display: none;
+/* Floating panel */
+[data-vertical-tab-float] {
+  animation: vertical-tab-float-in 150ms ease-out;
 }
 
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-titlebar-tab],
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="tab-link"] {
+@keyframes vertical-tab-float-in {
+  from {
+    opacity: 0;
+    translate: -4px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+/* Scroll container must allow overflow */
+[data-slot="vertical-tabs-scroll"] {
+  overflow-x: visible !important;
+}
+
+/* Header and footer icon buttons */
+[data-titlebar-vertical-tabs] [data-slot="vertical-tabs-header"] .IconButtonV2,
+[data-titlebar-vertical-tabs] [data-slot="vertical-tabs-header"] button {
   justify-content: center;
-  padding: 0;
-  gap: 0;
 }
 
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-header"],
-[data-titlebar-vertical-tabs][data-collapsed="true"] [data-slot="vertical-tabs-new"] {
-  justify-content: center;
-  padding-inline: 0;
+/* View switch in narrow rail */
+[data-titlebar-vertical-tabs] [data-component="titlebar-view-switch"] {
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-titlebar-vertical-tabs] [data-component="titlebar-view-switch"] button {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
 }

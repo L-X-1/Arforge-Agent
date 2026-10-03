@@ -17,6 +17,31 @@ export const WarpPayload = Schema.Struct({
   copyChanges: Workspace.SessionWarpInput.fields.copyChanges,
 })
 
+/**
+ * The only HTTP payload accepted by the workspace-root control adapter.
+ * State arrays, profile paths and authorization receipts are deliberately
+ * absent: the server reconstructs them from the Core owner immediately
+ * before the ActionGateway boundary.
+ */
+export const RootMutationPayload = Schema.Struct({
+  action: Schema.Literals(["trust", "add", "remove"]),
+  target: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(32_768)),
+})
+
+const RootMutationDigest = Schema.Struct({
+  trusted: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  configured: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+})
+
+export const RootMutationResult = Schema.Struct({
+  status: Schema.Literals(["committed", "noop"]),
+  action: Schema.Literals(["trust", "add", "remove"]),
+  intentDigest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+  before: RootMutationDigest,
+  after: RootMutationDigest,
+  rollbackArtifactID: Schema.optional(Schema.String),
+})
+
 export class ApiWorkspaceWarpError extends Schema.ErrorClass<ApiWorkspaceWarpError>("WorkspaceWarpError")(
   {
     name: Schema.Literal("WorkspaceWarpError"),
@@ -37,11 +62,27 @@ export class ApiWorkspaceCreateError extends Schema.ErrorClass<ApiWorkspaceCreat
   { httpApiStatus: 400 },
 ) {}
 
+export class ApiWorkspaceRootMutationError extends Schema.ErrorClass<ApiWorkspaceRootMutationError>(
+  "WorkspaceRootMutationError",
+)(
+  {
+    name: Schema.Literal("WorkspaceRootMutationError"),
+    data: Schema.Struct({
+      message: Schema.String,
+      reason: Schema.String,
+      owner: Schema.Literal("typescript-core-workspace-root-writer"),
+      blocking: Schema.Array(Schema.String),
+    }),
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export const WorkspacePaths = {
   adapters: `${root}/adapter`,
   list: root,
   syncList: `${root}/sync-list`,
   status: `${root}/status`,
+  rootMutation: `${root}/root-mutation`,
   remove: `${root}/:id`,
   warp: `${root}/warp`,
 } as const
@@ -79,7 +120,8 @@ export const WorkspaceApi = HttpApi.make("workspace")
           OpenApi.annotations({
             identifier: "experimental.workspace.create",
             summary: "Create workspace",
-            description: "Create a workspace for the current project.",
+            description:
+              "Create a workspace. The legacy Worktree adapter is disabled until it uses the control-plane Action Gateway.",
           }),
         ),
         HttpApiEndpoint.post("syncList", WorkspacePaths.syncList, {
@@ -102,6 +144,19 @@ export const WorkspaceApi = HttpApi.make("workspace")
             description: "Get connection status for workspaces in the current project.",
           }),
         ),
+        HttpApiEndpoint.post("rootMutation", WorkspacePaths.rootMutation, {
+          query: WorkspaceRoutingQuery,
+          payload: RootMutationPayload,
+          success: described(RootMutationResult, "Workspace root mutation committed"),
+          error: ApiWorkspaceRootMutationError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workspace.rootMutation",
+            summary: "Mutate workspace roots",
+            description:
+              "Mutate trusted/configured workspace roots through the single TypeScript/Core ActionGateway writer. The route fails closed while production writer gates are incomplete and never falls back to Python.",
+          }),
+        ),
         HttpApiEndpoint.delete("remove", WorkspacePaths.remove, {
           params: { id: Workspace.Info.fields.id },
           query: WorkspaceRoutingQuery,
@@ -111,7 +166,8 @@ export const WorkspaceApi = HttpApi.make("workspace")
           OpenApi.annotations({
             identifier: "experimental.workspace.remove",
             summary: "Remove workspace",
-            description: "Remove an existing workspace.",
+            description:
+              "Remove a workspace. Legacy Worktree adapter removal is disabled until it uses the control-plane Action Gateway.",
           }),
         ),
         HttpApiEndpoint.post("warp", WorkspacePaths.warp, {

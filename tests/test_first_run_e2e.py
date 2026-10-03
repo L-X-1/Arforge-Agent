@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -53,22 +54,34 @@ def test_onboarding_rejects_multiline_environment_values(monkeypatch, tmp_path):
     assert not (tmp_path / ".env").exists()
 
 
-def test_non_tty_entry_fails_closed(monkeypatch, capsys):
-    import arforge.trust_screen as trust
+def test_non_tty_entry_fails_closed(monkeypatch):
+    from arforge.cli_compat import invoke
 
-    monkeypatch.delenv("ARFORGE_TRUST_WORKSPACE", raising=False)
-    monkeypatch.setattr(trust.sys.stdin, "isatty", lambda: False)
-
-    assert trust.show_entry_screen("en") is False
-    assert "requires workspace trust" in capsys.readouterr().err
+    monkeypatch.setenv("ARFORGE_TRUST_WORKSPACE", "")
+    result = invoke(
+        ["custom-agents", "status", "--workspace", str(Path.cwd()), "--json"],
+        cwd=str(Path.cwd()),
+        env={"ARFORGE_TRUST_WORKSPACE": "", "ARFORGE_DB": ":memory:", "ARFORGE_DB_URL": "", "DATABASE_URL": ""},
+        timeout=15,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["workspace_trusted"] is False
+    assert payload["enabled"] is False
 
 
 def test_non_tty_entry_allows_explicit_trust(monkeypatch, tmp_path):
-    import arforge.trust_screen as trust
-
     monkeypatch.setenv("ARFORGE_TRUST_WORKSPACE", "1")
-    monkeypatch.setattr(trust, "_trust_file", lambda: tmp_path / "trusted.json")
-    monkeypatch.setattr(trust.sys.stdin, "isatty", lambda: False)
+    from arforge.cli_compat import invoke
 
-    assert trust.show_entry_screen("en") is True
-    assert trust.is_workspace_trusted()
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    result = invoke(
+        ["custom-agents", "status", "--workspace", str(workspace), "--json"],
+        cwd=str(workspace),
+        env={"ARFORGE_TRUST_WORKSPACE": "1", "ARFORGE_DB": ":memory:", "ARFORGE_DB_URL": "", "DATABASE_URL": ""},
+        timeout=15,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["workspace_trusted"] is True

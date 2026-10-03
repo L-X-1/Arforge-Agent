@@ -1,6 +1,8 @@
 import type { DesktopMenuAction } from "@arforge-ai/app/desktop-menu"
+import type { BrowserWorkbenchPlatform } from "@arforge-ai/app/browser-workbench"
 import type { WslServersPlatform } from "@arforge-ai/app/wsl/types"
 import type { UpdaterState } from "@arforge-ai/app/updater"
+import type { NativeActionReceipt } from "@arforge-ai/core/runtime/native-action"
 export type {
   WslDistroProbe,
   WslInstalledDistro,
@@ -42,6 +44,7 @@ export type FatalRendererError = {
 }
 
 export type ElectronAPI = {
+  browserWorkbench?: BrowserWorkbenchPlatform
   killSidecar: () => Promise<void>
   installCli: () => Promise<string>
   awaitInitialization: () => Promise<ServerReadyData>
@@ -70,6 +73,7 @@ export type ElectronAPI = {
   getWindowID: () => Promise<string>
   onMenuCommand: (cb: (id: string) => void) => () => void
   onDeepLink: (cb: (urls: string[]) => void) => () => void
+  onNativeActionReceipt: (cb: (receipt: NativeActionReceipt) => void) => () => void
 
   openDirectoryPicker: (opts?: {
     multiple?: boolean

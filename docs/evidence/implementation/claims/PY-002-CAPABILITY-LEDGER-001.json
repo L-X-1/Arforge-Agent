@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "claim_id": "PY-002-CAPABILITY-LEDGER-001",
+  "owner": "manual-dispatcher-bootstrap",
+  "version": 1,
+  "status": "REVIEW_PENDING",
+  "pre_review_whitelist": true,
+  "protocol_manifest": "docs/evidence/implementation/protocol-bootstrap.v1.json",
+  "protocol_manifest_digest": "a70a44a21c84dcffa742189689fa1a269f6256df5a968e586d1b72e19706acd8",
+  "owner_registry": "docs/evidence/implementation/owner-registry.v1.json",
+  "owner_registry_digest": "e0bad19c5d32739f9214c112f3cef6c031a150a991d934a5fbd03bd0f8991a48",
+  "baseline_manifest": "docs/evidence/implementation/bootstrap/baseline-dirty-manifest.v1.json",
+  "allowed_paths": [
+    "arforge/**/*.py",
+    "docs/evidence/implementation/legacy-python-capabilities.json",
+    "docs/evidence/implementation/legacy-python-files.json",
+    "docs/evidence/implementation/attestations/python-ledger.v1.sha256",
+    "docs/evidence/implementation/cards/PY-002-CAPABILITY-LEDGER-001.md",
+    "docs/evidence/implementation/claims/PY-002-CAPABILITY-LEDGER-001.json",
+    "docs/evidence/implementation/state.json",
+    "script/arforge-python-ledger.ts",
+    "script/arforge-python-ledger.test.ts",
+    "script/bunfig.toml"
+  ],
+  "forbidden_paths": [
+    "packages/*",
+    "packages/agent-python/*",
+    "arforge/**/*.py write",
+    "commit/push/PR/release paths"
+  ],
+  "created_from_source_revision": "92b769b95f3ebecc5b3e2d5689cf3c6cbce98fd8",
+  "artifact_digest": "5145d14d9926490be057dbf2c01a842d8fd134a08e8c0c5d28bac95f75aaaaee",
+  "card_digest": "f219a39943a72ffbb6a645b0a5ce129892621287c94f453b9a1c48242d5ebde3"
+}

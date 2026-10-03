@@ -149,6 +149,110 @@ describe("plugin.codex", () => {
     await enabled.dispose?.()
   })
 
+  test("scopes Codex request parameters and identity headers to OpenAI OAuth", async () => {
+    const hooks = await CodexAuthPlugin({} as never)
+    const input = {
+      sessionID: "session-auth-scope",
+      agent: "build",
+      model: { providerID: "openai" },
+    } as never
+
+    await hooks.auth!.loader!(async () => ({ type: "api", key: "sk-test" }) as never, {} as never)
+    const apiParams = { maxOutputTokens: 32_000 }
+    const apiHeaders = { headers: {} as Record<string, string> }
+    await hooks["chat.params"]!(input, apiParams as never)
+    await hooks["chat.headers"]!(input, apiHeaders)
+    expect(apiParams.maxOutputTokens).toBe(32_000)
+    expect(apiHeaders.headers).toEqual({})
+
+    await hooks.auth!.loader!(
+      async () => ({ type: "oauth", refresh: "refresh", access: "access", expires: Date.now() + 60_000 }) as never,
+      {} as never,
+    )
+    const oauthParams: { maxOutputTokens: number | undefined } = { maxOutputTokens: 32_000 }
+    const oauthHeaders = { headers: {} as Record<string, string> }
+    await hooks["chat.params"]!(input, oauthParams as never)
+    await hooks["chat.headers"]!(input, oauthHeaders)
+    expect(oauthParams.maxOutputTokens).toBeUndefined()
+    expect(oauthHeaders.headers).toMatchObject({
+      originator: "arforge",
+      "session-id": "session-auth-scope",
+      "User-Agent": expect.stringContaining("arforge/"),
+    })
+
+    const otherProviderParams = { maxOutputTokens: 16_000 }
+    await hooks["chat.params"]!(
+      {
+        sessionID: "session-auth-scope",
+        agent: "build",
+        model: { providerID: "anthropic" },
+      } as never,
+      otherProviderParams as never,
+    )
+    expect(otherProviderParams.maxOutputTokens).toBe(16_000)
+  })
+
+  test("preserves API authorization after an OAuth transport becomes stale", async () => {
+    let request: { path: string; authorization: string | null } | undefined
+    using server = Bun.serve({
+      port: 0,
+      fetch(input) {
+        request = {
+          path: new URL(input.url).pathname,
+          authorization: input.headers.get("authorization"),
+        }
+        return new Response("{}")
+      },
+    })
+    let auth = {
+      type: "oauth" as "oauth" | "api",
+      refresh: "refresh",
+      access: "oauth-access",
+      expires: Date.now() + 60_000,
+    }
+    const hooks = await CodexAuthPlugin({} as never, {
+      codexApiEndpoint: new URL("/codex", server.url).toString(),
+    })
+    const loaded = await hooks.auth!.loader!(async () => auth as never, {} as never)
+
+    auth = { ...auth, type: "api" }
+    await loaded.fetch!(new URL("/v1/responses", server.url), {
+      headers: { Authorization: "Bearer sk-current" },
+    })
+
+    expect(request).toEqual({ path: "/v1/responses", authorization: "Bearer sk-current" })
+  })
+
+  test("redirects only exact OpenAI generation routes to the Codex endpoint", async () => {
+    const requests: Array<{ path: string; authorization: string | null }> = []
+    using server = Bun.serve({
+      port: 0,
+      fetch(input) {
+        requests.push({
+          path: new URL(input.url).pathname,
+          authorization: input.headers.get("authorization"),
+        })
+        return new Response("{}")
+      },
+    })
+    const hooks = await CodexAuthPlugin({} as never, {
+      codexApiEndpoint: new URL("/codex", server.url).toString(),
+    })
+    const loaded = await hooks.auth!.loader!(
+      async () =>
+        ({ type: "oauth", refresh: "refresh", access: "oauth-access", expires: Date.now() + 60_000 }) as never,
+      {} as never,
+    )
+
+    await loaded.fetch!(new URL("/proxy/v1/responses/metadata", server.url))
+    await loaded.fetch!(new URL("/v1/responses", server.url))
+
+    expect(requests).toEqual([
+      { path: "/proxy/v1/responses/metadata", authorization: "Bearer oauth-access" },
+      { path: "/codex", authorization: "Bearer oauth-access" },
+    ])
+  })
+
   test("filters unsupported modes and uses Codex context limits for OAuth GPT models", async () => {
     const hooks = await CodexAuthPlugin({} as never)
     const limit = { context: 1_050_000, input: 922_000, output: 128_000 }

@@ -64,6 +64,34 @@ test("transitions shell and question through running error outcomes", async ({ p
   await expect(page.locator(`[data-timeline-part-id="${questionID}"]`)).toContainText(/dismissed/i)
 })
 
+test("explains a guarded file conflict with a readable retry path", async ({ page }) => {
+  const partID = "prt_file_conflict"
+  await setupTimeline(page, {
+    messages: [
+      userMessage(),
+      assistantMessage([
+        toolPart(partID, "edit", "error", { filePath: "src/example.ts" }, {
+          error: "File changed after permission approval. Read it again before editing.",
+          metadata: {
+            kind: "file_conflict",
+            code: "observed_version_mismatch",
+            path: "src/example.ts",
+            observedVersion: "a".repeat(64),
+            currentVersion: "b".repeat(64),
+          },
+        }),
+      ]),
+    ],
+  })
+
+  const card = page.locator(`[data-timeline-part-id="${partID}"] [data-kind="tool-error-card"]`)
+  await expect(card).toContainText("File changed after approval")
+  await card.getByRole("button").click()
+  await expect(card).toContainText("Read the file again")
+  await expect(card).toContainText("src/example.ts")
+  await expect(card).toContainText("Observed")
+})
+
 test("labels all web search provider variants", async ({ page }) => {
   const parts = [
     toolPart(

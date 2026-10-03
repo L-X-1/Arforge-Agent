@@ -1,13 +1,16 @@
 export * as PrimaryDelivery from "./primary-delivery"
 
 import { Schema } from "effect"
-import { DateTimeUtcFromMillis, NonNegativeInt } from "./schema"
+import { AgentRuntime } from "./agent-runtime"
+import { DateTimeUtcFromMillis, NonNegativeInt, optional } from "./schema"
 
 export const Status = Schema.Literals(["normal", "proactive"])
 export type Status = typeof Status.Type
 
 export const Artifact = Schema.Struct({
   artifactID: Schema.String,
+  /** Storage-safe receipt; `path` remains a local-only compatibility projection. */
+  artifactRef: Schema.suspend(() => AgentRuntime.OpaqueArtifactRef).pipe(optional),
   path: Schema.String,
   displayName: Schema.String,
   mime: Schema.String,

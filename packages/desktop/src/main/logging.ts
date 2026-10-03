@@ -1,11 +1,12 @@
 import { MainLogger } from "electron-log"
 import log from "electron-log/main.js"
-import { app, crashReporter, netLog, shell } from "electron"
+import { app, crashReporter, netLog, shell, webContents } from "electron"
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { ZipWriter, BlobWriter, BlobReader } from "@zip.js/zip.js"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 import { configureConsoleTransport } from "./logging-console"
+import { captureRendererConsole } from "./logging-renderer"
 
 const MAX_LOG_AGE_DAYS = 7
 const TAIL_LINES = 1000
@@ -18,6 +19,7 @@ let run = ""
 let netLogPath: string | undefined
 
 let logger: MainLogger
+let stopRendererConsole: (() => void) | undefined
 export const getLogger = () => logger
 
 export function initLogging() {
@@ -28,8 +30,19 @@ export function initLogging() {
       run,
       `${safeLogName(message?.scope ?? (message?.variables?.processType === "renderer" ? "renderer" : "main"))}.log`,
     )
-  log.initialize({ preload: false, spyRendererConsole: true })
+  log.initialize({ preload: false, spyRendererConsole: false })
   configureConsoleTransport(log.transports.console, app.isPackaged)
+  if (!stopRendererConsole) {
+    stopRendererConsole = captureRendererConsole({
+      app,
+      contents: () => webContents.getAllWebContents(),
+      write: (message) => log.processMessage(message),
+    })
+    app.once("will-quit", () => {
+      stopRendererConsole?.()
+      stopRendererConsole = undefined
+    })
+  }
   cleanup()
   return (logger = log)
 }

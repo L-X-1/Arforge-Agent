@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "Cambios de la sesión",
   "ui.sessionReview.title.git": "Cambios de Git",
   "ui.sessionReview.title.branch": "Cambios de la rama",
@@ -95,6 +98,7 @@ export const dict = {
 
   "ui.messagePart.questions.dismissed": "Preguntas descartadas",
   "ui.messagePart.compaction": "Sesión compactada",
+  "ui.messagePart.reasoningSummary": "Resumen del razonamiento",
   "ui.messagePart.context.read.one": "{{count}} lectura",
   "ui.messagePart.context.read.other": "{{count}} lecturas",
   "ui.messagePart.context.search.one": "{{count}} búsqueda",

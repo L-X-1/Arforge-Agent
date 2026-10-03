@@ -43,10 +43,7 @@ const target = fixture.sessions.find((session) => session.id === fixture.targetI
 const lastID = userID
 const lastAssistant = assistants.at(-1)!
 const lastPart = lastAssistant.parts.at(-1)!
-const lastPartID =
-  lastPart.type === "tool"
-    ? lastPart.id
-    : `${lastAssistant.info.id}:${lastPart.type}:${lastAssistant.parts.filter((part) => part.type === lastPart.type).length - 1}`
+const lastPartID = lastPart.id
 
 benchmark("hydrates an orphaned latest turn after a cold session click", async ({ browser, report }, testInfo) => {
   benchmark.setTimeout(180_000)

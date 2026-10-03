@@ -26,6 +26,7 @@ describe("hasNonBlockingServiceIssue", () => {
     expect(hasNonBlockingServiceIssue({ mcp: ["failed"], lsp: [] })).toBe(true)
     expect(hasNonBlockingServiceIssue({ mcp: ["needs_auth"], lsp: [] })).toBe(true)
     expect(hasNonBlockingServiceIssue({ mcp: ["needs_client_registration"], lsp: [] })).toBe(true)
+    expect(hasNonBlockingServiceIssue({ mcp: ["needs_approval"], lsp: [] })).toBe(true)
     expect(hasNonBlockingServiceIssue({ mcp: ["connected", "pending", "disabled"], lsp: [] })).toBe(false)
   })
 

@@ -1,0 +1,26 @@
+R05 automatic title formal-entry revalidation (2026-09-15)
+
+Conclusion:
+  - The current TS/Core formal session path schedules a durable session-title BackgroundJob.
+  - The job uses ActionGateway + RequestEnvelope + TitleGeneration and persists TitleGenerated.
+  - Replay requires matching session/assistant/tool identity, expected default title, and settled receipt; it does not call the Provider again.
+  - Strict billed runs remain fail-closed because a persisted maintenance-budget/settlement owner is not implemented yet.
+
+Tests:
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/session/prompt.test.ts -t "Formal first user turn generates a title for a default-title session" --rerun-every
+  result: 1 pass / 0 fail / 18 assertions / exit 0
+
+  command: D:\\bun\\bin\\bun.exe test --timeout 60000 test/session/prompt.test.ts -t "title" --rerun-every
+  result: 28 pass / 0 fail / 258 assertions / exit 0
+
+Covered:
+  - credential version fences, user-defined/default-title protection
+  - idle wake and fresh-process title projection
+  - explicit/small/automatic/disabled title configuration
+  - empty output, missing usage, provider/persistence failure, cancel/rename races
+  - root/child session behavior and text/image attachment inputs
+
+Open:
+  - strict billing maintenance budget and settlement
+  - remaining R05 unique-loop/legacy-adapter/child-task/recovery/user-journey gates
+  - external Provider matrix and full OS sandbox (post-R30)

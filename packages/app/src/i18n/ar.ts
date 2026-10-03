@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "command.category.suggested": "مقترح",
   "command.category.view": "عرض",
   "command.category.project": "مشروع",
@@ -294,6 +297,8 @@ export const dict = {
   "mcp.status.connected": "متصل",
   "mcp.status.failed": "فشل",
   "mcp.status.needs_auth": "يحتاج إلى مصادقة",
+  "mcp.status.needs_client_registration": "يتطلب تسجيل العميل",
+  "mcp.status.needs_approval": "يتطلب موافقة",
   "mcp.auth.clickToAuthenticate": "انقر للمصادقة",
   "mcp.status.disabled": "معطل",
   "dialog.fork.empty": "لا توجد رسائل للتفرع منها",
@@ -1225,7 +1230,7 @@ export const dict = {
   "controlCenter.m174": "استعادة",
   "controlCenter.m175": "تاريخ التشغيل المستمر",
   "controlCenter.m176":
-    "اقرأ عناصر المعاملات والتتبع والرسائل الخاصة بـ Python Core من خلال Server API المشترك المكتوب. التقارير للقراءة فقط وتظل مملوكة لمصدر استمراري واحد.",
+    "اقرأ عناصر المعاملات والتتبع والرسائل الخاصة بـ Arforge Core من خلال Server API المشترك المكتوب. التقارير للقراءة فقط وتظل مملوكة لمصدر استمراري واحد.",
   "controlCenter.m177": "الحد",
   "controlCenter.m178": "تحديث",
   "controlCenter.m179": "الملفات ·",
@@ -1276,6 +1281,19 @@ export const dict = {
   "controlCenter.m222": "خطأ غير معروف في التشخيص العميق",
   "controlCenter.m223": "التطور الخاضع للحوكمة",
   "controlCenter.m225": "Runtime Insight",
-  "controlCenter.m226": "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
-  "controlCenter.m224": "راجع مرشحي السياسات المستندين إلى أدلة التعلم، واضبط تغييرات القدرات عبر التقييم المعزول والموافقة البشرية والإطلاق التدريجي والتراجع.",
+  "controlCenter.m226":
+    "Visualization of context layer compilation, model routing decisions, independent verification, audit chain, and run state.",
+  "controlCenter.m224":
+    "راجع مرشحي السياسات المستندين إلى أدلة التعلم، واضبط تغييرات القدرات عبر التقييم المعزول والموافقة البشرية والإطلاق التدريجي والتراجع.",
+  "controlCenter.m227": "Personal Workspace",
+  "controlCenter.m228": "Unified safe view of Project, Location, Session, Task, Run, and background jobs.",
+  "controlCenter.m229": "Security",
+  "controlCenter.m230": "Signature",
+  "controlCenter.m231": "Permissions",
+  "controlCenter.m232": "Egress",
+  "controlCenter.m233": "Secrets",
+  "controlCenter.m234": "Compatibility",
+  "controlCenter.m235": "Security findings",
+  "controlCenter.m236": "Plugin changes create a durable ControlRun and require fresh human approval.",
+  "controlCenter.m237": "Plugin candidate is blocked by the security contract.",
 }

@@ -1,7 +1,7 @@
 # Arforge-Agent fusion architecture audit
 
 This document defines the source-level acceptance boundary for the unified
-private product in `E:\Arforge-Agent`. It deliberately does not treat release
+private product in `%ARFORGE_REPO%`. It deliberately does not treat release
 packaging, signing, publishing, hosted documentation or public deployment as
 requirements.
 
@@ -25,7 +25,7 @@ the owner approves their exact deletion list.
 Run:
 
 ```powershell
-cd E:\Arforge-Agent
+cd %ARFORGE_REPO%
 .\.tools\bun-1.3.14\bun.exe run fusion:audit
 ```
 

@@ -7,6 +7,19 @@ import { LocationQuery, locationQueryOpenApi } from "./location"
 
 export const ModelGroup = HttpApiGroup.make("server.model")
   .add(
+    HttpApiEndpoint.get("model.default", "/api/model/default", {
+      query: LocationQuery,
+      success: Location.response(Schema.NullOr(Model.Info)),
+      error: ServiceUnavailableError,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.model.default",
+          summary: "Get default model",
+          description: "Retrieve the default available model, or null when no model is available.",
+        }),
+      ),
     HttpApiEndpoint.get("model.list", "/api/model", {
       query: LocationQuery,
       success: Location.response(Schema.Array(Model.Info)),

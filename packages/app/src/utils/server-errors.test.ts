@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionNotFoundError } from "@arforge-ai/sdk/v2/client"
 import type { ConfigInvalidError, ProviderModelNotFoundError } from "./server-errors"
-import { formatServerError, isSessionNotFoundError, parseReadableConfigInvalidError } from "./server-errors"
+import {
+  formatServerError,
+  isClientClosedRequestError,
+  isSessionNotFoundError,
+  parseReadableConfigInvalidError,
+} from "./server-errors"
 
 function fill(text: string, vars?: Record<string, string | number>) {
   if (!vars) return text
@@ -171,5 +176,25 @@ describe("isSessionNotFoundError", () => {
         "ses_tab",
       ),
     ).toBe(false)
+  })
+})
+
+describe("isClientClosedRequestError", () => {
+  test("matches the generated client status cause", () => {
+    expect(isClientClosedRequestError(new Error("UnexpectedStatus", { cause: { status: 499 } }))).toBe(true)
+    expect(isClientClosedRequestError({ statusCode: "499" })).toBe(true)
+  })
+
+  test("matches the SDK interceptor message", () => {
+    expect(
+      isClientClosedRequestError(
+        new Error("arforge server GET http://127.0.0.1:1234/agent → 499 unknown: (empty response body)"),
+      ),
+    ).toBe(true)
+  })
+
+  test("does not hide other server failures", () => {
+    expect(isClientClosedRequestError(new Error("arforge server GET /agent → 500 unknown"))).toBe(false)
+    expect(isClientClosedRequestError({ status: 408, message: "request timed out" })).toBe(false)
   })
 })

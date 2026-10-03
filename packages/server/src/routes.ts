@@ -25,8 +25,27 @@ import { PtyEnvironment } from "./pty-environment"
 import { layer as locationLayer } from "./location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { UserAuth } from "./user-auth"
+import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
+import { ControlClaimIndex } from "@arforge-ai/core/runtime"
+import { SubagentControl } from "@arforge-ai/core/runtime/subagent-control"
+import { SubagentControlRecovery } from "@arforge-ai/core/runtime/subagent-control-recovery"
+import { RuntimeInvariants } from "@arforge-ai/core/runtime"
+import { DurableAction } from "@arforge-ai/core/runtime/durable-action"
+import { PersonalJobV2 } from "@arforge-ai/core/personal-job"
+import { PersonalJobExecutor } from "@arforge-ai/core/personal-job-executor"
+import { IdentityContext } from "./identity-context"
+import { node as tenantPlatformNode } from "@arforge-ai/core/tenant-platform"
+import { node as artifactMaintenanceScanNode } from "@arforge-ai/core/runtime/artifact-maintenance-scan"
+import { node as profileMaintenanceLifecycleNode } from "@arforge-ai/core/runtime/profile-maintenance-lifecycle"
+import { node as rollbackArtifactNode } from "@arforge-ai/core/runtime/rollback-artifact"
 
-const applicationServices = LayerNode.group([
+/**
+ * Complete service graph required by the HTTP route layer.  Consumers that
+ * embed `createRoutes` (the CLI server is one) must provide this same graph;
+ * maintaining a smaller hand-written subset causes new route services to leak
+ * into handler environments and makes the composition fail only at runtime.
+ */
+export const applicationServices = LayerNode.group([
   Database.node,
   EventV2.node,
   httpClient,
@@ -39,6 +58,18 @@ const applicationServices = LayerNode.group([
   Credential.node,
   PtyEnvironment.node,
   LocationServiceMap.node,
+  DurableRun.node,
+  ControlClaimIndex.node,
+  SubagentControl.node,
+  SubagentControlRecovery.node,
+  RuntimeInvariants.node,
+  DurableAction.node,
+  artifactMaintenanceScanNode,
+  profileMaintenanceLifecycleNode,
+  rollbackArtifactNode,
+  PersonalJobV2.node,
+  PersonalJobExecutor.node,
+  tenantPlatformNode,
 ])
 
 export function createRoutes(password?: string) {
@@ -65,6 +96,14 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
     Layer.provide(schemaErrorLayer),
     Layer.provide(auth),
     Layer.provide(UserAuth.Config.layer),
+    // Handler effects may reference the request identity directly. Authorization
+    // replaces this fallback per request after authentication; the fallback keeps
+    // the assembled server layer total for private/basic-auth routes.
+    Layer.provide(Layer.succeed(IdentityContext.Current, IdentityContext.LocalPrincipal)),
+    // Control claims are request-scoped.  Keep the long-lived application layer
+    // total with an explicit empty fallback; the subagent-control handler
+    // supplies the authenticated principal around each claim operation.
+    Layer.provide(Layer.succeed(ControlClaimIndex.CurrentPrincipal, undefined)),
     Layer.provide(serviceLayer),
   )
 }

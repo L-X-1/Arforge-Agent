@@ -1,4 +1,7 @@
+import { dict as en } from "./en"
+
 export const dict = {
+  ...en,
   "ui.sessionReview.title": "การเปลี่ยนแปลงเซสชัน",
   "ui.sessionReview.title.git": "การเปลี่ยนแปลงใน Git",
   "ui.sessionReview.title.branch": "การเปลี่ยนแปลงในสาขา",
@@ -96,6 +99,7 @@ export const dict = {
 
   "ui.messagePart.questions.dismissed": "ละทิ้งคำถามแล้ว",
   "ui.messagePart.compaction": "บีบอัดเซสชันแล้ว",
+  "ui.messagePart.reasoningSummary": "สรุปการให้เหตุผล",
   "ui.messagePart.context.read.one": "อ่าน {{count}} รายการ",
   "ui.messagePart.context.read.other": "อ่าน {{count}} รายการ",
   "ui.messagePart.context.search.one": "ค้นหา {{count}} รายการ",

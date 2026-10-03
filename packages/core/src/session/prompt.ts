@@ -1,1 +1,8 @@
-export { AgentAttachment, FileAttachment, Prompt, Source } from "@arforge-ai/schema/prompt"
+export {
+  AgentAttachment,
+  FileAttachment,
+  Prompt,
+  RequestSystem,
+  ScheduledTask,
+  Source,
+} from "@arforge-ai/schema/prompt"

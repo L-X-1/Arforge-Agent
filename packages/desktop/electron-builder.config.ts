@@ -70,6 +70,11 @@ const getBase = (appId: string): Configuration => ({
   files: [
     "out/**/*",
     "resources/**/*",
+    // These ignored directories can remain on a developer machine after the
+    // retired Python bridge migration. Exclude them explicitly so a stale
+    // local build can never leak the old runtime back into a desktop package.
+    "!resources/agent-python-dist/**/*",
+    "!resources/.agent-python-build/**/*",
     // @arforge-ai/core is compiled into out/main. Leaving its TypeScript source in
     // app.asar both bloats the package and makes an accidental runtime import fail
     // with ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING.

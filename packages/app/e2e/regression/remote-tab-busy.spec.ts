@@ -54,6 +54,8 @@ function session(id: string, directory: string, title: string) {
 async function mockServers(page: Page) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url())
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: corsHeaders(route) })
+    if (url.pathname === "/auth/session") return json(route, { authenticated: true, mode: "private" })
     if (url.origin !== serverA && url.origin !== serverB) return route.fallback()
     const current = url.origin === serverA ? sessionA : sessionB
     const directory = url.searchParams.get("directory")
@@ -62,6 +64,14 @@ async function mockServers(page: Page) {
       return sse(route, url.pathname === "/api/event")
     if (url.pathname === "/global/health") return json(route, {}, 404)
     if (url.pathname === "/api/health") return json(route, { pid: 1 })
+    if (["/api/provider", "/api/model", "/api/agent"].includes(url.pathname))
+      return json(route, { location: { directory: current.directory }, data: [] })
+    if (url.pathname === "/api/model/default") return json(route, { location: { directory: current.directory }, data: null })
+    if (["/api/command", "/api/reference", "/api/permission/request", "/api/question/request"].includes(url.pathname))
+      return json(route, { location: { directory: current.directory }, data: [] })
+    if (url.pathname === "/api/mcp") return json(route, { location: { directory: current.directory }, data: [] })
+    if (url.pathname === "/api/mcp/resource")
+      return json(route, { location: { directory: current.directory }, data: { resources: [], templates: [] } })
     if (url.pathname === "/api/session/active")
       return json(route, { data: url.origin === serverB ? { [sessionB.id]: { type: "running" } } : {} })
     if (url.pathname === "/api/session") return json(route, { data: [currentSession(current)], cursor: {} })
@@ -117,9 +127,20 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
     contentType: "application/json",
-    headers: { "access-control-allow-origin": "*" },
+    headers: corsHeaders(route),
     body: JSON.stringify(body),
   })
+}
+
+function corsHeaders(route: Route) {
+  const origin = route.request().headers().origin
+  return {
+    "access-control-allow-origin": origin ?? "*",
+    ...(origin ? { "access-control-allow-credentials": "true", vary: "Origin" } : {}),
+    "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers":
+      route.request().headers()["access-control-request-headers"] ?? "authorization,content-type,x-arforge-directory",
+  }
 }
 
 function sse(route: Route, current: boolean) {

@@ -1,0 +1,12 @@
+Command: bun test test/session/prompt.test.ts --timeout 30000 --test-name-pattern "Formal abandons an inspected unknown request without replay"
+Working directory: E:/Arforge-Agent/packages/arforge
+Exit: 0
+Runtime: Bun 1.3.14
+
+(pass) Formal abandons an inspected unknown request without replay and accepts only new input afterward [4126.02ms]
+
+1 pass
+200 filtered out
+0 fail
+25 expect() calls
+Ran 1 test across 1 file. [7.52s]

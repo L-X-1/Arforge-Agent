@@ -3,6 +3,7 @@ import type { ElectronAPI, WslServersEvent } from "./types"
 import type { UpdaterState } from "@arforge-ai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
+let browserLayoutSequence = 0
 let updaterState: UpdaterState | undefined
 let updaterSubscription: Promise<void> | undefined
 const updaterHandler = (_: unknown, state: UpdaterState) => {
@@ -11,6 +12,19 @@ const updaterHandler = (_: unknown, state: UpdaterState) => {
 }
 
 const api: ElectronAPI = {
+  browserWorkbench: {
+    open: (scope) => ipcRenderer.invoke("workbench-browser", { action: "open", scope }),
+    command: (scope, pageID, command) => ipcRenderer.invoke("workbench-browser", { ...command, scope, pageID }),
+    close: (scope, pageID) => ipcRenderer.invoke("workbench-browser", { action: "close", scope, pageID }),
+    layout: (scope, pageID, bounds) => ipcRenderer.invoke("workbench-browser-layout", {
+      scope, pageID, bounds, sequence: ++browserLayoutSequence,
+    }),
+    subscribe: (callback) => {
+      const handler = (_event: unknown, state: Parameters<typeof callback>[0]) => callback(state)
+      ipcRenderer.on("workbench-browser-state", handler)
+      return () => ipcRenderer.removeListener("workbench-browser-state", handler)
+    },
+  },
   killSidecar: () => ipcRenderer.invoke("kill-sidecar"),
   installCli: () => ipcRenderer.invoke("install-cli"),
   awaitInitialization: () => ipcRenderer.invoke("await-initialization"),
@@ -87,6 +101,11 @@ const api: ElectronAPI = {
     const handler = (_: unknown, urls: string[]) => cb(urls)
     ipcRenderer.on("deep-link", handler)
     return () => ipcRenderer.removeListener("deep-link", handler)
+  },
+  onNativeActionReceipt: (cb) => {
+    const handler = (_: unknown, receipt: Parameters<typeof cb>[0]) => cb(receipt)
+    ipcRenderer.on("native-action-receipt", handler)
+    return () => ipcRenderer.removeListener("native-action-receipt", handler)
   },
 
   openDirectoryPicker: (opts) => ipcRenderer.invoke("open-directory-picker", opts),

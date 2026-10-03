@@ -178,6 +178,15 @@ describe("tool parameters", () => {
       const parsed = parse(Lsp, { operation: "hover", filePath: "/a.ts", line: 1, character: 1 })
       expect(parsed.operation).toBe("hover")
     })
+    test("accepts status without file or cursor fields", () => {
+      expect(parse(Lsp, { operation: "status" })).toEqual({ operation: "status" })
+    })
+    test("accepts diagnostics with filePath and no cursor fields", () => {
+      expect(parse(Lsp, { operation: "diagnostics", filePath: "/a.ts" })).toEqual({
+        operation: "diagnostics",
+        filePath: "/a.ts",
+      })
+    })
     test("rejects line < 1", () => {
       expect(accepts(Lsp, { operation: "hover", filePath: "/a.ts", line: 0, character: 1 })).toBe(false)
     })
