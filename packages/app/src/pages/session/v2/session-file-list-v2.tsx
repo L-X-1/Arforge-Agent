@@ -46,7 +46,7 @@ export function SessionFileListV2(props: {
   id?: string
   role?: "listbox"
   optionID?: (path: string) => string
-  onFileClick: (path: string) => void
+  onFileClick: (path: string, event?: MouseEvent) => void
   onFileDoubleClick?: (path: string) => void
 }) {
   const active = () => normalizePath(props.active ?? "")
@@ -132,7 +132,7 @@ export function SessionFileListV2(props: {
                     style="padding-left: 8px"
                     onFocus={() => setFocused(path)}
                     onBlur={() => setFocused(undefined)}
-                    onClick={() => props.onFileClick(path)}
+                    onClick={(event) => props.onFileClick(path, event)}
                     onDblClick={() => props.onFileDoubleClick?.(path)}
                   >
                     <span class="filetree-iconpair size-4">

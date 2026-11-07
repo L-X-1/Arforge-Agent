@@ -10,7 +10,36 @@ import {
   sessionPanelWidthBounds,
   sessionPanelWidthMin,
   sessionPanelWidthMax,
+  sessionPanelNeedsFullWorkbench,
 } from "./session-panel-width"
+
+describe("sessionPanelNeedsFullWorkbench", () => {
+  test("retains side-by-side controls whenever both existing compact floors fit", () => {
+    expect(sessionPanelNeedsFullWorkbench({ available: 1004 - 12, hasSession: true })).toBe(false)
+    expect(sessionPanelNeedsFullWorkbench({ available: 824 - 12, hasSession: true })).toBe(false)
+    expect(sessionPanelNeedsFullWorkbench({ available: 680, hasSession: true })).toBe(false)
+  })
+
+  test("uses the existing full-workbench interaction below the compact floors", () => {
+    expect(sessionPanelNeedsFullWorkbench({ available: 679, hasSession: true })).toBe(true)
+    expect(sessionPanelNeedsFullWorkbench({ available: 504 - 12, hasSession: true })).toBe(true)
+    expect(sessionPanelNeedsFullWorkbench({ available: 0, hasSession: true })).toBe(true)
+  })
+
+  test("waits for the first measurement without changing persisted widths", () => {
+    expect(sessionPanelNeedsFullWorkbench({ available: undefined, hasSession: true })).toBe(false)
+    const storedWidth = 800
+    expect(clampSessionPanelWidth({ width: storedWidth, available: undefined, split: false })).toBe(storedWidth)
+    expect(clampSessionPanelWidth({ width: storedWidth, available: 992, split: false })).toBeLessThan(storedWidth)
+    expect(clampSessionPanelWidth({ width: storedWidth, available: 1700, split: false })).toBe(storedWidth)
+  })
+
+  test("never hides an unsent session draft without a real session panel", () => {
+    for (const available of [undefined, 0, 492, 679, 680, 992]) {
+      expect(sessionPanelNeedsFullWorkbench({ available, hasSession: false })).toBe(false)
+    }
+  })
+})
 
 describe("sessionPanelWidthMax", () => {
   test("reserves the unified review pane minimum", () => {

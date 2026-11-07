@@ -106,6 +106,36 @@ describe("applyGlobalEvent", () => {
     expect(refreshCount).toBe(0)
   })
 
+  test("an older project event cannot replace a newer cached revision", () => {
+    const project: Project[] = [
+      {
+        id: "repo",
+        worktree: "/repo",
+        name: "newer",
+        icon: { override: "fresh" },
+        time: { created: 1, updated: 3 },
+        sandboxes: [],
+      },
+    ]
+    const publish = (updated: number, name: string) =>
+      applyGlobalEvent({
+        event: {
+          type: "project.updated",
+          properties: { ...project[0], name, icon: { override: name }, time: { created: 1, updated } },
+        },
+        project,
+        refresh() {},
+        setGlobalProject(next) {
+          if (typeof next === "function") next(project)
+        },
+      })
+
+    publish(2, "older")
+    expect(project[0]).toMatchObject({ name: "newer", icon: { override: "fresh" }, time: { updated: 3 } })
+    publish(4, "latest")
+    expect(project[0]).toMatchObject({ name: "latest", icon: { override: "latest" }, time: { updated: 4 } })
+  })
+
   test("handles global.disposed by triggering refresh", () => {
     let refreshCount = 0
     applyGlobalEvent({

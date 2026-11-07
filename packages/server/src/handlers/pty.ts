@@ -1,4 +1,5 @@
 import { Pty } from "@arforge-ai/core/pty"
+import { Shell } from "@arforge-ai/core/shell"
 import { PtyProtocol } from "@arforge-ai/core/pty/protocol"
 import { PtyTicket } from "@arforge-ai/core/pty/ticket"
 import { Location } from "@arforge-ai/core/location"
@@ -29,6 +30,12 @@ export const PtyHandler = HttpApiBuilder.group(Api, "server.pty", (handlers) =>
     const environment = yield* PtyEnvironment.Service
 
     return handlers
+      .handle(
+        "pty.shells",
+        Effect.fn(function* () {
+          return yield* response(Effect.promise(() => Shell.list()))
+        }),
+      )
       .handle(
         "pty.list",
         Effect.fn(function* () {

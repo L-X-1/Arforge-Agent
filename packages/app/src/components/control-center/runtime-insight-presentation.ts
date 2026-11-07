@@ -582,6 +582,20 @@ export const runtimeInsightCopy = (locale: Locale) => {
       human: traditional ? "人工" : "人工",
       refresh: traditional ? "重新整理" : "刷新",
       refreshing: traditional ? "重新整理中…" : "刷新中…",
+      principalAuditTitle: traditional ? "我的稽核記錄" : "我的审计记录",
+      principalAuditHint: traditional
+        ? "僅顯示我的記錄並驗證各記錄摘要；不驗證完整設定檔稽核鏈的連續性，此檢視不提供全域保留計數。"
+        : "仅显示我的记录并验证各记录摘要；不验证完整配置审计链的连续性，此视图不提供全局保留计数。",
+      principalAuditStatus: traditional ? "記錄完整性" : "记录完整性",
+      principalAuditValid: (count: number) => traditional ? `我的 ${count} 條記錄完整` : `我的 ${count} 条记录完整`,
+      principalAuditInvalid: traditional ? "我的記錄完整性驗證失敗" : "我的记录完整性验证失败",
+      verifyPrincipalAudit: traditional ? "驗證我的稽核記錄" : "验证我的审计记录",
+      principalAuditVerified: (count: number) => traditional
+        ? `我的 ${count} 條稽核記錄摘要已驗證；未檢查完整設定檔稽核鏈的連續性。`
+        : `我的 ${count} 条审计记录摘要已验证；未检查完整配置审计链的连续性。`,
+      principalAuditFailed: (issue: string) => traditional
+        ? `我的稽核記錄驗證失敗：${issue || "記錄摘要不相符"}`
+        : `我的审计记录验证失败：${issue || "记录摘要不匹配"}`,
       verifyAudit: traditional ? "校驗稽核鏈" : "校验审计链",
       verifyingAudit: traditional ? "校驗中…" : "校验中…",
       automaticNotice: traditional
@@ -923,6 +937,14 @@ export const runtimeInsightCopy = (locale: Locale) => {
     human: "Human",
     refresh: "Refresh",
     refreshing: "Refreshing…",
+    principalAuditTitle: "My audit records",
+    principalAuditHint: "Only my records and their digests are shown. Full profile chain continuity is not checked; global retention counts are unavailable in this view.",
+    principalAuditStatus: "Record integrity",
+    principalAuditValid: (count: number) => `My records intact (${count})`,
+    principalAuditInvalid: "My record integrity check failed",
+    verifyPrincipalAudit: "Verify my audit records",
+    principalAuditVerified: (count: number) => `My audit records verified: ${count} record digests are intact. Full profile chain continuity is not checked.`,
+    principalAuditFailed: (issue: string) => `My audit record verification failed: ${issue || "record digests differ"}`,
     verifyAudit: "Verify audit chain",
     verifyingAudit: "Verifying…",
     automaticNotice: "All data below is recorded automatically by the system; no manual maintenance is required.",

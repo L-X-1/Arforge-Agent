@@ -24,6 +24,70 @@ const comment = (id: string, value = "note"): PromptHistoryComment => ({
 })
 
 describe("prompt-input history", () => {
+  test("resource-only drafts remain in history without inventing prompt text", () => {
+    const prompt: Prompt = [
+      {
+        type: "file",
+        path: "evidence://shared/manual",
+        url: "evidence://shared/manual",
+        filename: "manual",
+        mime: "text/plain",
+        content: "",
+        start: 0,
+        end: 0,
+        source: {
+          type: "resource",
+          clientName: "server-B",
+          uri: "evidence://shared/manual",
+          text: { value: "", start: 0, end: 0 },
+        },
+      },
+    ]
+    const entries = prependHistoryEntry([], prompt)
+    expect(entries).toHaveLength(1)
+    const first = entries[0]
+    if (!first) throw new Error("expected resource history")
+    expect(normalizePromptHistoryEntry(first).prompt).toEqual(prompt)
+    expect(promptLength(prompt)).toBe(0)
+  })
+
+  test("an unmentioned resource protects a new draft from empty-draft history replacement", () => {
+    expect(canNavigateHistoryAtCursor("up", "", 0, false, true)).toBe(false)
+    expect(canNavigateHistoryAtCursor("down", "", 0, false, true)).toBe(false)
+    expect(canNavigateHistoryAtCursor("up", "", 0, false, false)).toBe(true)
+    expect(canNavigateHistoryAtCursor("up", "", 0, true, true)).toBe(true)
+  })
+
+  test("history keeps different MCP servers at the same URI and deduplicates an identical source", () => {
+    const resource = (clientName: string): Prompt => [
+      {
+        type: "file",
+        path: "evidence://shared/manual",
+        url: "evidence://shared/manual",
+        filename: "manual",
+        mime: "text/plain",
+        content: "@manual",
+        start: 0,
+        end: 7,
+        source: {
+          type: "resource",
+          clientName,
+          uri: "evidence://shared/manual",
+          text: { value: "@manual", start: 0, end: 7 },
+        },
+      },
+    ]
+    const first = prependHistoryEntry([], resource("server-A"))
+    const second = prependHistoryEntry(first, resource("server-B"))
+    expect(second).toHaveLength(2)
+    const latest = second[0]
+    const earlier = second[1]
+    if (!latest || !earlier) throw new Error("expected distinct resource history")
+    expect(normalizePromptHistoryEntry(latest).prompt).toEqual(resource("server-B"))
+    expect(normalizePromptHistoryEntry(earlier).prompt).toEqual(resource("server-A"))
+    expect(prependHistoryEntry(second, resource("server-B"))).toBe(second)
+  })
+
   test("prependHistoryEntry skips empty prompt and deduplicates consecutive entries", () => {
     const first = prependHistoryEntry([], DEFAULT_PROMPT)
     expect(first).toEqual([])

@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/arforge
+Working directory: %ARFORGE_REPO%/packages/arforge
 Command: bun test --timeout 60000 test/session/prompt.test.ts -t 'Formal scheduled subtask|integrated Formal drain executes an admitted automatic subtask|Formal failed subtask|Formal running task preserves|Formal scheduled cancellation'
 Exit code: 0
 Raw captured output:

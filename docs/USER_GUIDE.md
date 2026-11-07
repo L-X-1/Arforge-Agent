@@ -3,20 +3,32 @@
 本文面向 `Arforge 测试 1.00.00 版` 的私有本地使用。产品入口统一为
 TypeScript CLI 与 Electron Desktop。
 
-## 1. 启动前检查
+## 1. 从源码启动
+
+在仓库根目录使用 Bun 1.3.14：
 
 ```powershell
-cd Arforge-Agent
-powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 -ValidateOnly
-powershell -ExecutionPolicy Bypass -File .\scripts\run_desktop.ps1 -ValidateOnly
+bun --version
+bun install --frozen-lockfile
+bun run cli --help
+bun run dev:desktop
 ```
 
-两个命令会检查当前工作区、仓库固定版本的 Bun 和 Electron 运行文件。
-启动器从本仓库加载代码，不依赖另一份本机工程目录。
+`bun run cli` 启动交互式终端。若需要通过 Windows 启动器自动加载私有环境，
+把同版本的 `bun.exe` 放在 `.tools/bun-1.3.14/bun.exe`，再使用第 4 节命令。
+启动器支持 `-ValidateOnly`，可以检查所用运行时与入口路径。
 
-## 2. 模型配置
+## 2. 桌面端初次使用
 
-私有密钥文件：
+1. 用侧栏的「打开项目」选择工作目录。
+2. 打开设置中的「提供商」，选择或添加服务连接。自定义连接需填写实际服务的 Base URL 和 API 格式。密钥应在应用内配置，已保存的密钥留空可保留。更换目标地址或 API 格式时，按提示重新授权。
+3. 保存配置后，按需用模型行的「测试连接」发起一次文本生成请求。若使用第三方服务，该请求会发往对应服务商并可能计入用量。
+4. 回到会话，在输入区下方选择已配置的服务商和模型。推理强度依赖所选模型可用的选项。若预设填入上下文或输出上限，可根据服务账号的实际限制调整。
+5. 发送一条简短消息。需要文件写入或命令执行时，先核对审批中的命令和目标范围。
+
+### CLI 模型配置
+
+Windows 私有启动器读取的密钥文件：
 
 ```text
 %USERPROFILE%\.arforge\.env
@@ -47,14 +59,13 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 3. 用 CLI 执行一次最小调用：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 run `
-  "只回复：Arforge模型链路正常" `
-  --model "deepseek-v4-flash/deepseek-v4-flash"
+bun run cli run --model "deepseek-v4-flash/deepseek-v4-flash" "只回复：Arforge模型链路正常"
 ```
 
-## 3. PostgreSQL
+## 3. PostgreSQL（可选）
 
-私有持久模式使用数据库 `arforge`，日常角色必须是最小权限
+未配置 PostgreSQL URL 时，本地运行时使用 SQLite。需要配置 PostgreSQL 时，
+先阅读[数据库部署指南](DATABASE_DEPLOYMENT.md)。私有持久模式使用数据库 `arforge`，日常角色必须是最小权限
 `arforge_app`。管理员角色只运行迁移、授权与恢复，不启动产品。
 
 首次配置应用角色：
@@ -77,7 +88,9 @@ Remove-Item Env:ARFORGE_DB_URL
 
 备份文件存在不等于可恢复；必须定期恢复到隔离数据库并比较表数和关键数据。
 
-## 4. 启动 CLI 与桌面端
+## 4. Windows 启动器与常用 CLI 命令
+
+以下命令使用第 1 节的可选 Windows 启动器配置。
 
 ```powershell
 # CLI

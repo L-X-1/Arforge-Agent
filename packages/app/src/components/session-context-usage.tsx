@@ -12,10 +12,14 @@ import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSDK } from "@/context/sdk"
-import { getSessionContext } from "@/components/session/session-context-metrics"
+import { useLocal } from "@/context/local"
+import { getConfirmedSessionContext } from "@/components/session/session-context-metrics"
+import { createSessionContextFormatter } from "@/components/session/session-context-format"
+import { contextCopy, contextServerLabel } from "@/components/session/session-context-copy"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 import { useSettings } from "@/context/settings"
+import "@/components/session/session-context.css"
 
 interface SessionContextUsageProps {
   variant?: "button" | "indicator"
@@ -27,12 +31,12 @@ function ContextTooltipRow(props: { name: JSX.Element; value: JSX.Element }) {
   return (
     <div class="flex min-w-0 items-center gap-4">
       <span class="shrink-0 text-v2-text-text-muted">{props.name}</span>
-      <span class="ml-auto min-w-0 truncate text-right text-v2-text-text-base">{props.value}</span>
+      <span data-context-value class="ml-auto min-w-0 text-right text-v2-text-text-base">{props.value}</span>
     </div>
   )
 }
 
-function openSessionContext(args: {
+export function openSessionContext(args: {
   view: ReturnType<ReturnType<typeof useLayout>["view"]>
   layout: ReturnType<typeof useLayout>
   tabs: ReturnType<ReturnType<typeof useLayout>["tabs"]>
@@ -49,6 +53,9 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const layout = useLayout()
   const language = useLanguage()
   const sdk = useSDK()
+  const local = useLocal()
+  const copy = createMemo(() => contextCopy(language.locale()))
+  const formatter = createMemo(() => createSessionContextFormatter(language.intl()))
   const settings = useSettings()
   const providers = useProviders(() => sdk().directory)
   const { params, tabs, view } = useSessionLayout()
@@ -73,7 +80,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
       }),
   )
 
-  const context = createMemo(() => getSessionContext(messages(), [...providers.all().values()]))
+  const context = createMemo(() => getConfirmedSessionContext(messages(), [...providers.all().values()]))
   const cost = createMemo(() => {
     return usd().format(info()?.cost ?? 0)
   })
@@ -102,7 +109,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   }
 
   const circle = () => (
-    <div class="flex items-center justify-center">
+    <div class="flex items-center justify-center" data-usage-known={context()?.usage != null} aria-label={context()?.usage == null ? copy().unknown : `${context()!.usage}%`}>
       <ProgressCircle
         size={16}
         strokeWidth={2}
@@ -120,19 +127,31 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     </div>
   )
   const circleV2 = () => (
-    <div class="flex items-center justify-center">
+    <div class="flex items-center justify-center" data-usage-known={context()?.usage != null} aria-label={context()?.usage == null ? copy().unknown : `${context()!.usage}%`}>
       <ProgressCircleV2 percentage={context()?.usage ?? 0} />
     </div>
   )
 
   const tooltipValue = () => (
-    <div class="flex w-[120px] flex-col gap-2">
-      <ContextTooltipRow name={language.t("context.usage.cost")} value={cost()} />
-      <ContextTooltipRow name={language.t("context.usage.usage")} value={`${context()?.usage ?? 0}%`} />
+    <div class="arforge-context-tooltip">
+      <strong>{copy().confirmed}</strong>
+      <ContextTooltipRow name={copy().cost} value={cost()} />
+      <ContextTooltipRow name={copy().sampledUsage} value={formatter().percent(context()?.usage)} />
       <ContextTooltipRow
-        name={language.t("context.usage.tokens")}
-        value={context()?.total.toLocaleString(language.intl()) ?? "0"}
+        name={copy().tokens}
+        value={formatter().number(context()?.total)}
       />
+      <ContextTooltipRow name={copy().sample} value={context()?.message.id ?? copy().unknown} />
+      <ContextTooltipRow name={copy().settledAt} value={formatter().time(context()?.message.time.completed)} />
+      <ContextTooltipRow name={copy().sampledModel} value={context()
+        ? `${context()!.message.providerID} / ${context()!.message.modelID}` : copy().unknown} />
+      <ContextTooltipRow name={copy().selectedModel} value={local.model.current()
+        ? `${local.model.current()!.provider.id} / ${local.model.current()!.id}` : copy().unknown} />
+      <ContextTooltipRow name={copy().context} value={formatter().number((local.model.current()?.limit.context ?? 0) > 0 ? local.model.current()?.limit.context : undefined)} />
+      <ContextTooltipRow name={copy().server} value={contextServerLabel(sdk().url)} />
+      <ContextTooltipRow name={copy().directory} value={sdk().directory} />
+      <ContextTooltipRow name={copy().session} value={params.id ?? copy().unknown} />
+      <p class="arforge-context-note">{context() ? copy().accounting : copy().noConfirmed}</p>
     </div>
   )
 

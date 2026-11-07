@@ -4,6 +4,7 @@ import { officeFixture } from "../../fixtures/office-documents"
 import type { OfficeFormat } from "../../../src/components/preview/office-format"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/OfficePreview"
@@ -42,6 +43,7 @@ async function setup(page: Page, broken: () => Uint8Array = () => new Uint8Array
   }, { directory, server, sessionID })
   await page.goto("/server/" + base64Encode(server) + "/session/" + sessionID)
   await expectSessionTitle(page, "Office preview test")
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   const open = async (name: string) => {

@@ -37,9 +37,18 @@ export const CONTROL_CENTER_CAPABILITY_MAP = [
     feature: "providers-models-integrations",
     risk: "write",
     methods: [
+      // Read by catalog bootstrap for model fallback; this does not set a default.
+      "models.default",
       "models.list",
       "providers.list",
       "providers.get",
+      "providers.capability",
+      // Provider workspace reads saved configuration and explicitly tests a saved model.
+      "providers.configurationGet",
+      "providers.configurationTest",
+      "providers.save",
+      "providers.credential",
+      "providers.disconnect",
       "integrations.list",
       "integrations.get",
       "integrations.connectKey",
@@ -184,7 +193,7 @@ export const CONTROL_CENTER_CAPABILITY_MAP = [
     surface: "global-control-center",
     feature: "mcp-capability-observability",
     risk: "read",
-    methods: ["mcp.capabilities"],
+    methods: ["mcp.capabilities", "mcp.toolDetails"],
   },
   {
     surface: "global-control-center",
@@ -294,6 +303,7 @@ export const CONTROL_CENTER_CAPABILITY_MAP = [
       "sessions.create",
       "sessions.active",
       "sessions.get",
+      "sessions.rename",
       "sessions.tagsUpdate",
       "sessions.checkpointCreate",
       "sessions.checkpointList",
@@ -302,6 +312,8 @@ export const CONTROL_CENTER_CAPABILITY_MAP = [
       "sessions.switchAgent",
       "sessions.switchModel",
       "sessions.prompt",
+      "sessions.shell",
+      "sessions.command",
       "sessions.promptQueueList",
       "sessions.promptQueueUpdate",
       "sessions.promptQueueRemove",
@@ -426,7 +438,14 @@ export const CONTROL_CENTER_CAPABILITY_MAP = [
     methods: [
       "files.list",
       "files.find",
+      // HTML preview resource grants, not opening/closing editor tabs.
+      "files.open",
+      "files.close",
+      // Versioned text-document editing, not the raw file/byte reader.
+      "files.read",
+      "files.save",
       "commands.list",
+      "ptys.shells",
       "ptys.list",
       "ptys.create",
       "ptys.get",

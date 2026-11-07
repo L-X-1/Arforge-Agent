@@ -7,8 +7,13 @@ import { useModels } from "@/context/models"
 import { useSettings } from "@/context/settings"
 import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
-import { hasCustomAgent, resolveAgent } from "./local-agent"
-import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
+import { hasCustomAgent, resolveAgent, resolveAgentSelection } from "./local-agent"
+import {
+  cycleModelVariant,
+  getConfiguredAgentVariant,
+  queuedVariantRestore,
+  resolveModelVariant,
+} from "./model-variant"
 import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
@@ -21,7 +26,11 @@ type State = {
   agent?: string
   model?: ModelKey
   variant?: string | null
+  variantBinding?: { kind: "default" | "prompt" | "queue"; model: ModelKey }
 }
+
+const sameModel = (left: ModelKey | undefined, right: ModelKey | undefined) =>
+  !!left && !!right && left.providerID === right.providerID && left.modelID === right.modelID
 
 type Saved = {
   session: Record<string, State | undefined>
@@ -53,6 +62,9 @@ const clone = (value: State | undefined) => {
   return {
     ...value,
     model: value.model ? { ...value.model } : undefined,
+    variantBinding: value.variantBinding
+      ? { ...value.variantBinding, model: { ...value.variantBinding.model } }
+      : undefined,
   } satisfies State
 }
 
@@ -72,22 +84,22 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const agentsVisible = createMemo(() => settings.visibility.customAgents() || hasCustomAgent(list()))
     const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
 
-    const selectionTarget = createMemo(
-      () => ({ scope: serverSDK().scope, directory: sdk().directory }),
-      undefined,
-      { equals: (previous, next) => previous.scope === next.scope && previous.directory === next.directory },
-    )
+    const selectionTarget = createMemo(() => ({ scope: serverSDK().scope, directory: sdk().directory }), undefined, {
+      equals: (previous, next) => previous.scope === next.scope && previous.directory === next.directory,
+    })
     const selectionPersistence = createMemo(() => {
       const target = selectionTarget()
       // Keep the memo's owner so scope changes dispose its resources, but never
       // subscribe construction to the store snapshot or ready resource it creates.
-      return untrack(() => persisted(
-        {
-          ...Persist.serverWorkspace(target.scope, target.directory, "model-selection", ["model-selection.v1"]),
-          migrate,
-        },
-        createStore<Saved>({ session: {} }),
-      ))
+      return untrack(() =>
+        persisted(
+          {
+            ...Persist.serverWorkspace(target.scope, target.directory, "model-selection", ["model-selection.v1"]),
+            migrate,
+          },
+          createStore<Saved>({ session: {} }),
+        ),
+      )
     })
     const saved = () => selectionPersistence()[0]
     const saveSession = (session: string, state: State | undefined) =>
@@ -185,32 +197,48 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const fallback = createMemo<ModelKey | undefined>(() => configuredModel() ?? recentModel() ?? defaultModel())
 
+    const agentSelection = createMemo(() =>
+      resolveAgentSelection(list(), {
+        selected: scope()?.agent,
+        fallback: agentsVisible() ? store.current : "build",
+      }),
+    )
+
     const agent = {
       list,
       visible: agentsVisible,
+      selected: () => agentSelection().selected,
+      unavailable: () => agentSelection().unavailable,
       current() {
-        return pickAgent(agentsVisible() ? (scope()?.agent ?? store.current) : "build")
+        return agentSelection().current
       },
       set(name: string | undefined) {
         const item = pickAgent(name)
-        if (!item) {
+        const selected = item?.name ?? name
+        if (selected === undefined) {
           setStore("current", undefined)
           return
         }
 
         batch(() => {
-          setStore("current", item.name)
+          setStore("current", selected)
           setStore("last", {
             type: "agent",
-            agent: item.name,
-            model: item.model,
-            variant: item.variant ?? null,
+            agent: selected,
+            model: item?.model,
+            variant: item?.variant ?? null,
           })
           const prev = scope()
+          const nextModel = item?.model ?? prev?.model
+          const binding =
+            item?.variant === undefined && sameModel(prev?.variantBinding?.model, nextModel ?? fallback())
+              ? prev?.variantBinding
+              : undefined
           const next = {
-            agent: item.name,
-            model: item.model ?? prev?.model,
-            variant: item.variant ?? prev?.variant,
+            agent: selected,
+            model: nextModel,
+            variant: item?.variant ?? (prev?.variantBinding && !binding ? undefined : prev?.variant),
+            variantBinding: binding,
           } satisfies State
           const session = id()
           if (session) {
@@ -250,7 +278,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
     }
 
-    const selected = () => scope()?.variant
+    const variantBinding = () => {
+      const binding = scope()?.variantBinding
+      return sameModel(binding?.model, selectedModelKey()) ? binding : undefined
+    }
+    const selected = () => {
+      const state = scope()
+      return state?.variantBinding && !variantBinding() ? undefined : state?.variant
+    }
 
     const snapshot = () => {
       const model = current()
@@ -258,6 +293,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         agent: agent.current()?.name,
         model: model ? { providerID: model.provider.id, modelID: model.id } : undefined,
         variant: selected(),
+        variantBinding: variantBinding(),
       } satisfies State
     }
 
@@ -298,19 +334,24 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (!entry) return
         model.set({ providerID: entry.provider.id, modelID: entry.id })
       },
-      set(item: ModelKey | undefined, options?: { recent?: boolean }) {
+      set(item: ModelKey | undefined, options?: { recent?: boolean; restoring?: boolean }) {
         batch(() => {
-            setStore("last", {
-              type: "model",
-              agent: agent.current()?.name,
-              model: item ?? null,
-              variant: selected(),
-            })
-            write({ model: item })
-            if (!item) return
-            models.setVisibility(item, true)
-            if (!options?.recent) return
-            models.recent.push(item)
+          setStore("last", {
+            type: "model",
+            agent: agent.current()?.name,
+            model: item ?? null,
+            variant: selected(),
+          })
+          const bound = scope()?.variantBinding
+          write(
+            bound && !sameModel(bound.model, item)
+              ? { model: item, variant: undefined, variantBinding: undefined }
+              : { model: item },
+          )
+          if (!item || options?.restoring) return
+          models.setVisibility(item, true)
+          if (!options?.recent) return
+          models.recent.push(item)
         })
       },
       visible(item: ModelKey) {
@@ -323,9 +364,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         configured,
         selected,
         current() {
+          const choice = this.selected()
+          if (choice === null && variantBinding()) return undefined
           const resolved = resolveModelVariant({
             variants: this.list(),
-            selected: this.selected(),
+            selected: choice,
             configured: this.configured(),
           })
           if (resolved) return resolved
@@ -339,18 +382,25 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!item?.variants) return []
           return Object.keys(item.variants)
         },
-        set(value: string | undefined) {
+        set(value: string | undefined, options?: { restoring?: boolean }) {
           startTransition(() =>
             batch(() => {
               const model = current()
+              const key = model ? { providerID: model.provider.id, modelID: model.id } : null
               setStore("last", {
                 type: "variant",
                 agent: agent.current()?.name,
-                model: model ? { providerID: model.provider.id, modelID: model.id } : null,
+                model: key,
                 variant: value ?? null,
               })
-              write({ variant: value ?? null })
-              if (model) {
+              write({
+                variant: value ?? null,
+                variantBinding:
+                  key && (options?.restoring || value === undefined)
+                    ? { kind: options?.restoring ? "prompt" : "default", model: key }
+                    : undefined,
+              })
+              if (model && !options?.restoring) {
                 models.variant.set({ providerID: model.provider.id, modelID: model.id }, value ?? undefined)
               }
             }),
@@ -368,6 +418,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           )
         },
       },
+    }
+
+    const queueVariant = (queued: ModelKey) => {
+      return queuedVariantRestore({
+        queued,
+        current: selectedModelKey(),
+        currentVariant: model.variant.current(),
+        supported: model.variant.list(),
+        explicit: variantBinding()?.kind === "default" && selected() === null,
+      })
     }
 
     const result = {
@@ -396,6 +456,19 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
       session: {
         ready: savedReady,
+        queueVariant,
+        restoreQueueVariant(queued: ModelKey | undefined) {
+          if (!id() || !savedReady()) return
+          // A previous editor's automatic restoration is not a new user choice.
+          if (scope()?.variantBinding?.kind === "queue") write({ variant: undefined, variantBinding: undefined })
+          if (!queued?.variant) return
+          const result = queueVariant(queued)
+          if (result.status !== "restore") return
+          // Queue restoration belongs to this Session. It must not remember a
+          // new global per-model preset or change other/new Session defaults.
+          const model = { providerID: queued.providerID, modelID: queued.modelID }
+          write({ model, variant: result.variant, variantBinding: { kind: "queue", model } })
+        },
         reset() {
           setStore({ draft: undefined, promoting: undefined })
         },

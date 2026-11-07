@@ -9,7 +9,12 @@ describe("Settings permission provider boundary", () => {
     const legacyLayout = await Bun.file(new URL("../../pages/layout.tsx", import.meta.url)).text()
 
     expect(opener).toMatch(/const permission = usePermission\(\)/)
-    expect(opener).toContain("permission={permission}")
+    // Detached settings must use the originating route's server, even when the
+    // globally selected server differs. The browser audit exercises these calls.
+    expect(opener).toContain("permission={targetPermission}")
+    expect(opener).toContain("currentServerState: () => permission.ensureServerState(key)")
+    expect(opener).toContain("permission.ensureServerState(key).enableAutoAccept(sessionID, directory)")
+    expect(opener).toContain("permission.ensureServerState(key).disableAutoAccept(sessionID, directory)")
     expect(dialog).toContain("permission: ReturnType<typeof usePermission>")
     expect(dialog).toContain("permission={props.permission}")
     expect(general).not.toMatch(/const permission = usePermission\(\)/)

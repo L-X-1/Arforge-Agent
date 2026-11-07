@@ -5,7 +5,7 @@ import { createStore } from "solid-js/store"
 import "./tooltip-v2.css"
 
 export const TOOLTIP_V2_TIMING = {
-  openDelay: 400,
+  openDelay: 300,
   closeDelay: 0,
 } as const
 
@@ -131,9 +131,10 @@ export function TooltipV2(props: TooltipV2Props) {
             as="div"
             data-component="tooltip-v2-trigger"
             class={local.class}
-            onPointerDownCapture={suppressTooltipOnActivation}
-            onFocusCapture={openTooltipOnFocus}
-            onKeyDownCapture={(event: KeyboardEvent) => {
+            oncapture:pointerdown={suppressTooltipOnActivation}
+            oncapture:focus={openTooltipOnFocus}
+            oncapture:keydown={(event: KeyboardEvent) => {
+              if (event.isComposing || event.keyCode === 229) return
               if (event.key !== "Enter" && event.key !== " ") return
               suppressTooltipOnActivation()
             }}

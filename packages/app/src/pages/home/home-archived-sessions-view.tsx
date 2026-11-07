@@ -172,7 +172,7 @@ function HomeArchivedSessionRow(props: {
           </span>
           <span>{language.t("home.archived.restore")}</span>
         </ButtonV2>
-        <MenuV2 gutter={6} modal={false} placement="bottom-end">
+        <MenuV2 gutter={4} modal={false} placement="bottom-end">
           <MenuV2.Trigger
             as={IconButtonV2}
             type="button"

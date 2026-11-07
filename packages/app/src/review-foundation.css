@@ -33,6 +33,146 @@
 @media (forced-colors: active) {
   :is(button, a, input, textarea, select, [role="button"]):focus-visible {
     outline: 2px solid Highlight;
-    outline-offset: 3px;
+    outline-offset: 2px;
   }
+}
+
+/* The user-approved A control system. User font and color preferences keep precedence. */
+:root {
+  --arforge-review-radius-control: 8px;
+  --arforge-review-control-height: 36px;
+  --arforge-review-compact-height: 32px;
+  --arforge-review-touch-target: 44px;
+  --arforge-review-panel-radius: 16px;
+  --arforge-review-focus-offset: 2px;
+  --arforge-review-motion: 140ms;
+}
+:where(button, a, input, textarea, select, summary, [role="button"]):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus, var(--border-focus));
+  outline-offset: var(--arforge-review-focus-offset);
+}
+@media (forced-colors: active) {
+  :where(button, a, input, textarea, select, summary, [role="button"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+/* Shared aliases bridge management and preview surfaces to the active theme. */
+:root {
+  --arforge-review-surface: var(--v2-background-bg-base);
+  --arforge-review-surface-subtle: var(--v2-background-bg-layer-01);
+  --arforge-review-surface-muted: var(--v2-background-bg-layer-02);
+  --arforge-review-border: var(--v2-border-border-muted);
+  --arforge-review-text: var(--v2-text-text-base);
+  --arforge-review-muted: var(--v2-text-text-muted);
+  --arforge-review-text-muted: var(--v2-text-text-muted);
+  --arforge-review-accent: var(--v2-background-bg-contrast);
+  --arforge-review-selected: var(--v2-overlay-simple-overlay-pressed);
+}
+/* Settings visibility is owned by NewLayout's conditional rendering.
+   Ordinary controls and menus opt into workspace presentation in their UI owners. */
+.confirm-action-dialog [data-slot="dialog-body"] {
+  padding: 4px 16px 16px;
+  line-height: 1.7;
+}
+.confirm-action-dialog [data-slot="dialog-footer"] {
+  flex-wrap: wrap;
+}
+
+/* Retained compatibility: select/tooltip portals and approval details. */
+body:has([data-component="workspace-shell"]) [data-component="select-content"] {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--v2-border-border-muted);
+  background: var(--v2-background-bg-base);
+  box-shadow: 0 10px 28px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 24%));
+}
+body:has([data-component="workspace-shell"]) [data-slot="select-select-item"] {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+body:has([data-component="workspace-shell"]) [data-component="select-content"][data-closed] {
+  animation: none;
+  pointer-events: none;
+  visibility: hidden;
+}
+body:has([data-component="workspace-shell"]) [data-component="tooltip"] {
+  max-width: min(280px, calc(100vw - 16px));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+[data-arforge-management="approval"] {
+  border-radius: 12px;
+  padding: 16px;
+  gap: 12px;
+}
+[data-arforge-management="approval"] details[open] > :not(summary) {
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+[data-arforge-management="approval"] [data-component="button-v2"] {
+  min-height: 36px;
+}
+[data-component="dock-prompt"][data-kind="permission"] [data-slot="permission-body"] {
+  border-radius: 12px 12px 0 0;
+  padding: 16px;
+  gap: 12px;
+}
+[data-component="dock-prompt"][data-kind="permission"] [data-slot="permission-footer-actions"] {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (pointer: coarse) {
+  body:has([data-component="workspace-shell"]) [data-slot="select-select-item"],
+  [data-arforge-management="approval"] [data-component="button-v2"] {
+    min-height: 44px;
+  }
+}
+
+[data-slot="permission-origin"] details[open] > code {
+  display: block;
+  max-height: 240px;
+  overflow: auto;
+  margin-top: 8px;
+}
+
+@media (forced-colors: active) {
+  body:has([data-component="workspace-shell"])
+    :is(button, a, input, textarea, select, summary, [role="button"]):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+}
+
+[data-component="session-process-panel"] button {
+  border-radius: 8px;
+}
+@media (pointer: coarse) {
+  [data-component="session-process-panel"] button {
+    min-height: 44px !important;
+    min-width: 44px;
+  }
+}
+
+[data-component="button"][data-busy-label] [data-slot="button-state-label"] {
+  display: grid;
+  min-width: 0;
+}
+[data-component="button"][data-busy-label] [data-slot="button-state-label"] > span {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+[data-component="button"][data-busy-label] [data-component="spinner"] {
+  width: 16px;
+  height: 16px;
+  flex: none;
 }

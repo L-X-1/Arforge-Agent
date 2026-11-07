@@ -45,11 +45,12 @@ const ModelApi = Schema.Union([
   }),
 ])
 
-class Model extends Schema.Class<Model>("ConfigV2.Model")({
+export class Model extends Schema.Class<Model>("ConfigV2.Model")({
   family: ModelV2.Family.pipe(Schema.optional),
   name: Schema.String.pipe(Schema.optional),
   api: ModelApi.pipe(Schema.optional),
   profile: ModelV2.Profile.pipe(Schema.optional),
+  preset: ModelV2.PresetReference.pipe(Schema.optional),
   capabilities: ModelV2.Capabilities.pipe(Schema.optional),
   request: Schema.Struct({
     ...Request.fields,
@@ -67,7 +68,11 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
 }) {}
 
 export class Info extends Schema.Class<Info>("ConfigV2.Provider")({
+  /** Connection-scoped exclusions prevent deleted overrides from revealing inherited catalog rows. */
+  excludedModels: Schema.Array(ModelV2.ID).pipe(Schema.optional),
   name: Schema.String.pipe(Schema.optional),
+  authentication: Schema.Literals(["optional", "required"]).pipe(Schema.optional),
+  disabled: Schema.Boolean.pipe(Schema.optional),
   env: Schema.String.pipe(Schema.Array, Schema.optional),
   api: ProviderV2.Api.pipe(Schema.optional),
   request: Request.pipe(Schema.optional),

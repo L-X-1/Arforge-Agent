@@ -1,5 +1,50 @@
 import { describe, expect, test } from "bun:test"
-import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "./model-variant"
+import {
+  cycleModelVariant,
+  getConfiguredAgentVariant,
+  queuedVariantRestore,
+  resolveModelVariant,
+} from "./model-variant"
+
+describe("queued model preset restoration", () => {
+  const queued = { providerID: "owned", modelID: "model-a", variant: "pinned" }
+  const base = {
+    queued,
+    current: { providerID: "owned", modelID: "model-a" },
+    currentVariant: undefined,
+    supported: ["pinned", "max"],
+    explicit: false,
+  }
+
+  test("restores a supported original preset for the same otherwise unselected model", () => {
+    expect(queuedVariantRestore(base)).toEqual({ status: "restore", variant: "pinned" })
+  })
+  test("keeps a deliberately selected different model without copying its old preset", () => {
+    expect(queuedVariantRestore({ ...base, current: { providerID: "owned", modelID: "model-b" } })).toEqual({
+      status: "unchanged",
+    })
+  })
+  test("keeps the current model preset choice", () => {
+    expect(queuedVariantRestore({ ...base, currentVariant: "max" })).toEqual({ status: "unchanged" })
+  })
+  test("honors an explicit Default choice", () => {
+    expect(queuedVariantRestore({ ...base, explicit: true })).toEqual({ status: "unchanged" })
+  })
+  test("does not silently drop an unavailable queued preset", () => {
+    expect(queuedVariantRestore({ ...base, supported: [] })).toEqual({ status: "retain", variant: "pinned" })
+  })
+  test("does not invent a preset for an original request without one", () => {
+    expect(queuedVariantRestore({ ...base, queued: { providerID: "owned", modelID: "model-a" } })).toEqual({
+      status: "unchanged",
+    })
+  })
+  test("does not substitute a different provider or an unavailable current model", () => {
+    expect(queuedVariantRestore({ ...base, current: { providerID: "other", modelID: "model-a" } })).toEqual({
+      status: "unchanged",
+    })
+    expect(queuedVariantRestore({ ...base, current: undefined })).toEqual({ status: "unchanged" })
+  })
+})
 
 describe("model variant", () => {
   test("resolves configured agent variant when model matches", () => {

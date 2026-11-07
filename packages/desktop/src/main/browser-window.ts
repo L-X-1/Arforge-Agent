@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { BrowserWindow, Menu, dialog, session } from "electron"
 import { normalizeWorkbenchBrowserUrl, requireWorkbenchBrowserOrigin, workbenchBrowserPreferences } from "./browser-policy"
 import { workbenchBrowserStartPage } from "./browser-start-page"
+import { getWorkbenchBrowserAppearance, observeWorkbenchBrowserAppearance } from "./browser-appearance"
 
 const windows = new Map<number, BrowserWindow>()
 
@@ -35,7 +36,10 @@ export function createWorkbenchBrowserWindow(
   })
   windows.set(owner.id, win)
   const contents = win.webContents
-  const home = `data:text/html;charset=utf-8,${encodeURIComponent(workbenchBrowserStartPage(randomUUID().replaceAll("-", "")))}`
+  const home = `data:text/html;charset=utf-8,${encodeURIComponent(workbenchBrowserStartPage(
+    randomUUID().replaceAll("-", ""),
+    getWorkbenchBrowserAppearance(owner),
+  ))}`
   const allowedOrigins = new Set<string>()
   let showingNotice = false
   const notice = (message: string) => {
@@ -61,6 +65,19 @@ export function createWorkbenchBrowserWindow(
       win.setTitle(`Arforge Browser | ${url.host}${url.pathname.slice(0, 160)}`)
     } catch { win.setTitle("Arforge Browser") }
   }
+  const updateAppearance = () => {
+    if (win.isDestroyed() || contents.isDestroyed() || contents.getURL() !== home) return
+    const appearance = getWorkbenchBrowserAppearance(owner)
+    win.setBackgroundColor(appearance.mode === "dark" ? "#1D1F1D" : "#FAFAF7")
+    // Re-check in the target world: navigation may occur between this call and
+    // script execution. Never inject host presentation into an external page.
+    const script = `if(location.href===${JSON.stringify(home)})globalThis.__arforgeBrowserAppearance?.(${JSON.stringify(appearance)})`
+    void contents.executeJavaScript(script).catch((error: unknown) => {
+      if (!win.isDestroyed() && !contents.isDestroyed() && contents.getURL() === home) notice(String(error))
+    })
+  }
+  const stopAppearanceSync = observeWorkbenchBrowserAppearance(owner, updateAppearance)
+  contents.on("did-finish-load", updateAppearance)
 
   // Only the trusted start page may extend the explicit top-level origin scope.
   contents.on("will-navigate", (event, value) => {
@@ -129,6 +146,7 @@ export function createWorkbenchBrowserWindow(
   const closeWithOwner = () => { if (!win.isDestroyed()) win.destroy() }
   owner.once("closed", closeWithOwner)
   win.once("closed", () => {
+    stopAppearanceSync()
     windows.delete(owner.id)
     owner.removeListener("closed", closeWithOwner)
     isolated.webRequest.onBeforeRequest(null)

@@ -1,7 +1,8 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Effect, Equal, Hash, Option, Schema } from "effect"
+import { Context, DateTime, Effect, Equal, Exit, Hash, Layer, Option, RcMap, Schema, Scope } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { Tool } from "@arforge-ai/core/tool/tool"
 import { define } from "@arforge-ai/plugin/v2/effect"
 import { AgentV2 } from "@arforge-ai/core/agent"
@@ -15,7 +16,7 @@ import { PluginV2 } from "@arforge-ai/core/plugin"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ProjectV2 } from "@arforge-ai/core/project"
 import { ProviderV2 } from "@arforge-ai/core/provider"
-import { AbsolutePath } from "@arforge-ai/core/schema"
+import { AbsolutePath, RelativePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionRunnerModel } from "@arforge-ai/core/session/runner/model"
 import { WorkspaceV2 } from "@arforge-ai/core/workspace"
@@ -27,12 +28,108 @@ import { EventV2 } from "../src/event"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
+import { FileSystem } from "../src/filesystem"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
 
 describe("LocationServiceMap", () => {
+  it.live("reused acquisition effects resolve the current cache generation", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const ref = Location.Ref.make({ directory: AbsolutePath.make(path.join(dir.path, "restored")) })
+        const acquire = locations.contextEffect(ref)
+        const acquireFileSystem = FileSystem.Service.pipe(Effect.provide(Layer.fresh(locations.get(ref))))
+        expect(Exit.isFailure(yield* acquire.pipe(Effect.scoped, Effect.exit))).toBe(true)
+        yield* Effect.promise(() => fs.mkdir(ref.directory))
+        const recovered = yield* acquire
+        expect(recovered === (yield* locations.contextEffect(ref))).toBe(true)
+        expect(yield* acquireFileSystem).toBe(Context.get(recovered, FileSystem.Service))
+        yield* locations.invalidate(ref)
+        const refreshed = yield* acquire
+        expect(refreshed === recovered).toBe(false)
+        expect(refreshed === (yield* locations.contextEffect(ref))).toBe(true)
+        expect(yield* acquireFileSystem).toBe(Context.get(refreshed, FileSystem.Service))
+        const keys = Array.from(yield* RcMap.keys(locations.rcMap))
+        expect(keys).toHaveLength(1)
+        expect(keys.every(Schema.is(Location.Ref))).toBe(true)
+        yield* locations.invalidate(keys[0])
+        expect(refreshed === (yield* acquire)).toBe(false)
+      })),
+    ),
+  )
+
+  it.effect("late failed acquisition cleanup preserves recovered same-key leases", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const ref = Location.Ref.make({ directory: AbsolutePath.make(path.join(dir.path, "recovered")) })
+        const scopeA = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+        const scopeB = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+        const scopeC = yield* Effect.acquireRelease(Scope.make(), (scope) => Scope.close(scope, Exit.void))
+        const failed = yield* Effect.all([
+          locations.contextEffect(ref).pipe(Scope.provide(scopeA), Effect.exit),
+          locations.contextEffect(ref).pipe(Scope.provide(scopeB), Effect.exit),
+        ], { concurrency: "unbounded" })
+        expect(failed.every(Exit.isFailure)).toBe(true)
+        yield* Scope.close(scopeA, Exit.void)
+        yield* Effect.promise(() => fs.mkdir(ref.directory))
+        const ready = yield* locations.contextEffect(ref).pipe(Scope.provide(scopeC))
+
+        yield* Scope.close(scopeB, Exit.void)
+        expect(ready === (yield* locations.contextEffect(ref).pipe(Scope.provide(scopeC)))).toBe(true)
+        yield* TestClock.adjust("61 minutes")
+        expect(ready === (yield* locations.contextEffect(ref).pipe(Scope.provide(scopeC)))).toBe(true)
+        expect(yield* Context.get(ready, FileSystem.Service).list()).toEqual([])
+      })),
+    ),
+  )
+
+  it.live("retries failed directory construction after recovery while preserving successful caches", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) => Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const healthy = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+        const original = yield* locations.contextEffect(healthy)
+        const directory = path.join(dir.path, "restored")
+        const native = Location.Ref.make({ directory: AbsolutePath.make(directory) })
+        const client = Location.Ref.make({ directory: AbsolutePath.make(process.platform === "win32" ? directory.replaceAll("\\", "/") : directory) })
+        const failed = yield* Effect.all([
+          locations.contextEffect(client).pipe(Effect.scoped, Effect.exit),
+          locations.contextEffect(native).pipe(Effect.scoped, Effect.exit),
+        ], { concurrency: "unbounded" })
+        expect(failed.every(Exit.isFailure)).toBe(true)
+
+        yield* Effect.promise(() => fs.mkdir(directory))
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "retained.txt"), "owned recovery"))
+        const recovered = yield* locations.contextEffect(native)
+        const files = yield* Context.get(recovered, FileSystem.Service).list()
+        expect(files.map((file) => file.path)).toContain(RelativePath.make("retained.txt"))
+        expect(recovered).toBe(yield* locations.contextEffect(client))
+        expect(original).toBe(yield* locations.contextEffect(healthy))
+        expect(Option.getOrUndefined(Context.getOption(recovered, Database.Service))).toBe(
+          Option.getOrUndefined(Context.getOption(original, Database.Service)),
+        )
+        const consumerFailure = yield* Effect.fail("request failure").pipe(
+          Effect.provide(locations.get(healthy)), Effect.scoped, Effect.exit,
+        )
+        expect(Exit.isFailure(consumerFailure)).toBe(true)
+        expect(original).toBe(yield* locations.contextEffect(healthy))
+      })),
+    ),
+  )
+
   it.live("reuses cached services for constructed and decoded location refs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -79,6 +176,8 @@ describe("LocationServiceMap", () => {
             directory: AbsolutePath.make(process.platform === "win32" ? dir.path.replaceAll("\\", "/") : dir.path),
           })
           const before = yield* locations.contextEffect(native)
+          const keys = Array.from(yield* RcMap.keys(locations.rcMap))
+          expect(keys.some((key) => key.directory === native.directory && key.workspaceID === native.workspaceID)).toBe(true)
           yield* locations.invalidate(client)
           const after = yield* locations.contextEffect(native)
           expect(after).not.toBe(before)

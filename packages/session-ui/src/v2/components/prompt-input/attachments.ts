@@ -94,6 +94,7 @@ export function createPromptInputV2Attachments(
     if (!editor) return
     return { prompt, cursor: prompt.cursor() ?? cursorPosition(editor) }
   }
+  let pickerTarget: ReturnType<typeof capture>
   const add = async (file: File, toast = true, target = capture()) => {
     if (!target) return false
     const mime = await attachmentMime(file)
@@ -187,15 +188,24 @@ export function createPromptInputV2Attachments(
 
   return {
     addAttachments,
+    addPickedAttachments(files: File[]) {
+      const target = pickerTarget ?? capture()
+      pickerTarget = undefined
+      return addAttachments(files, true, target)
+    },
+    cancelPicker() { pickerTarget = undefined },
     handlePaste,
     handleDrop,
     pick(fallback: () => void) {
+      const target = capture()
+      if (!target) return
       if (!input.picker) {
+        pickerTarget = target
         fallback()
         return
       }
       void input
-        .picker({ defaultPath: input.directory(), multiple: true, accept: accepted }, (file) => add(file))
+        .picker({ defaultPath: input.directory(), multiple: true, accept: accepted }, (file) => add(file, true, target))
         .catch(input.onError)
     },
   }

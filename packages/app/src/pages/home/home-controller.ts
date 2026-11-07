@@ -4,18 +4,37 @@ import { ServerConnection, useServer } from "@/context/server"
 import { useServerSync } from "@/context/server-sync"
 import { useTabs } from "@/context/tabs"
 import { toggleHomeProjectSelection } from "@/pages/layout/helpers"
-import { createEffect, createMemo } from "solid-js"
+import { createEffect, createMemo, type Accessor } from "solid-js"
+import { pathKey } from "@/utils/path-key"
 
-export function createHomeController() {
+export function createHomeController(options?: { browseServer?: Accessor<ServerConnection.Key | undefined> }) {
   const sync = useServerSync()
   const layout = useLayout()
   const server = useServer()
   const global = useGlobal()
   const tabs = useTabs()
   const selection = layout.home.selection
-  const focusedServer = createMemo(
-    () => global.servers.list().find((conn) => ServerConnection.key(conn) === selection().server) ?? server.current,
+  const focusedServer = createMemo(() => {
+    const list = global.servers.list()
+    const browseServer = options?.browseServer?.()
+    const savedServer = selection().server
+    return (
+      (browseServer && list.find((conn) => ServerConnection.key(conn) === browseServer)) ||
+      list.find((conn) => ServerConnection.key(conn) === savedServer) ||
+      server.current
+    )
+  })
+  // Expose an opaque revision to the view, never credentials in a scope label.
+  const healthSource = createMemo(
+    () => {
+      const conn = focusedServer()
+      return conn ? [ServerConnection.key(conn), conn.http.url, conn.http.username, conn.http.password] : undefined
+    },
+    undefined,
+    { equals: (previous, next) => previous === next || !!previous && !!next && previous.every((value, index) => value === next[index]) },
   )
+  let healthRevision = 0
+  const healthScope = createMemo(() => { healthSource(); return ++healthRevision })
   const focusedServerCtx = createMemo(() => {
     const conn = focusedServer()
     if (!conn) return undefined
@@ -27,7 +46,13 @@ export function createHomeController() {
     () => focusedServerCtx()?.projects.recentlyClosed() ?? layout.projects.recentlyClosed(),
   )
   const homedir = createMemo(() => focusedSync().data.path.home ?? "")
-  const selectedProject = createMemo(() => projects().find((project) => project.worktree === selection().directory))
+  const selectedProject = createMemo(() => {
+    const directory = selection().directory
+    if (!directory) return
+    return projects().find((project) =>
+      [project.worktree, ...(project.sandboxes ?? [])].some((item) => pathKey(item) === pathKey(directory)),
+    )
+  })
   const newSessionProject = createMemo(
     () =>
       selectedProject() ??
@@ -62,6 +87,11 @@ export function createHomeController() {
     server: {
       list: global.servers.list,
       health: (conn: ServerConnection.Any) => global.servers.health[ServerConnection.key(conn)],
+      healthScope,
+      refreshHealth: () => {
+        const conn = focusedServer()
+        return conn ? global.servers.refreshHealth(conn) : Promise.resolve(undefined)
+      },
       context: (conn: ServerConnection.Any) => global.ensureServerCtx(conn),
       focused: focusedServer,
       focusedContext: focusedServerCtx,

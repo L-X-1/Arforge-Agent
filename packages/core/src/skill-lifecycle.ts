@@ -136,7 +136,7 @@ export function evaluateSkill(input: {
     noPermissionExpansion: true,
     noNewSecret: newSecretFindings === 0,
     noNewEgress: newEgressAttempts === 0,
-    noRegression: regressionCases.length === 0,
+    noRegression: regressionCases.length === 0 && newFailureCount === 0,
     utilityNonRegression: utilityDelta >= 0,
   }
   return {

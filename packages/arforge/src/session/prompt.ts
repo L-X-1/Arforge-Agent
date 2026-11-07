@@ -137,21 +137,26 @@ export const durablePromptFromMatureMessage = (
     })
     .join("\n")
   const files = message.parts
-    // Text attachments are already expanded into bounded synthetic text by
+    // Text/directory attachments are already expanded into bounded synthetic text by
     // `createUserMessage` (data URLs are decoded; local files go through the
-    // canonical Read carrier). Keeping the text/plain media URI in the Core
+    // canonical Read carrier). Keeping these media URIs in the Core
     // prompt would make provider lowering reject an otherwise valid request,
     // because image/audio/video are the only media kinds accepted by the
     // provider-neutral contract. The mature message still retains the file
     // part for replay; the durable Core prompt carries its text projection.
     .filter(
       (part): part is SessionV1.FilePart =>
-        part.type === "file" && inlineTextAttachment(part) === undefined && part.mime !== "text/plain",
+        part.type === "file" &&
+        (part.source?.type === "resource" || (inlineTextAttachment(part) === undefined &&
+          part.mime !== "text/plain" && part.mime !== "application/x-directory")),
     )
     .map((part) => ({
       uri: part.url,
       mime: part.mime,
       ...(part.filename ? { name: part.filename } : {}),
+      ...(part.source?.type === "resource"
+        ? { resource: { server: part.source.clientName, uri: part.source.uri } }
+        : {}),
       ...(part.source
         ? {
             source: {
@@ -235,6 +240,8 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   /** Resolves and persists a command without starting a second execution owner. */
   readonly admitCommand: (input: CommandInput) => Effect.Effect<CommandAdmission, Image.Error>
+  /** Resolve into the current Prompt contract before either idle or queued admission. Creates no V1 shadow. */
+  readonly prepareDurableCommand: NonNullable<SessionExecution.Interface["preparePrompt"]>
   /** Command admission plus the caller's canonical SessionExecution; no legacy-loop fallback. */
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
@@ -1941,13 +1948,22 @@ const layer = Layer.effect(
             mime: file.mime,
             url: file.uri,
             filename: file.name,
-            source: file.source
+            source: file.resource
               ? {
-                  type: "file",
-                  path: file.uri,
-                  text: { value: file.source.text, start: file.source.start, end: file.source.end },
+                  type: "resource",
+                  clientName: file.resource.server,
+                  uri: file.resource.uri,
+                  text: file.source
+                    ? { value: file.source.text, start: file.source.start, end: file.source.end }
+                    : { value: "", start: 0, end: 0 },
                 }
-              : undefined,
+              : file.source
+                ? {
+                    type: "file",
+                    path: file.uri,
+                    text: { value: file.source.text, start: file.source.start, end: file.source.end },
+                  }
+                : undefined,
           }),
         ),
         ...(input.agents ?? []).map(
@@ -2120,6 +2136,130 @@ const layer = Layer.effect(
       return { ...prepared, message }
     })
 
+    const prepareDurableCommand: Interface["prepareDurableCommand"] = Effect.fn("SessionPrompt.prepareDurableCommand")(
+      function* (input) {
+        const command = input.prompt.command
+        if (!command)
+          return yield* new SessionExecution.OperationError({
+            operation: "command",
+            reason: "invalid",
+            message: "Named command is required",
+          })
+        const route = input.prompt.route
+        const prepared = yield* prepareCommand({
+          sessionID: SessionID.make(input.sessionID),
+          messageID: MessageID.make(input.id),
+          command: command.name,
+          arguments: command.arguments,
+          agent: route?.agent,
+          model: route?.model ? `${route.model.providerID}/${route.model.id}` : undefined,
+          variant: route?.model?.variant,
+          parts: input.prompt.files?.map((file) => {
+            const dataMime = file.uri.match(/^data:([^;,]+)[;,]/i)?.[1]
+            const target = URL.canParse(file.uri) ? new URL(file.uri).pathname : (file.name ?? file.uri)
+            return {
+              type: "file" as const,
+              url: file.uri,
+              filename: file.name,
+              mime:
+                file.mime ?? dataMime ?? (target.endsWith("/") ? "application/x-directory" : FSUtil.mimeType(target)),
+              ...(file.resource
+                ? {
+                    source: {
+                      type: "resource" as const,
+                      clientName: file.resource.server,
+                      uri: file.resource.uri,
+                      text: file.source
+                        ? { value: file.source.text, start: file.source.start, end: file.source.end }
+                        : { value: "", start: 0, end: 0 },
+                    },
+                  }
+                : file.source
+                  ? {
+                      source: {
+                        type: "file" as const,
+                        path: file.uri,
+                        text: { value: file.source.text, start: file.source.start, end: file.source.end },
+                      },
+                    }
+                  : {}),
+            }
+          }),
+        })
+        const parts = prepared.prompt.parts
+        return DurablePrompt.make({
+          ...input.prompt,
+          text: parts
+            .flatMap((part) => (part.type === "text" ? [part.text] : part.type === "subtask" ? [part.prompt] : []))
+            .join("\n"),
+          files: parts.flatMap((part) =>
+            part.type === "file"
+              ? [
+                  {
+                    uri: part.url,
+                    mime: part.mime,
+                    name: part.filename,
+                    ...(part.source?.type === "resource"
+                      ? { resource: { server: part.source.clientName, uri: part.source.uri } }
+                      : {}),
+                    ...(part.source
+                      ? {
+                          source: {
+                            text: part.source.text.value,
+                            start: part.source.text.start,
+                            end: part.source.text.end,
+                          },
+                        }
+                      : {}),
+                  },
+                ]
+              : [],
+          ),
+          agents: [
+            ...(input.prompt.agents ?? []),
+            ...parts.flatMap((part) => (part.type === "agent" ? [{ name: part.name }] : [])),
+          ],
+          scheduledTasks: parts.flatMap((part, index) =>
+            part.type === "subtask"
+              ? [
+                  {
+                    id: `prt_${canonicalHash({ messageID: input.id, index })}`,
+                    prompt: part.prompt,
+                    description: part.description,
+                    agent: part.agent,
+                    command: part.command,
+                    ...(part.model ? { model: { providerID: part.model.providerID, id: part.model.modelID } } : {}),
+                  },
+                ]
+              : [],
+          ),
+          route: {
+            agent: prepared.prompt.agent,
+            ...(prepared.prompt.model
+              ? {
+                  model: {
+                    providerID: prepared.prompt.model.providerID,
+                    id: prepared.prompt.model.modelID,
+                    ...(prepared.prompt.variant ? { variant: ModelV2.VariantID.make(prepared.prompt.variant) } : {}),
+                  },
+                }
+              : {}),
+          },
+        })
+      },
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.fail(
+              new SessionExecution.OperationError({
+                operation: "command",
+                reason: "invalid",
+                message: "Named command preparation failed; verify its command, agent and model configuration",
+              }),
+            ),
+      ),
+    )
+
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       const owner = yield* requireExecution
       const admitted = yield* admitCommand(input)
@@ -2134,6 +2274,7 @@ const layer = Layer.effect(
     })
 
     return Service.of({
+      prepareDurableCommand,
       recoverTask: (input) =>
         Effect.gen(function* () {
           const frozen = readRecoveryIntent(input.child)

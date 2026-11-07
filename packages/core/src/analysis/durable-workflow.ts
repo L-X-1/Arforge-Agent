@@ -818,9 +818,11 @@ export class DurableWorkflowGraphRuntime {
     ]
     await this.save(runId, state)
     if (snapshot.run.status === "failed") await this.transition(runId, "recovering", "workflow node retry requested")
-    if (["recovering", "paused"].includes((await this.snapshot(runId)).run.status))
+    if ((await this.snapshot(runId)).run.status === "paused")
       await this.transition(runId, "queued", "workflow retry queued")
-    if ((await this.snapshot(runId)).run.status === "queued")
+    // Recovery resumes directly; the canonical Run state machine forbids
+    // recovering -> queued. Paused retries retain their normal queue path.
+    if (["recovering", "queued"].includes((await this.snapshot(runId)).run.status))
       await this.transition(runId, "running", "workflow retry started")
     if (!this.loops.has(runId)) {
       this.loops.add(runId)

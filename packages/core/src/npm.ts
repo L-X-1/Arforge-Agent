@@ -178,6 +178,21 @@ const layer = Layer.effect(
           ...Object.keys(root?.optionalDependencies || {}),
         ])
 
+        // A packaged SDK resource can move on upgrade. A lock entry's name
+        // alone must not keep an old install or a missing SDK indefinitely.
+        for (const dependency of input?.add ?? []) {
+          const spec = root.dependencies?.[dependency.name]
+          const installed = yield* afs.existsSafe(path.join(dir, "node_modules", dependency.name, "package.json"))
+          const expected = dependency.version
+          if (
+            !installed ||
+            (expected && (typeof spec !== "string" || !sameTarget(dependency.name, spec, expected, dir)))
+          ) {
+            yield* reify({ dir, add })
+            return
+          }
+        }
+
         for (const name of declared) {
           if (!locked.has(name)) {
             yield* reify({ dir, add })
@@ -247,6 +262,16 @@ const layer = Layer.effect(
     })
   }),
 )
+
+function sameTarget(name: string, current: string, expected: string, directory: string) {
+  try {
+    const left = npa.resolve(name, current, directory)
+    const right = npa.resolve(name, expected, directory)
+    return left.type === right.type && left.fetchSpec === right.fetchSpec
+  } catch {
+    return current === expected
+  }
+}
 
 export const node = makeGlobalNode({
   service: Service,

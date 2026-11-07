@@ -1,6 +1,6 @@
 import { checksum } from "@arforge-ai/core/util/encode"
 import type { FilePartSource } from "@arforge-ai/sdk/v2/client"
-import { batch, createMemo, type Accessor } from "solid-js"
+import { batch, createComputed, createMemo, onCleanup, type Accessor } from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import type { FileSelection } from "@/context/file"
 import { Persist, persisted } from "@/utils/persist"
@@ -66,6 +66,17 @@ export type PromptScope = { draftID: string } | { dir: string; id?: string }
 
 export const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
 
+export function hasPromptResources(prompt: Prompt) {
+  return prompt.some((part) => part.type === "file" && part.source?.type === "resource")
+}
+
+export function hasPromptContent(prompt: Prompt) {
+  return (
+    hasPromptResources(prompt) ||
+    prompt.some((part) => part.type === "image" || ("content" in part && !!part.content.trim()))
+  )
+}
+
 export type PromptStore = {
   prompt: Prompt
   cursor?: number
@@ -98,7 +109,20 @@ function isPartEqual(partA: ContentPart, partB: ContentPart) {
         partA.path === partB.path &&
         partA.mime === partB.mime &&
         partA.filename === partB.filename &&
-        isSelectionEqual(partA.selection, partB.selection)
+        isSelectionEqual(partA.selection, partB.selection) &&
+        (partA.source?.type !== "resource" && partB.source?.type !== "resource"
+          ? true
+          : partA.source?.type === "resource" &&
+            partB.source?.type === "resource" &&
+            partA.source.clientName === partB.source.clientName &&
+            partA.source.uri === partB.source.uri &&
+            partA.url === partB.url &&
+            partA.content === partB.content &&
+            partA.start === partB.start &&
+            partA.end === partB.end &&
+            partA.source.text.value === partB.source.text.value &&
+            partA.source.text.start === partB.source.text.start &&
+            partA.source.text.end === partB.source.text.end)
       )
     case "agent":
       return partB.type === "agent" && partA.name === partB.name
@@ -197,11 +221,56 @@ function promptStore(initial?: InitialPrompt): PromptStore {
 
 function createPromptStateValue(store: PromptStore, setStore: SetStoreFunction<PromptStore>) {
   const actions = createPromptActions(setStore)
+  let owner = 0,
+    version = 0,
+    alive = true
+  const array = Symbol("array"),
+    object = Symbol("object")
+  let previous: unknown[] = []
+  // Track direct V2 store writes too, without serializing/copying image data on each edit.
+  const revision = createMemo(() => {
+    const values: unknown[] = []
+    const visit = (value: unknown) => {
+      if (Array.isArray(value)) {
+        values.push(array, value.length)
+        value.forEach(visit)
+      } else if (value && typeof value === "object") {
+        const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+        values.push(object, entries.length)
+        for (const [key, entry] of entries) {
+          values.push(key)
+          visit(entry)
+        }
+      } else values.push(value)
+    }
+    visit(store.prompt)
+    visit(store.model)
+    visit(store.context.items)
+    if (values.length !== previous.length || values.some((value, index) => !Object.is(value, previous[index]))) {
+      previous = values
+      version++
+    }
+    return version
+  })
+  createComputed(() => revision())
+  onCleanup(() => {
+    alive = false
+  })
   const value = {
     store: [() => store, setStore] as [Accessor<PromptStore>, SetStoreFunction<PromptStore>],
     current: () => store.prompt,
     cursor: createMemo(() => store.cursor),
     dirty: () => !isPromptEqual(store.prompt, DEFAULT_PROMPT),
+    ownership: {
+      claim() {
+        owner++
+      },
+      capture() {
+        const expectedOwner = owner,
+          expectedRevision = revision()
+        return { current: () => alive && owner === expectedOwner && revision() === expectedRevision }
+      },
+    },
     model: {
       current: () => store.model,
       set: (model: PromptModel | undefined) => setStore("model", model),

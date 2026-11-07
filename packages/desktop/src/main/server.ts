@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from "node:path"
+import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
@@ -7,6 +8,9 @@ import { getUserShell, loadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
 import { loadProductEnv } from "@arforge-ai/core/config/product-env"
+import { checkHealth, waitForHealth } from "./health"
+import { createOwnedProcessStop } from "./lifecycle"
+export { checkHealth } from "./health"
 
 export type HealthCheck = { wait: Promise<void> }
 
@@ -19,10 +23,10 @@ export type SidecarListener = { stop: () => Promise<void> }
 
 const SIDECAR_SERVICE_NAME = "arforge server"
 const SIDECAR_START_STALL_TIMEOUT = 60_000
-const SIDECAR_STOP_TIMEOUT = 6_000
 
 type SpawnLocalServerOptions = {
   userDataPath: string
+  onListener?: (listener: SidecarListener) => void
   onStdout?: (message: string) => void
   onStderr?: (message: string) => void
   onExit?: (code: number) => void
@@ -80,6 +84,19 @@ export async function spawnLocalServer(
   })
   let exited = false
   const exit = defer<number>()
+  const healthAbort = new AbortController()
+  const stop = createOwnedProcessStop({
+    exited: () => exited,
+    exit: exit.promise,
+    requestStop: () => {
+      healthAbort.abort(new Error("Owned backend is stopping"))
+      child.postMessage({ type: "stop" })
+    },
+    kill: () => {
+      child.kill()
+    },
+  })
+  const listener = { stop }
 
   const onProcessGone = (_event: unknown, details: Details) => {
     if (details.type !== "Utility" || details.name !== SIDECAR_SERVICE_NAME) return
@@ -92,11 +109,14 @@ export async function spawnLocalServer(
     app.off("child-process-gone", onProcessGone)
     options.onExit?.(code)
     exit.resolve(code)
+    healthAbort.abort(new Error(`Owned backend exited with code ${code}`))
   })
   child.on("error", (error) => options.onStderr?.(`utility process error: ${serializeError(error).message}`))
 
   child.stdout?.on("data", (chunk: Buffer) => options.onStdout?.(chunk.toString("utf8").trimEnd()))
   child.stderr?.on("data", (chunk: Buffer) => options.onStderr?.(chunk.toString("utf8").trimEnd()))
+  // Register ownership before readiness: Quit during startup must also stop it.
+  options.onListener?.(listener)
 
   await new Promise<void>((resolve, reject) => {
     let done = false
@@ -151,78 +171,19 @@ export async function spawnLocalServer(
       password,
       userDataPath: options.userDataPath,
     })
-  }).catch((error) => {
-    if (!exited) child.kill()
+  }).catch(async (error) => {
+    await stop()
     throw error
   })
 
-  const wait = (async () => {
-    const url = `http://${hostname}:${port}`
-    let healthy = false
-    const gone = exit.promise.then((code) => {
-      if (healthy) return
-      throw new Error(`Sidecar exited before health check passed with code ${code}`)
-    })
-
-    const ready = async () => {
-      while (true) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        if (await checkHealth(url, username, password)) {
-          healthy = true
-          return
-        }
-      }
-    }
-
-    await Promise.race([ready(), gone])
-  })()
-
-  let stopping: Promise<void> | undefined
-
+  const wait = waitForHealth({
+    check: (signal) => checkHealth(`http://${hostname}:${port}`, username, password, signal),
+    signal: healthAbort.signal,
+  })
   return {
-    listener: {
-      stop: () => {
-        if (stopping) return stopping
-        if (exited) return Promise.resolve()
-        child.postMessage({ type: "stop" })
-        stopping = Promise.race([
-          exit.promise.then(() => undefined),
-          delay(SIDECAR_STOP_TIMEOUT).then(() => {
-            if (!exited) child.kill()
-          }),
-        ])
-        return stopping
-      },
-    },
+    listener,
     health: { wait },
   }
-}
-
-export async function checkHealth(url: string, username?: string | null, password?: string | null): Promise<boolean> {
-  let healthUrls: URL[]
-  try {
-    healthUrls = [new URL("/api/health", url), new URL("/global/health", url)]
-  } catch {
-    return false
-  }
-
-  const headers = new Headers()
-  if (password) {
-    const auth = Buffer.from(`${username ?? "arforge"}:${password}`).toString("base64")
-    headers.set("authorization", `Basic ${auth}`)
-  }
-
-  for (const healthUrl of healthUrls) {
-    try {
-      const res = await fetch(healthUrl, {
-        method: "GET",
-        headers,
-        signal: AbortSignal.timeout(3000),
-      })
-      if (res.ok) return true
-    } catch {}
-  }
-  return false
 }
 
 function createSidecarEnv(): Record<string, string> {
@@ -230,12 +191,15 @@ function createSidecarEnv(): Record<string, string> {
     Object.entries(process.env).flatMap(([key, value]) => (value === undefined ? [] : [[key, String(value)]])),
   )
   delete env.DEBUG
+  const bundledSDK = app.isPackaged
+    ? join(process.resourcesPath, "plugin-sdk")
+    : join(dirname(fileURLToPath(import.meta.url)), "assets", "plugin-sdk")
+  if (!existsSync(join(bundledSDK, "package.json"))) {
+    throw new Error("Bundled plugin SDK is missing. Rebuild or reinstall Arforge; no registry fallback was attempted.")
+  }
+  env.ARFORGE_BUNDLED_PLUGIN_SDK = bundledSDK
   if (process.platform === "linux") delete env.LD_PRELOAD
   return env
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 function serializeError(error: unknown) {

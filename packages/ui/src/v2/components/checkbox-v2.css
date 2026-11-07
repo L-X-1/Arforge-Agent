@@ -182,3 +182,5 @@
 [data-slot="checkbox-v2"]:where([data-disabled]) [data-slot="checkbox-v2-description"] {
   opacity: 0.5;
 }
+
+@media(pointer:coarse){[data-slot="checkbox-v2-row"]{min-height:44px;align-items:center}}

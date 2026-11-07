@@ -1,4 +1,5 @@
 import type { Prompt } from "@/context/prompt"
+import { hasPromptContent, isPromptEqual as isPromptContentEqual } from "@/context/prompt-state"
 import type { SelectedLineRange } from "@/context/file"
 
 const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
@@ -22,7 +23,14 @@ export type PromptHistoryEntry = {
 
 export type PromptHistoryStoredEntry = Prompt | PromptHistoryEntry
 
-export function canNavigateHistoryAtCursor(direction: "up" | "down", text: string, cursor: number, inHistory = false) {
+export function canNavigateHistoryAtCursor(
+  direction: "up" | "down",
+  text: string,
+  cursor: number,
+  inHistory = false,
+  hasNonTextContent = false,
+) {
+  if (!inHistory && hasNonTextContent) return false
   const position = Math.max(0, Math.min(cursor, text.length))
   const atStart = position === 0
   const atEnd = position === text.length
@@ -82,13 +90,8 @@ export function prependHistoryEntry(
   comments: PromptHistoryComment[] = [],
   max = MAX_HISTORY,
 ) {
-  const text = prompt
-    .map((part) => ("content" in part ? part.content : ""))
-    .join("")
-    .trim()
-  const hasImages = prompt.some((part) => part.type === "image")
   const hasComments = comments.some((comment) => !!comment.comment.trim())
-  if (!text && !hasImages && !hasComments) return entries
+  if (!hasPromptContent(prompt) && !hasComments) return entries
 
   const entry = {
     prompt: clonePromptParts(prompt),
@@ -122,6 +125,11 @@ function isPromptEqual(promptA: PromptHistoryStoredEntry, promptB: PromptHistory
     if (partA.type !== partB.type) return false
     if (partA.type === "text" && partA.content !== (partB.type === "text" ? partB.content : "")) return false
     if (partA.type === "file") {
+      if (
+        (partA.source?.type === "resource" || (partB.type === "file" && partB.source?.type === "resource")) &&
+        !isPromptContentEqual([partA], [partB])
+      )
+        return false
       if (partA.path !== (partB.type === "file" ? partB.path : "")) return false
       const a = partA.selection
       const b = partB.type === "file" ? partB.selection : undefined

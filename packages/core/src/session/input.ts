@@ -3,7 +3,7 @@ export * as SessionInput from "./input"
 import { and, asc, eq, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Admitted, Delivery } from "@arforge-ai/schema/session-input"
-import type { Database } from "../database/database"
+import { Database } from "../database/database"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
@@ -158,9 +158,12 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     .get()
     .pipe(Effect.orDie)
   if (message !== undefined) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+  const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
   const stored = yield* db
     .insert(SessionInputTable)
     .values({
+      tenant_id: principal.tenantID,
+      owner_user_id: principal.userID,
       id: input.id,
       session_id: input.sessionID,
       admitted_seq: input.admittedSeq,
@@ -212,9 +215,12 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     return
   }
 
+  const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
   yield* db
     .insert(SessionInputTable)
     .values({
+      tenant_id: principal.tenantID,
+      owner_user_id: principal.userID,
       id: input.id,
       session_id: input.sessionID,
       prompt: encodePrompt(input.prompt) as Prompt,

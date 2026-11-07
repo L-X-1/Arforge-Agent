@@ -75,6 +75,44 @@ beforeEach(() => {
 })
 
 describe("persist localStorage resilience", () => {
+  test("observed preference quota failure preserves the old value and unrelated drafts", () => {
+    const name = "arforge.formal-preference-quota"
+    const saved: boolean[] = []
+    const api = persistTesting.localStorageWithPrefix(name, { preserveOnFailure: true, onWrite: (value) => saved.push(value) })
+    api.setItem("settings", '{"font":"original"}')
+    storage.setItem("arforge.formal-important-draft", "keep this draft")
+    const originalSet = storage.setItem
+    storage.setItem = function (key, value) {
+      if (key === `${name}:settings`) throw new DOMException("full", "QuotaExceededError")
+      return originalSet.call(this, key, value)
+    }
+    try {
+      api.setItem("settings", '{"font":"new"}')
+      expect(saved).toEqual([true, false])
+      expect(storage.getItem(`${name}:settings`)).toBe('{"font":"original"}')
+      expect(storage.getItem("arforge.formal-important-draft")).toBe("keep this draft")
+      expect(storage.calls.remove).toBe(0)
+    } finally { storage.setItem = originalSet }
+  })
+
+  test("observed preference failure reports later writes as unsaved until an explicit retry", () => {
+    const name = "arforge.formal-preference-denied"
+    const saved: boolean[] = []
+    const api = persistTesting.localStorageWithPrefix(name, { preserveOnFailure: true, onWrite: (value) => saved.push(value) })
+    api.setItem("settings", "old")
+    const originalSet = storage.setItem
+    storage.setItem = function (key, value) {
+      if (key === `${name}:settings`) throw new DOMException("denied", "SecurityError")
+      return originalSet.call(this, key, value)
+    }
+    try {
+      api.setItem("settings", "new")
+      api.setItem("settings", "newest")
+      expect(saved).toEqual([true, false, false])
+      expect(api.getItem("settings")).toBe("old")
+    } finally { storage.setItem = originalSet }
+  })
+
   test("does not cache values as persisted when quota write and eviction fail", () => {
     const storageApi = persistTesting.localStorageWithPrefix("arforge.quota.scope")
     storageApi.setItem("value", '{"value":1}')

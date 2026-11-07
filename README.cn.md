@@ -19,6 +19,7 @@ Arforge Agent 是面向开发工作区的本地优先 AI 智能体。当前公�
 
 - `packages/core`：共享契约、数据库、Session Runner、记忆、评测与原生 TypeScript 能力层。
 - `packages/arforge`：统一 CLI、Provider、Server、工具与会话运行时。
+- `packages/server`：连接 Core 的 HTTP 服务与路由。
 - `packages/app`：Desktop 与 Web 共用的 Solid 前端。
 - `packages/desktop`：当前 Electron 桌面外壳。
 - `arforge/`：Python 兼容与迁移保留层，也供测试和评测使用；产品 CLI、会话运行时
@@ -27,32 +28,25 @@ Arforge Agent 是面向开发工作区的本地优先 AI 智能体。当前公�
 CLI、Server、App 和 Desktop 使用同一套会话、模型、权限和 PostgreSQL
 契约，不再各自维护一套产品状态。
 
-## 已验证状态（2026-07-27）
+## 从新检出的源码启动
 
-- 真实 CLI → Core → DeepSeek 调用成功，模型完成状态为 `stop`。
-- 切换最小权限 `arforge_app` 后再次真实调用，返回
-  `Arforge私有链路正常`。
-- Python 全量：`2967 passed, 7 skipped, 0 failed`。
-- TypeScript 成熟运行时全量：
-  `3182 passed, 65 skipped, 1 todo, 0 failed`。
-- 根工作区 TypeScript：`23/23` 包通过。
-- 严格品牌审计：`0 hits in 0 finding files`；遍历 6,392 个文件，扫描
-  5,786 个文本文件。
-- 外部源码依赖、Junction 和运行进程：均为 0。
-- PostgreSQL 应用角色读写往返、备份和恢复比对通过。
-
-跳过项是当前 Windows 主机缺少的可选运行时或平台能力；例如本机没有
-Go/Ruby/PHP 且 Docker 引擎未启动时会明确跳过/报告不可用，不伪造成功。
-
-## 首次配置
+在仓库根目录使用 `package.json` 指定的 Bun 1.3.14：
 
 ```powershell
-cd Arforge-Agent
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev,postgres]"
-bun install
+bun --version
+bun install --frozen-lockfile
+bun run cli --help
+bun run dev:desktop
 ```
+
+打开桌面端后，选择一个项目，在设置中配置服务商，并在输入框下方选定模型。
+Python 兼容工具和开发检查见[开发者上手指南](docs/DEVELOPER_ONBOARDING.md)。
+
+### Windows 私有启动器（可选）
+
+若要使用 `scripts/run_cli.ps1` 或 `scripts/run_desktop.ps1`，将 Bun 1.3.14 的
+`bun.exe` 放在仓库内的 `.tools/bun-1.3.14/bun.exe`。使用 PATH 上的 Bun 时，
+可直接执行上面的命令。
 
 私有环境文件位于：
 
@@ -91,9 +85,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\configure_private_postgres.ps
 脚本会生成随机的 `arforge_app` 密码、审计最小权限，并只把应用连接持久化到
 用户私有 `.env`；不会把管理员连接当作日常运行连接保存。
 
-## 启动
+## CLI 和桌面启动器示例
 
-CLI：
+完成上述可选的 Windows 启动器配置后，可以运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 --help
@@ -272,7 +266,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_desktop.ps1
 
 - 私有持久模式：PostgreSQL `arforge` 数据库，日常角色 `arforge_app`。
 - 管理员角色：只运行迁移、授权和恢复管理，不启动产品。
-- SQLite/内存数据库：只用于显式本地隔离测试或尚未迁移的兼容能力。
+- SQLite：未配置 PostgreSQL URL 时使用的本地运行存储。隔离测试可使用内存数据库。
 - 备份：`%LOCALAPPDATA%\Arforge\backups\postgresql`。
 
 `arforge clear-data` 采用两阶段协议：首次调用只盘点 `workspace|all` 范围、

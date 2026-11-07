@@ -98,6 +98,48 @@ describe("DurableAction", () => {
     return { actionID, sessionID, subject, action }
   })
 
+  it.effect("filters nonlocal event ownership and allowed Sessions before decoding foreign proposals", () => Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const actions = yield* DurableAction.Service
+    const owned = yield* propose()
+    const peer = yield* propose()
+    const tenant = yield* propose()
+    const unknown = yield* propose()
+    const identity = { tenantID: "ten_scope_a", userID: "usr_scope_a" }
+    for (const [fixture, tenantID, userID] of [
+      [owned, identity.tenantID, identity.userID],
+      [peer, identity.tenantID, "usr_scope_b"],
+      [tenant, "ten_scope_b", identity.userID],
+      [unknown, identity.tenantID, identity.userID],
+    ] as const) {
+      yield* db.update(EventTable).set({ tenant_id: tenantID, owner_user_id: userID }).where(eq(EventTable.aggregate_id, fixture.actionID)).run().pipe(Effect.orDie)
+      yield* db.update(EventSequenceTable).set({ tenant_id: tenantID, owner_user_id: userID }).where(eq(EventSequenceTable.aggregate_id, fixture.actionID)).run().pipe(Effect.orDie)
+    }
+    // Foreign rows forge the visible Session but remain excluded by SQL owner predicates.
+    for (const fixture of [peer, tenant])
+      yield* db.update(EventTable).set({ data: { sessionID: owned.sessionID } }).where(eq(EventTable.aggregate_id, fixture.actionID)).run().pipe(Effect.orDie)
+    yield* db.update(EventTable).set({ data: { sessionID: "ses_scope_unknown" } }).where(eq(EventTable.aggregate_id, unknown.actionID)).run().pipe(Effect.orDie)
+    const result = yield* Database.principalContext(identity, actions.list({ allowedSessionIDs: new Set([owned.sessionID]), limit: 1 }))
+    expect(result.map((snapshot) => snapshot.action.id)).toEqual([owned.actionID])
+    expect(yield* Database.principalContext(identity, actions.list({ allowedSessionIDs: new Set(), limit: 1 }))).toEqual([])
+    // The private/default diagnostic still reads the original whole history and reports corruption.
+    expect((yield* actions.list({ limit: 100 }).pipe(Effect.exit))._tag).toBe("Failure")
+  }))
+
+  it.effect("preserves private default action history across stored owners", () => Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const actions = yield* DurableAction.Service
+    const owned = yield* propose()
+    const other = yield* propose()
+    yield* db.update(EventTable).set({ tenant_id: "ten_other", owner_user_id: "usr_other" }).where(eq(EventTable.aggregate_id, other.actionID)).run().pipe(Effect.orDie)
+    const ids = (yield* actions.list({ limit: 100 })).map((snapshot) => snapshot.action.id)
+    expect(ids).toContain(owned.actionID)
+    expect(ids).toContain(other.actionID)
+    yield* db.update(EventTable).set({ data: { sessionID: owned.sessionID } }).where(eq(EventTable.aggregate_id, other.actionID)).run().pipe(Effect.orDie)
+    const scoped = yield* Database.principalContext(Database.DefaultLocalPrincipal, actions.list({ allowedSessionIDs: new Set([owned.sessionID]), limit: 1 }))
+    expect(scoped.map((snapshot) => snapshot.action.id)).toEqual([owned.actionID])
+  }))
+
   const policy = Effect.fn("DurableActionTest.policy")(function* (fixture: Fixture) {
     const events = yield* EventV2.Service
     const decidedAt = yield* DateTime.now

@@ -106,7 +106,7 @@ test("opens and searches project files inline", async ({ page }) => {
   const filter = panel.getByRole("combobox", { name: "Filter files" })
   await expect(filter).toBeFocused()
   await expect(panel.getByRole("tab", { name: "Open file" })).toHaveAttribute("data-selected", "")
-  await expect(panel.getByText("open-file-project", { exact: true })).toBeVisible()
+  await expect(sidebar.getByText("open-file-project", { exact: true })).toBeVisible()
 
   await panel.getByRole("button", { name: "README.md" }).click()
   await expect(panel.getByRole("tab", { name: "README.md" })).toHaveAttribute("data-selected", "")

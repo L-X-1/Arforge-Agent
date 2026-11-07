@@ -13,7 +13,7 @@
   height: auto;
   min-height: 280px;
   max-height: min(calc(100vh - 96px), 480px);
-  margin-top: max(48px, calc((100vh - 480px) / 2));
+  margin-top: max(env(safe-area-inset-top, 0px), min(80px, max(16px, 8dvh)));
   border-radius: 20px;
   background: var(--v2-background-bg-base);
   box-shadow: var(--v2-elevation-floating);
@@ -88,7 +88,7 @@
   margin: 6px 0;
   padding: 0 12px;
   color: var(--v2-text-text-muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 440;
   line-height: 16px;
   letter-spacing: -0.04px;
@@ -146,9 +146,9 @@
   min-width: 0;
   overflow: hidden;
   color: var(--v2-text-text-base);
-  font-size: 13px;
-  font-weight: 530;
-  line-height: 16px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
   letter-spacing: -0.04px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -216,5 +216,31 @@
 
   .command-palette-v2-description {
     max-width: 100%;
+  }
+}
+
+/* Z09–Z11/R28: command-only blur covers the complete application content. */
+[data-component="dialog-overlay"]:has(+ [data-dialog-layer] .command-palette-v2) {
+  background: rgb(0 0 0 / 12%);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+[data-component="dialog-v2"]:has(.command-palette-v2) [data-slot="dialog-container"] {
+  width: min(640px, calc(100vw - 32px));
+  border-radius: 16px;
+  max-height: min(80dvh, 480px);
+}
+.command-palette-v2-row {
+  border-radius: 8px;
+  min-height: 36px;
+  height: auto;
+}
+.command-palette-v2-row:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .command-palette-v2-row {
+    min-height: 44px;
   }
 }

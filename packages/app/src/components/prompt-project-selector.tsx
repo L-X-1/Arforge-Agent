@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createSignal,
   For,
   onCleanup,
@@ -26,6 +27,7 @@ export type PromptProject = {
   sandboxes?: string[]
   icon?: { color?: string; url?: string; override?: string }
   server?: { key: string; name: string }
+  unavailable?: string
 }
 
 export type PromptProjectControls = {
@@ -34,6 +36,7 @@ export type PromptProjectControls = {
   server?: string
   select: (worktree: string, server?: string) => void
   add: (title: string, server?: string) => void
+  refresh?: () => void
 }
 
 const actionPrefix = "action:"
@@ -65,7 +68,15 @@ export function createPromptProjectController(input: {
           (pathKey(project.worktree) === key || project.sandboxes?.some((sandbox) => pathKey(sandbox) === key)),
       )
   }
-  const selected = () => current() ?? input.controls().available[0]
+  const selected = () => current() ?? (!input.controls().directory ? input.controls().available[0] : undefined)
+  const nameCounts = createMemo(() => {
+    const counts = new Map<string, number>()
+    for (const project of input.controls().available) {
+      const name = displayName(project).trim().toLowerCase()
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+    return counts
+  })
   const projects = () => {
     const search = store.search.trim().toLowerCase()
     if (!search) return input.controls().available
@@ -77,12 +88,13 @@ export function createPromptProjectController(input: {
       .available.map((project) => project.server)
       .filter((server, index, all) => server && all.findIndex((item) => item?.key === server.key) === index)
   const keys = () => {
+    const enabled = projects().filter((project) => !project.unavailable)
     if (servers().length <= 1) {
-      return [...projects().map(projectKey), actionKey(servers()[0]?.key)]
+      return [...enabled.map(projectKey), actionKey(servers()[0]?.key)]
     }
     return [
       ...servers().flatMap((server) =>
-        projects()
+        enabled
           .filter((project) => project.server?.key === server!.key)
           .map(projectKey),
       ),
@@ -100,6 +112,8 @@ export function createPromptProjectController(input: {
     input.onDone()
   }
   const select = (project: PromptProject) => {
+    const target = input.controls().available.find((item) => projectKey(item) === projectKey(project))
+    if (!target || target.unavailable) return
     if (
       pathKey(project.worktree) !== pathKey(current()?.worktree ?? "") ||
       project.server?.key !== current()?.server?.key
@@ -116,7 +130,7 @@ export function createPromptProjectController(input: {
     const search = value.trim().toLowerCase()
     const first = input
       .controls()
-      .available.find((project) => !search || displayName(project).toLowerCase().includes(search))
+      .available.find((project) => !project.unavailable && (!search || displayName(project).toLowerCase().includes(search)))
     setStore({
       search: value,
       active: first ? projectKey(first) : actionKey(servers().length > 1 ? undefined : servers()[0]?.key),
@@ -129,6 +143,7 @@ export function createPromptProjectController(input: {
     projects,
     servers,
     projectKey,
+    showDirectory: (project: PromptProject) => (nameCounts().get(displayName(project).trim().toLowerCase()) ?? 0) > 1,
     actionKey,
     open: () => store.open,
     search: () => store.search,
@@ -143,6 +158,7 @@ export function createPromptProjectController(input: {
     select,
     setOpen(open: boolean) {
       if (open) {
+        input.controls().refresh?.()
         setStore({ open: true, active: initialActive() })
         setTimeout(() => requestAnimationFrame(() => searchRef?.focus()))
         return
@@ -155,6 +171,7 @@ export function createPromptProjectController(input: {
       setTimeout(() => searchRef?.focus())
     },
     setActive(key: string) {
+      if (!keys().includes(key)) return
       setStore("active", key)
     },
     moveActive(delta: number) {
@@ -166,7 +183,7 @@ export function createPromptProjectController(input: {
     },
     activeProject() {
       return store.active.startsWith(projectPrefix)
-        ? projects().find((project) => projectKey(project) === store.active)
+        ? projects().find((project) => !project.unavailable && projectKey(project) === store.active)
         : undefined
     },
     activeServer() {
@@ -510,13 +527,15 @@ function ProjectItem(props: {
   onSelect: (project: PromptProject) => void
 }) {
   const key = () => props.controller.projectKey(props.project)
+  const showDirectory = () => props.controller.showDirectory(props.project)
   return (
     <DropdownMenu.RadioItem
       id={key()}
       value={key()}
+      disabled={!!props.project.unavailable}
       data-option-key={key()}
-      class="h-7 gap-2 rounded-sm px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
-      classList={{ "!bg-v2-overlay-simple-overlay-hover": props.controller.active() === key() }}
+      class="gap-2 rounded-sm px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-base data-[highlighted]:!bg-v2-overlay-simple-overlay-hover"
+      classList={{ "h-7": !showDirectory() && !props.project.unavailable, "min-h-7": showDirectory() || !!props.project.unavailable, "!bg-v2-overlay-simple-overlay-hover": props.controller.active() === key() }}
       style={{
         "font-family": "var(--v2-font-family-sans)",
         "font-size": "13px",
@@ -524,7 +543,7 @@ function ProjectItem(props: {
         "line-height": "20px",
         "letter-spacing": "-0.04px",
         color: "var(--v2-text-text-base)",
-        padding: "0 12px",
+        padding: showDirectory() || props.project.unavailable ? "6px 12px" : "0 12px",
       }}
       closeOnSelect
       onMouseEnter={() => {
@@ -538,7 +557,19 @@ function ProjectItem(props: {
         src={getProjectAvatarSource(props.project.id, props.project.icon)}
         variant={getProjectAvatarVariant(props.project.icon?.color)}
       />
-      <DropdownMenu.ItemLabel class="min-w-0 truncate leading-5">{displayName(props.project)}</DropdownMenu.ItemLabel>
+      <div class="min-w-0 flex-1 pr-4">
+        <DropdownMenu.ItemLabel class="block truncate leading-5">{displayName(props.project)}</DropdownMenu.ItemLabel>
+        <Show when={showDirectory()}>
+          <DropdownMenu.ItemDescription class="block truncate text-[12px] leading-5 text-v2-text-text-muted" title={props.project.worktree}>
+            {props.project.worktree}
+          </DropdownMenu.ItemDescription>
+        </Show>
+        <Show when={props.project.unavailable}>
+          <DropdownMenu.ItemDescription class="block whitespace-normal break-words text-[12px] leading-5 text-v2-text-text-muted">
+            {props.project.unavailable}
+          </DropdownMenu.ItemDescription>
+        </Show>
+      </div>
       <DropdownMenu.ItemIndicator style={{ width: "14px", height: "14px", right: "12px" }}>
         <IconV2 name="check" size="small" class="shrink-0 text-v2-icon-icon-base" />
       </DropdownMenu.ItemIndicator>

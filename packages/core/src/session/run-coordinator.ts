@@ -1,6 +1,8 @@
 export * as SessionRunCoordinator from "./run-coordinator"
 
 import { Context, Deferred, Effect, Exit, Fiber, FiberSet, Scope } from "effect"
+import { Database } from "../database/database"
+import * as TransactionEffects from "../database/transaction-effects"
 
 /** Serializes execution for each key while allowing different keys to run concurrently. */
 export interface Coordinator<Key, E, Options = never> {
@@ -50,6 +52,14 @@ export const make = <Key, E, Options = never>(options: {
     const active = new Map<Key, Entry<E, Options>>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
+    const executionContext = (context: Context.Context<never>) => {
+      // Record an absent identity explicitly, so a runtime constructed for an
+      // earlier principal cannot supply that identity to a later local caller.
+      const caller = Context.add(context, Database.CurrentPrincipal, Context.get(context, Database.CurrentPrincipal))
+      const database = Context.getOption(caller, Database.Service)
+      return database._tag === "Some" ? TransactionEffects.detachedContext(database.value.db.$client, caller) : caller
+    }
+
     const makeEntry = (
       context: Context.Context<never>,
       options?: Options,
@@ -57,7 +67,7 @@ export const make = <Key, E, Options = never>(options: {
     ): Entry<E, Options> => ({
       done: Deferred.makeUnsafe<void, E>(),
       ...(options === undefined ? {} : { options }),
-      context,
+      context: executionContext(context),
       completionWaiters,
       pendingWaiters: [],
       pendingWake: false,
@@ -70,7 +80,9 @@ export const make = <Key, E, Options = never>(options: {
         (successor ? Effect.yieldNow : Deferred.await(ready)).pipe(
           Effect.andThen(
             Effect.suspend(() => entry.work ?? options.drain(key, force, entry.options)).pipe(
-              Effect.provide(entry.context),
+              Effect.updateContext((runtime: Context.Context<never>) =>
+                executionContext(Context.merge(runtime, entry.context)),
+              ),
             ),
           ),
           Effect.onExit((exit) => Effect.sync(() => settle(key, entry, exit))),
@@ -184,8 +196,9 @@ export const make = <Key, E, Options = never>(options: {
       )
 
     const wake = (key: Key): Effect.Effect<void> =>
-      Effect.contextWith((context: Context.Context<never>) =>
-        Effect.sync(() => {
+      Effect.contextWith((callerContext: Context.Context<never>) => {
+        const context = executionContext(callerContext)
+        const schedule = Effect.sync(() => {
           const entry = active.get(key)
           if (entry !== undefined) {
             entry.pendingWake = true
@@ -196,8 +209,11 @@ export const make = <Key, E, Options = never>(options: {
           const next = makeEntry(context)
           active.set(key, next)
           start(key, next, false)
-        }),
-      )
+        })
+        const database = Context.getOption(callerContext, Database.Service)
+        // Admission and its wake are one lifetime: rollback must not launch work.
+        return database._tag === "Some" ? TransactionEffects.afterCommit(database.value.db.$client, schedule) : schedule
+      })
 
     const wakeAndWait = (key: Key): Effect.Effect<void, E> =>
       Effect.uninterruptibleMask((restore) =>
@@ -212,7 +228,7 @@ export const make = <Key, E, Options = never>(options: {
 
           const waiter = Deferred.makeUnsafe<void, E>()
           entry.pendingWake = true
-          entry.pendingContext = Context.merge(entry.pendingContext ?? entry.context, context)
+          entry.pendingContext = Context.merge(entry.pendingContext ?? entry.context, executionContext(context))
           entry.pendingWaiters.push(waiter)
           return restore(Deferred.await(waiter))
         }),

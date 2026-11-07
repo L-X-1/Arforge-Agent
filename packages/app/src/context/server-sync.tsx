@@ -59,6 +59,9 @@ import type {
 import { toggleMcp } from "./global-sync/mcp"
 import { createServerSession, type ServerSession } from "./server-session"
 import { createRequestLifetime } from "./request-lifetime"
+import { createDirectoryAccess } from "./directory-access"
+import { assertBootstrapReadCurrent, retryBootstrapRead } from "./global-sync/bootstrap-read"
+import { createPermissionRetirement } from "./global-sync/permission-retirement"
 
 type GlobalStore = {
   ready: boolean
@@ -258,6 +261,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   if (!owner) throw new Error("ServerSync must be created within owner")
 
   const lifetime = createRequestLifetime(typeof window === "undefined" ? undefined : window, () => {
+    for (const directory of Object.keys(directoryAccess.data)) void directoryAccess.check(directory, { force: true })
     for (const directory of Object.keys(children.children)) {
       if (!children.active(directory)) continue
       void loadSessions(directory).catch((error) => console.error("Failed to resume session loading", error))
@@ -283,8 +287,47 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   }
 
   const session = createServerSession(serverSDK.client, serverSDK.api.session, serverSDK.api.message, {
+    capture: lifetime.capture,
     protocol: serverSDK.protocol,
   })
+  const permissionRetirement = createPermissionRetirement({
+    get: (sessionID) => session.data.permission[sessionID] ?? [],
+    set: (sessionID, requests) => session.set("permission", sessionID, requests),
+    capture: lifetime.capture,
+    read: async (sessionID, current) => {
+      const info = session.get(sessionID) ?? (await session.resolve(sessionID))
+      assertBootstrapReadCurrent(current)
+      if ((await serverSDK.protocol) === "v1") {
+        assertBootstrapReadCurrent(current)
+        const result = await sdkFor(info.directory).permission.list()
+        if (!Array.isArray(result.data)) throw new TypeError("Invalid pending permission response")
+        return result.data
+      }
+      assertBootstrapReadCurrent(current)
+      return (
+        await serverSDK.api.permission.request.list({
+          location: { directory: info.directory, ...(info.workspaceID ? { workspace: info.workspaceID } : {}) },
+        })
+      ).data
+    },
+    onError: (error, retry) =>
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: formatServerError(error, language.t),
+        actions: [{ label: language.t("common.retry"), onClick: retry }],
+      }),
+  })
+  onCleanup(() => permissionRetirement.dispose())
+  const directoryAccess = createDirectoryAccess(async (directory) => {
+    if ((await serverSDK.protocol) === "v1") {
+      await sdkFor(directory).file.list({ path: "." })
+      return { directory }
+    }
+    const result = await serverSDK.api.file.list({ location: { directory }, path: "." })
+    return result.location
+  }, lifetime.capture)
+  onCleanup(() => directoryAccess.dispose())
   const queryOptionsApi = makeQueryOptionsApi(
     serverSDK.scope,
     () => serverSDK.client,
@@ -377,6 +420,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   const bootstrap = useQuery(() => ({
     queryKey: [serverSDK.scope, "bootstrap"],
     queryFn: async () => {
+      const current = lifetime.capture()
+      assertBootstrapReadCurrent(current)
       await bootstrapGlobal({
         serverSDK: serverSDK.client,
         serverAPI: serverSDK.api,
@@ -387,7 +432,9 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         formatMoreCount: (count) => language.t("common.moreCountSuffix", { count }),
         setGlobalStore: setBootStore,
         queryClient,
+        isCurrent: current,
       })
+      assertBootstrapReadCurrent(current)
       bootedAt = Date.now()
       return bootedAt
     },
@@ -420,9 +467,15 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
       void bootstrapInstance(directory)
     },
     onMcp: (directory, setStore) => {
-      void loadCommands(directory, serverSDK.api.command, sdkFor(directory), serverSDK.protocol)
-        .then((commands) => setStore("command", commands))
+      const captured = lifetime.capture()
+      const child = children.children[directoryKey(directory)]
+      const current = () => captured() && children.children[directoryKey(directory)] === child
+      void loadCommands(directory, serverSDK.api.command, sdkFor(directory), serverSDK.protocol, current)
+        .then((commands) => {
+          if (current()) setStore("command", commands)
+        })
         .catch((err) => {
+          if (!current()) return
           showToast({
             variant: "error",
             title: language.t("toast.project.reloadFailed.title", { project: getFilename(directory) }),
@@ -479,16 +532,20 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
       .fetchQuery({
         ...queryOptionsApi.sessions(key),
         staleTime: 0,
-        queryFn: () =>
-          serverSDK.protocol
+        queryFn: ({ signal }) => {
+          const queryCurrent = () => current() && !signal.aborted
+          return serverSDK.protocol
             .then((protocol) => {
-              if (!current()) return
+              if (!queryCurrent()) return
               return protocol === "v1"
                 ? loadRootSessionsV1({ client: sdkFor(directory), directory, limit })
-                : loadRootSessions({ api: serverSDK.api.session, directory, limit })
+                : retryBootstrapRead(
+                    () => loadRootSessions({ api: serverSDK.api.session, directory, limit }),
+                    queryCurrent,
+                  )
             })
             .then((x) => {
-              if (!current() || !x) return
+              if (!queryCurrent() || !x) return
               const nonArchived = (x.data ?? [])
                 .filter((s) => !!s?.id)
                 .filter((s) => !s.time?.archived)
@@ -500,7 +557,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
                 permission: session.data.permission,
               })
               batch(() => {
-                next.forEach(session.remember)
+                const remembered = next.map((info) => session.remember(info))
                 setStore(
                   "sessionTotal",
                   estimateRootSessionTotal({
@@ -509,17 +566,18 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
                     limited: x.limited,
                   }),
                 )
-                setStore("session", reconcile(next, { key: "id" }))
+                setStore("session", reconcile(remembered, { key: "id" }))
                 setStore("session_list_status", "ready")
               })
               sessionMeta.set(key, { limit })
             })
             .catch((err) => {
-              if (!current()) return
+              if (!queryCurrent()) return
               console.error("Failed to load sessions", err)
               setStore("session_list_status", "error")
             })
-            .then(() => null),
+            .then(() => null)
+        },
       })
       .then(() => {})
 
@@ -532,14 +590,18 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   }
 
   async function bootstrapInstance(directory: string) {
+    if (!lifetime.active()) return
     const key = directoryKey(directory)
     if (!key) return
     const pending = booting.get(key)
     if (pending) return pending
 
     children.pin(key)
+    const captured = lifetime.capture()
     const promise = Promise.resolve().then(async () => {
+      if (!captured()) return
       const child = children.ensureChild(directory)
+      const current = () => captured() && children.children[key] === child
       const cache = children.vcsCache.get(key)
       if (!cache) return
       const sdk = sdkFor(directory)
@@ -563,6 +625,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         queryClient,
         session,
         protocol: serverSDK.protocol,
+        isCurrent: current,
       })
     })
 
@@ -598,8 +661,44 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     const eventType: string = event.type
     const recent = bootingRoot || Date.now() - bootedAt < 1500
 
+    if (event.current?.type === "catalog.updated" && event.current.metadata?.configUpdated === true) {
+      if (!key || directory === "global") return
+      const windows = key[1] === ":" || key.startsWith("//")
+      const source = windows ? key.toLowerCase() : key
+      const prefix = source.endsWith("/") ? source : `${source}/`
+      for (const directory of Object.keys(children.children)) {
+        const target = windows ? directory.toLowerCase() : directory
+        if (target !== source && !target.startsWith(prefix)) continue
+        void queryClient.invalidateQueries({ ...queryOptionsApi.agents(directoryKey(directory)), exact: true })
+      }
+      return
+    }
+
+    if (event.current?.type === "session.next.renamed") {
+      const renamed = event.current
+      const source = renamed.location
+      const current = lifetime.capture()
+      if (!current() || !source || directory === "global" || directoryKey(source.directory) !== key) return
+      if (!session.applyV2(renamed)) return
+      const fanout = () => {
+        if (!current()) return
+        const info = session.get(renamed.data.sessionID)
+        if (!info || directoryKey(info.directory) !== key || info.workspaceID !== source.workspaceID) return
+        indexSession(info)
+        homeSessions.apply({ type: "session.updated", properties: { sessionID: info.id, info } })
+      }
+      if (session.get(renamed.data.sessionID)) fanout()
+      else
+        void session
+          .resolve(renamed.data.sessionID)
+          .then(fanout)
+          .catch(() => {})
+      return
+    }
+
     if (event.current) session.applyV2(event.current)
     session.apply(event)
+    permissionRetirement.observe(event)
     if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
       homeSessions.apply(event)
     }
@@ -646,6 +745,8 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     const existing = children.children[key]
     if (!existing) return
     children.mark(key)
+    if (eventType === "server.instance.disposed" && children.active(key))
+      void queryClient.invalidateQueries({ ...queryOptionsApi.agents(key), exact: true })
     if (
       event.current?.type === "session.moved" ||
       event.current?.type === "session.archived" ||
@@ -734,6 +835,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
   return {
     data: globalStore,
     set,
+    captureRequestLifetime: lifetime.capture,
     get ready() {
       return globalStore.ready
     },
@@ -744,6 +846,9 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     peek: children.peek,
     disableMcp: children.disableMcp,
     queryOptions: queryOptionsApi,
+    directoryAccess,
+    // Provider consumers must observe/refetch the cache owned by this sync root.
+    queryClient,
     // bootstrap,
     updateConfig: updateConfigMutation.mutateAsync,
     project: projectApi,

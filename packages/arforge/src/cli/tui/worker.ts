@@ -4,6 +4,8 @@ import { Rpc } from "@/util/rpc"
 import { upgrade } from "@/cli/upgrade"
 import { Config } from "@/config/config"
 import { GlobalBus } from "@/bus/global"
+import { Database } from "@arforge-ai/core/database/database"
+import { Project } from "@arforge-ai/schema/project"
 import { ServerAuth } from "@/server/auth"
 import { writeHeapSnapshot } from "node:v8"
 import { Heap } from "@/cli/heap"
@@ -21,7 +23,9 @@ process.on("unhandledRejection", onUnhandledRejection)
 process.on("uncaughtException", onUncaughtException)
 
 // Subscribe to global events and forward them via RPC
-GlobalBus.on("event", (event) => {
+GlobalBus.on("event", ({ principal, ...event }) => {
+  if (event.payload.type === Project.Event.Updated.type && principal && !Database.isDefaultLocalPrincipal(principal))
+    return
   Rpc.emit("global.event", event)
 })
 

@@ -2,8 +2,7 @@ import { createSimpleContext } from "@arforge-ai/ui/context"
 import { createEffect, createMemo, createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createServerProjects, RECENTLY_CLOSED_DISPLAY_LIMIT, ServerConnection, useServer } from "./server"
-import { pathKey } from "@/utils/path-key"
-import { useServerHealth } from "@/utils/server-health"
+import { createServerHealth } from "@/utils/server-health"
 import { createServerSdkContext } from "./server-sdk"
 import { createServerSyncContext } from "./server-sync"
 import { getOwner } from "solid-js/web"
@@ -14,7 +13,7 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
   name: "Global",
   init: () => {
     const server = useServer()
-    const serverHealth = useServerHealth(
+    const serverHealth = createServerHealth(
       () => server.list,
       () => true,
     )
@@ -73,7 +72,8 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
     return {
       servers: {
         list: () => server.list,
-        health: serverHealth,
+        health: serverHealth.status,
+        refreshHealth: serverHealth.refresh,
       },
       settings: {
         server: {
@@ -120,7 +120,7 @@ function createServerCtx(
     // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
     // Without this, different subdirectories of the same git repo would share the same
     // icon from the database instead of using their individual overrides.
-    const base = { ...metadata, ...project }
+    const base = { ...metadata, id: metadata?.id || projectID || undefined, ...project }
     if (childStore.icon) {
       return { ...base, icon: { ...base.icon, override: childStore.icon } }
     }
@@ -129,10 +129,8 @@ function createServerCtx(
 
   const projectsList = createMemo(() => projects.list().map(enrich))
   const recentlyClosedList = createMemo(() => {
-    const known = new Set(sync.data.project.map((project) => pathKey(project.worktree)))
     return projects
       .recentlyClosed()
-      .filter((worktree) => known.has(pathKey(worktree)))
       .slice(0, RECENTLY_CLOSED_DISPLAY_LIMIT)
       .map((worktree) => enrich({ worktree, expanded: false }))
   })

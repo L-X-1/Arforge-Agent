@@ -6,6 +6,7 @@ import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ReasoningEffort,
   Usage,
   type FinishReason,
   type JsonSchema,
@@ -135,7 +136,7 @@ const OpenAIResponsesCoreFields = {
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
   reasoning: Schema.optional(
     Schema.Struct({
-      effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
+      effort: Schema.optional(ReasoningEffort),
       summary: Schema.optional(Schema.Literal("auto")),
     }),
   ),
@@ -456,8 +457,11 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
-  const effort = OpenAIOptions.reasoningEffort(request)
-  if (effort && !OpenAIOptions.isReasoningEffort(effort))
+  const canonical = request.generation?.reasoning
+  if (canonical?.mode !== undefined || canonical?.budgetTokens !== undefined)
+    return yield* invalid("Responses reasoning uses effort rather than thinking mode or budget.")
+  const effort = canonical?.effort ?? OpenAIOptions.reasoningEffort(request)
+  if (effort && canonical?.effort === undefined && !OpenAIOptions.isReasoningEffort(effort))
     return yield* invalid(`OpenAI Responses does not support reasoning effort ${effort}`)
   const summary = OpenAIOptions.reasoningSummary(request)
   const include = OpenAIOptions.include(request)

@@ -86,3 +86,8 @@ export function parseCustomAgentAdmission(value: unknown): CustomAgentAdmissionO
     truncated: record.truncated === true,
   }
 }
+
+/** System Overview keeps builtin roles beside the custom admission projection. */
+export function parseCustomAgentAdmissionSection(value: unknown): CustomAgentAdmissionOverview | undefined {
+  return parseCustomAgentAdmission(objectRecord(value)?.custom_agents)
+}

@@ -1,10 +1,17 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 
 const src = await Bun.file(new URL("../public/arforge-theme-preload.js", import.meta.url)).text()
 
 const run = () => Function(src)()
+let matchMediaDescriptor: PropertyDescriptor | undefined
+
+afterEach(() => {
+  if (matchMediaDescriptor) Object.defineProperty(window, "matchMedia", matchMediaDescriptor)
+  else Reflect.deleteProperty(window, "matchMedia")
+})
 
 beforeEach(() => {
+  matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, "matchMedia")
   document.head.innerHTML = ""
   document.documentElement.removeAttribute("data-theme")
   document.documentElement.removeAttribute("data-color-scheme")
@@ -47,7 +54,6 @@ describe("theme preload", () => {
     expect(document.getElementById("arforge-theme-preload")?.textContent).toContain("--background-base:#fff;")
   })
 })
-
 
 describe("approved V2 startup preferences", () => {
   const systemDark = () => {

@@ -12,6 +12,40 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(LayerNode.compile(LayerNode.group([Credential.node, Database.node])))
 
 describe("Credential", () => {
+  it.effect("stale replacement and versioned removal preserve a newer credential generation", () =>
+    Effect.gen(function* () {
+      const credentials = yield* Credential.Service
+      const integrationID = Integration.ID.make("owned-generation-cas")
+      const old = yield* credentials.create({
+        integrationID,
+        value: Credential.Key.make({ type: "key", key: "old-owned" }),
+      })
+      const fresh = yield* credentials.create({
+        integrationID,
+        value: Credential.Key.make({ type: "key", key: "fresh-owned" }),
+      })
+      const stale = yield* credentials
+        .create(
+          { integrationID, value: Credential.Key.make({ type: "key", key: "stale-owned" }) },
+          { expectedCredentials: [{ id: old.id, version: old.version }] },
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(stale)).toBe(true)
+      expect((yield* credentials.list(integrationID)).map((item) => item.id)).toEqual([fresh.id])
+      yield* credentials.remove(fresh.id, { expectedVersion: old.version })
+      expect(yield* credentials.get(fresh.id)).toBeDefined()
+      yield* credentials.update(
+        fresh.id,
+        { value: Credential.Key.make({ type: "key", key: "updated-owned" }) },
+        { expectedVersion: fresh.version },
+      )
+      yield* credentials.remove(fresh.id, { expectedVersion: fresh.version })
+      expect(yield* credentials.get(fresh.id)).toBeDefined()
+      const current = yield* credentials.get(fresh.id)
+      yield* credentials.remove(fresh.id, { expectedVersion: current!.version })
+      expect(yield* credentials.list(integrationID)).toHaveLength(0)
+    }),
+  )
   it.effect("stores, updates, lists, and removes credentials", () =>
     Effect.gen(function* () {
       const credentials = yield* Credential.Service

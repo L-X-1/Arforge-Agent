@@ -189,3 +189,28 @@
 [data-component="icon-button"].titlebar-icon[data-variant="ghost"][aria-expanded="true"]:hover:not(:disabled) {
   background-color: var(--surface-raised-base-active);
 }
+[data-component="icon-button"][data-presentation="workspace"] {
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  &:is(:hover, :focus-visible):not(:disabled) {
+    background: var(--v2-overlay-simple-overlay-hover);
+    box-shadow: none;
+  }
+  &:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+  [data-slot="icon-svg"] {
+    width: 16px;
+    height: 16px;
+  }
+  @media (pointer: coarse) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

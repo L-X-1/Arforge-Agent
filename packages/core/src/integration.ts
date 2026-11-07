@@ -17,6 +17,7 @@ import {
 } from "effect"
 import { Integration } from "@arforge-ai/schema/integration"
 import { Credential } from "./credential"
+import { providerCredentialTargetKey } from "./provider-credential-target"
 import { State } from "./state"
 import { EventV2 } from "./event"
 import { IntegrationConnection } from "./integration/connection"
@@ -123,9 +124,11 @@ type Entry = {
 
 type Data = {
   integrations: Map<ID, Entry>
+  targets: Map<ID, string | undefined>
 }
 
 export type Draft = {
+  credentialTarget: (id: ID, target: string | undefined) => void
   list: () => readonly Ref[]
   get: (id: ID) => Ref | undefined
   update: (id: ID, update: (integration: Types.DeepMutable<Ref>) => void) => void
@@ -166,6 +169,9 @@ export interface Interface extends State.Transformable<Draft> {
       readonly integrationID: ID
       /** Secret entered by the user. */
       readonly key: string
+      /** Private owner metadata is sealed with the credential, never catalog configuration. */
+      readonly metadata?: Readonly<Record<string, unknown>>
+      readonly expectedCredentials?: readonly Pick<Credential.Info, "id" | "version">[]
       /** User-facing label for the stored credential. */
       readonly label?: string
     }) => Effect.Effect<void, AuthorizationError>
@@ -186,7 +192,10 @@ export interface Interface extends State.Transformable<Draft> {
       updates: Partial<Pick<Credential.Info, "label">>,
     ) => Effect.Effect<void>
     /** Removes a stored credential connection. */
-    readonly remove: (credentialID: Credential.ID) => Effect.Effect<void>
+    readonly remove: (
+      credentialID: Credential.ID,
+      options?: { readonly expectedVersion: string },
+    ) => Effect.Effect<void>
   }
   readonly attempt: {
     /** Returns the current state of an OAuth attempt. */
@@ -233,11 +242,22 @@ export const locationLayer = Layer.effect(
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
     const events = yield* EventV2.Service
+    const accepts = (credential: Credential.Info) => {
+      const target =
+        credential.value.type === "key" ? credential.value.metadata?.[providerCredentialTargetKey] : undefined
+      return (
+        target === undefined ||
+        (typeof target === "string" && target === state.get().targets.get(credential.integrationID))
+      )
+    }
     const scope = yield* Scope.Scope
     const attempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, AttemptEntry>())
     const state = State.create<Data, Draft>({
-      initial: () => ({ integrations: new Map<ID, Entry>() }),
+      initial: () => ({ integrations: new Map<ID, Entry>(), targets: new Map<ID, string | undefined>() }),
       draft: (draft) => ({
+        credentialTarget: (id, target) => {
+          draft.targets.set(id, target)
+        },
         list: () => Array.from(draft.integrations.values(), (entry) => entry.ref) as Ref[],
         get: (id) => draft.integrations.get(id)?.ref as Ref | undefined,
         update: (id, update) => {
@@ -250,7 +270,10 @@ export const locationLayer = Layer.effect(
           update(current.ref)
           current.ref.id = id
         },
-        remove: (id) => draft.integrations.delete(id),
+        remove: (id) => {
+          draft.integrations.delete(id)
+          draft.targets.delete(id)
+        },
         method: {
           list: (integrationID) => (draft.integrations.get(integrationID)?.methods as Method[] | undefined) ?? [],
           update: (implementation) => {
@@ -297,6 +320,7 @@ export const locationLayer = Layer.effect(
 
     const resolveConnections = (entry: Entry | undefined, saved: readonly Credential.Info[]) => {
       const credentials = saved
+        .filter(accepts)
         .map((credential) => ({
           type: "credential" as const,
           id: credential.id,
@@ -381,7 +405,7 @@ export const locationLayer = Layer.effect(
         return key ? { value: Credential.Key.make({ type: "key", key }) } : undefined
       }
       let credential = yield* credentials.get(connection.id)
-      if (!credential) return undefined
+      if (!credential || !accepts(credential)) return undefined
       if (credential.value.type === "oauth") {
         const implementation = state
           .get()
@@ -427,11 +451,18 @@ export const locationLayer = Layer.effect(
             .integrations.get(input.integrationID)
             ?.methods.some((method) => method.type === "key")
           if (!method) return yield* Effect.die(`Key method not found: ${input.integrationID}`)
-          yield* credentials.create({
-            integrationID: input.integrationID,
-            label: input.label,
-            value: Credential.Key.make({ type: "key", key: input.key }),
-          })
+          yield* credentials.create(
+            {
+              integrationID: input.integrationID,
+              label: input.label,
+              value: Credential.Key.make({
+                type: "key",
+                key: input.key,
+                ...(input.metadata ? { metadata: input.metadata } : {}),
+              }),
+            },
+            input.expectedCredentials ? { expectedCredentials: input.expectedCredentials } : undefined,
+          )
           yield* events.publish(Event.ConnectionUpdated, { integrationID: input.integrationID })
           yield* events.publish(Event.Updated, {})
         }),
@@ -483,9 +514,9 @@ export const locationLayer = Layer.effect(
           }
           yield* events.publish(Event.Updated, {})
         }),
-        remove: Effect.fn("Integration.connection.remove")(function* (credentialID) {
+        remove: Effect.fn("Integration.connection.remove")(function* (credentialID, options) {
           const credential = yield* credentials.get(credentialID)
-          yield* credentials.remove(credentialID)
+          yield* credentials.remove(credentialID, options)
           if (credential) {
             yield* events.publish(Event.ConnectionUpdated, { integrationID: credential.integrationID })
           }

@@ -4,6 +4,7 @@ import { Auth } from "../auth"
 import { describeEndpoint } from "../executor"
 import { render as renderEndpoint } from "../endpoint"
 import { Framing, type Framing as FramingDef } from "../framing"
+import { OutputBudget } from "../output-budget"
 import type { Transport, TransportPrepareInput } from "./index"
 import * as ProviderShared from "../../protocols/shared"
 import { mergeJsonRecords, type LLMRequest } from "../../schema"
@@ -31,12 +32,15 @@ const applyQuery = (url: string, query: Record<string, string> | undefined) => {
 }
 
 const PROTOCOL_BODY_OVERLAY_DENYLIST = new Set([
+  ...OutputBudget.BodyKeys,
   "content",
   "contents",
   "frequencyPenalty",
   "frequency_penalty",
   "generationConfig",
+  "generation_config",
   "inferenceConfig",
+  "inference_config",
   "input",
   "maxTokens",
   "max_tokens",
@@ -69,25 +73,29 @@ const PROTOCOL_BODY_OVERLAY_DENYLIST = new Set([
   "top_p",
 ])
 
-const forbiddenBodyOverlayKeys = (body: Record<string, unknown>) =>
+export const forbiddenBodyOverlayKeys = (body: Record<string, unknown>) =>
   Object.keys(body).filter((key) => PROTOCOL_BODY_OVERLAY_DENYLIST.has(key))
 
-const bodyWithOverlay = <Body>(body: Body, request: LLMRequest, encodeBody: (body: Body) => string) =>
+const bodyWithOverlay = <Body,>(body: Body, request: LLMRequest, encodeBody: (body: Body) => string) =>
   Effect.gen(function* () {
-    if (request.http?.body === undefined) return { jsonBody: body, bodyText: encodeBody(body) }
-    const forbiddenKeys = forbiddenBodyOverlayKeys(request.http.body)
+    const decoded = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(encodeBody(body))
+    const forbiddenKeys = forbiddenBodyOverlayKeys(request.http?.body ?? {})
     if (forbiddenKeys.length > 0)
       return yield* ProviderShared.invalidRequest(
         `http.body cannot overlay protocol-owned field(s): ${forbiddenKeys.join(", ")}`,
       )
-    if (ProviderShared.isRecord(body)) {
-      const overlaid = mergeJsonRecords(body, request.http.body) ?? {}
-      return { jsonBody: overlaid, bodyText: ProviderShared.encodeJson(overlaid) }
-    }
-    return yield* ProviderShared.invalidRequest("http.body can only overlay JSON object request bodies")
+    if (request.http?.body !== undefined && !ProviderShared.isRecord(decoded))
+      return yield* ProviderShared.invalidRequest("http.body can only overlay JSON object request bodies")
+    const overlaid =
+      request.http?.body === undefined
+        ? decoded
+        : (mergeJsonRecords(decoded as Record<string, unknown>, request.http.body) ?? {})
+    const jsonBody = OutputBudget.clampBody(overlaid, request)
+    // The protocol codec above validated Body; budget replacement changes only owned numeric fields.
+    return { jsonBody: jsonBody as Body | Record<string, unknown>, bodyText: ProviderShared.encodeJson(jsonBody) }
   })
 
-export const jsonRequestParts = <Body>(input: JsonRequestInput<Body>) =>
+export const jsonRequestParts = <Body,>(input: JsonRequestInput<Body>) =>
   Effect.gen(function* () {
     const url = applyQuery(
       renderEndpoint(input.endpoint, { request: input.request, body: input.body }).toString(),
@@ -158,5 +166,5 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
 
 export const sseJson = {
   id: "http-json/sse",
-  with: <Body>() => httpJson<Body, string>({ framing: Framing.sse }),
+  with: <Body,>() => httpJson<Body, string>({ framing: Framing.sse }),
 } as const

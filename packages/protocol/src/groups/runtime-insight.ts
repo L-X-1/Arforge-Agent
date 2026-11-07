@@ -1,5 +1,6 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware } from "effect/unstable/httpapi"
 import { Context, Schema } from "effect"
+import { optional } from "@arforge-ai/schema/schema"
 import { OpenApi } from "effect/unstable/httpapi"
 import { ForbiddenError, InvalidRequestError } from "../errors"
 import { LocationQuery, locationQueryOpenApi } from "./location"
@@ -74,6 +75,8 @@ export const AuditEntry = Schema.Struct({
 })
 
 export const AuditVerify = Schema.Struct({
+  /** Omitted legacy responses retain profile-chain semantics. */
+  scope: Schema.Literals(["profile-chain", "principal-records"]).pipe(optional),
   valid: Schema.Boolean,
   count: Schema.Number,
   headHash: Schema.String,
@@ -470,6 +473,7 @@ export const RuntimeInsightPage = Schema.Struct({
   routing: Schema.Array(RoutingDecision),
   verifications: Schema.Array(VerificationRecord),
   audit: Schema.Array(AuditEntry),
+  /** With principal-records verification scope, zero withholds the unavailable global retention count. */
   auditDropped: Schema.Number,
   auditVerify: AuditVerify,
   runs: Schema.Array(RunRecord),

@@ -1,3 +1,10 @@
+import { ManagementViews, type ManagementView } from "./management-views"
+import { ManagementCollection } from "./management-collection"
+import { ManagementStatus } from "@/components/settings-v2/management-status"
+import { ManagementActionToolbar } from "./management-action-toolbar"
+import { ManagementDangerZone } from "./management-danger-zone"
+import { useConfirmAction } from "@/components/confirm-action"
+import { createManagementConfirmationGuard } from "./management-confirmation"
 import { useLanguage } from "@/context/language"
 import type { OperationsApi } from "@/utils/server"
 import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
@@ -538,6 +545,7 @@ export function EvolutionWorkbench(props: {
   ready: () => boolean
 }) {
   const language = useLanguage()
+  const confirmAction = useConfirmAction()
   const navigate = useNavigate()
   const dialog = useDialog()
   const c = () => copy[language.locale() as keyof typeof copy] ?? copy.en
@@ -582,6 +590,7 @@ export function EvolutionWorkbench(props: {
   type ExposureFilter = "all" | "pending" | "recorded"
   const [state, setState] = createStore({
     loading: "",
+    candidatesFresh: false,
     error: "",
     notice: "",
     status: undefined as Status | undefined,
@@ -617,12 +626,21 @@ export function EvolutionWorkbench(props: {
     return value.directory + "\u0000" + (value.workspace ?? "")
   }
   const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  const captureConfirmation = createManagementConfirmationGuard({
+    source: props.api,
+    key: () => `${props.ready()}\u0000${locationScopeKey()}`,
+    blocked: () => !props.ready() || !!state.loading,
+    invalidate: () => {
+      scopeGuard.invalidate()
+      setState("candidatesFresh", false)
+    },
+  })
   let previousScopeKey: string | undefined
   const refresh = async () => {
     if (!props.ready() || state.loading) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: "refresh", error: "" })
+    setState({ loading: "refresh", candidatesFresh: false, error: "" })
     try {
       const results = await Promise.allSettled([
         props.api().agentCapabilities.evolutionStatus(requestedLocation),
@@ -642,7 +660,8 @@ export function EvolutionWorkbench(props: {
       if (status.status === "fulfilled") {
         setState("status", status.value.data)
       }
-      if (candidates.status === "fulfilled") setState("candidates", [...candidates.value.data.items])
+      if (candidates.status === "fulfilled")
+        setState({ candidates: [...candidates.value.data.items], candidatesFresh: true })
       if (opportunities.status === "fulfilled") setState("opportunities", [...opportunities.value.data.items])
       if (recall.status === "fulfilled") setState("recall", recall.value)
       if (exposures.status === "fulfilled") setState("exposures", exposures.value.data)
@@ -699,7 +718,7 @@ export function EvolutionWorkbench(props: {
     )
   }
 
-  const applyExposureArchive = () => {
+  const applyExposureArchive = async () => {
     const plan = state.archivePlan
     if (!plan || plan.eligible_count === 0) return
     const reason = state.archiveReason.trim()
@@ -707,22 +726,37 @@ export function EvolutionWorkbench(props: {
       setState("error", c().archiveReasonRequired)
       return
     }
+    const confirmation = captureConfirmation()
+    const payload = {
+      location: { ...props.location().location },
+      keepRecorded: plan.keep_recorded,
+      expectedPlanDigest: plan.plan_digest,
+      reason,
+    }
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      state.archivePlan?.plan_digest === payload.expectedPlanDigest &&
+      state.archiveReason.trim() === reason
+    if (!isCurrent()) return
     if (
-      !window.confirm(
+      !(await confirmAction(
         `${c().confirmArchive}\n\n${c().archiveEligible}: ${plan.eligible_count}\n${c().archivePlanDigest}: ${digestLabel(plan.plan_digest)}\n${c().eventReason}: ${reason}`,
-      )
+        { isCurrent, danger: true },
+      ))
     )
       return
-    void run(
+    if (!isCurrent()) return
+    await run(
       "archive-apply",
-      async (location, request) => {
-        await props.api().agentCapabilities.evolutionExposureArchiveApply({
-          ...location,
-          keepRecorded: plan.keep_recorded,
-          expectedPlanDigest: plan.plan_digest,
-          reason,
-        })
-        if (scopeGuard.isCurrent(request)) setState({ archivePlan: undefined, archiveReason: "" })
+      async (_location, request) => {
+        await confirmation.source.agentCapabilities.evolutionExposureArchiveApply(payload)
+        if (
+          confirmation.isCurrent() &&
+          scopeGuard.isCurrent(request) &&
+          state.archivePlan?.plan_digest === payload.expectedPlanDigest &&
+          state.archiveReason.trim() === reason
+        )
+          setState({ archivePlan: undefined, archiveReason: "" })
       },
       c().archiveApplied,
     )
@@ -767,7 +801,7 @@ export function EvolutionWorkbench(props: {
     )
   }
 
-  const applyExposureRestore = () => {
+  const applyExposureRestore = async () => {
     const plan = state.restorePlan
     if (!plan || !plan.can_apply || plan.counts.missing === 0) return
     const reason = state.restoreReason.trim()
@@ -775,27 +809,44 @@ export function EvolutionWorkbench(props: {
       setState("error", c().restoreReasonRequired)
       return
     }
+    const confirmation = captureConfirmation()
+    const payload = {
+      location: { ...props.location().location },
+      archiveID: plan.archive_id,
+      expectedPlanDigest: plan.plan_digest,
+      reason,
+    }
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      state.restorePlan?.plan_digest === payload.expectedPlanDigest &&
+      state.selectedArchiveID === payload.archiveID &&
+      state.restoreReason.trim() === reason
+    if (!isCurrent()) return
     if (
-      !window.confirm(
+      !(await confirmAction(
         `${c().confirmRestore}\n\n${c().missingLive}: ${plan.counts.missing}\n${c().archivePlanDigest}: ${digestLabel(plan.plan_digest)}\n${c().eventReason}: ${reason}`,
-      )
+        { isCurrent },
+      ))
     )
       return
-    void run(
+    if (!isCurrent()) return
+    await run(
       "restore-apply",
-      async (location, request) => {
-        await props.api().agentCapabilities.evolutionExposureRestoreApply({
-          ...location,
-          archiveID: plan.archive_id,
-          expectedPlanDigest: plan.plan_digest,
-          reason,
-        })
-        const detail = await props.api().agentCapabilities.evolutionExposureArchiveGet({
-          ...location,
-          archiveID: plan.archive_id,
+      async (_location, request) => {
+        await confirmation.source.agentCapabilities.evolutionExposureRestoreApply(payload)
+        if (!confirmation.isCurrent() || !scopeGuard.isCurrent(request)) return
+        const detail = await confirmation.source.agentCapabilities.evolutionExposureArchiveGet({
+          location: payload.location,
+          archiveID: payload.archiveID,
           limit: 500,
         })
-        if (scopeGuard.isCurrent(request))
+        if (
+          confirmation.isCurrent() &&
+          scopeGuard.isCurrent(request) &&
+          state.selectedArchiveID === payload.archiveID &&
+          state.restorePlan?.plan_digest === payload.expectedPlanDigest &&
+          state.restoreReason.trim() === reason
+        )
           setState({ archiveDetail: detail.data, restorePlan: undefined, restoreReason: "" })
       },
       c().restoreApplied,
@@ -814,7 +865,8 @@ export function EvolutionWorkbench(props: {
         })
         const actualDigest = await sha256Text(result.data.content)
         if (actualDigest !== result.data.sha256) throw new Error("Exported audit document digest mismatch")
-        if (scopeGuard.isCurrent(request)) downloadText(result.data.filename, result.data.media_type, result.data.content)
+        if (scopeGuard.isCurrent(request))
+          downloadText(result.data.filename, result.data.media_type, result.data.content)
       },
       c().archiveExported,
       false,
@@ -831,15 +883,23 @@ export function EvolutionWorkbench(props: {
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
     setState({ loading: name, error: "", notice: "" })
+    let actionError = ""
     try {
       await action(requestedLocation, request)
       if (notice && scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
-      if (scopeGuard.isCurrent(request)) setState("error", evolutionRefreshError([error], c().unavailable))
+      if (scopeGuard.isCurrent(request)) {
+        actionError = evolutionRefreshError([error], c().unavailable)
+        setState("error", actionError)
+      }
     } finally {
       if (scopeGuard.isCurrent(request)) setState("loading", "")
     }
-    if (refreshAfter && scopeGuard.isCurrent(request)) await refresh()
+    if (refreshAfter && scopeGuard.isCurrent(request)) {
+      await refresh()
+      if (actionError && scopeGuard.isCurrent(request))
+        setState("error", [...new Set([actionError, state.error].filter(Boolean))].join("\n"))
+    }
   }
 
   const createCandidate = () =>
@@ -859,7 +919,7 @@ export function EvolutionWorkbench(props: {
       c().create,
     )
 
-  const transition = (candidate: Candidate, action: EvolutionAction) => {
+  const transition = async (candidate: Candidate, action: EvolutionAction) => {
     const reason = state.reasons[candidate.candidate_id]?.trim() ?? ""
     const destructive = evolutionActionRequiresReason(action)
     const label = {
@@ -874,18 +934,36 @@ export function EvolutionWorkbench(props: {
       setState("error", c().reason)
       return
     }
-    if (destructive && !window.confirm(`${label}: ${candidate.title}\n\n${reason}`)) return
-    void run(
-      `${action}:${candidate.candidate_id}`,
-      (location) =>
-        props.api().agentCapabilities.evolutionTransition({
-          ...location,
-          candidateID: candidate.candidate_id,
-          action,
-          expectedRevision: candidate.state.revision,
-          ...(reason ? { reason } : {}),
-          ...(action === "startCanary" ? { trafficPercent: state.trafficPercent } : {}),
-        }),
+    const confirmation = captureConfirmation()
+    const payload = {
+      location: { ...props.location().location },
+      candidateID: candidate.candidate_id,
+      action,
+      expectedRevision: candidate.state.revision,
+      ...(reason ? { reason } : {}),
+      ...(action === "startCanary" ? { trafficPercent: state.trafficPercent } : {}),
+    }
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      state.candidatesFresh &&
+      state.candidates.some(
+        (item) => item.candidate_id === payload.candidateID && item.state.revision === payload.expectedRevision,
+      ) &&
+      (state.reasons[payload.candidateID]?.trim() ?? "") === reason &&
+      (action !== "startCanary" || state.trafficPercent === payload.trafficPercent)
+    if (!isCurrent()) return
+    if (
+      destructive &&
+      !(await confirmAction(`${label}: ${candidate.title}\n\n${reason}`, {
+        isCurrent,
+        danger: action === "reject" || action === "rollback",
+      }))
+    )
+      return
+    if (!isCurrent()) return
+    await run(
+      `${action}:${payload.candidateID}`,
+      () => confirmation.source.agentCapabilities.evolutionTransition(payload),
       label.replace("…", ""),
     )
   }
@@ -942,6 +1020,7 @@ export function EvolutionWorkbench(props: {
         if (scopeChanged) {
           setState({
             loading: "",
+            candidatesFresh: false,
             error: "",
             notice: "",
             status: undefined,
@@ -967,6 +1046,1003 @@ export function EvolutionWorkbench(props: {
     ),
   )
 
+  const evolutionViews: ManagementView[] = [
+    {
+      id: "candidates",
+      label: () => c().candidates,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <details class="rounded-md border border-border-weak-base p-3">
+            <summary class="cursor-pointer arforge-management-section-title text-text-strong">{c().create}</summary>
+            <div class="mt-3 grid gap-3">
+              <Field label={c().titleField} value={state.title} onInput={(value) => setState("title", value)} />
+              <label class="arforge-management-copy text-text-weak">
+                {c().target}
+                <select
+                  class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong"
+                  value={state.target}
+                  onChange={(event) => setState("target", event.currentTarget.value as Candidate["target"])}
+                >
+                  <option value="learning.failure">learning.failure</option>
+                  <option value="learning.fix">learning.fix</option>
+                  <option value="learning.preference">learning.preference</option>
+                  <option value="routing.advice">routing.advice</option>
+                  <option value="tool.advice">tool.advice</option>
+                </select>
+              </label>
+              <Area
+                label={c().instruction}
+                value={state.instruction}
+                onInput={(value) => setState("instruction", value)}
+              />
+              <Area label={c().rationale} value={state.rationale} onInput={(value) => setState("rationale", value)} />
+              <Area label={c().evidence} value={state.evidence} onInput={(value) => setState("evidence", value)} />
+              <Button
+                size="small"
+                variant="secondary"
+                disabled={
+                  !!state.loading ||
+                  !state.title.trim() ||
+                  !state.instruction.trim() ||
+                  !state.rationale.trim() ||
+                  !state.evidence.trim()
+                }
+                onClick={createCandidate}
+                aria-busy={state.loading === "create"}
+                busyLabel={c().running}
+              >
+                {state.loading === "create" ? c().running : c().create}
+              </Button>
+            </div>
+          </details>
+          <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+            <h3 class="arforge-management-section-title text-text-strong">{c().opportunities}</h3>
+            <For each={state.opportunities}>
+              {(item) => (
+                <div class="flex flex-wrap items-center justify-between gap-3 rounded-md bg-background-weak p-3">
+                  <div class="min-w-0 arforge-management-copy">
+                    <div class="text-text-strong">{item.source_ref}</div>
+                    <div class="mt-1 text-text-weak">
+                      {item.kind} · {item.category}
+                    </div>
+                  </div>
+                  <Show when={item.proposal_available && item.source_ref.startsWith("learning-pattern:")}>
+                    <Button size="small" variant="ghost" disabled={!!state.loading} onClick={() => fromPattern(item)}>
+                      {c().propose}
+                    </Button>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </article>
+          <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+            <h3 class="arforge-management-section-title text-text-strong">{c().candidates}</h3>
+            <Show when={state.candidatesFresh && state.candidates.length === 0}>
+              <ManagementStatus empty emptyText={c().noData} onRetry={() => void refresh()} />
+            </Show>
+            <ManagementCollection
+              label={c().candidates}
+              scope={locationScopeKey()}
+              scopeLabel={props.location().location.directory}
+              items={state.candidates}
+              identity={(candidate) => candidate.candidate_id}
+              title={(candidate) => candidate.title}
+              description={(candidate) => statusLabel(candidate.state.status) + " · " + candidate.target}
+            >
+              {(candidate) => {
+                const report = () => state.canary[candidate.candidate_id]
+                const actions = () =>
+                  evolutionActions(
+                    candidate.state.status,
+                    candidate.evaluation?.gate_passed ?? false,
+                    report()?.gate_passed ?? false,
+                  )
+                const primaryAction = (): EvolutionAction | undefined =>
+                  actions().find(
+                    (action) => action === "approve" || action === "startCanary" || action === "promote",
+                  ) ?? actions().find((action) => action === "evaluate")
+                return (
+                  <section class="flex flex-col gap-3 rounded-md bg-background-weak p-3">
+                    <header class="flex flex-wrap items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <h4 class="text-text-strong arforge-management-section-title">{candidate.title}</h4>
+                        <p class="mt-1 break-all  text-text-weak arforge-management-copy">
+                          {candidate.candidate_id} · {candidate.target} · rev {candidate.state.revision}
+                        </p>
+                      </div>
+                      <span class="rounded-full border border-border-weak-base px-2 py-1  text-text-strong arforge-management-label">
+                        {statusLabel(candidate.state.status)}
+                      </span>
+                    </header>
+                    <p class="text-text-strong arforge-management-copy">{candidate.instruction}</p>
+                    <dl class="grid gap-1  text-text-weak arforge-management-copy">
+                      <div>
+                        <dt class="inline text-text-strong">{c().proposer}: </dt>
+                        <dd class="inline">{proposerLabel(candidate.created_by)}</dd>
+                      </div>
+                      <div>
+                        <dt class="inline text-text-strong">{c().rationale}: </dt>
+                        <dd class="inline">{candidate.rationale}</dd>
+                      </div>
+                      <div>
+                        <dt class="inline text-text-strong">{c().evidence}: </dt>
+                        <dd class="inline break-all">{candidate.evidence_refs.join(", ")}</dd>
+                      </div>
+                    </dl>
+                    <Show when={candidate.evaluation}>
+                      {(evaluation) => (
+                        <div class="rounded-md border border-border-weak-base p-2 arforge-management-copy">
+                          <div class={evaluation().gate_passed ? "text-text-success" : "text-text-danger"}>
+                            {evaluation().gate_passed ? c().gatePassed : c().gateBlocked}
+                          </div>
+                          <ul class="mt-2 grid gap-1 text-text-weak">
+                            <For each={evaluation().cases}>
+                              {(item) => (
+                                <li>
+                                  {item.passed ? "✓" : "×"} {item.case_id}: {item.detail}
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </div>
+                      )}
+                    </Show>
+                    <Show when={actions().some(evolutionActionRequiresReason)}>
+                      <Field
+                        label={c().reason}
+                        value={state.reasons[candidate.candidate_id] ?? ""}
+                        onInput={(value) => setState("reasons", candidate.candidate_id, value)}
+                      />
+                    </Show>
+                    <Show when={candidate.state.status === "approved"}>
+                      <label class="text-text-weak arforge-management-copy">
+                        {c().traffic}
+                        <input
+                          class="mt-1 h-9 w-32 rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong"
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={state.trafficPercent}
+                          onInput={(event) => setState("trafficPercent", Number(event.currentTarget.value))}
+                        />
+                      </label>
+                    </Show>
+                    <ManagementActionToolbar
+                      primary={
+                        <Show
+                          when={primaryAction()}
+                          keyed
+                          fallback={
+                            <Show when={candidate.state.status === "canary"}>
+                              <Button
+                                size="small"
+                                variant="primary"
+                                disabled={!!state.loading}
+                                onClick={() => loadCanary(candidate)}
+                              >
+                                {state.loading === `report:${candidate.candidate_id}` ? c().running : c().report}
+                              </Button>
+                            </Show>
+                          }
+                        >
+                          {(active) => {
+                            const primary = active
+                            return (
+                              <Button
+                                size="small"
+                                variant="primary"
+                                disabled={!!state.loading || !state.candidatesFresh}
+                                onClick={() => void transition(candidate, primary)}
+                                aria-busy={state.loading === primary + ":" + candidate.candidate_id}
+                                busyLabel={c().running}
+                              >
+                                {state.loading === `${primary}:${candidate.candidate_id}`
+                                  ? c().running
+                                  : primary === "evaluate"
+                                    ? c().evaluate
+                                    : primary === "approve"
+                                      ? c().approve
+                                      : primary === "startCanary"
+                                        ? c().canary
+                                        : c().promote}
+                              </Button>
+                            )
+                          }}
+                        </Show>
+                      }
+                      actions={[
+                        ...actions()
+                          .filter((action) => action === "evaluate" && action !== primaryAction())
+                          .map((action) => ({
+                            id: action,
+                            label: state.loading === `${action}:${candidate.candidate_id}` ? c().running : c().evaluate,
+                            run: () => transition(candidate, action),
+                            disabled: !!state.loading || !state.candidatesFresh,
+                            busy: state.loading === `${action}:${candidate.candidate_id}`,
+                          })),
+                        ...(candidate.state.status === "canary" && primaryAction()
+                          ? [
+                              {
+                                id: "report",
+                                label: state.loading === `report:${candidate.candidate_id}` ? c().running : c().report,
+                                run: () => loadCanary(candidate),
+                                disabled: !!state.loading,
+                                busy: state.loading === `report:${candidate.candidate_id}`,
+                              },
+                            ]
+                          : []),
+                      ]}
+                      disabledReason={
+                        state.loading
+                          ? c().running
+                          : !state.candidatesFresh
+                            ? language.locale().startsWith("zh")
+                              ? "候选列表未完成读取，已有候选暂为只读；请刷新列表。"
+                              : "The candidate list is not current. Existing candidates are read-only until refreshed."
+                            : undefined
+                      }
+                    />
+                    <Show when={actions().includes("reject")}>
+                      <ManagementDangerZone
+                        scope={`${props.location().location.directory} · ${candidate.candidate_id}`}
+                      >
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          disabled={!!state.loading || !state.candidatesFresh}
+                          onClick={() => void transition(candidate, "reject")}
+                          aria-busy={state.loading === "reject" + ":" + candidate.candidate_id}
+                          busyLabel={c().running}
+                        >
+                          {state.loading === `reject:${candidate.candidate_id}` ? c().running : c().reject}
+                        </Button>
+                      </ManagementDangerZone>
+                    </Show>
+                    <Show when={actions().includes("rollback")}>
+                      <ManagementDangerZone
+                        scope={`${props.location().location.directory} · ${candidate.candidate_id}`}
+                      >
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          disabled={!!state.loading || !state.candidatesFresh}
+                          onClick={() => void transition(candidate, "rollback")}
+                          aria-busy={state.loading === "rollback" + ":" + candidate.candidate_id}
+                          busyLabel={c().running}
+                        >
+                          {state.loading === `rollback:${candidate.candidate_id}` ? c().running : c().rollback}
+                        </Button>
+                      </ManagementDangerZone>
+                    </Show>
+
+                    <Show when={report()}>
+                      {(value) => (
+                        <div class="grid gap-2">
+                          <div
+                            class="rounded-md border border-border-weak-base bg-background-base p-3  text-text-weak arforge-management-copy"
+                            role="status"
+                          >
+                            <div class="text-text-strong arforge-management-label">
+                              {value().gate_passed ? c().gatePassed : c().gateBlocked}
+                            </div>
+                            <ul class="mt-2 grid gap-1">
+                              <For each={Object.entries(value().checks)}>
+                                {([check, passed]) => (
+                                  <li>
+                                    {passed ? "✓" : "×"} {check}
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </div>
+                          <div class="grid gap-2 sm:grid-cols-3">
+                            <Metric
+                              label="candidate"
+                              value={`${value().candidate_observations} · ${percent(value().candidate_success_rate)}`}
+                            />
+                            <Metric
+                              label="control"
+                              value={`${value().control_observations} · ${percent(value().control_success_rate)}`}
+                            />
+                            <Metric label="delta" value={percent(value().success_rate_delta)} />
+                          </div>
+                        </div>
+                      )}
+                    </Show>
+                  </section>
+                )
+              }}
+            </ManagementCollection>
+          </article>
+        </div>
+      ),
+    },
+    {
+      id: "exposures",
+      label: () => c().exposureAudit,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <article
+            class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
+            data-testid="evolution-exposure-audit"
+          >
+            <header class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 max-w-3xl">
+                <h3 class="arforge-management-section-title text-text-strong">{c().exposureAudit}</h3>
+                <p class="mt-1 arforge-management-copy leading-relaxed text-text-weak">{c().exposureDescription}</p>
+              </div>
+              <label class="min-w-40 arforge-management-copy text-text-weak">
+                {c().exposureFilter}
+                <select
+                  class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                  value={state.exposureFilter}
+                  disabled={!!state.loading}
+                  onChange={(event) => filterExposures(event.currentTarget.value as ExposureFilter)}
+                >
+                  <option value="all">{c().exposureAll}</option>
+                  <option value="pending">{c().exposurePending}</option>
+                  <option value="recorded">{c().exposureRecorded}</option>
+                </select>
+              </label>
+            </header>
+
+            <div class="grid gap-3 sm:grid-cols-3">
+              <Metric label={c().exposureTotal} value={state.exposures?.total ?? "—"} />
+              <Metric label={c().exposurePending} value={state.exposures?.counts.pending ?? "—"} />
+              <Metric label={c().exposureRecorded} value={state.exposures?.counts.recorded ?? "—"} />
+            </div>
+
+            <Show when={state.exposures?.truncated}>
+              <p role="status" class="rounded-md bg-background-weak p-3 arforge-management-copy text-text-warning">
+                {state.exposures?.count} / {state.exposures?.total}
+              </p>
+            </Show>
+            <Show when={state.exposures && state.exposures.items.length === 0}>
+              <p class="arforge-management-copy text-text-weak">{c().noExposures}</p>
+            </Show>
+
+            <div class="grid gap-2">
+              <ManagementCollection
+                label={c().exposureAudit}
+                scope={locationScopeKey()}
+                scopeLabel={props.location().location.directory}
+                items={state.exposures?.items ?? []}
+                identity={(exposure) => exposure.exposure_id}
+                title={(exposure) => exposure.exposure_id}
+                description={(exposure) => exposure.status}
+              >
+                {(exposure) => (
+                  <details class="group rounded-md border border-border-weak-base bg-background-weak p-3">
+                    <summary class="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+                      <span class="flex min-w-0 flex-wrap items-center gap-2">
+                        <span
+                          class={
+                            exposure.status === "pending"
+                              ? "rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-warning"
+                              : "rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-success"
+                          }
+                        >
+                          {exposure.status === "pending" ? c().exposurePending : c().exposureRecorded}
+                        </span>
+                        <code class="break-all  text-text-strong arforge-management-copy">{exposure.exposure_id}</code>
+                      </span>
+                      <time class="text-text-weak arforge-management-copy" dateTime={exposure.created_at}>
+                        {new Date(exposure.created_at).toLocaleString()}
+                      </time>
+                    </summary>
+
+                    <div class="mt-3 grid gap-3 border-t border-border-weak-base pt-3">
+                      <dl class="grid gap-x-4 gap-y-2  sm:grid-cols-2 arforge-management-copy">
+                        <DigestFact label={c().cohortDigest} value={exposure.cohort_key_digest} />
+                        <DigestFact label={c().contextDigest} value={exposure.context_digest} />
+                        <DigestFact label={c().ticketDigest} value={exposure.ticket_digest} />
+                        <Show when={exposure.receipt}>
+                          {(receipt) => <DigestFact label={c().receiptDigest} value={receipt().receipt_digest} />}
+                        </Show>
+                      </dl>
+
+                      <Show
+                        when={exposure.source}
+                        fallback={
+                          <p class="rounded-md bg-background-base p-3  text-text-weak arforge-management-copy">
+                            {c().legacySource}
+                          </p>
+                        }
+                      >
+                        {(source) => (
+                          <section
+                            class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
+                            aria-label={c().executionSource}
+                            data-testid="evolution-exposure-source"
+                          >
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                              <div class="min-w-0">
+                                <h4 class="text-text-strong arforge-management-section-title">{c().executionSource}</h4>
+                                <p class="mt-1  leading-relaxed text-text-weak arforge-management-copy">
+                                  {c().sourceDescription}
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                size="small"
+                                variant="ghost"
+                                onClick={() => openSourceSession(source().session_id)}
+                              >
+                                {c().openSourceSession}
+                              </Button>
+                            </div>
+                            <dl class="grid gap-x-4 gap-y-2  sm:grid-cols-2 arforge-management-copy">
+                              <ReferenceFact label={c().sourceSession} value={source().session_id} />
+                              <ReferenceFact label={c().sourceUserMessage} value={source().user_message_id} />
+                              <ReferenceFact label={c().sourceStep} value={String(source().turn_step)} />
+                              <Show when={exposure.receipt?.assistant_message_id}>
+                                {(messageID) => (
+                                  <ReferenceFact label={c().sourceAssistantMessage} value={messageID()} />
+                                )}
+                              </Show>
+                            </dl>
+                          </section>
+                        )}
+                      </Show>
+
+                      <section aria-label={c().assignments} class="grid gap-2">
+                        <h4 class="text-text-strong arforge-management-section-title">{c().assignments}</h4>
+                        <For each={exposure.assignments}>
+                          {(assignment) => (
+                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background-base p-2 arforge-management-copy">
+                              <span class="break-all text-text-strong">{assignment.candidate_id}</span>
+                              <span class="text-text-weak">
+                                {assignment.cohort === "candidate" ? c().candidateCohort : c().controlCohort} ·{" "}
+                                <code title={assignment.candidate_digest}>
+                                  {digestLabel(assignment.candidate_digest)}
+                                </code>
+                              </span>
+                            </div>
+                          )}
+                        </For>
+                        <p class="text-text-weak arforge-management-copy">
+                          {c().injected}:{" "}
+                          {exposure.injected_candidate_ids.length ? exposure.injected_candidate_ids.join(", ") : "—"}
+                        </p>
+                      </section>
+
+                      <Show
+                        when={exposure.receipt}
+                        fallback={
+                          <p class="rounded-md bg-background-base p-3  text-text-warning arforge-management-copy">
+                            {c().awaitingOutcome}
+                          </p>
+                        }
+                      >
+                        {(receipt) => (
+                          <section class="grid gap-2 rounded-md bg-background-base p-3" aria-label={c().outcome}>
+                            <div class="flex flex-wrap items-center justify-between gap-2 arforge-management-copy">
+                              <span class="text-text-strong">
+                                {c().observations}: {receipt().observation_count}
+                              </span>
+                              <time class="text-text-weak" dateTime={receipt().recorded_at}>
+                                {new Date(receipt().recorded_at).toLocaleString()}
+                              </time>
+                            </div>
+                            <Show
+                              when={receipt().outcome}
+                              fallback={<p class="text-text-weak arforge-management-copy">{c().legacyOutcome}</p>}
+                            >
+                              {(outcome) => (
+                                <div class="grid gap-1 arforge-management-copy">
+                                  <p class={outcome().success ? "text-text-success" : "text-text-danger"}>
+                                    {outcome().success ? c().success : c().failure}
+                                  </p>
+                                  <p class={outcome().safety_incident ? "text-text-danger" : "text-text-weak"}>
+                                    {outcome().safety_incident ? c().safetyIncident : c().noSafetyIncident}
+                                  </p>
+                                  <Show when={outcome().stop_reason}>
+                                    <p class="whitespace-pre-wrap break-words text-text-weak">
+                                      {outcome().stop_reason}
+                                    </p>
+                                  </Show>
+                                </div>
+                              )}
+                            </Show>
+                          </section>
+                        )}
+                      </Show>
+                    </div>
+                  </details>
+                )}
+              </ManagementCollection>
+            </div>
+          </article>
+        </div>
+      ),
+    },
+    {
+      id: "archives",
+      label: () => c().archiveLibrary,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <section class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3">
+            <div>
+              <h4 class="arforge-management-section-title text-text-strong">{c().archiveRetention}</h4>
+              <p class="mt-1 arforge-management-copy leading-relaxed text-text-weak">{c().archiveDescription}</p>
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
+              <label class="min-w-56 arforge-management-copy text-text-weak">
+                {c().keepRecorded}
+                <input
+                  class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="1"
+                  value={state.archiveKeepRecorded}
+                  disabled={!!state.loading}
+                  onInput={(event) => {
+                    setState("archiveKeepRecorded", Number(event.currentTarget.value))
+                    setState("archivePlan", undefined)
+                  }}
+                />
+              </label>
+              <Button
+                size="small"
+                variant="secondary"
+                disabled={
+                  !!state.loading ||
+                  !Number.isFinite(state.archiveKeepRecorded) ||
+                  state.archiveKeepRecorded < 0 ||
+                  state.archiveKeepRecorded > 10_000
+                }
+                onClick={previewExposureArchive}
+                aria-busy={state.loading === "archive-preview"}
+                busyLabel={c().running}
+              >
+                {state.loading === "archive-preview" ? c().running : c().previewArchive}
+              </Button>
+            </div>
+            <Show when={state.archivePlan}>
+              {(plan) => (
+                <div class="grid gap-3 rounded-md bg-background-weak p-3" data-testid="evolution-archive-plan">
+                  <div class="grid gap-3 sm:grid-cols-3">
+                    <Metric label={c().archiveEligible} value={plan().eligible_count} />
+                    <Metric label={c().exposurePending} value={plan().counts.pending} />
+                    <Metric label={c().archiveRetained} value={plan().counts.retained_recorded} />
+                  </div>
+                  <DigestFact label={c().archivePlanDigest} value={plan().plan_digest} />
+                  <Show
+                    when={plan().eligible_count > 0}
+                    fallback={<p class="arforge-management-copy text-text-success">{c().archiveNoop}</p>}
+                  >
+                    <Field
+                      label={c().archiveReason}
+                      value={state.archiveReason}
+                      onInput={(value) => setState("archiveReason", value)}
+                    />
+                    <details class="rounded-md border border-border-weak-base p-2 arforge-management-copy text-text-weak">
+                      <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+                        {c().archiveEligible}: {plan().eligible_count}
+                        {plan().truncated ? ` · ${plan().items.length} shown` : ""}
+                      </summary>
+                      <ul class="mt-2 grid gap-1 border-t border-border-weak-base pt-2">
+                        <For each={plan().items}>
+                          {(item) => (
+                            <li class="flex flex-wrap justify-between gap-2">
+                              <code class="break-all text-text-strong">{item.exposure_id}</code>
+                              <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </details>
+                    <ManagementDangerZone
+                      scope={`${props.location().location.directory} · ${digestLabel(plan().plan_digest)}`}
+                    >
+                      <Button
+                        size="small"
+                        variant="primary"
+                        disabled={!!state.loading || !state.archiveReason.trim()}
+                        onClick={() => void applyExposureArchive()}
+                        aria-busy={state.loading === "archive-apply"}
+                        busyLabel={c().running}
+                      >
+                        {state.loading === "archive-apply" ? c().running : c().applyArchive}
+                      </Button>
+                    </ManagementDangerZone>
+                  </Show>
+                </div>
+              )}
+            </Show>
+          </section>
+          <section
+            class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
+            data-testid="evolution-archive-library"
+          >
+            <div>
+              <h4 class="arforge-management-section-title text-text-strong">{c().archiveLibrary}</h4>
+              <p class="mt-1 arforge-management-copy leading-relaxed text-text-weak">{c().archiveLibraryDescription}</p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+              <Metric label={c().archiveCount} value={state.archiveCatalog?.total ?? "—"} />
+              <Metric label={c().integrityValid} value={state.archiveCatalog?.valid_count ?? "—"} />
+              <Metric label={c().invalidArchives} value={state.archiveCatalog?.invalid_count ?? "—"} />
+            </div>
+            <Show when={state.archiveCatalog && state.archiveCatalog.items.length === 0}>
+              <p class="arforge-management-copy text-text-weak">{c().noArchives}</p>
+            </Show>
+            <Show when={state.archiveCatalog && state.archiveCatalog.items.length > 0}>
+              <div class="grid min-w-0 gap-3 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)]">
+                <div class="grid max-h-96 content-start gap-2 overflow-y-auto" aria-label={c().archiveLibrary}>
+                  <ManagementCollection
+                    label={c().archiveLibrary}
+                    scope={locationScopeKey()}
+                    scopeLabel={props.location().location.directory}
+                    items={state.archiveCatalog?.items ?? []}
+                    identity={(archive) => archive.archive_id}
+                    title={(archive) => archive.archive_id}
+                    description={(archive) => archive.integrity + " · " + archive.archived_count}
+                  >
+                    {(archive) => (
+                      <button
+                        type="button"
+                        class="min-h-11 w-full rounded-md border border-border-weak-base bg-background-weak p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-70"
+                        classList={{ "ring-1 ring-border-focus": state.selectedArchiveID === archive.archive_id }}
+                        aria-pressed={state.selectedArchiveID === archive.archive_id}
+                        disabled={!!state.loading || !archive.integrity.valid}
+                        onClick={() => selectExposureArchive(archive.archive_id)}
+                      >
+                        <span class="flex flex-wrap items-center justify-between gap-2">
+                          <code class="break-all  text-text-strong arforge-management-label">{archive.archive_id}</code>
+                          <span
+                            class={
+                              archive.integrity.valid
+                                ? "text-10-medium text-text-success"
+                                : "text-10-medium text-text-danger"
+                            }
+                          >
+                            {archive.integrity.valid ? `✓ ${c().integrityValid}` : `× ${c().integrityInvalid}`}
+                          </span>
+                        </span>
+                        <span class="mt-2 grid gap-1  text-text-weak arforge-management-copy">
+                          <span>
+                            {c().archivedRecords}: {archive.archived_count}
+                          </span>
+                          <Show when={archive.published_at}>
+                            <time dateTime={archive.published_at}>
+                              {c().publishedAt}: {new Date(archive.published_at).toLocaleString()}
+                            </time>
+                          </Show>
+                          <Show when={!archive.integrity.valid}>
+                            <span class="text-text-danger">{archive.integrity.issue}</span>
+                          </Show>
+                        </span>
+                      </button>
+                    )}
+                  </ManagementCollection>
+                </div>
+
+                <Show
+                  when={state.archiveDetail}
+                  fallback={
+                    <p class="min-h-24 rounded-md bg-background-weak p-3 arforge-management-copy text-text-weak">
+                      {c().selectArchive}
+                    </p>
+                  }
+                >
+                  {(detail) => (
+                    <div class="grid min-w-0 gap-3 rounded-md bg-background-weak p-3" data-testid="archive-detail">
+                      <header class="flex flex-wrap items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <h5 class="arforge-management-section-title text-text-strong">{c().archiveDetails}</h5>
+                          <code class="mt-1 block break-all arforge-management-copy text-text-weak">
+                            {detail().archive_id}
+                          </code>
+                        </div>
+                        <span class="arforge-management-section-title text-text-success">✓ {c().integrityValid}</span>
+                      </header>
+                      <div class="grid gap-3 sm:grid-cols-3">
+                        <Metric label={c().archivedRecords} value={detail().archived_count} />
+                        <Metric label={c().missingLive} value={detail().restore.missing} />
+                        <Metric label={c().alreadyLive} value={detail().restore.identical} />
+                      </div>
+                      <dl class="grid gap-x-4 gap-y-2 arforge-management-copy sm:grid-cols-2">
+                        <DigestFact label={c().archivePlanDigest} value={detail().plan_digest} />
+                        <DigestFact label="Manifest SHA-256" value={detail().manifest_digest} />
+                        <DigestFact label="Completion SHA-256" value={detail().completion_digest} />
+                        <DigestFact label="Evidence set SHA-256" value={detail().evidence_set_digest} />
+                        <div>
+                          <dt class="text-text-weak">{c().publishedAt}</dt>
+                          <dd class="mt-1 text-text-strong">
+                            <time dateTime={detail().published_at}>
+                              {new Date(detail().published_at).toLocaleString()}
+                            </time>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt class="text-text-weak">{c().completedAt}</dt>
+                          <dd class="mt-1 text-text-strong">
+                            <time dateTime={detail().completed_at}>
+                              {new Date(detail().completed_at).toLocaleString()}
+                            </time>
+                          </dd>
+                        </div>
+                      </dl>
+                      <p class="rounded-md bg-background-base p-3 arforge-management-copy text-text-weak">
+                        {c().sanitizedExport}
+                      </p>
+                      <ManagementActionToolbar
+                        primary={
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            disabled={!!state.loading}
+                            onClick={previewExposureRestore}
+                            aria-busy={state.loading === "restore-preview"}
+                            busyLabel={c().running}
+                          >
+                            {state.loading === "restore-preview" ? c().running : c().restorePreview}
+                          </Button>
+                        }
+                        actions={[
+                          {
+                            id: "export-archive",
+                            label: state.loading === "archive-export" ? c().running : c().archiveExport,
+                            run: exportExposureArchive,
+                            disabled: !!state.loading,
+                            busy: state.loading === "archive-export",
+                          },
+                        ]}
+                      />
+
+                      <Show when={state.restorePlan}>
+                        {(plan) => (
+                          <section
+                            class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
+                            data-testid="evolution-restore-plan"
+                          >
+                            <div class="grid gap-3 sm:grid-cols-3">
+                              <Metric label={c().missingLive} value={plan().counts.missing} />
+                              <Metric label={c().alreadyLive} value={plan().counts.already_present} />
+                              <Metric label={c().conflictLive} value={plan().counts.conflicts} />
+                            </div>
+                            <DigestFact label={c().archivePlanDigest} value={plan().plan_digest} />
+                            <Show when={plan().counts.conflicts > 0}>
+                              <p role="alert" class="arforge-management-copy text-text-danger">
+                                {c().restoreBlockedConflict}
+                              </p>
+                            </Show>
+                            <Show when={plan().capacity_exceeded}>
+                              <p role="alert" class="arforge-management-copy text-text-danger">
+                                {c().restoreBlockedCapacity}
+                              </p>
+                            </Show>
+                            <Show when={plan().can_apply && plan().counts.missing > 0}>
+                              <Field
+                                label={c().restoreReason}
+                                value={state.restoreReason}
+                                onInput={(value) => setState("restoreReason", value)}
+                              />
+                              <ManagementDangerZone
+                                scope={`${props.location().location.directory} · ${plan().archive_id}`}
+                              >
+                                <Button
+                                  size="small"
+                                  variant="primary"
+                                  disabled={!!state.loading || !state.restoreReason.trim()}
+                                  onClick={() => void applyExposureRestore()}
+                                  aria-busy={state.loading === "restore-apply"}
+                                  busyLabel={c().running}
+                                >
+                                  {state.loading === "restore-apply" ? c().running : c().restoreRecords}
+                                </Button>
+                              </ManagementDangerZone>
+                            </Show>
+                            <Show when={plan().can_apply && plan().counts.missing === 0}>
+                              <p class="arforge-management-copy text-text-success">{c().restoreNoop}</p>
+                            </Show>
+                          </section>
+                        )}
+                      </Show>
+
+                      <details class="rounded-md border border-border-weak-base p-2 arforge-management-copy text-text-weak">
+                        <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+                          {c().evidenceItems}: {detail().archived_count}
+                          {detail().truncated ? ` · ${detail().items.length} shown` : ""}
+                        </summary>
+                        <ul class="mt-2 grid gap-2 border-t border-border-weak-base pt-2">
+                          <For each={detail().items}>
+                            {(item) => (
+                              <li class="grid gap-1 rounded-md bg-background-base p-2">
+                                <span class="flex flex-wrap items-center justify-between gap-2">
+                                  <code class="break-all text-text-strong">{item.exposure_id}</code>
+                                  <span class={item.live_status === "conflict" ? "text-text-danger" : "text-text-weak"}>
+                                    {item.live_status === "missing"
+                                      ? c().missingLive
+                                      : item.live_status === "identical"
+                                        ? c().alreadyLive
+                                        : c().conflictLive}
+                                  </span>
+                                </span>
+                                <span>
+                                  {c().ticketDigest}: <code>{digestLabel(item.ticket_digest)}</code>
+                                </span>
+                                <span>
+                                  {c().receiptDigest}: <code>{digestLabel(item.receipt_digest)}</code>
+                                </span>
+                                <Show when={item.source}>
+                                  {(source) => (
+                                    <span class="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-border-weak-base pt-2">
+                                      <span>
+                                        {c().sourceSession}: <code class="break-all">{source().session_id}</code> ·{" "}
+                                        {c().sourceStep} {source().turn_step}
+                                      </span>
+                                      <Button
+                                        type="button"
+                                        size="small"
+                                        variant="ghost"
+                                        onClick={() => openSourceSession(source().session_id)}
+                                      >
+                                        {c().openSourceSession}
+                                      </Button>
+                                    </span>
+                                  )}
+                                </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </details>
+                    </div>
+                  )}
+                </Show>
+              </div>
+            </Show>
+          </section>
+        </div>
+      ),
+    },
+    {
+      id: "timeline",
+      label: () => c().executionTimeline,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <article
+            class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
+            data-testid="evolution-execution-timeline"
+          >
+            <header class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 max-w-3xl">
+                <h3 class="arforge-management-section-title text-text-strong">{c().executionTimeline}</h3>
+                <p class="mt-1 arforge-management-copy leading-relaxed text-text-weak">{c().timelineDescription}</p>
+              </div>
+              <Show when={state.auditTimeline?.valid}>
+                <span class="rounded-full border border-border-weak-base px-2 py-1 arforge-management-section-title text-text-success">
+                  ✓ {c().chainValid} · {state.auditTimeline?.total ?? 0}
+                </span>
+              </Show>
+            </header>
+            <Show when={state.auditTimeline && state.auditTimeline.items.length === 0}>
+              <p class="arforge-management-copy text-text-weak">{c().noEvents}</p>
+            </Show>
+            <div class="grid gap-2">
+              <ManagementCollection
+                label={c().audit}
+                scope={locationScopeKey()}
+                scopeLabel={props.location().location.directory}
+                items={state.auditTimeline?.items ?? []}
+                identity={(event) => String(event.sequence)}
+                title={(event) => event.action}
+                description={(event) => event.actor + " · " + event.subject_id}
+              >
+                {(event) => (
+                  <article>
+                    <details class="rounded-md border border-border-weak-base bg-background-weak p-3">
+                      <summary class="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+                        <span class="min-w-0">
+                          <span class="capitalize text-text-strong arforge-management-label">
+                            {auditActionLabel(event.action)}
+                          </span>
+                          <code class="ml-2  text-text-weak arforge-management-copy">#{event.sequence}</code>
+                        </span>
+                        <time class="text-text-weak arforge-management-copy" dateTime={event.recorded_at}>
+                          {new Date(event.recorded_at).toLocaleString()}
+                        </time>
+                      </summary>
+                      <dl class="mt-3 grid gap-2 border-t border-border-weak-base pt-3  sm:grid-cols-2 arforge-management-copy">
+                        <DigestFact label={c().eventActor} value={event.actor} />
+                        <DigestFact
+                          label={c().eventSubject}
+                          value={`${event.subject_kind} · ${event.subject_id || "system"}`}
+                        />
+                        <Show when={event.reason}>
+                          <div class="sm:col-span-2">
+                            <dt class="text-text-weak">{c().eventReason}</dt>
+                            <dd class="mt-1 whitespace-pre-wrap break-words text-text-strong">{event.reason}</dd>
+                          </div>
+                        </Show>
+                      </dl>
+                      <details class="mt-3 rounded-md bg-background-base p-2  text-text-weak arforge-management-copy">
+                        <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
+                          {c().eventMetadata}
+                        </summary>
+                        <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all border-t border-border-weak-base pt-2">
+                          {JSON.stringify(
+                            {
+                              metadata: event.metadata,
+                              previous_hash: event.previous_hash,
+                              record_hash: event.record_hash,
+                            },
+                            null,
+                            2,
+                          )}
+                        </pre>
+                      </details>
+                    </details>
+                  </article>
+                )}
+              </ManagementCollection>
+            </div>
+            <Show when={state.auditTimeline?.truncated}>
+              <p role="status" class="rounded-md bg-background-weak p-3 arforge-management-copy text-text-warning">
+                {state.auditTimeline?.count} / {state.auditTimeline?.total}
+              </p>
+            </Show>
+          </article>
+        </div>
+      ),
+    },
+    {
+      id: "recall",
+      label: () => c().actualRecall,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+            <h3 class="arforge-management-section-title text-text-strong">{c().actualRecall}</h3>
+            <p class="arforge-management-copy text-text-weak">{c().syntheticWarning}</p>
+            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <Metric label={c().recalls} value={state.recall?.sampleSize ?? "—"} />
+              <Metric label={c().useful} value={state.recall ? percent(state.recall.top1Rate) : "—"} />
+              <Metric label={c().feedback} value={state.recall ? state.recall.meanReciprocalRank.toFixed(3) : "—"} />
+              <Metric label={c().stale} value={state.recall ? percent(state.recall.noResultRate) : "—"} />
+              <Metric label={c().conflicts} value={state.recall?.status ?? "—"} />
+            </div>
+          </article>
+        </div>
+      ),
+    },
+    {
+      id: "context",
+      label: () => c().preview,
+      render: () => (
+        <div class="arforge-management-task-form">
+          <details class="rounded-md border border-border-weak-base p-3">
+            <summary class="cursor-pointer arforge-management-section-title text-text-strong">{c().preview}</summary>
+            <div class="mt-3 grid gap-3">
+              <Area
+                label={c().previewTask}
+                value={state.previewTask}
+                onInput={(value) => setState("previewTask", value)}
+              />
+              <Field label={c().cohort} value={state.cohortKey} onInput={(value) => setState("cohortKey", value)} />
+              <Button
+                size="small"
+                variant="secondary"
+                disabled={!!state.loading || !state.cohortKey.trim()}
+                onClick={previewContext}
+              >
+                {c().previewButton}
+              </Button>
+              <Show when={state.contextPreview}>
+                {(value) => (
+                  <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background-stronger p-3 arforge-management-copy text-text-weak">
+                    {JSON.stringify(value(), null, 2)}
+                  </pre>
+                )}
+              </Show>
+            </div>
+          </details>
+        </div>
+      ),
+    },
+  ]
   return (
     <section
       class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
@@ -974,21 +2050,26 @@ export function EvolutionWorkbench(props: {
       aria-busy={!!state.loading}
     >
       <header class="flex justify-end">
-        <Button size="small" variant="ghost" disabled={!!state.loading} onClick={() => void refresh()}>
+        <Button
+          size="small"
+          variant="ghost"
+          disabled={!!state.loading}
+          onClick={() => void refresh()}
+          aria-busy={state.loading === "refresh"}
+          busyLabel={c().running}
+        >
           {state.loading === "refresh" ? c().running : c().refresh}
         </Button>
       </header>
 
-      <Show when={state.error}>
-        <div role="alert" class="rounded-md border border-border-danger p-3 text-12-regular text-text-danger">
-          {state.error}
-        </div>
-      </Show>
-      <Show when={state.notice}>
-        <div role="status" aria-live="polite" class="rounded-md border border-border-weak-base p-3 text-12-regular">
-          {state.notice}
-        </div>
-      </Show>
+      <ManagementStatus
+        error={state.error}
+        notice={state.notice}
+        loading={state.loading === "refresh"}
+        initialLoading={!state.status}
+        scope={props.location().location.directory}
+        onRetry={() => void refresh()}
+      />
 
       <div class="grid gap-3 md:grid-cols-4">
         <Metric label={c().candidates} value={state.status?.total ?? "—"} />
@@ -1003,851 +2084,19 @@ export function EvolutionWorkbench(props: {
           }
         />
       </div>
-      <p class="rounded-md bg-background-weak p-3 text-11-regular text-text-weak">{c().protected}</p>
+      <p class="rounded-md bg-background-weak p-3 arforge-management-copy text-text-weak">{c().protected}</p>
 
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="evolution-exposure-audit"
-      >
-        <header class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0 max-w-3xl">
-            <h3 class="text-13-medium text-text-strong">{c().exposureAudit}</h3>
-            <p class="mt-1 text-11-regular leading-relaxed text-text-weak">{c().exposureDescription}</p>
-          </div>
-          <label class="min-w-40 text-11-regular text-text-weak">
-            {c().exposureFilter}
-            <select
-              class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-              value={state.exposureFilter}
-              disabled={!!state.loading}
-              onChange={(event) => filterExposures(event.currentTarget.value as ExposureFilter)}
-            >
-              <option value="all">{c().exposureAll}</option>
-              <option value="pending">{c().exposurePending}</option>
-              <option value="recorded">{c().exposureRecorded}</option>
-            </select>
-          </label>
-        </header>
-
-        <div class="grid gap-3 sm:grid-cols-3">
-          <Metric label={c().exposureTotal} value={state.exposures?.total ?? "—"} />
-          <Metric label={c().exposurePending} value={state.exposures?.counts.pending ?? "—"} />
-          <Metric label={c().exposureRecorded} value={state.exposures?.counts.recorded ?? "—"} />
-        </div>
-
-        <Show when={state.exposures?.truncated}>
-          <p role="status" class="rounded-md bg-background-weak p-3 text-11-regular text-text-warning">
-            {state.exposures?.count} / {state.exposures?.total}
-          </p>
-        </Show>
-        <Show when={state.exposures && state.exposures.items.length === 0}>
-          <p class="text-12-regular text-text-weak">{c().noExposures}</p>
-        </Show>
-
-        <div class="grid gap-2">
-          <For each={state.exposures?.items ?? []}>
-            {(exposure) => (
-              <details class="group rounded-md border border-border-weak-base bg-background-weak p-3">
-                <summary class="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-                  <span class="flex min-w-0 flex-wrap items-center gap-2">
-                    <span
-                      class={
-                        exposure.status === "pending"
-                          ? "rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-warning"
-                          : "rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-success"
-                      }
-                    >
-                      {exposure.status === "pending" ? c().exposurePending : c().exposureRecorded}
-                    </span>
-                    <code class="break-all text-10-regular text-text-strong">{exposure.exposure_id}</code>
-                  </span>
-                  <time class="text-10-regular text-text-weak" dateTime={exposure.created_at}>
-                    {new Date(exposure.created_at).toLocaleString()}
-                  </time>
-                </summary>
-
-                <div class="mt-3 grid gap-3 border-t border-border-weak-base pt-3">
-                  <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-2">
-                    <DigestFact label={c().cohortDigest} value={exposure.cohort_key_digest} />
-                    <DigestFact label={c().contextDigest} value={exposure.context_digest} />
-                    <DigestFact label={c().ticketDigest} value={exposure.ticket_digest} />
-                    <Show when={exposure.receipt}>
-                      {(receipt) => <DigestFact label={c().receiptDigest} value={receipt().receipt_digest} />}
-                    </Show>
-                  </dl>
-
-                  <Show
-                    when={exposure.source}
-                    fallback={<p class="rounded-md bg-background-base p-3 text-11-regular text-text-weak">{c().legacySource}</p>}
-                  >
-                    {(source) => (
-                      <section
-                        class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
-                        aria-label={c().executionSource}
-                        data-testid="evolution-exposure-source"
-                      >
-                        <div class="flex flex-wrap items-start justify-between gap-3">
-                          <div class="min-w-0">
-                            <h4 class="text-11-medium text-text-strong">{c().executionSource}</h4>
-                            <p class="mt-1 text-10-regular leading-relaxed text-text-weak">{c().sourceDescription}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            size="small"
-                            variant="ghost"
-                            onClick={() => openSourceSession(source().session_id)}
-                          >
-                            {c().openSourceSession}
-                          </Button>
-                        </div>
-                        <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-2">
-                          <ReferenceFact label={c().sourceSession} value={source().session_id} />
-                          <ReferenceFact label={c().sourceUserMessage} value={source().user_message_id} />
-                          <ReferenceFact label={c().sourceStep} value={String(source().turn_step)} />
-                          <Show when={exposure.receipt?.assistant_message_id}>
-                            {(messageID) => <ReferenceFact label={c().sourceAssistantMessage} value={messageID()} />}
-                          </Show>
-                        </dl>
-                      </section>
-                    )}
-                  </Show>
-
-                  <section aria-label={c().assignments} class="grid gap-2">
-                    <h4 class="text-11-medium text-text-strong">{c().assignments}</h4>
-                    <For each={exposure.assignments}>
-                      {(assignment) => (
-                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-md bg-background-base p-2 text-10-regular">
-                          <span class="break-all text-text-strong">{assignment.candidate_id}</span>
-                          <span class="text-text-weak">
-                            {assignment.cohort === "candidate" ? c().candidateCohort : c().controlCohort} ·{" "}
-                            <code title={assignment.candidate_digest}>{digestLabel(assignment.candidate_digest)}</code>
-                          </span>
-                        </div>
-                      )}
-                    </For>
-                    <p class="text-10-regular text-text-weak">
-                      {c().injected}:{" "}
-                      {exposure.injected_candidate_ids.length ? exposure.injected_candidate_ids.join(", ") : "—"}
-                    </p>
-                  </section>
-
-                  <Show
-                    when={exposure.receipt}
-                    fallback={
-                      <p class="rounded-md bg-background-base p-3 text-11-regular text-text-warning">
-                        {c().awaitingOutcome}
-                      </p>
-                    }
-                  >
-                    {(receipt) => (
-                      <section class="grid gap-2 rounded-md bg-background-base p-3" aria-label={c().outcome}>
-                        <div class="flex flex-wrap items-center justify-between gap-2 text-11-regular">
-                          <span class="text-text-strong">
-                            {c().observations}: {receipt().observation_count}
-                          </span>
-                          <time class="text-text-weak" dateTime={receipt().recorded_at}>
-                            {new Date(receipt().recorded_at).toLocaleString()}
-                          </time>
-                        </div>
-                        <Show
-                          when={receipt().outcome}
-                          fallback={<p class="text-11-regular text-text-weak">{c().legacyOutcome}</p>}
-                        >
-                          {(outcome) => (
-                            <div class="grid gap-1 text-11-regular">
-                              <p class={outcome().success ? "text-text-success" : "text-text-danger"}>
-                                {outcome().success ? c().success : c().failure}
-                              </p>
-                              <p class={outcome().safety_incident ? "text-text-danger" : "text-text-weak"}>
-                                {outcome().safety_incident ? c().safetyIncident : c().noSafetyIncident}
-                              </p>
-                              <Show when={outcome().stop_reason}>
-                                <p class="whitespace-pre-wrap break-words text-text-weak">{outcome().stop_reason}</p>
-                              </Show>
-                            </div>
-                          )}
-                        </Show>
-                      </section>
-                    )}
-                  </Show>
-                </div>
-              </details>
-            )}
-          </For>
-        </div>
-
-        <section class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3">
-          <div>
-            <h4 class="text-12-medium text-text-strong">{c().archiveRetention}</h4>
-            <p class="mt-1 text-11-regular leading-relaxed text-text-weak">{c().archiveDescription}</p>
-          </div>
-          <div class="flex flex-wrap items-end gap-3">
-            <label class="min-w-56 text-11-regular text-text-weak">
-              {c().keepRecorded}
-              <input
-                class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-                type="number"
-                min="0"
-                max="10000"
-                step="1"
-                value={state.archiveKeepRecorded}
-                disabled={!!state.loading}
-                onInput={(event) => {
-                  setState("archiveKeepRecorded", Number(event.currentTarget.value))
-                  setState("archivePlan", undefined)
-                }}
-              />
-            </label>
-            <Button
-              size="small"
-              variant="secondary"
-              disabled={
-                !!state.loading ||
-                !Number.isFinite(state.archiveKeepRecorded) ||
-                state.archiveKeepRecorded < 0 ||
-                state.archiveKeepRecorded > 10_000
-              }
-              onClick={previewExposureArchive}
-            >
-              {state.loading === "archive-preview" ? c().running : c().previewArchive}
-            </Button>
-          </div>
-          <Show when={state.archivePlan}>
-            {(plan) => (
-              <div class="grid gap-3 rounded-md bg-background-weak p-3" data-testid="evolution-archive-plan">
-                <div class="grid gap-3 sm:grid-cols-3">
-                  <Metric label={c().archiveEligible} value={plan().eligible_count} />
-                  <Metric label={c().exposurePending} value={plan().counts.pending} />
-                  <Metric label={c().archiveRetained} value={plan().counts.retained_recorded} />
-                </div>
-                <DigestFact label={c().archivePlanDigest} value={plan().plan_digest} />
-                <Show
-                  when={plan().eligible_count > 0}
-                  fallback={<p class="text-11-regular text-text-success">{c().archiveNoop}</p>}
-                >
-                  <Field
-                    label={c().archiveReason}
-                    value={state.archiveReason}
-                    onInput={(value) => setState("archiveReason", value)}
-                  />
-                  <details class="rounded-md border border-border-weak-base p-2 text-10-regular text-text-weak">
-                    <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-                      {c().archiveEligible}: {plan().eligible_count}
-                      {plan().truncated ? ` · ${plan().items.length} shown` : ""}
-                    </summary>
-                    <ul class="mt-2 grid gap-1 border-t border-border-weak-base pt-2">
-                      <For each={plan().items}>
-                        {(item) => (
-                          <li class="flex flex-wrap justify-between gap-2">
-                            <code class="break-all text-text-strong">{item.exposure_id}</code>
-                            <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </details>
-                  <Button
-                    size="small"
-                    variant="primary"
-                    disabled={!!state.loading || !state.archiveReason.trim()}
-                    onClick={applyExposureArchive}
-                  >
-                    {state.loading === "archive-apply" ? c().running : c().applyArchive}
-                  </Button>
-                </Show>
-              </div>
-            )}
-          </Show>
-        </section>
-
-        <section
-          class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
-          data-testid="evolution-archive-library"
-        >
-          <div>
-            <h4 class="text-12-medium text-text-strong">{c().archiveLibrary}</h4>
-            <p class="mt-1 text-11-regular leading-relaxed text-text-weak">{c().archiveLibraryDescription}</p>
-          </div>
-          <div class="grid gap-3 sm:grid-cols-3">
-            <Metric label={c().archiveCount} value={state.archiveCatalog?.total ?? "—"} />
-            <Metric label={c().integrityValid} value={state.archiveCatalog?.valid_count ?? "—"} />
-            <Metric label={c().invalidArchives} value={state.archiveCatalog?.invalid_count ?? "—"} />
-          </div>
-          <Show when={state.archiveCatalog && state.archiveCatalog.items.length === 0}>
-            <p class="text-11-regular text-text-weak">{c().noArchives}</p>
-          </Show>
-          <Show when={state.archiveCatalog && state.archiveCatalog.items.length > 0}>
-            <div class="grid min-w-0 gap-3 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)]">
-              <div class="grid max-h-96 content-start gap-2 overflow-y-auto" aria-label={c().archiveLibrary}>
-                <For each={state.archiveCatalog?.items ?? []}>
-                  {(archive) => (
-                    <button
-                      type="button"
-                      class="min-h-11 w-full rounded-md border border-border-weak-base bg-background-weak p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-70"
-                      classList={{ "ring-1 ring-border-focus": state.selectedArchiveID === archive.archive_id }}
-                      aria-pressed={state.selectedArchiveID === archive.archive_id}
-                      disabled={!!state.loading || !archive.integrity.valid}
-                      onClick={() => selectExposureArchive(archive.archive_id)}
-                    >
-                      <span class="flex flex-wrap items-center justify-between gap-2">
-                        <code class="break-all text-10-medium text-text-strong">{archive.archive_id}</code>
-                        <span
-                          class={
-                            archive.integrity.valid
-                              ? "text-10-medium text-text-success"
-                              : "text-10-medium text-text-danger"
-                          }
-                        >
-                          {archive.integrity.valid ? `✓ ${c().integrityValid}` : `× ${c().integrityInvalid}`}
-                        </span>
-                      </span>
-                      <span class="mt-2 grid gap-1 text-10-regular text-text-weak">
-                        <span>
-                          {c().archivedRecords}: {archive.archived_count}
-                        </span>
-                        <Show when={archive.published_at}>
-                          <time dateTime={archive.published_at}>
-                            {c().publishedAt}: {new Date(archive.published_at).toLocaleString()}
-                          </time>
-                        </Show>
-                        <Show when={!archive.integrity.valid}>
-                          <span class="text-text-danger">{archive.integrity.issue}</span>
-                        </Show>
-                      </span>
-                    </button>
-                  )}
-                </For>
-              </div>
-
-              <Show
-                when={state.archiveDetail}
-                fallback={
-                  <p class="min-h-24 rounded-md bg-background-weak p-3 text-11-regular text-text-weak">
-                    {c().selectArchive}
-                  </p>
-                }
-              >
-                {(detail) => (
-                  <div class="grid min-w-0 gap-3 rounded-md bg-background-weak p-3" data-testid="archive-detail">
-                    <header class="flex flex-wrap items-start justify-between gap-3">
-                      <div class="min-w-0">
-                        <h5 class="text-11-medium text-text-strong">{c().archiveDetails}</h5>
-                        <code class="mt-1 block break-all text-10-regular text-text-weak">{detail().archive_id}</code>
-                      </div>
-                      <span class="text-10-medium text-text-success">✓ {c().integrityValid}</span>
-                    </header>
-                    <div class="grid gap-3 sm:grid-cols-3">
-                      <Metric label={c().archivedRecords} value={detail().archived_count} />
-                      <Metric label={c().missingLive} value={detail().restore.missing} />
-                      <Metric label={c().alreadyLive} value={detail().restore.identical} />
-                    </div>
-                    <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-2">
-                      <DigestFact label={c().archivePlanDigest} value={detail().plan_digest} />
-                      <DigestFact label="Manifest SHA-256" value={detail().manifest_digest} />
-                      <DigestFact label="Completion SHA-256" value={detail().completion_digest} />
-                      <DigestFact label="Evidence set SHA-256" value={detail().evidence_set_digest} />
-                      <div>
-                        <dt class="text-text-weak">{c().publishedAt}</dt>
-                        <dd class="mt-1 text-text-strong">
-                          <time dateTime={detail().published_at}>
-                            {new Date(detail().published_at).toLocaleString()}
-                          </time>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt class="text-text-weak">{c().completedAt}</dt>
-                        <dd class="mt-1 text-text-strong">
-                          <time dateTime={detail().completed_at}>
-                            {new Date(detail().completed_at).toLocaleString()}
-                          </time>
-                        </dd>
-                      </div>
-                    </dl>
-                    <p class="rounded-md bg-background-base p-3 text-10-regular text-text-weak">
-                      {c().sanitizedExport}
-                    </p>
-                    <div class="flex flex-wrap gap-2">
-                      <Button
-                        size="small"
-                        variant="secondary"
-                        disabled={!!state.loading}
-                        onClick={previewExposureRestore}
-                      >
-                        {state.loading === "restore-preview" ? c().running : c().restorePreview}
-                      </Button>
-                      <Button size="small" variant="ghost" disabled={!!state.loading} onClick={exportExposureArchive}>
-                        {state.loading === "archive-export" ? c().running : c().archiveExport}
-                      </Button>
-                    </div>
-
-                    <Show when={state.restorePlan}>
-                      {(plan) => (
-                        <section
-                          class="grid gap-3 rounded-md border border-border-weak-base bg-background-base p-3"
-                          data-testid="evolution-restore-plan"
-                        >
-                          <div class="grid gap-3 sm:grid-cols-3">
-                            <Metric label={c().missingLive} value={plan().counts.missing} />
-                            <Metric label={c().alreadyLive} value={plan().counts.already_present} />
-                            <Metric label={c().conflictLive} value={plan().counts.conflicts} />
-                          </div>
-                          <DigestFact label={c().archivePlanDigest} value={plan().plan_digest} />
-                          <Show when={plan().counts.conflicts > 0}>
-                            <p role="alert" class="text-11-regular text-text-danger">
-                              {c().restoreBlockedConflict}
-                            </p>
-                          </Show>
-                          <Show when={plan().capacity_exceeded}>
-                            <p role="alert" class="text-11-regular text-text-danger">
-                              {c().restoreBlockedCapacity}
-                            </p>
-                          </Show>
-                          <Show when={plan().can_apply && plan().counts.missing > 0}>
-                            <Field
-                              label={c().restoreReason}
-                              value={state.restoreReason}
-                              onInput={(value) => setState("restoreReason", value)}
-                            />
-                            <Button
-                              size="small"
-                              variant="primary"
-                              disabled={!!state.loading || !state.restoreReason.trim()}
-                              onClick={applyExposureRestore}
-                            >
-                              {state.loading === "restore-apply" ? c().running : c().restoreRecords}
-                            </Button>
-                          </Show>
-                          <Show when={plan().can_apply && plan().counts.missing === 0}>
-                            <p class="text-11-regular text-text-success">{c().restoreNoop}</p>
-                          </Show>
-                        </section>
-                      )}
-                    </Show>
-
-                    <details class="rounded-md border border-border-weak-base p-2 text-10-regular text-text-weak">
-                      <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-                        {c().evidenceItems}: {detail().archived_count}
-                        {detail().truncated ? ` · ${detail().items.length} shown` : ""}
-                      </summary>
-                      <ul class="mt-2 grid gap-2 border-t border-border-weak-base pt-2">
-                        <For each={detail().items}>
-                          {(item) => (
-                            <li class="grid gap-1 rounded-md bg-background-base p-2">
-                              <span class="flex flex-wrap items-center justify-between gap-2">
-                                <code class="break-all text-text-strong">{item.exposure_id}</code>
-                                <span class={item.live_status === "conflict" ? "text-text-danger" : "text-text-weak"}>
-                                  {item.live_status === "missing"
-                                    ? c().missingLive
-                                    : item.live_status === "identical"
-                                      ? c().alreadyLive
-                                      : c().conflictLive}
-                                </span>
-                              </span>
-                              <span>
-                                {c().ticketDigest}: <code>{digestLabel(item.ticket_digest)}</code>
-                              </span>
-                              <span>
-                                {c().receiptDigest}: <code>{digestLabel(item.receipt_digest)}</code>
-                              </span>
-                              <Show when={item.source}>
-                                {(source) => (
-                                  <span class="mt-1 flex flex-wrap items-center justify-between gap-2 border-t border-border-weak-base pt-2">
-                                    <span>
-                                      {c().sourceSession}: <code class="break-all">{source().session_id}</code> ·{" "}
-                                      {c().sourceStep} {source().turn_step}
-                                    </span>
-                                    <Button
-                                      type="button"
-                                      size="small"
-                                      variant="ghost"
-                                      onClick={() => openSourceSession(source().session_id)}
-                                    >
-                                      {c().openSourceSession}
-                                    </Button>
-                                  </span>
-                                )}
-                              </Show>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </details>
-                  </div>
-                )}
-              </Show>
-            </div>
-          </Show>
-        </section>
-      </article>
-
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="evolution-execution-timeline"
-      >
-        <header class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0 max-w-3xl">
-            <h3 class="text-13-medium text-text-strong">{c().executionTimeline}</h3>
-            <p class="mt-1 text-11-regular leading-relaxed text-text-weak">{c().timelineDescription}</p>
-          </div>
-          <Show when={state.auditTimeline?.valid}>
-            <span class="rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-success">
-              ✓ {c().chainValid} · {state.auditTimeline?.total ?? 0}
-            </span>
-          </Show>
-        </header>
-        <Show when={state.auditTimeline && state.auditTimeline.items.length === 0}>
-          <p class="text-12-regular text-text-weak">{c().noEvents}</p>
-        </Show>
-        <ol class="grid gap-2">
-          <For each={state.auditTimeline?.items ?? []}>
-            {(event) => (
-              <li>
-                <details class="rounded-md border border-border-weak-base bg-background-weak p-3">
-                  <summary class="flex min-h-11 cursor-pointer list-none flex-wrap items-center justify-between gap-2 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-                    <span class="min-w-0">
-                      <span class="text-11-medium capitalize text-text-strong">{auditActionLabel(event.action)}</span>
-                      <code class="ml-2 text-10-regular text-text-weak">#{event.sequence}</code>
-                    </span>
-                    <time class="text-10-regular text-text-weak" dateTime={event.recorded_at}>
-                      {new Date(event.recorded_at).toLocaleString()}
-                    </time>
-                  </summary>
-                  <dl class="mt-3 grid gap-2 border-t border-border-weak-base pt-3 text-10-regular sm:grid-cols-2">
-                    <DigestFact label={c().eventActor} value={event.actor} />
-                    <DigestFact
-                      label={c().eventSubject}
-                      value={`${event.subject_kind} · ${event.subject_id || "system"}`}
-                    />
-                    <Show when={event.reason}>
-                      <div class="sm:col-span-2">
-                        <dt class="text-text-weak">{c().eventReason}</dt>
-                        <dd class="mt-1 whitespace-pre-wrap break-words text-text-strong">{event.reason}</dd>
-                      </div>
-                    </Show>
-                  </dl>
-                  <details class="mt-3 rounded-md bg-background-base p-2 text-10-regular text-text-weak">
-                    <summary class="min-h-9 cursor-pointer rounded-sm py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus">
-                      {c().eventMetadata}
-                    </summary>
-                    <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all border-t border-border-weak-base pt-2">
-                      {JSON.stringify(
-                        {
-                          metadata: event.metadata,
-                          previous_hash: event.previous_hash,
-                          record_hash: event.record_hash,
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
-                  </details>
-                </details>
-              </li>
-            )}
-          </For>
-        </ol>
-        <Show when={state.auditTimeline?.truncated}>
-          <p role="status" class="rounded-md bg-background-weak p-3 text-11-regular text-text-warning">
-            {state.auditTimeline?.count} / {state.auditTimeline?.total}
-          </p>
-        </Show>
-      </article>
-
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <h3 class="text-13-medium text-text-strong">{c().actualRecall}</h3>
-        <p class="text-11-regular text-text-weak">{c().syntheticWarning}</p>
-        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <Metric label={c().recalls} value={state.recall?.sampleSize ?? "—"} />
-          <Metric label={c().useful} value={state.recall ? percent(state.recall.top1Rate) : "—"} />
-          <Metric label={c().feedback} value={state.recall ? state.recall.meanReciprocalRank.toFixed(3) : "—"} />
-          <Metric label={c().stale} value={state.recall ? percent(state.recall.noResultRate) : "—"} />
-          <Metric label={c().conflicts} value={state.recall?.status ?? "—"} />
-        </div>
-      </article>
-
-      <details class="rounded-md border border-border-weak-base p-3">
-        <summary class="cursor-pointer text-13-medium text-text-strong">{c().create}</summary>
-        <div class="mt-3 grid gap-3">
-          <Field label={c().titleField} value={state.title} onInput={(value) => setState("title", value)} />
-          <label class="text-11-regular text-text-weak">
-            {c().target}
-            <select
-              class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong"
-              value={state.target}
-              onChange={(event) => setState("target", event.currentTarget.value as Candidate["target"])}
-            >
-              <option value="learning.failure">learning.failure</option>
-              <option value="learning.fix">learning.fix</option>
-              <option value="learning.preference">learning.preference</option>
-              <option value="routing.advice">routing.advice</option>
-              <option value="tool.advice">tool.advice</option>
-            </select>
-          </label>
-          <Area label={c().instruction} value={state.instruction} onInput={(value) => setState("instruction", value)} />
-          <Area label={c().rationale} value={state.rationale} onInput={(value) => setState("rationale", value)} />
-          <Area label={c().evidence} value={state.evidence} onInput={(value) => setState("evidence", value)} />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={
-              !!state.loading ||
-              !state.title.trim() ||
-              !state.instruction.trim() ||
-              !state.rationale.trim() ||
-              !state.evidence.trim()
-            }
-            onClick={createCandidate}
-          >
-            {state.loading === "create" ? c().running : c().create}
-          </Button>
-        </div>
-      </details>
-
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <h3 class="text-13-medium text-text-strong">{c().opportunities}</h3>
-        <For each={state.opportunities}>
-          {(item) => (
-            <div class="flex flex-wrap items-center justify-between gap-3 rounded-md bg-background-weak p-3">
-              <div class="min-w-0 text-11-regular">
-                <div class="text-text-strong">{item.source_ref}</div>
-                <div class="mt-1 text-text-weak">
-                  {item.kind} · {item.category}
-                </div>
-              </div>
-              <Show when={item.proposal_available && item.source_ref.startsWith("learning-pattern:")}>
-                <Button size="small" variant="ghost" disabled={!!state.loading} onClick={() => fromPattern(item)}>
-                  {c().propose}
-                </Button>
-              </Show>
-            </div>
-          )}
-        </For>
-      </article>
-
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <h3 class="text-13-medium text-text-strong">{c().candidates}</h3>
-        <Show when={state.candidates.length === 0}>
-          <p class="text-12-regular text-text-weak">{c().noData}</p>
-        </Show>
-        <For each={state.candidates}>
-          {(candidate) => {
-            const report = () => state.canary[candidate.candidate_id]
-            const actions = () =>
-              evolutionActions(
-                candidate.state.status,
-                candidate.evaluation?.gate_passed ?? false,
-                report()?.gate_passed ?? false,
-              )
-            return (
-              <section class="flex flex-col gap-3 rounded-md bg-background-weak p-3">
-                <header class="flex flex-wrap items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <h4 class="text-12-medium text-text-strong">{candidate.title}</h4>
-                    <p class="mt-1 break-all text-10-regular text-text-weak">
-                      {candidate.candidate_id} · {candidate.target} · rev {candidate.state.revision}
-                    </p>
-                  </div>
-                  <span class="rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-strong">
-                    {statusLabel(candidate.state.status)}
-                  </span>
-                </header>
-                <p class="text-11-regular text-text-strong">{candidate.instruction}</p>
-                <dl class="grid gap-1 text-10-regular text-text-weak">
-                  <div>
-                    <dt class="inline text-text-strong">{c().proposer}: </dt>
-                    <dd class="inline">{proposerLabel(candidate.created_by)}</dd>
-                  </div>
-                  <div>
-                    <dt class="inline text-text-strong">{c().rationale}: </dt>
-                    <dd class="inline">{candidate.rationale}</dd>
-                  </div>
-                  <div>
-                    <dt class="inline text-text-strong">{c().evidence}: </dt>
-                    <dd class="inline break-all">{candidate.evidence_refs.join(", ")}</dd>
-                  </div>
-                </dl>
-                <Show when={candidate.evaluation}>
-                  {(evaluation) => (
-                    <div class="rounded-md border border-border-weak-base p-2 text-11-regular">
-                      <div class={evaluation().gate_passed ? "text-text-success" : "text-text-danger"}>
-                        {evaluation().gate_passed ? c().gatePassed : c().gateBlocked}
-                      </div>
-                      <ul class="mt-2 grid gap-1 text-text-weak">
-                        <For each={evaluation().cases}>
-                          {(item) => (
-                            <li>
-                              {item.passed ? "✓" : "×"} {item.case_id}: {item.detail}
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </div>
-                  )}
-                </Show>
-                <Show when={actions().some(evolutionActionRequiresReason)}>
-                  <Field
-                    label={c().reason}
-                    value={state.reasons[candidate.candidate_id] ?? ""}
-                    onInput={(value) => setState("reasons", candidate.candidate_id, value)}
-                  />
-                </Show>
-                <Show when={candidate.state.status === "approved"}>
-                  <label class="text-11-regular text-text-weak">
-                    {c().traffic}
-                    <input
-                      class="mt-1 h-9 w-32 rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong"
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={state.trafficPercent}
-                      onInput={(event) => setState("trafficPercent", Number(event.currentTarget.value))}
-                    />
-                  </label>
-                </Show>
-                <div class="flex flex-wrap gap-2">
-                  <Show when={actions().includes("evaluate")}>
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      disabled={!!state.loading}
-                      onClick={() => transition(candidate, "evaluate")}
-                    >
-                      {state.loading === `evaluate:${candidate.candidate_id}` ? c().running : c().evaluate}
-                    </Button>
-                  </Show>
-                  <Show when={actions().includes("approve")}>
-                    <Button
-                      size="small"
-                      variant="primary"
-                      disabled={!!state.loading}
-                      onClick={() => transition(candidate, "approve")}
-                    >
-                      {state.loading === `approve:${candidate.candidate_id}` ? c().running : c().approve}
-                    </Button>
-                  </Show>
-                  <Show when={actions().includes("reject")}>
-                    <Button
-                      size="small"
-                      variant="ghost"
-                      disabled={!!state.loading}
-                      onClick={() => transition(candidate, "reject")}
-                    >
-                      {state.loading === `reject:${candidate.candidate_id}` ? c().running : c().reject}
-                    </Button>
-                  </Show>
-                  <Show when={actions().includes("startCanary")}>
-                    <Button
-                      size="small"
-                      variant="primary"
-                      disabled={!!state.loading}
-                      onClick={() => transition(candidate, "startCanary")}
-                    >
-                      {state.loading === `startCanary:${candidate.candidate_id}` ? c().running : c().canary}
-                    </Button>
-                  </Show>
-                  <Show when={candidate.state.status === "canary"}>
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      disabled={!!state.loading}
-                      onClick={() => loadCanary(candidate)}
-                    >
-                      {state.loading === `report:${candidate.candidate_id}` ? c().running : c().report}
-                    </Button>
-                    <Show when={actions().includes("promote")}>
-                      <Button
-                        size="small"
-                        variant="primary"
-                        disabled={!!state.loading}
-                        onClick={() => transition(candidate, "promote")}
-                      >
-                        {state.loading === `promote:${candidate.candidate_id}` ? c().running : c().promote}
-                      </Button>
-                    </Show>
-                  </Show>
-                  <Show when={actions().includes("rollback")}>
-                    <Button
-                      size="small"
-                      variant="ghost"
-                      disabled={!!state.loading}
-                      onClick={() => transition(candidate, "rollback")}
-                    >
-                      {state.loading === `rollback:${candidate.candidate_id}` ? c().running : c().rollback}
-                    </Button>
-                  </Show>
-                </div>
-                <Show when={report()}>
-                  {(value) => (
-                    <div class="grid gap-2">
-                      <div
-                        class="rounded-md border border-border-weak-base bg-background-base p-3 text-11-regular text-text-weak"
-                        role="status"
-                      >
-                        <div class="text-12-medium text-text-strong">
-                          {value().gate_passed ? c().gatePassed : c().gateBlocked}
-                        </div>
-                        <ul class="mt-2 grid gap-1">
-                          <For each={Object.entries(value().checks)}>
-                            {([check, passed]) => (
-                              <li>
-                                {passed ? "✓" : "×"} {check}
-                              </li>
-                            )}
-                          </For>
-                        </ul>
-                      </div>
-                      <div class="grid gap-2 sm:grid-cols-3">
-                        <Metric
-                          label="candidate"
-                          value={`${value().candidate_observations} · ${percent(value().candidate_success_rate)}`}
-                        />
-                        <Metric
-                          label="control"
-                          value={`${value().control_observations} · ${percent(value().control_success_rate)}`}
-                        />
-                        <Metric label="delta" value={percent(value().success_rate_delta)} />
-                      </div>
-                    </div>
-                  )}
-                </Show>
-              </section>
-            )
-          }}
-        </For>
-      </article>
-
-      <details class="rounded-md border border-border-weak-base p-3">
-        <summary class="cursor-pointer text-13-medium text-text-strong">{c().preview}</summary>
-        <div class="mt-3 grid gap-3">
-          <Area label={c().previewTask} value={state.previewTask} onInput={(value) => setState("previewTask", value)} />
-          <Field label={c().cohort} value={state.cohortKey} onInput={(value) => setState("cohortKey", value)} />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={!!state.loading || !state.cohortKey.trim()}
-            onClick={previewContext}
-          >
-            {c().previewButton}
-          </Button>
-          <Show when={state.contextPreview}>
-            {(value) => (
-              <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background-stronger p-3 text-10-regular text-text-weak">
-                {JSON.stringify(value(), null, 2)}
-              </pre>
-            )}
-          </Show>
-        </div>
-      </details>
+      <ManagementViews label={c().title} views={evolutionViews} />
     </section>
   )
 }
 
 function Field(props: { label: string; value: string; onInput: (value: string) => void }) {
   return (
-    <label class="text-11-regular text-text-weak">
+    <label class="arforge-management-copy text-text-weak">
       {props.label}
       <input
-        class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong"
+        class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3 text-text-strong arforge-management-field"
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
@@ -1857,10 +2106,10 @@ function Field(props: { label: string; value: string; onInput: (value: string) =
 
 function Area(props: { label: string; value: string; onInput: (value: string) => void }) {
   return (
-    <label class="text-11-regular text-text-weak">
+    <label class="arforge-management-copy text-text-weak">
       {props.label}
       <textarea
-        class="mt-1 min-h-20 w-full rounded-md border border-border-weak-base bg-background-base p-3 text-text-strong"
+        class="mt-1 min-h-20 w-full rounded-md border border-border-weak-base bg-background-base p-3 text-text-strong arforge-management-field"
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
@@ -1871,7 +2120,7 @@ function Area(props: { label: string; value: string; onInput: (value: string) =>
 function Metric(props: { label: string; value: string | number }) {
   return (
     <div class="rounded-md bg-background-weak p-3">
-      <div class="text-10-regular text-text-weak">{props.label}</div>
+      <div class="arforge-management-copy text-text-weak">{props.label}</div>
       <div class="mt-1 text-14-medium text-text-strong">{props.value}</div>
     </div>
   )

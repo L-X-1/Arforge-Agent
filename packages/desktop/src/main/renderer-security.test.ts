@@ -24,6 +24,7 @@ test("renderer policy permits bundled scripts and WASM but not arbitrary JavaScr
 test("renderer policy preserves server connections, workers and capability previews", () => {
   expect(directives.get("connect-src")).toEqual(["'self'", "http:", "https:", "ws:", "wss:", "data:", "blob:"])
   expect(directives.get("worker-src")).toEqual(["'self'", "blob:"])
+  expect(directives.get("style-src")).toEqual(["'self'", "'unsafe-inline'", "http://127.0.0.2:*"])
   expect(directives.get("base-uri")).toEqual(["'self'", "http://127.0.0.2:*"])
   expect(directives.get("frame-src")).toContain("http://127.0.0.2:*")
   expect(directives.get("frame-src")).not.toContain("https:")

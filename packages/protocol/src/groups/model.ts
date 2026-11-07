@@ -1,4 +1,6 @@
 import { Model } from "@arforge-ai/schema/model"
+import * as ModelPreset from "@arforge-ai/schema/model-preset"
+import { optional } from "@arforge-ai/schema/schema"
 import { Location } from "@arforge-ai/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
@@ -21,8 +23,11 @@ export const ModelGroup = HttpApiGroup.make("server.model")
         }),
       ),
     HttpApiEndpoint.get("model.list", "/api/model", {
-      query: LocationQuery,
-      success: Location.response(Schema.Array(Model.Info)),
+      query: Schema.Struct({ ...LocationQuery.fields, includePresets: Schema.Boolean.pipe(optional) }),
+      success: Schema.Struct({
+        ...Location.response(Schema.Array(Model.Info)).fields,
+        presets: ModelPreset.Catalog.pipe(optional),
+      }),
       error: ServiceUnavailableError,
     })
       .annotateMerge(locationQueryOpenApi)

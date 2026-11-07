@@ -8,11 +8,18 @@ export function DockPrompt(props: {
   footer: JSX.Element
   ref?: (el: HTMLDivElement) => void
   onKeyDown?: JSX.EventHandlerUnion<HTMLDivElement, KeyboardEvent>
+  busy?: boolean
 }) {
   const slot = (name: string) => `${props.kind}-${name}`
 
   return (
-    <div data-component="dock-prompt" data-kind={props.kind} ref={props.ref} onKeyDown={props.onKeyDown}>
+    <div
+      data-component="dock-prompt"
+      data-kind={props.kind}
+      aria-busy={props.busy || undefined}
+      ref={props.ref}
+      onKeyDown={props.onKeyDown}
+    >
       <DockShell data-slot={slot("body")}>
         <div data-slot={slot("header")}>{props.header}</div>
         <div data-slot={slot("content")}>{props.children}</div>

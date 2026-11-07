@@ -109,6 +109,7 @@ export interface Interface {
     path: AbsolutePath,
     resource: string,
     page?: PageInput,
+    options?: { readonly preserveBOM?: boolean },
   ) => Effect.Effect<FileSystem.Content | TextPage, ReadError>
   readonly list: (path: AbsolutePath, page?: PageInput) => Effect.Effect<ListPage, FSUtil.Error | SymbolicLinkError>
 }
@@ -209,6 +210,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
   input: string,
   resource: string,
   page: PageInput = {},
+  options?: { readonly preserveBOM?: boolean },
 ) {
   if (yield* fs.isSymbolicLink(input)) return yield* Effect.fail(new SymbolicLinkError({ path: input }))
   const real = yield* fs.realPath(input)
@@ -252,7 +254,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
       const paged = info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
       if (!paged) {
         if (binary(resource, first)) return yield* Effect.fail(new BinaryFileError({ resource }))
-        const decoder = new TextDecoder("utf-8", { fatal: true })
+        const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: options?.preserveBOM })
         const text = [yield* decodeUtf8(resource, decoder, first)]
         while (true) {
           const chunk = yield* file.readAlloc(64 * 1024)
@@ -271,7 +273,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
       const offset = page.offset ?? 1
       const limit = Math.min(page.limit ?? MAX_READ_LINES, MAX_READ_LINES)
       const lines: string[] = []
-      const decoder = new TextDecoder("utf-8", { fatal: true })
+      const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: options?.preserveBOM })
       let pending = ""
       let discard = false
       let line = 1
@@ -399,7 +401,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     return Service.of({
       inspect: (path) => inspect(fs, path),
-      read: (path, resource, page) => read(fs, path, resource, page),
+      read: (path, resource, page, options) => read(fs, path, resource, page, options),
       list: (path, page) => list(fs, path, page),
     })
   }),

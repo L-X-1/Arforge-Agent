@@ -1,5 +1,13 @@
 /* V2 management surfaces. Semantic fallbacks preserve explicit user themes and fonts. */
-:is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) {
+:is(
+  .settings-v2-surface,
+  .settings-v2-dialog-container,
+  .settings-v2-server-dialog-container,
+  .arforge-control-center-panel,
+  .session-settings-panel,
+  [data-arforge-management],
+  .settings-v2-server-dialog
+) {
   --management-surface: var(--arforge-review-surface, var(--v2-background-bg-base));
   --management-subtle: var(--arforge-review-surface-subtle, var(--v2-background-bg-layer-01));
   --management-border: var(--arforge-review-border, var(--v2-border-border-base));
@@ -8,23 +16,25 @@
   --management-accent: var(--arforge-review-accent, var(--v2-text-text-accent));
   color: var(--management-text);
   font-family: var(--font-family-sans);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 [data-component="settings-workspace"].settings-v2-surface,
-[data-component="dialog-v2"].settings-v2-surface [data-slot="dialog-container"] {
+[data-component="dialog-v2"] > .settings-v2-dialog-container {
   border: 1px solid var(--management-border);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--management-surface);
   box-shadow: 0 12px 36px color-mix(in srgb, var(--management-text) 8%, transparent);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 
-.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-list"] {
-  width: 224px;
-  min-width: 224px;
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-list"] {
+  width: var(--settings-nav-width, 264px);
+  min-width: var(--settings-nav-width, 264px);
+  flex: none;
   padding: 20px 12px 12px;
   border-right: 1px solid var(--management-border);
   background: var(--management-subtle);
@@ -40,7 +50,8 @@
   letter-spacing: 0;
 }
 
-.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-trigger-wrapper"] {
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger-wrapper"] {
   height: auto;
   min-height: 38px;
   border: 1px solid transparent;
@@ -48,7 +59,8 @@
   box-shadow: none;
 }
 
-.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-trigger"] {
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger"] {
   min-height: 38px;
   height: auto;
   padding: 8px 10px;
@@ -63,9 +75,12 @@
   overflow-wrap: anywhere;
 }
 
-.settings-v2 [data-slot="tabs-v2-trigger-content"] svg { flex-shrink: 0; }
+.settings-v2 [data-slot="tabs-v2-trigger-content"] svg {
+  flex-shrink: 0;
+}
 
-.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
   border-color: color-mix(in srgb, var(--management-accent) 25%, var(--management-border));
   background: color-mix(in srgb, var(--management-accent) 9%, var(--management-surface));
   box-shadow: none;
@@ -76,8 +91,14 @@
   overscroll-behavior: contain;
 }
 
-.settings-v2-surface :is(.settings-v2-nav-scroll, .settings-v2-panel)::-webkit-scrollbar { display: block; width: 6px; }
-.settings-v2-surface :is(.settings-v2-nav-scroll, .settings-v2-panel)::-webkit-scrollbar-thumb { background: var(--management-border); border-radius: 8px; }
+.settings-v2-surface :is(.settings-v2-nav-scroll, .settings-v2-panel)::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+.settings-v2-surface :is(.settings-v2-nav-scroll, .settings-v2-panel)::-webkit-scrollbar-thumb {
+  background: var(--management-border);
+  border-radius: 8px;
+}
 
 .settings-v2-surface .settings-v2-nav-hint {
   padding: 4px 10px;
@@ -106,10 +127,10 @@
 }
 
 .settings-v2-surface .settings-v2-tab-title {
-  font-size: 22px;
-  line-height: 1.4;
+  font-size: 24px;
+  line-height: 1.5;
   letter-spacing: 0;
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .settings-v2-surface .settings-v2-tab-body {
@@ -117,27 +138,44 @@
   padding: 24px 28px 36px;
 }
 
-.settings-v2-surface .settings-v2-section { gap: 12px; }
-.settings-v2-surface .settings-v2-section-title { font-size: 13px; line-height: 1.5; color: var(--management-muted); }
+.settings-v2-surface .settings-v2-section {
+  gap: 12px;
+}
+.settings-v2-surface .settings-v2-section-title {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--management-muted);
+}
 
 .settings-v2-surface .settings-v2 [data-component="settings-v2-list"] {
   border: 1px solid var(--management-border);
-  border-radius: 10px;
+  border-radius: 16px;
   background: var(--management-surface);
-  padding-inline: 18px;
+  padding: 0;
   box-shadow: none;
 }
 
 .settings-v2-surface .settings-v2 [data-component="settings-v2-row"] {
-  min-height: 72px;
-  gap: 20px;
-  padding-block: 16px;
+  min-height: 0;
+  gap: 12px 24px;
+  padding: 16px;
   border-bottom: 1px solid var(--management-border);
 }
-.settings-v2-surface .settings-v2 [data-component="settings-v2-row"]:last-child { border-bottom: 0; }
-.settings-v2-surface [data-slot="settings-v2-row-title"] { line-height: 1.5; overflow-wrap: anywhere; }
-.settings-v2-surface [data-slot="settings-v2-row-description"] { font-size: 12px; line-height: 1.65; }
-.settings-v2-surface [data-slot="settings-v2-row-control"] { max-width: 100%; min-width: 0; }
+.settings-v2-surface .settings-v2 [data-component="settings-v2-row"]:last-child {
+  border-bottom: 0;
+}
+.settings-v2-surface [data-slot="settings-v2-row-title"] {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.settings-v2-surface [data-slot="settings-v2-row-description"] {
+  font-size: 12px;
+  line-height: 1.65;
+}
+.settings-v2-surface [data-slot="settings-v2-row-control"] {
+  max-width: 100%;
+  min-width: 0;
+}
 
 .settings-v2-surface .settings-v2-models .settings-v2-section-title {
   font-size: 11px;
@@ -148,24 +186,40 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.settings-v2-surface .settings-v2-provider-env-hint { opacity: 1; line-height: 1.5; }
-.settings-v2-surface :is(.settings-v2-provider-row, .settings-v2-servers-row) { flex-wrap: wrap; gap: 12px; }
-.settings-v2-surface .settings-v2-keybind-button { margin: 0; min-height: 36px; line-height: 1.5; white-space: normal; }
-.settings-v2-surface .settings-v2-shortcuts [data-component="settings-v2-list"] > div { flex-wrap: wrap; }
+.settings-v2-surface .settings-v2-provider-env-hint {
+  opacity: 1;
+  line-height: 1.5;
+}
+.settings-v2-surface :is(.settings-v2-provider-row, .settings-v2-servers-row) {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.settings-v2-surface .settings-v2-keybind-button {
+  margin: 0;
+  min-height: 36px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.settings-v2-surface .settings-v2-shortcuts [data-component="settings-v2-list"] > div {
+  flex-wrap: wrap;
+}
 
-:is(.arforge-control-center-panel, .session-settings-panel) :is(.arforge-control-center-context, .session-settings-context) {
+:is(.arforge-control-center-panel, .session-settings-panel)
+  :is(.arforge-control-center-context, .session-settings-context) {
   border: 1px solid var(--management-border);
   border-radius: 8px;
   background: var(--management-subtle);
   box-shadow: none;
   padding: 12px;
 }
-:is(.arforge-control-center-panel, .session-settings-panel) :is(.arforge-control-center-path, .session-settings-context-copy span) {
+:is(.arforge-control-center-panel, .session-settings-panel)
+  :is(.arforge-control-center-path, .session-settings-context-copy span) {
   white-space: normal;
   overflow-wrap: anywhere;
   user-select: text;
 }
-:is(.arforge-control-center-panel, .session-settings-panel) :is(.arforge-control-center-description, .session-settings-description) {
+:is(.arforge-control-center-panel, .session-settings-panel)
+  :is(.arforge-control-center-description, .session-settings-description) {
   max-width: 76ch;
   line-height: 1.65;
   color: var(--management-muted);
@@ -177,29 +231,94 @@
   padding: 18px;
   background: var(--management-surface);
 }
-:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(section, article, form, fieldset, .grid) { min-width: 0; }
-:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(h2, h3) { line-height: 1.5; text-wrap: pretty; }
-:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(article, details) { border-radius: 8px; }
-:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(p, dd, code) { overflow-wrap: anywhere; }
-:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(pre) { max-width: 100%; overflow: auto; }
-:is(.arforge-control-center-body, .session-settings-body) :where([class*="text-10-"], [class*="text-11-"]) { font-size: 12px; line-height: 1.6; }
-:is(.arforge-control-center-body, .session-settings-body) :where(table) { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-:is(.arforge-control-center-body, .session-settings-body) :where(th, td) { padding: 10px 12px; text-align: start; border-bottom: 1px solid var(--management-border); }
-:is(.arforge-control-center-body, .session-settings-body) :where(th) { background: var(--management-subtle); font-size: 12px; }
-:is(.arforge-control-center-body, .session-settings-body) :where(tr:hover) { background: var(--management-subtle); }
+:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management])
+  :where(section, article, form, fieldset, .grid) {
+  min-width: 0;
+}
+:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(h2, h3) {
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(article, details) {
+  border-radius: 8px;
+}
+:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(p, dd, code) {
+  overflow-wrap: anywhere;
+}
+:is(.arforge-control-center-body, .session-settings-body, [data-arforge-management]) :where(pre) {
+  max-width: 100%;
+  overflow: auto;
+}
+:is(.arforge-control-center-body, .session-settings-body) :where([class*="text-10-"], [class*="text-11-"]) {
+  font-size: 12px;
+  line-height: 1.6;
+}
+:is(.arforge-control-center-body, .session-settings-body) :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+:is(.arforge-control-center-body, .session-settings-body) :where(th, td) {
+  padding: 10px 12px;
+  text-align: start;
+  border-bottom: 1px solid var(--management-border);
+}
+:is(.arforge-control-center-body, .session-settings-body) :where(th) {
+  background: var(--management-subtle);
+  font-size: 12px;
+}
+:is(.arforge-control-center-body, .session-settings-body) :where(tr:hover) {
+  background: var(--management-subtle);
+}
 
-:is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) :where(button, [role="button"], [role="combobox"], summary) {
+:is(
+    .settings-v2-surface,
+    .arforge-control-center-panel,
+    .session-settings-panel,
+    [data-arforge-management],
+    .settings-v2-server-dialog
+  )
+  :where(button, [role="button"], [role="combobox"], summary) {
   min-height: 36px;
   touch-action: manipulation;
 }
-:is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) :where(button, [role="button"]) { white-space: normal; overflow-wrap: anywhere; }
-:is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) :where(input, textarea, select) { max-width: 100%; }
-:is(.arforge-control-center-body, .session-settings-body) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea, select) { min-width: 0; min-height: 36px; border-radius: 7px; }
-:is(.settings-v2-surface, [data-arforge-management], .settings-v2-server-dialog) :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--v2-border-border-focus);
-  outline-offset: 3px;
+:is(
+    .settings-v2-surface,
+    .arforge-control-center-panel,
+    .session-settings-panel,
+    [data-arforge-management],
+    .settings-v2-server-dialog
+  )
+  :where(button, [role="button"]) {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
-.settings-v2-surface [data-component="switch"] { min-height: 44px; display: inline-flex; align-items: center; }
+:is(
+    .settings-v2-surface,
+    .arforge-control-center-panel,
+    .session-settings-panel,
+    [data-arforge-management],
+    .settings-v2-server-dialog
+  )
+  :where(input, textarea, select) {
+  max-width: 100%;
+}
+:is(.arforge-control-center-body, .session-settings-body)
+  :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea, select) {
+  min-width: 0;
+  min-height: 36px;
+  border-radius: 7px;
+}
+:is(.settings-v2-surface, [data-arforge-management], .settings-v2-server-dialog)
+  :where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+.settings-v2-surface [data-component="switch"] {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
 
 .arforge-management-status,
 .arforge-management-empty {
@@ -211,59 +330,141 @@
   line-height: 1.65;
   padding: 12px 14px;
 }
-.arforge-management-status { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.arforge-management-status-copy { min-width: 0; flex: 1 1 220px; }
-.arforge-management-status-copy strong { color: var(--management-text, var(--v2-text-text-base)); font-weight: 600; }
-.arforge-management-status-copy p { margin-top: 4px; }
-.arforge-management-error-detail { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.arforge-management-status[data-state="error"] { border-color: var(--v2-state-fg-danger); }
-.arforge-management-status:is([data-state="permission"], [data-state="conflict"]) { border-color: var(--border-warning); }
-.arforge-management-status:is([data-state="loading"], [data-state="saving"]) { border-inline-start: 3px solid var(--management-accent, var(--v2-text-text-accent)); }
-.settings-v2-surface .arforge-management-recovery { padding-block: 28px; }
+.arforge-management-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.arforge-management-status-copy {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.arforge-management-status-copy strong {
+  color: var(--management-text, var(--v2-text-text-base));
+  font-weight: 600;
+}
+.arforge-management-status-copy p {
+  margin-top: 4px;
+}
+.arforge-management-error-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.arforge-management-status[data-state="error"] {
+  border-color: var(--v2-state-fg-danger);
+}
+.arforge-management-status:is([data-state="permission"], [data-state="conflict"]) {
+  border-color: var(--border-warning);
+}
+.arforge-management-status:is([data-state="loading"], [data-state="saving"]) {
+  border-inline-start: 3px solid var(--management-accent, var(--v2-text-text-accent));
+}
+.settings-v2-surface .arforge-management-recovery {
+  padding-block: 28px;
+}
 
-[data-arforge-management="approval"] { scroll-padding: 16px; }
-[data-arforge-management="approval"] dl { padding: 12px; border-radius: 8px; background: var(--management-surface); }
-[data-arforge-management="approval"] dt { font-size: 12px; }
-[data-arforge-management="approval"] dd { user-select: text; }
-[data-arforge-management="approval"] > .flex:last-child { padding-top: 16px; }
-[data-arforge-management="onboarding"] { border-radius: 12px; background: var(--management-surface); box-shadow: none; }
-[data-arforge-management="onboarding"] ol > li { border: 1px solid var(--management-border); border-radius: 8px; background: var(--management-subtle); }
-[data-arforge-management="onboarding"] .arforge-management-empty { margin-top: 12px; }
+[data-arforge-management="approval"] {
+  scroll-padding: 16px;
+}
+[data-arforge-management="approval"] dl {
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--management-surface);
+}
+[data-arforge-management="approval"] dt {
+  font-size: 12px;
+}
+[data-arforge-management="approval"] dd {
+  user-select: text;
+}
+[data-arforge-management="approval"] > .flex:last-child {
+  padding-top: 16px;
+}
+[data-arforge-management="onboarding"] {
+  border-radius: 12px;
+  background: var(--management-surface);
+  box-shadow: none;
+}
+[data-arforge-management="onboarding"] ol > li {
+  border: 1px solid var(--management-border);
+  border-radius: 8px;
+  background: var(--management-subtle);
+}
+[data-arforge-management="onboarding"] .arforge-management-empty {
+  margin-top: 12px;
+}
 
 @media (max-width: 760px) {
-  .settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] { flex-direction: column; min-height: 0; }
-  .settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] [data-slot="tabs-v2-list"] {
-    width: 100%;
-    min-width: 0;
-    height: auto;
-    max-height: min(36dvh, 280px);
-    flex: 0 0 auto;
-    padding: 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--management-border);
-    overflow-y: auto;
+  .settings-v2-surface .settings-v2-nav-heading {
+    padding-bottom: 12px;
   }
-  .settings-v2-surface .settings-v2-nav { height: auto; }
-  .settings-v2-surface .settings-v2-nav-scroll { overflow: visible; }
-  .settings-v2-surface .settings-v2-nav-heading { padding-bottom: 12px; }
-  .settings-v2-surface .settings-v2-tab-header { position: relative; padding: 20px 16px 16px; }
-  .settings-v2-surface .settings-v2-tab-body { padding: 18px 16px 28px; gap: 18px; }
-  .settings-v2-surface .settings-v2-tab-title { font-size: 20px; }
-  .settings-v2-surface .settings-v2 [data-component="settings-v2-row"] { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
-  .settings-v2-surface [data-slot="settings-v2-row-control"] { width: 100%; justify-content: flex-start; }
-  :is(.arforge-control-center-body, .session-settings-body) > section { padding: 14px; }
-  :is(.arforge-control-center-body, .session-settings-body) :where(.flex:has(> button)) { flex-wrap: wrap; }
+  .settings-v2-surface .settings-v2-tab-header {
+    position: relative;
+    padding: 20px 16px 16px;
+  }
+  .settings-v2-surface .settings-v2-tab-body {
+    padding: 18px 16px 28px;
+    gap: 18px;
+  }
+  .settings-v2-surface .settings-v2 [data-component="settings-v2-row"] {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .settings-v2-surface [data-slot="settings-v2-row-control"] {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  :is(.arforge-control-center-body, .session-settings-body) > section {
+    padding: 14px;
+  }
+  :is(.arforge-control-center-body, .session-settings-body) :where(.flex:has(> button)) {
+    flex-wrap: wrap;
+  }
 }
 
 @media (pointer: coarse), (max-width: 760px) {
-  :is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) :where(button, [role="button"], [role="combobox"], summary) { min-height: 44px; }
-  :is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea, select) { min-height: 44px; font-size: 16px; }
-  .settings-v2-surface .settings-v2-tab-search-clear { min-width: 44px; }
-  .settings-v2-surface .settings-v2-tab-search [data-slot="text-input-v2-input"] { padding-right: 52px; }
+  :is(
+      .settings-v2-surface,
+      .arforge-control-center-panel,
+      .session-settings-panel,
+      [data-arforge-management],
+      .settings-v2-server-dialog
+    )
+    :where(button, [role="button"], [role="combobox"], summary) {
+    min-height: 44px;
+  }
+  :is(
+      .settings-v2-surface,
+      .arforge-control-center-panel,
+      .session-settings-panel,
+      [data-arforge-management],
+      .settings-v2-server-dialog
+    )
+    :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), textarea, select) {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .settings-v2-surface .settings-v2-tab-search-clear {
+    min-width: 44px;
+  }
+  .settings-v2-surface .settings-v2-tab-search [data-slot="text-input-v2-input"] {
+    padding-right: 52px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :is(.settings-v2-surface, .arforge-control-center-panel, .session-settings-panel, [data-arforge-management], .settings-v2-server-dialog) *,
+  :is(
+      .settings-v2-surface,
+      .arforge-control-center-panel,
+      .session-settings-panel,
+      [data-arforge-management],
+      .settings-v2-server-dialog
+    )
+    *,
   :is(.settings-v2-surface, [data-arforge-management]) *::before,
   :is(.settings-v2-surface, [data-arforge-management]) *::after {
     animation-duration: 0.01ms !important;
@@ -272,4 +473,621 @@
   }
 }
 
-.arforge-management-inline-hint { display: block; max-width: 24ch; color: var(--management-muted); font-size: 12px; line-height: 1.6; }
+.arforge-management-inline-hint {
+  display: block;
+  max-width: 24ch;
+  color: var(--management-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Approved R/C refinements. Existing permission/request state machines are untouched. */
+.settings-v2-surface :is(.settings-v2-general-header, .settings-v2-general) {
+  width: min(100%, 848px);
+}
+.settings-v2-surface .settings-v2-general-header {
+  padding: 24px;
+}
+.settings-v2-surface .settings-v2-general {
+  padding: 24px 24px 36px;
+}
+.settings-v2-surface .settings-v2-nav-heading {
+  padding: 0 8px 16px;
+}
+.settings-v2-surface .settings-v2-nav-heading h1 {
+  margin-top: 12px;
+  font-weight: 500;
+}
+.settings-v2-surface .settings-v2 [data-component="settings-v2-row"][data-density="single"] {
+  min-height: 44px;
+  padding-block: 4px;
+}
+.settings-v2-surface .settings-v2 [data-component="settings-v2-row"][data-density="double"] {
+  min-height: 64px;
+}
+.settings-v2-surface .settings-v2-shortcuts [data-component="settings-v2-list"] > div {
+  min-height: 48px;
+}
+.settings-v2-surface :is(.settings-v2-provider-row, .settings-v2-servers-row) {
+  min-height: 64px;
+  padding: 16px;
+  margin: 0;
+}
+.settings-v2-surface :is(.settings-v2-tab-header-row, .arforge-control-center-context) {
+  min-height: 44px;
+}
+.settings-v2-surface .settings-v2-general [data-slot="settings-v2-row-control"] {
+  min-width: 0;
+  width: 100%;
+}
+.settings-v2-surface
+  .settings-v2-general
+  [data-slot="settings-v2-row-control"]
+  > div:has([data-component="text-input-v2"]) {
+  width: 100%;
+}
+.settings-v2-surface [data-slot="settings-v2-row-control"] [data-slot="text-input-v2-input"] {
+  min-height: 36px;
+  padding-inline: 12px;
+}
+.settings-v2-surface .settings-v2-models .settings-v2-section-title {
+  font-weight: 500;
+}
+.arforge-control-center-body {
+  container: arforge-control-content / inline-size;
+}
+.arforge-control-center-body :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select) {
+  min-height: 36px;
+  padding-inline: 12px;
+  border-radius: 8px;
+}
+.arforge-control-center-body :where(textarea) {
+  min-height: 96px;
+  border-radius: 8px;
+}
+.arforge-control-center-body :where(label.flex.flex-col) {
+  gap: 6px;
+}
+.arforge-control-center-body :where(tbody tr) {
+  height: 44px;
+}
+.arforge-control-center-body :where(th, td) {
+  padding: 10px 12px;
+}
+.arforge-control-center-body :where(article, [data-testid$="-row"], [data-testid$="-item"]) {
+  min-height: 44px;
+}
+.arforge-control-center-body :where(button.flex.flex-col) {
+  min-height: 64px;
+}
+.arforge-control-center-body :where(section > header) {
+  min-height: 44px;
+}
+.arforge-control-center-body :where(form > .flex:last-child) {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.arforge-management-status {
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+}
+.arforge-management-status-scope {
+  display: block;
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--management-muted);
+  overflow-wrap: anywhere;
+}
+.arforge-management-error-detail {
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.arforge-management-skeleton {
+  display: grid;
+  flex: 1 0 100%;
+  min-width: 0;
+  gap: 10px;
+  padding: 4px 0 12px;
+}
+.arforge-management-skeleton span {
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--management-muted) 12%, var(--management-surface));
+}
+.arforge-management-skeleton span:nth-child(2) {
+  width: 80%;
+}
+.arforge-management-skeleton span:nth-child(3) {
+  width: 60%;
+}
+@container arforge-settings-form (max-width: 640px) {
+  .settings-v2-surface .settings-v2-general [data-component="settings-v2-row"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-v2-surface .settings-v2-general [data-slot="settings-v2-row-control"] {
+    align-items: flex-start;
+  }
+}
+@media (max-width: 760px) {
+  .settings-v2-surface :is(.settings-v2-general, .settings-v2-general-header) {
+    padding-inline: 16px;
+  }
+  .settings-v2-surface .settings-v2-nav-heading {
+    padding-bottom: 12px;
+  }
+  .settings-v2-surface .settings-v2-return {
+    min-height: 44px;
+  }
+}
+@media (pointer: coarse) {
+  .arforge-control-center-body :where(input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select) {
+    min-height: 44px;
+  }
+}
+
+.arforge-management-busy-icon {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+.arforge-management-busy-icon > * {
+  width: 16px;
+  height: 16px;
+}
+.arforge-management-status:not([data-state="loading"]):not([data-state="saving"])::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: none;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.65;
+}
+.arforge-management-error-disclosure {
+  margin-top: 8px;
+  min-width: 0;
+}
+.arforge-management-error-disclosure > summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 12px;
+}
+.arforge-management-error-disclosure > pre {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+}
+
+/* F21–F30: target the real content/container nodes, including detached dialogs. */
+[data-component="dialog-v2"] > .settings-v2-dialog-container {
+  width: min(1240px, calc(100vw - 32px));
+  height: min(80dvh, 800px);
+  align-items: stretch;
+}
+.settings-v2-dialog[data-slot="dialog-content"] {
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+.settings-v2-workspace.settings-v2-surface {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.settings-v2-surface .settings-v2 {
+  position: relative;
+  isolation: isolate;
+}
+.settings-v2-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-v2-navigation-toggle {
+  display: none;
+}
+.settings-v2 .settings-v2-nav-help > summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--management-muted);
+  font-size: 12px;
+}
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"] .settings-v2-nav-list {
+  overflow: hidden;
+}
+.settings-v2[data-component="tabs-v2"] .settings-v2-nav-list[hidden] {
+  display: none;
+}
+.settings-v2[data-component="tabs-v2"][data-variant="settings"] [data-slot="tabs-v2-trigger"] {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+.settings-v2[data-component="tabs-v2"][data-variant="settings"] [data-slot="tabs-v2-trigger"]:focus-visible {
+  outline: 2px solid var(--management-text);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.settings-v2[data-component="tabs-v2"][data-variant="settings"][data-orientation="vertical"]
+  [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+  border-color: transparent;
+  background: var(--management-subtle);
+  box-shadow: none;
+}
+.settings-v2[data-component="tabs-v2"] [data-slot="tabs-v2-trigger-content"] > [data-component="icon"] {
+  width: 16px;
+  height: 16px;
+}
+.settings-v2-surface
+  :is(.settings-v2-tab-header, .settings-v2-tab-body, .settings-v2-general-header, .settings-v2-general) {
+  box-sizing: border-box;
+  width: min(100%, calc(var(--settings-form-width) + 80px));
+  margin-inline: auto;
+}
+.settings-v2-surface :is(.settings-v2-tab-header, .settings-v2-general-header) {
+  padding: 40px 40px 28px;
+  border-bottom: 0;
+}
+.settings-v2-surface :is(.settings-v2-tab-body, .settings-v2-general) {
+  padding: 0 40px 64px;
+  gap: 28px;
+}
+.settings-v2-surface .settings-v2-tab-title {
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.settings-v2-surface .settings-v2-section-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--management-text);
+}
+.settings-v2-surface :is(.settings-v2-provider-name, .settings-v2-servers-name) {
+  font-size: 14px;
+  font-weight: 400;
+}
+.settings-v2-surface .settings-v2-general [data-component="settings-v2-row"] {
+  min-height: 76px;
+  padding: 16px;
+  align-items: center;
+}
+.settings-v2-surface [data-slot="settings-v2-row-title"] {
+  font-size: 14px;
+  font-weight: 400;
+}
+.settings-v2-surface .settings-v2-general [data-slot="settings-v2-row-description"] {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-v2-surface .settings-v2-models [data-component="settings-v2-row"][data-density="double"] {
+  padding-block: 8px;
+  min-height: 64px;
+}
+.settings-v2-surface .settings-v2-models [data-slot="settings-v2-row-control"] {
+  width: auto;
+}
+.settings-v2-surface .settings-v2-provider-row[data-density="single"] {
+  min-height: 44px;
+  padding-block: 4px;
+}
+.settings-v2-surface .settings-v2-provider-row[data-density="double"] {
+  min-height: 64px;
+  padding-block: 10px;
+}
+.settings-v2-surface .settings-v2-provider-select,
+.settings-v2-surface .settings-v2-model-select {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--management-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.settings-v2-surface .settings-v2-model-select {
+  min-height: 0;
+  text-decoration: none;
+}
+.settings-v2-surface :is(.settings-v2-provider-select, .settings-v2-model-select):hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.settings-v2-surface :is(.settings-v2-providers, .settings-v2-models, .settings-v2-servers) {
+  container: arforge-control-content / inline-size;
+  width: min(100%, 1280px);
+}
+.settings-v2-server-select {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--management-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.settings-v2-server-select:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.settings-v2-server-select:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.settings-v2-servers-address {
+  max-width: 100%;
+  color: var(--management-muted);
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.settings-v2-connection-layout {
+  width: 100%;
+}
+.settings-v2-connection-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.settings-v2-connection-detail :is(h3, p, dl, dd, ul) {
+  margin: 0;
+}
+.settings-v2-connection-detail h3 {
+  font-size: 14px;
+  font-weight: 500;
+}
+.settings-v2-connection-detail dt {
+  margin-top: 16px;
+  color: var(--management-muted);
+  font-size: 12px;
+}
+.settings-v2-connection-detail dt:first-child {
+  margin-top: 0;
+}
+.settings-v2-connection-detail dd {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.settings-v2-connection-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--management-muted);
+  font-size: 12px;
+}
+.settings-v2-connection-state::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.settings-v2-detail-models {
+  padding: 0;
+  list-style: none;
+}
+.settings-v2-detail-models > li {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 64px;
+  padding-block: 10px;
+  border-bottom: 1px solid var(--management-border);
+  overflow-wrap: anywhere;
+}
+.settings-v2-detail-models code {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--management-muted);
+}
+.settings-v2-model-inspector > div {
+  width: 100%;
+  max-width: 100%;
+}
+.settings-v2-surface .arforge-control-center-header,
+.settings-v2-surface .arforge-control-center-body {
+  width: min(100%, 1280px);
+}
+.settings-v2-surface .arforge-control-center-body > section {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.settings-v2-surface .arforge-control-center-body :where(.grid):has(> article) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.settings-v2-surface .arforge-control-center-body :where(table) {
+  table-layout: fixed;
+}
+.settings-v2-surface .arforge-control-center-body :where(tbody tr):has(.text-weak, small, code) {
+  height: 64px;
+}
+.settings-v2-surface .arforge-control-center-body :where(th, td) {
+  overflow-wrap: anywhere;
+}
+.arforge-management-status[data-state="refreshing"] {
+  align-items: center;
+  padding-block: 8px;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+}
+.arforge-management-status[data-state="refreshing"]::before {
+  display: none;
+}
+.arforge-management-status[data-state="partial"],
+.arforge-management-status[data-state="ack"] {
+  border-color: var(--management-border);
+}
+.arforge-management-acknowledged-notice {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--management-text);
+}
+.settings-v2-surface :where(button, input, textarea, select, summary) {
+  transition:
+    background-color 140ms,
+    color 140ms,
+    opacity 140ms;
+}
+.settings-v2[data-compact="true"][data-component="tabs-v2"][data-orientation="vertical"] {
+  flex-direction: column;
+}
+.settings-v2[data-compact="true"] .settings-v2-navigation-toggle {
+  display: flex;
+  flex: none;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--management-border);
+  background: var(--management-subtle);
+  color: var(--management-text);
+  font: inherit;
+  cursor: pointer;
+}
+.settings-v2[data-compact="true"][data-component="tabs-v2"][data-variant="settings"] .settings-v2-nav-list {
+  position: absolute;
+  inset: 44px 0 0;
+  z-index: 20;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 16px;
+  border: 0;
+}
+.settings-v2[data-compact="true"] .settings-v2-nav {
+  height: 100%;
+}
+.settings-v2[data-compact="true"] .settings-v2-nav-scroll {
+  overflow-y: auto;
+}
+.settings-v2[data-compact="true"] .settings-v2-nav-footer {
+  display: none;
+}
+@media (max-width: 959px) {
+  .settings-v2-surface {
+    --settings-nav-width: 216px;
+  }
+  .settings-v2-surface :is(.settings-v2-tab-header, .settings-v2-general-header) {
+    padding: 28px 24px;
+  }
+  .settings-v2-surface :is(.settings-v2-tab-body, .settings-v2-general) {
+    padding: 0 24px 48px;
+  }
+}
+@media (max-width: 639px) {
+  .settings-v2-surface :is(.settings-v2-tab-header, .settings-v2-general-header) {
+    padding: 24px 16px;
+  }
+  .settings-v2-surface :is(.settings-v2-tab-body, .settings-v2-general) {
+    padding: 0 16px 40px;
+  }
+  .settings-v2-surface .settings-v2-tab-title {
+    font-size: 22px;
+  }
+}
+@media (pointer: coarse) {
+  .settings-v2[data-component="tabs-v2"][data-variant="settings"] [data-slot="tabs-v2-trigger"] {
+    min-height: 44px;
+  }
+  .settings-v2-surface .settings-v2-model-select {
+    min-height: 44px;
+  }
+}
+@media (forced-colors: active) {
+  .settings-v2-surface :focus-visible {
+    outline: 2px solid Highlight;
+  }
+  .settings-v2 [data-slot="tabs-v2-trigger-wrapper"]:has([data-selected]) {
+    outline: 1px solid Highlight;
+  }
+  .arforge-management-skeleton span {
+    background: GrayText;
+  }
+}
+
+/* Shared confirmations invoked by the existing management handlers. DialogV2
+   puts class on dialog-content, so size the actual parent container with :has. */
+[data-component="dialog-v2"] > [data-slot="dialog-container"]:has(> .confirm-action-dialog) {
+  width: min(480px, calc(100vw - 32px));
+  height: auto;
+  max-height: 80dvh;
+  border-radius: 16px;
+  background: var(--v2-background-bg-base);
+}
+[data-component="dialog-v2"] .confirm-action-dialog > [data-slot="dialog-header"],
+[data-component="dialog-v2"] .confirm-action-dialog > [data-slot="dialog-footer"] {
+  padding: 16px;
+  gap: 8px;
+}
+[data-component="dialog-v2"] .confirm-action-dialog > [data-slot="dialog-body"] {
+  padding: 0 16px;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+[data-component="dialog-v2"] .confirm-action-dialog > [data-slot="dialog-footer"] {
+  justify-content: flex-end;
+}
+.confirm-action-details {
+  min-width: 0;
+  margin-top: 16px;
+}
+.confirm-action-details > summary {
+  min-height: 36px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.confirm-action-details > dl {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  margin: 8px 0 0;
+  overflow: auto;
+}
+.confirm-action-details :is(dt, dd) {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.confirm-action-details dt {
+  font-size: 14px;
+  font-weight: 400;
+}
+.confirm-action-details dd {
+  color: var(--management-muted, var(--v2-text-text-muted));
+}
+.confirm-action-details code {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .confirm-action-details > summary {
+    min-height: 44px;
+  }
+}

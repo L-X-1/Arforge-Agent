@@ -1,0 +1,52 @@
+/* F24: approval decisions and execution receipts keep their actual separate owners. */
+[data-component="dialog"]:has(.control-approval-dialog) > [data-slot="dialog-container"] {
+  width: min(720px, calc(100vw - 32px));
+  max-height: 80dvh;
+}
+[data-component="dialog"] .control-approval-dialog[data-slot="dialog-content"] {
+  min-width: 0;
+  border: 1px solid var(--management-border, var(--v2-border-border-base));
+  border-radius: 16px;
+  background: var(--management-surface, var(--v2-background-bg-base));
+  box-shadow: none;
+}
+.control-approval-dialog > [data-slot="dialog-header"],
+.control-approval-dialog > [data-slot="dialog-body"] { padding: 16px; }
+.control-approval-dialog > [data-slot="dialog-description"] { padding-inline: 16px; }
+.control-approval-dialog [data-testid="control-approval-dialog"] { padding: 0; scroll-padding: 16px; }
+[data-testid="control-approval-card"][data-arforge-management="approval"] {
+  min-width: 0;
+  padding: 16px;
+  gap: 16px;
+  border: 1px solid var(--management-border);
+  border-radius: 16px;
+  background: var(--management-surface);
+  color: var(--management-text);
+}
+[data-testid="control-approval-card"] > header :is(h2, [data-component="icon"]) { color: var(--management-text); }
+[data-testid="control-approval-card"] > header p { color: var(--management-muted); }
+[data-testid="control-approval-card"] > dl { padding: 12px; background: var(--management-subtle); }
+[data-testid="control-approval-card"] > dl dd { margin-inline-start: 0; overflow-wrap: anywhere; }
+[data-testid="control-approval-card"] > .flex:last-child { justify-content: flex-end; padding-top: 16px; gap: 8px; }
+[data-testid="control-approval-card"] [data-component="icon"] { width: 16px; height: 16px; }
+[data-testid="control-approval-card"] details > summary { min-height: 36px; }
+[data-testid="control-approval-receipt"] {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--management-border);
+  border-radius: 16px;
+  background: var(--management-subtle);
+}
+[data-testid="control-approval-receipt"][data-state="failed"] { border-color: var(--v2-state-fg-danger); }
+.control-approval-receipt-stage { margin-top: 8px; color: var(--management-muted); font-size: 12px; line-height: 1.7; }
+.control-approval-operation { display: flex; min-width: 0; flex-direction: column; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--management-border); }
+.control-approval-operation dl { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; margin-top: 12px; }
+.control-approval-operation dt { color: var(--management-muted); }
+.control-approval-operation dd { margin: 0; overflow-wrap: anywhere; }
+[data-arforge-management="approval"] :where(button, summary):focus-visible { outline: 2px solid var(--management-text); outline-offset: 2px; }
+@media (max-width: 639px), (pointer: coarse) {
+  [data-arforge-management="approval"] :where(button, summary) { min-height: 44px; }
+}
+@media (forced-colors: active) {
+  [data-arforge-management="approval"] :focus-visible { outline-color: Highlight; }
+}

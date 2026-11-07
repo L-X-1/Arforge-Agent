@@ -184,6 +184,28 @@ describe("query keys", () => {
     expect(result).toEqual([])
   })
 
+  test("Windows directory aliases share the same Agent query without crossing server scopes", async () => {
+    const calls: unknown[] = []
+    const api = {
+      list: async (input: unknown) => {
+        calls.push(input)
+        return { location: {}, data: [] }
+      },
+    } as unknown as AgentApi
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, gcTime: Infinity } } })
+    const raw = loadAgentsQuery(ServerScope.local, String.raw`C:\owned\repo`, api)
+    const canonical = loadAgentsQuery(ServerScope.local, "C:/owned/repo/", api)
+    try {
+      await Promise.all([client.fetchQuery(raw), client.fetchQuery(canonical)])
+      expect(calls).toHaveLength(1)
+      expect(raw.queryKey).toEqual(canonical.queryKey)
+      const foreign = loadAgentsQuery("other-server" as ServerScope, "C:/owned/repo", api)
+      expect(foreign.queryKey).not.toEqual(raw.queryKey)
+    } finally {
+      client.clear()
+    }
+  })
+
   test("loads commands from the current location-scoped endpoint", async () => {
     const calls: unknown[] = []
     const api = {

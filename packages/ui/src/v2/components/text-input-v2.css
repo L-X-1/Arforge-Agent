@@ -177,3 +177,9 @@
   color: var(--v2-state-fg-danger);
   opacity: 1;
 }
+
+/* C10: one readable field scale; validation styling remains owned by the field. */
+[data-component="text-input-v2"],[data-component="text-input-v2"][data-appearance="large"]{height:auto;min-height:36px;border-radius:8px;background:var(--v2-background-bg-base);box-shadow:none;outline-offset:2px}
+[data-component="text-input-v2"]:focus-within:not([data-disabled]){outline-width:2px}
+[data-component="text-input-v2"] [data-slot="text-input-v2-input"]{padding-inline:12px}
+@media(pointer:coarse){[data-component="text-input-v2"]{min-height:44px}}

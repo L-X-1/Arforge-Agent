@@ -69,6 +69,13 @@ export type Capability = Schema.Schema.Type<typeof Capability>
 export const CapabilityCatalog = Schema.Array(Capability).annotate({ identifier: "McpCapabilityCatalog" })
 export type CapabilityCatalog = Schema.Schema.Type<typeof CapabilityCatalog>
 
+/** One advertised tool definition, read from its exact current capability. */
+export const ToolDetails = Schema.Struct({
+  capability: Capability,
+  definition: Schema.Record(Schema.String, Schema.Json),
+}).annotate({ identifier: "Mcp.ToolDetails" })
+export interface ToolDetails extends Schema.Schema.Type<typeof ToolDetails> {}
+
 /**
  * Read-only evidence returned after an MCP child action is reconciled. The
  * response deliberately carries digests and bounded text only; request

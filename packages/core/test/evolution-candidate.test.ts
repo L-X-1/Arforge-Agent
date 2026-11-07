@@ -110,7 +110,7 @@ const runWithApproval = <A, R>(
       if (Exit.isFailure(signal.exit)) return yield* Effect.failCause(signal.exit.cause)
       return signal.exit.value
     }
-    yield* authorizer.reply({ requestID: signal.request.id, reply: "once" })
+    yield* Database.principalContext(identity, authorizer.reply({ requestID: signal.request.id, reply: "once" }))
     return yield* Fiber.join(fiber)
   })
 

@@ -321,6 +321,22 @@ export function displayPickerPath(path: string, input: string, home: string) {
   return pickerTilde(value, home) || value
 }
 
+export function directoryPickerSearchText(absolute: string, home: string) {
+  const full = displayPickerPath(absolute, "", "")
+  const tilde = displayPickerPath(full, "~", home)
+  const withSlash = (value: string, separator = "/") => {
+    if (!value) return ""
+    return value.endsWith(separator) ? value : value + separator
+  }
+  const aliases = [full, withSlash(full), tilde, withSlash(tilde), getFilename(full)]
+  const canonical = trimPickerPath(full)
+  if (/^[A-Za-z]:\//.test(canonical) || canonical.startsWith("//")) {
+    const native = nativePickerPath(canonical)
+    aliases.push(canonical, withSlash(canonical), native, withSlash(native, "\\"))
+  }
+  return Array.from(new Set(aliases.filter(Boolean))).join("\n")
+}
+
 export function createDirectorySearch(args: { sdk: ServerSDK; base: () => string | undefined; home: () => string }) {
   const cache = new Map<string, Promise<Array<{ name: string; absolute: string }>>>()
   let current = 0

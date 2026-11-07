@@ -16,12 +16,16 @@ export interface GenericSealedExecutor<S, E = never> {
     readonly actionID: AgentRuntime.ActionID
     readonly controlLease: DurableRun.RunLeaseCapability
     readonly authorization: ActionGateway.AuthorizationGrantCapability
+    /** Checkpoint only this sealed run/action under the current worker-owned lease. */
+    readonly checkpointControl: (
+      state: Parameters<DurableRun.Interface["checkpointControl"]>[1]["state"],
+    ) => ReturnType<DurableRun.Interface["checkpointControl"]>
     /**
      * Signal only after the executor has validated the presented control
      * capability and all immutable inputs, immediately before side effects.
      * The worker may rotate the capability through heartbeats after this
-     * one-way handoff because neither Gateway nor the executor will read the
-     * old capability again.
+     * one-way handoff. Neither Gateway nor the executor may read the old
+     * capability again; subsequent checkpoints use checkpointControl.
      */
     readonly controlLeaseValidated: () => Effect.Effect<void>
   }) => Effect.Effect<void, E>
@@ -408,6 +412,16 @@ export const makeGeneric = <S, Scope, E>(input: {
                 actionID: rebuilt.input.actionID,
                 controlLease: executorLease,
                 authorization,
+                checkpointControl: (checkpointState) =>
+                  SynchronizedRef.modifyEffect(leaseState, (state) =>
+                    input.durable
+                      .checkpointControl(state.capability, {
+                        runID,
+                        lastActionID: rebuilt.input.actionID,
+                        state: checkpointState,
+                      })
+                      .pipe(Effect.map((checkpoint) => [checkpoint, state] as const)),
+                  ).pipe(Effect.uninterruptible),
                 controlLeaseValidated: () => Deferred.succeed(controlLeaseValidated, undefined),
               })
               .pipe(Effect.exit)

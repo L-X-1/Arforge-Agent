@@ -1,4 +1,5 @@
-import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, Show } from "solid-js"
+import { useLocation } from "@solidjs/router"
 import { createStore } from "solid-js/store"
 import { createQuery } from "@tanstack/solid-query"
 import { Icon } from "@arforge-ai/ui/icon"
@@ -9,11 +10,13 @@ import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
 import { displayName } from "@/pages/layout/helpers"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { SessionFileView } from "@/pages/session/file-tabs"
 import { applyFileListKeyDown, SessionFileListV2 } from "@/pages/session/v2/session-file-list-v2"
 import { pathKey } from "@/utils/path-key"
+import { createFilePreviewActivation } from "./file-preview-activation"
 
 const emptyFiles: string[] = []
 
@@ -39,23 +42,60 @@ export function SessionFileBrowserTab(props: {
   const language = useLanguage()
   const layout = useLayout()
   const sdk = useSDK()
-  const { workspaceKey } = useSessionLayout()
+  const server = useServerSDK()
+  const location = useLocation()
+  const { workspaceKey, sessionKey } = useSessionLayout()
   const resultsID = `session-file-browser-results-${createUniqueId()}`
   const [filter, setFilter] = createSignal("")
   const [explicitHighlight, setExplicitHighlight] = createSignal<string>()
-  const [pane, setPane] = createStore({ compact: false, navigation: true })
+  const [pane, setPane] = createStore({ compact: false, navigation: props.placeholder })
   let root!: HTMLDivElement
+  const activationIdentity = () =>
+    JSON.stringify([
+      server().scope,
+      sdk().directory,
+      workspaceKey(),
+      sessionKey(),
+      location.pathname,
+      props.tab,
+      props.active,
+      filter(),
+      pane.compact,
+    ])
+  const activate = (path: string, permanent: boolean) => {
+    if (permanent) props.onSelectPermanent(path)
+    else props.onSelect(path)
+    setPane("navigation", false)
+  }
+  const activation = createFilePreviewActivation({
+    compact: () => pane.compact,
+    source: server,
+    identity: activationIdentity,
+    preview: (path) => activate(path, false),
+    pin: (path) => activate(path, true),
+  })
+  createEffect(on(() => [server(), activationIdentity()] as const, activation.cancel, { defer: true }))
   onMount(() => {
+    const cancel = () => activation.cancel()
+    document.addEventListener("pointerdown", cancel, true)
+    document.addEventListener("keydown", cancel, true)
+    document.addEventListener("click", cancel, true)
+    onCleanup(() => {
+      document.removeEventListener("pointerdown", cancel, true)
+      document.removeEventListener("keydown", cancel, true)
+      document.removeEventListener("click", cancel, true)
+    })
     const observer = new ResizeObserver(() => setPane("compact", root.clientWidth < 560))
     observer.observe(root)
     onCleanup(() => observer.disconnect())
   })
-  createEffect(() => { if (props.placeholder) setPane("navigation", true) })
+  onCleanup(activation.cancel)
+  createEffect(() => {
+    if (props.placeholder) setPane("navigation", true)
+  })
   const sidebarOpened = () => props.placeholder || (pane.compact ? pane.navigation : props.state.sidebarOpened())
-  const select = (path: string, permanent = false) => {
-    if (permanent) props.onSelectPermanent(path)
-    else props.onSelect(path)
-    setPane("navigation", false)
+  const select = (path: string, permanent = false, event?: MouseEvent) => {
+    activation.select(path, { permanent, pointer: !!event && event.detail > 0 })
   }
   const query = createMemo(() => filter().trim())
   const search = createQuery(() => {
@@ -106,106 +146,125 @@ export function SessionFileBrowserTab(props: {
   // Keep the sidebar outside Kobalte Tabs.Content: a morphing content value
   // unmounts the whole panel on every file-tab switch and resets sidebar scroll.
   return (
-    <div ref={root} data-component="review-file-workbench" data-compact={pane.compact} data-navigation={sidebarOpened()}>
+    <div
+      ref={root}
+      data-component="review-file-workbench"
+      data-compact={pane.compact}
+      data-navigation={sidebarOpened()}
+    >
       <Show when={pane.compact}>
         <div data-slot="workbench-pane-switch" role="group" aria-label={language.t("session.panel.reviewAndFiles")}>
-          <button type="button" aria-pressed={sidebarOpened()} onClick={() => setPane("navigation", true)}>{language.t("session.files.all")}</button>
-          <button type="button" disabled={props.placeholder} aria-pressed={!sidebarOpened()} onClick={() => setPane("navigation", false)}>{language.locale().startsWith("zh") ? "当前文件" : "Current file"}</button>
+          <button type="button" aria-pressed={sidebarOpened()} onClick={() => setPane("navigation", true)}>
+            {language.t("session.files.all")}
+          </button>
+          <button
+            type="button"
+            disabled={props.placeholder}
+            aria-pressed={!sidebarOpened()}
+            onClick={() => setPane("navigation", false)}
+          >
+            {language.locale().startsWith("zh") ? "当前文件" : "Current file"}
+          </button>
           <span title={sdk().directory}>{title()}</span>
         </div>
       </Show>
-    <SessionFilePanelV2
-      toolbar={false}
-      sidebar={
-        <SessionReviewV2Sidebar
-          open={sidebarOpened()}
-          transition={props.state.sidebarTransition()}
-          title={<span class="truncate">{title()}</span>}
-          filter={filter()}
-          onFilterChange={setFilter}
-          onFilterKeyDown={onFilterKeyDown}
-          filterAutofocus={props.placeholder}
-          filterRef={props.filterRef}
-          filterControls={resultsID}
-          filterActiveDescendant={highlighted() ? optionID(highlighted()!) : undefined}
-          filterExpanded={query().length > 0 && files().length > 0}
-          width={props.state.sidebarWidth()}
-          onWidthChange={props.state.resizeSidebar}
-        >
-          <Show
-            when={query()}
-            fallback={
-              <FileTreeV2
-                active={props.active}
-                kinds={props.kinds}
-                onFileClick={(node) => select(node.path)}
-                onFileDoubleClick={(node) => select(node.path, true)}
-              />
-            }
+      <SessionFilePanelV2
+        toolbar={false}
+        sidebar={
+          <SessionReviewV2Sidebar
+            open={sidebarOpened()}
+            transition={props.state.sidebarTransition()}
+            title={<span class="truncate">{title()}</span>}
+            filter={filter()}
+            onFilterChange={setFilter}
+            onFilterKeyDown={onFilterKeyDown}
+            filterAutofocus={props.placeholder}
+            filterRef={props.filterRef}
+            filterControls={resultsID}
+            filterActiveDescendant={highlighted() ? optionID(highlighted()!) : undefined}
+            filterExpanded={query().length > 0 && files().length > 0}
+            width={props.state.sidebarWidth()}
+            onWidthChange={props.state.resizeSidebar}
           >
             <Show
-              when={!loading()}
+              when={query()}
               fallback={
-                <div role="status" class="px-2 py-2 text-12-regular text-text-weak">
-                  {language.t("common.loading")}
-                  {language.t("common.loading.ellipsis")}
-                </div>
+                <FileTreeV2
+                  active={props.active}
+                  kinds={props.kinds}
+                  onFileClick={(node, event) => select(node.path, false, event)}
+                  onFileDoubleClick={(node) => select(node.path, true)}
+                />
               }
             >
-              <Show when={!search.isError} fallback={
-                <div role="alert" class="p-3 text-12-regular text-text-weak">
-                  <p>{search.error instanceof Error ? search.error.message : language.t("common.requestFailed")}</p>
-                  <button type="button" disabled={search.isFetching} onClick={() => void search.refetch()}>{language.locale().startsWith("zh") ? "重试搜索" : "Retry search"}</button>
-                </div>
-              }>
               <Show
-                when={files().length > 0}
+                when={!loading()}
                 fallback={
                   <div role="status" class="px-2 py-2 text-12-regular text-text-weak">
-                    {language.t("palette.empty")}
+                    {language.t("common.loading")}
+                    {language.t("common.loading.ellipsis")}
                   </div>
                 }
               >
-                <SessionFileListV2
-                  id={resultsID}
-                  role="listbox"
-                  optionID={optionID}
-                  files={files()}
-                  kinds={props.kinds}
-                  active={props.active}
-                  highlighted={highlighted()}
-                  onFileClick={(path) => {
-                    setExplicitHighlight(path)
-                    select(path)
-                  }}
-                  onFileDoubleClick={(path) => select(path, true)}
-                />
-              </Show>
+                <Show
+                  when={!search.isError}
+                  fallback={
+                    <div role="alert" class="p-3 text-12-regular text-text-weak">
+                      <p>{search.error instanceof Error ? search.error.message : language.t("common.requestFailed")}</p>
+                      <button type="button" disabled={search.isFetching} onClick={() => void search.refetch()}>
+                        {language.locale().startsWith("zh") ? "重试搜索" : "Retry search"}
+                      </button>
+                    </div>
+                  }
+                >
+                  <Show
+                    when={files().length > 0}
+                    fallback={
+                      <div role="status" class="px-2 py-2 text-12-regular text-text-weak">
+                        {language.t("palette.empty")}
+                      </div>
+                    }
+                  >
+                    <SessionFileListV2
+                      id={resultsID}
+                      role="listbox"
+                      optionID={optionID}
+                      files={files()}
+                      kinds={props.kinds}
+                      active={props.active}
+                      highlighted={highlighted()}
+                      onFileClick={(path, event) => {
+                        setExplicitHighlight(path)
+                        select(path, false, event)
+                      }}
+                      onFileDoubleClick={(path) => select(path, true)}
+                    />
+                  </Show>
+                </Show>
               </Show>
             </Show>
-          </Show>
-        </SessionReviewV2Sidebar>
-      }
-    >
-      <Show
-        when={!props.placeholder}
-        fallback={
-          <SessionFilePanelV2Empty>
-            <div class="flex flex-col items-center gap-3 text-center text-text-weak">
-              <Icon name="file-tree" size="large" />
-              <div class="text-14-medium text-text-strong">{language.t("command.file.open")}</div>
-              <div class="text-13-regular">{language.t("session.files.selectToOpen")}</div>
-            </div>
-          </SessionFilePanelV2Empty>
+          </SessionReviewV2Sidebar>
         }
       >
-        <div class="min-h-0 flex-1">
-          <Show when={props.tab} keyed>
-            {(tab) => <SessionFileView tab={tab} />}
-          </Show>
-        </div>
-      </Show>
-    </SessionFilePanelV2>
+        <Show
+          when={!props.placeholder}
+          fallback={
+            <SessionFilePanelV2Empty>
+              <div class="flex flex-col items-center gap-3 text-center text-text-weak">
+                <Icon name="file-tree" size="large" />
+                <div class="text-14-medium text-text-strong">{language.t("command.file.open")}</div>
+                <div class="text-13-regular">{language.t("session.files.selectToOpen")}</div>
+              </div>
+            </SessionFilePanelV2Empty>
+          }
+        >
+          <div class="flex min-h-0 flex-1 flex-col">
+            <Show when={props.tab} keyed>
+              {(tab) => <SessionFileView tab={tab} />}
+            </Show>
+          </div>
+        </Show>
+      </SessionFilePanelV2>
     </div>
   )
 }

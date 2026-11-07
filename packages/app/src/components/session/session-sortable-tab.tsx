@@ -10,7 +10,7 @@ import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useCommand } from "@/context/command"
 
-export function FileVisual(props: { path: string; active?: boolean; temporary?: boolean }): JSX.Element {
+export function FileVisual(props: { path: string; active?: boolean; temporary?: boolean; dirty?: boolean; dirtyLabel?: string }): JSX.Element {
   return (
     <div class="flex items-center gap-x-1.5 min-w-0">
       <Show
@@ -25,6 +25,9 @@ export function FileVisual(props: { path: string; active?: boolean; temporary?: 
       <span class="text-14-medium truncate" classList={{ italic: props.temporary }}>
         {getFilename(props.path)}
       </span>
+      <Show when={props.dirty}>
+        <span data-slot="file-tab-dirty" role="img" aria-label={props.dirtyLabel ?? "Unsaved changes"} />
+      </Show>
     </div>
   )
 }
@@ -32,6 +35,7 @@ export function FileVisual(props: { path: string; active?: boolean; temporary?: 
 export function SortableTab(props: {
   tab: string
   temporary?: boolean
+  dirty?: boolean
   onTabClose: (tab: string) => void
   onTabDoubleClick?: (tab: string) => void
 }): JSX.Element {
@@ -43,7 +47,7 @@ export function SortableTab(props: {
   const content = createMemo(() => {
     const value = path()
     if (!value) return
-    return <FileVisual path={value} temporary={props.temporary} />
+    return <FileVisual path={value} temporary={props.temporary} dirty={props.dirty} dirtyLabel={language.locale().startsWith("zh") ? "未保存的修改" : "Unsaved changes"} />
   })
   return (
     <div use:sortable class="h-full flex items-center" classList={{ "opacity-0": sortable.isActiveDraggable }}>

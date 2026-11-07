@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message } from "@arforge-ai/sdk/v2/client"
-import { getSessionContext } from "./session-context-metrics"
+import { getConfirmedSessionContext, getSessionContext } from "./session-context-metrics"
 
 const assistant = (
   id: string,
@@ -38,6 +38,22 @@ const user = (id: string) => {
 }
 
 describe("getSessionContext", () => {
+  test("confirmed usage excludes a newer streaming or failed sample and retains the actual sampled model", () => {
+    const settled = assistant("settled", { input: 40, output: 10, reasoning: 0, read: 0, write: 0 }, 0.1, "original", "sample-model")
+    if (settled.role !== "assistant") throw new Error("assistant fixture")
+    settled.time.completed = 2
+    settled.finish = "stop"
+    const streaming = assistant("streaming", { input: 900, output: 20, reasoning: 0, read: 0, write: 0 }, 0, "new", "new-model")
+    const failed = assistant("failed", { input: 700, output: 30, reasoning: 0, read: 0, write: 0 }, 0)
+    if (failed.role !== "assistant") throw new Error("assistant fixture")
+    failed.time.completed = 3
+    failed.finish = "error"
+    const result = getConfirmedSessionContext([settled, streaming, failed], [{ id: "original", models: { "sample-model": { limit: { context: 100 } } } }])
+    expect(result?.message.id).toBe("settled")
+    expect(result?.message.providerID).toBe("original")
+    expect(result?.usage).toBe(50)
+    expect(getConfirmedSessionContext([streaming, failed])).toBeUndefined()
+  })
   test("computes token totals and usage from latest assistant with tokens", () => {
     const messages = [
       user("u1"),

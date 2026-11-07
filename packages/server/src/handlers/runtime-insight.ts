@@ -4,7 +4,9 @@ import { Api } from "../api"
 import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { Mcp } from "@arforge-ai/schema/mcp"
 import { Database } from "@arforge-ai/core/database/database"
-import { RuntimeInsight } from "@arforge-ai/core/runtime/insight"
+import { RuntimeInsight, type PrincipalVisibility } from "@arforge-ai/core/runtime/insight"
+import { SessionTable } from "@arforge-ai/core/session/sql"
+import { and, eq } from "drizzle-orm"
 import { attachRuntimePersistence, RuntimeToolExecution } from "@arforge-ai/core/runtime"
 import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
 import { DurableAction } from "@arforge-ai/core/runtime/durable-action"
@@ -645,6 +647,26 @@ const buildRecoveryView = (
     }
   })
 
+export const trustedPrivateRuntimeInsightPrincipal = (principal: IdentityContext.Principal) =>
+  Database.isDefaultLocalPrincipal(principal) && principal.sessionID === IdentityContext.LocalPrincipal.sessionID
+
+/** Canonical Session ownership scopes authenticated telemetry; role does not widen it. */
+export const runtimeInsightVisibility = Effect.fn("RuntimeInsight.visibility")(function* () {
+  const principal = yield* IdentityContext.Current
+  if (trustedPrivateRuntimeInsightPrincipal(principal)) return undefined
+  const { db } = yield* Database.Service
+  const sessions = yield* db.select({ id: SessionTable.id }).from(SessionTable).where(and(
+    eq(SessionTable.tenant_id, principal.tenantID),
+    eq(SessionTable.owner_user_id, principal.userID),
+  )).all().pipe(Effect.orDie)
+  const visibility: PrincipalVisibility = {
+    tenantID: principal.tenantID,
+    userID: principal.userID,
+    sessionIDs: new Set(sessions.map((session) => String(session.id))),
+  }
+  return visibility
+})
+
 export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeInsight", (handlers) =>
   handlers
     .handle(
@@ -652,9 +674,12 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
       Effect.fn(function* (ctx) {
         const limit = Number(ctx.query.limit ?? "50")
         const bounded = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 200) : 50
-        const audit = RuntimeInsight.auditList(bounded)
+        const visibility = yield* runtimeInsightVisibility()
+        const listOptions = { limit: bounded, ...(visibility === undefined ? {} : { allowedSessionIDs: visibility.sessionIDs }) }
+        const scope = <A, E, R>(effect: Effect.Effect<A, E, R>) => visibility === undefined ? effect : Database.principalContext(visibility, effect)
+        const audit = RuntimeInsight.auditList(bounded, undefined, visibility)
         const durableRuns = yield* DurableRun.Service.pipe(
-          Effect.flatMap((service) => service.list({ limit: bounded })),
+          Effect.flatMap((service) => scope(service.list(listOptions))),
           Effect.catchTag(
             "DurableRun.CorruptHistoryError",
             (error) =>
@@ -665,7 +690,7 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
           ),
         )
         const durableActions = yield* DurableAction.Service.pipe(
-          Effect.flatMap((service) => service.list({ limit: bounded })),
+          Effect.flatMap((service) => scope(service.list(listOptions))),
           Effect.catchTag(
             "DurableAction.CorruptHistoryError",
             (error) =>
@@ -678,9 +703,9 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
         const access = runtimeInsightAccess((yield* IdentityContext.Current).role)
         return {
           access,
-          contextLayers: RuntimeInsight.contextLayers(20),
-          routing: RuntimeInsight.routingDecisions(bounded),
-          verifications: RuntimeInsight.verifications(bounded),
+          contextLayers: RuntimeInsight.contextLayers(20, visibility),
+          routing: RuntimeInsight.routingDecisions(bounded, visibility),
+          verifications: RuntimeInsight.verifications(bounded, visibility),
           // Tenant ownership is persistence metadata, not a public snapshot
           // field. The access projection above contains only bounded
           // capabilities; it never exposes user, tenant, or profile IDs.
@@ -696,8 +721,8 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
             recordHash: entry.recordHash,
           })),
           auditDropped: audit.dropped,
-          auditVerify: RuntimeInsight.auditVerify(),
-          runs: RuntimeInsight.runs(bounded),
+          auditVerify: RuntimeInsight.auditVerify(visibility),
+          runs: RuntimeInsight.runs(bounded, visibility),
           // The current wire contract is session-shaped and requires a real
           // sessionID. Control runs are deliberately excluded until the
           // protocol exposes a subject-aware control-run record; never invent
@@ -845,7 +870,7 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
                 updatedAt: DateTime.toEpochMillis(action.time.updated),
               }
             }),
-          recalls: RuntimeInsight.memoryRecalls(bounded),
+          recalls: RuntimeInsight.memoryRecalls(bounded, visibility),
         }
       }),
     )
@@ -1347,7 +1372,7 @@ export const RuntimeInsightHandler = HttpApiBuilder.group(Api, "server.runtimeIn
     .handle(
       "runtimeInsight.auditVerify",
       Effect.fn(function* () {
-        return RuntimeInsight.auditVerify()
+        return RuntimeInsight.auditVerify(yield* runtimeInsightVisibility())
       }),
     ),
 )

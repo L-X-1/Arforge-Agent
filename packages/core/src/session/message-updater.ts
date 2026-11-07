@@ -102,6 +102,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
     yield* SessionEvent.All.match(event, {
       // Session metadata is not conversation content or a model-visible message.
       "session.next.title.generated": () => Effect.void,
+      "session.next.renamed": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           SessionMessage.AgentSwitched.make({

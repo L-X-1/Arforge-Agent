@@ -2,6 +2,7 @@ import { Dialog as Kobalte } from "@kobalte/core/dialog"
 import { ComponentProps, JSXElement, Match, ParentProps, Show, Switch } from "solid-js"
 import { useI18n } from "../context/i18n"
 import { IconButton } from "./icon-button"
+import { useUIPresentation, type UIPresentation } from "../context/presentation"
 
 export interface DialogProps extends ParentProps {
   title?: JSXElement
@@ -12,13 +13,16 @@ export interface DialogProps extends ParentProps {
   classList?: ComponentProps<"div">["classList"]
   fit?: boolean
   transition?: boolean
+  presentation?: UIPresentation
 }
 
 export function Dialog(props: DialogProps) {
   const i18n = useI18n()
+  const presentation = useUIPresentation(() => props.presentation)
   return (
     <div
       data-component="dialog"
+      data-presentation={presentation()}
       data-fit={props.fit ? true : undefined}
       data-size={props.size || "normal"}
       data-transition={props.transition ? true : undefined}

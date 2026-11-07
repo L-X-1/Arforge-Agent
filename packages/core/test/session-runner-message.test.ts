@@ -14,6 +14,39 @@ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
 
 describe("toLLMMessages", () => {
+  test("keeps ordinary PNG/PDF attachments while MCP references await governed tool results", () => {
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("resource-reference"),
+          type: "user",
+          text: "@manual",
+          time: { created },
+          files: [
+            FileAttachment.make({
+              uri: "evidence://manual",
+              mime: "text/plain",
+              resource: { server: "manual-server", uri: "evidence://manual" },
+            }),
+            FileAttachment.make({ uri: "data:image/png;base64,aGVsbG8=", mime: "image/png" }),
+            FileAttachment.make({ uri: "data:application/pdf;base64,aGVsbG8=", mime: "application/pdf" }),
+          ],
+        }),
+      ],
+      model,
+    )
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "@manual" },
+      expect.objectContaining({ type: "media", mediaType: "image/png", data: "data:image/png;base64,aGVsbG8=" }),
+      expect.objectContaining({
+        type: "media",
+        mediaType: "application/pdf",
+        data: "data:application/pdf;base64,aGVsbG8=",
+      }),
+    ])
+    expect(JSON.stringify(messages)).not.toContain("evidence://manual")
+  })
+
   test("projects local tool errors as stable model-readable text", () => {
     const messages = toLLMMessages(
       [

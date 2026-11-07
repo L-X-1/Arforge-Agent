@@ -151,18 +151,15 @@ describe("sidebar primary action motion", () => {
     )
     const forcedColorsRule = colorRules.find((rule) => rule.groups?.declarations.includes("background: CanvasText"))
     const lightTheme = materialStyles.match(/:root\s*\{(?<declarations>[^}]*)\}/)
-    const darkTheme = materialStyles.match(/:root\[data-color-scheme="dark"\]\s*\{(?<declarations>[^}]*)\}/)
 
     expect(colorRules).toHaveLength(2)
     expect(semanticRule?.groups?.selectors.trim()).toBe("[data-sidebar-primary-action-dock]::after")
     expect(semanticRule?.groups?.declarations).not.toMatch(/(?:color-mix|rgba?\(|hsla?\(|#[0-9a-f]{3,8})/i)
     expect(forcedColorsRule?.groups?.declarations).toContain("background: CanvasText")
-    expect(lightTheme?.groups?.declarations).toMatch(
-      /--arforge-hairline:\s*color-mix\(in srgb,\s*var\(--text-strong\)\s+12%,\s*transparent\)/,
-    )
-    expect(darkTheme?.groups?.declarations).toMatch(
-      /--arforge-hairline:\s*color-mix\(in srgb,\s*white\s+12%,\s*transparent\)/,
-    )
+    expect(lightTheme?.groups?.declarations).toMatch(/--arforge-hairline:\s*var\(--arforge-review-border\)/)
+    // The approved theme now supplies both schemes through the semantic border;
+    // the isolated Chrome audit also verifies computed light/dark/custom colors.
+    expect(lightTheme?.groups?.declarations).toMatch(/--arforge-review-border:\s*var\(--border-base\)/)
     expect(panelStyles).not.toMatch(
       /\[data-sidebar-primary-action-dock\][^{]*::after[^{]*\{[^}]*(?:background(?:-color)?|color)\s*:[^}]*(?:data-collapsed|aria-busy|data-pending)/,
     )
@@ -544,11 +541,11 @@ describe("sidebar primary action motion", () => {
     expect(tooltipSource).not.toContain("max-height")
   })
 
-  test("inherits the shared 400ms open delay and immediate close timing", () => {
-    expect(tooltipSource).not.toContain("openDelay=")
+  test("preserves the primary text action's 400ms delay and shared immediate close timing", () => {
+    expect(tooltipSource).toContain("openDelay={400}")
     expect(tooltipSource).not.toContain("closeDelay=")
     expect(sharedTooltipSource).toContain("export const TOOLTIP_V2_TIMING = {")
-    expect(sharedTooltipSource).toContain("openDelay: 400")
+    expect(sharedTooltipSource).toContain("openDelay: 300")
     expect(sharedTooltipSource).toContain("closeDelay: 0")
     expect(sharedTooltipSource).toContain("openDelay={TOOLTIP_V2_TIMING.openDelay}")
     expect(sharedTooltipSource).toContain("closeDelay={TOOLTIP_V2_TIMING.closeDelay}")
@@ -568,8 +565,8 @@ describe("sidebar primary action motion", () => {
     expect(focusHandler).toContain('setState("open", true)')
     expect(focusHandler).not.toContain("setTimeout")
     expect(focusHandler).not.toContain("requestAnimationFrame")
-    expect(trigger).toContain("onFocusCapture={openTooltipOnFocus}")
-    expect(sharedTooltipSource).toContain("openDelay: 400")
+    expect(trigger).toContain("oncapture:focus={openTooltipOnFocus}")
+    expect(tooltipSource).toContain("openDelay={400}")
     expect(sharedTooltipSource).toContain("openDelay={TOOLTIP_V2_TIMING.openDelay}")
   })
 
@@ -624,7 +621,7 @@ describe("sidebar primary action motion", () => {
 
     expect(triggerStart).not.toBe(-1)
     expect(triggerEnd).not.toBe(-1)
-    expect(trigger).toContain("onPointerDownCapture={suppressTooltipOnActivation}")
+    expect(trigger).toContain("oncapture:pointerdown={suppressTooltipOnActivation}")
     expect(trigger).not.toContain("preventDefault")
     expect(trigger).not.toContain("onTouchStart")
     expect(trigger).not.toContain("onContextMenu")

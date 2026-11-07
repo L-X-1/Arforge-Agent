@@ -1,10 +1,12 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { FSUtil } from "@arforge-ai/core/fs-util"
+import { NodeServices } from "@effect/platform-node"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Effect, FileSystem, Layer } from "effect"
 import path from "path"
 import { resetDatabase } from "../fixture/db"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { httpApiLayer, request } from "./httpapi-layer"
 
@@ -15,6 +17,7 @@ const testStateLayer = Layer.effectDiscard(
   ),
 )
 const it = testEffect(Layer.mergeAll(testStateLayer, LayerNode.compile(FSUtil.node), httpApiLayer))
+const inProcess = testEffect(Layer.merge(testStateLayer, NodeServices.layer))
 const projectOptions = { config: { formatter: false, lsp: false } }
 
 describe("current protocol bootstrap", () => {
@@ -48,6 +51,40 @@ describe("current protocol bootstrap", () => {
     expect(legacyList.status).toBe(200)
     expect(yield* list.json).toEqual(yield* legacyList.json)
   }), projectOptions, 30_000)
+
+  inProcess.live("updates a Git project's metadata only at its selected worktree", Effect.gen(function* () {
+    const directory = yield* tmpdirScoped({ git: true, config: projectOptions.config })
+    const send = (route: string, init: RequestInit) => Effect.promise(() =>
+      HttpApiApp.webHandler().handler(new Request(new URL(route, "http://localhost"), init), HttpApiApp.context),
+    )
+    const init = { headers: { "x-arforge-directory": directory } }
+    const current = yield* send("/api/project/current", init)
+    expect(current.status).toBe(200)
+    const { id } = (yield* Effect.promise(() => current.json())) as { id: string }
+    expect(id).not.toBe("global")
+    const endpoint = `/api/project/${encodeURIComponent(id)}`
+    const patch = (worktree: string, body: object) =>
+      send(endpoint, {
+        method: "PATCH",
+        headers: { "x-arforge-directory": encodeURIComponent(worktree), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      })
+
+    const color = yield* patch(directory, { icon: { color: "blue" } })
+    expect(color.status).toBe(200)
+    expect(yield* Effect.promise(() => color.json())).toMatchObject({ id, icon: { color: "blue" } })
+    const edit = yield* patch(directory, { name: "Renamed workspace", commands: { start: "echo ready" } })
+    expect(edit.status).toBe(200)
+    const expected = { id, name: "Renamed workspace", icon: { color: "blue" }, commands: { start: "echo ready" } }
+    expect(yield* Effect.promise(() => edit.json())).toMatchObject(expected)
+
+    const wrong = yield* patch(path.join(directory, "other workspace"), { name: "Wrong workspace" })
+    expect(wrong.status).toBe(404)
+    expect(yield* Effect.promise(() => wrong.json())).toMatchObject({ _tag: "ProjectNotFoundError", projectID: id })
+    const list = yield* send("/api/project", init)
+    expect(list.status).toBe(200)
+    expect(yield* Effect.promise(() => list.json())).toContainEqual(expect.objectContaining(expected))
+  }), 30_000)
 
   it.instance("wraps VCS information in the selected location without inventing branches", Effect.gen(function* () {
     const directory = (yield* TestInstance).directory

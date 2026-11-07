@@ -7,6 +7,9 @@ import { createMemoryCandidateReviewApi } from "@/utils/memory-candidate-api"
 import { createTextDocumentApi } from "@/utils/text-document-api"
 import { createPreviewResourceApi } from "@/utils/preview-resource-api"
 import { createSessionPromptApi } from "@/utils/session-prompt-api"
+import { createSessionOperationsApi } from "@/utils/session-operations-api"
+import { createRuntimeInsightApi } from "@/utils/runtime-insight-api"
+import { createMcpToolDetailsApi } from "@/utils/mcp-tool-api"
 
 const fetchWithSession = Object.assign(
   (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) =>
@@ -59,7 +62,7 @@ export function createSdkForServer({
 export function createApiForServer(input: {
   server: ServerConnection.HttpBase
   fetch?: typeof globalThis.fetch
-}): ArforgeClient {
+}): ServerApi {
   const options = {
     baseUrl: input.server.url,
     fetch: input.fetch ?? fetchWithSession,
@@ -76,11 +79,18 @@ export function createApiForServer(input: {
   const current = CurrentArforge.make(options)
   return {
     ...api,
-    session: { ...api.session, prompt: createSessionPromptApi(current.sessions.prompt) },
+    session: {
+      ...api.session,
+      prompt: createSessionPromptApi(current.sessions.prompt),
+      ...createSessionOperationsApi(current.sessions),
+    },
   }
 }
 
-export type ServerApi = ArforgeClient
+export type ServerApi = Omit<ArforgeClient, "session"> & {
+  readonly session: Omit<ArforgeClient["session"], "shell" | "command" | "compact"> &
+    ReturnType<typeof createSessionOperationsApi>
+}
 
 export function createOperationsApiForServer(input: {
   server: ServerConnection.HttpBase
@@ -136,8 +146,15 @@ export function createOperationsApiForServer(input: {
     }
     return body
   }
-  return Object.assign(api, {
-    previewResources: createPreviewResourceApi({ baseUrl: input.server.url, fetch: input.fetch ?? fetchWithSession, headers }),
+  return {
+    ...api,
+    runtimeInsight: createRuntimeInsightApi(api.runtimeInsight),
+    mcp: { ...api.mcp, ...createMcpToolDetailsApi(api.mcp) },
+    previewResources: createPreviewResourceApi({
+      baseUrl: input.server.url,
+      fetch: input.fetch ?? fetchWithSession,
+      headers,
+    }),
     textDocuments: createTextDocumentApi({
       baseUrl: input.server.url,
       fetch: input.fetch ?? fetchWithSession,
@@ -169,7 +186,7 @@ export function createOperationsApiForServer(input: {
         readonly requestID: string
       }) => controlledSession({ ...value, operation: "unrevert", body: { requestID: value.requestID } }),
     },
-  })
+  }
 }
 
 export type OperationsApi = ReturnType<typeof createOperationsApiForServer>

@@ -4,7 +4,7 @@ import {
   SESSION_REVIEW_V2_SIDEBAR_WIDTH_MIN,
   type SessionReviewExpandMode,
 } from "@arforge-ai/session-ui/v2/session-review-v2"
-import { createSignal } from "solid-js"
+import type { SessionReviewDiffStyle } from "@arforge-ai/session-ui/session-review"
 import { createStore } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 
@@ -19,14 +19,22 @@ export function createReviewPanelV2State() {
   )
   // The filter is transient by design: a persisted filter would silently hide
   // files after a reload.
-  const [filter, setFilter] = createSignal("")
+  const [presentation, setPresentation] = createStore({
+    filter: "",
+    previewWidth: 0,
+    diffStyleChoice: undefined as SessionReviewDiffStyle | undefined,
+  })
 
   return {
     sidebarOpened: () => store.sidebarOpened,
     sidebarWidth: () => store.sidebarWidth,
     sidebarTransition: ready,
-    filter,
-    setFilter,
+    filter: () => presentation.filter,
+    setFilter: (value: string) => setPresentation("filter", value),
+    previewWidth: () => presentation.previewWidth,
+    setPreviewWidth: (width: number) => setPresentation("previewWidth", width),
+    diffStyleChoice: () => presentation.diffStyleChoice,
+    setDiffStyleChoice: (style: SessionReviewDiffStyle | undefined) => setPresentation("diffStyleChoice", style),
     expandMode: () => store.expandMode,
     setExpandMode: (mode: SessionReviewExpandMode) => setStore("expandMode", mode),
     resizeSidebar: (width: number) =>

@@ -1,7 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { historyDestination, historyEntries, historyExcerpt, historyWindow } from "./history-rail-model"
+import { historyDestination, historyEntries, historyExcerpt, historyWindow, historyPreviewPosition } from "./history-rail-model"
 
 describe("history prompt navigation", () => {
+  test("keeps a preview inside a reduced viewport after its marker leaves the virtual window", () => {
+    const viewport = { left: 0, top: 0, width: 375, height: 430 }
+    const position = historyPreviewPosition({ viewport, previous: { left: 20, top: 245 }, cardHeight: 337 })
+    expect(position.top).toBeGreaterThanOrEqual(8)
+    expect(position.top + 337).toBeLessThanOrEqual(422)
+    expect(position.left + 340).toBeLessThanOrEqual(359)
+  })
+  test("accounts for visual viewport origin and height when a software keyboard shrinks it", () => {
+    const position = historyPreviewPosition({ viewport: { left: 10, top: 40, width: 320, height: 220 }, previous: { left: 0, top: 400 }, anchor: { right: 350, top: 600 }, cardHeight: 360 })
+    expect(position).toEqual({ left: 26, top: 64 })
+  })
   test("indexes human prompts without assistant messages or injected context", () => {
     const entries = historyEntries([
       { id: "u1", role: "user" },

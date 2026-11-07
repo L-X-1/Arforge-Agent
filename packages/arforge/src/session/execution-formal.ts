@@ -5,6 +5,8 @@ import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
 import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
 import { SessionEvent } from "@arforge-ai/core/session/event"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
+import { reportDrainFailure } from "@arforge-ai/core/session/execution/failure"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionRunCoordinator } from "@arforge-ai/core/session/run-coordinator"
 import { SessionRunner } from "@arforge-ai/core/session/runner"
 import { SessionRunnerModel } from "@arforge-ai/core/session/runner/model"
@@ -12,7 +14,8 @@ import { SessionSchema } from "@arforge-ai/core/session/schema"
 import { SessionStore } from "@arforge-ai/core/session/store"
 import { SessionInput } from "@arforge-ai/core/session/input"
 import { ActionGateway } from "@arforge-ai/core/action-gateway"
-import { Cause, Clock, DateTime, Effect, Layer, Scope, Schema } from "effect"
+import { Cause, Clock, DateTime, Effect, Exit, Layer, Scope, Schema } from "effect"
+import * as SessionManualCompaction from "@arforge-ai/core/session/manual-compaction"
 import { SystemContext } from "@arforge-ai/core/system-context"
 import { SystemPrompt } from "./system"
 import { Agent } from "@/agent/agent"
@@ -23,8 +26,17 @@ import { InstanceStore } from "@/project/instance-store"
 import { SessionPrompt, type ChildRunExecutor } from "./prompt"
 import { SessionStatus } from "./status"
 import { ToolCoreBridge } from "@/tool/core-bridge"
-import { SessionID } from "./schema"
+import { SessionID, MessageID } from "./schema"
 import { hasPendingTaskNotification, taskNotificationParentToWake } from "@/tool/task"
+
+const operationFailure = (operation: string) => (cause: Cause.Cause<unknown>): Effect.Effect<never, SessionExecution.OperationError> => {
+  if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+  const error = Cause.findErrorOption(cause)
+  const defect = Cause.findDefect(cause)
+  if (error._tag === "Some" && error.value instanceof SessionExecution.OperationError) return Effect.fail(error.value)
+  if (defect._tag === "Success" && defect.success instanceof SessionExecution.OperationError) return Effect.fail(defect.success)
+  return Effect.fail(new SessionExecution.OperationError({ operation, reason: "unavailable", message: `Session ${operation} failed; inspect its durable execution evidence before retrying` }))
+}
 
 /**
  * Product execution adapter for the Formal Core runner.
@@ -39,6 +51,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const database = yield* Database.Service
     const events = yield* EventV2.Service
+    const executionEvents = yield* EventV2Bridge.Service
     const durableRuns = yield* DurableRun.Service
     const locations = yield* LocationServiceMap.Service
     const sessions = yield* SessionStore.Service
@@ -87,88 +100,93 @@ const layer = Layer.effect(
       force: boolean,
       options: SessionExecution.RunOptions | undefined,
     ) {
-      const session = yield* sessions.get(sessionID)
-      if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
-      return yield* instances.provide(
-        { directory: session.location.directory },
-        Effect.scoped(
-          Effect.gen(function* () {
-            // The formal Core runner is the execution owner, but the mature
-            // HTTP/CLI transports still consume the legacy session.status
-            // stream. Project its lifecycle at this single adapter boundary
-            // so callers get one busy→idle transition without introducing a
-            // second runner or a second status authority.
-            yield* status.set(sessionID, { type: "busy" })
-            const taskRoutes = new Map<
-              string,
-              { readonly modelID: string; readonly providerID: string; readonly variant?: string }
-            >()
-            const context = yield* sessions.context(sessionID)
-            const admitted = [
-              ...(yield* SessionInput.listPending(database.db, sessionID, "steer")),
-              ...(yield* SessionInput.listPending(database.db, sessionID, "queue")),
-            ]
-            const taskInputs = [
-              ...context.flatMap((message) => (message.type === "user" ? (message.scheduledTasks ?? []) : [])),
-              ...admitted.flatMap((input) => input.prompt.scheduledTasks ?? []),
-            ]
-            for (const task of taskInputs) {
-              const route = task.model ?? session.model
-              if (!route) continue
-              taskRoutes.set(task.id, {
-                modelID: String(route.id),
-                providerID: String(route.providerID),
-                ...(session.model?.variant ? { variant: String(session.model.variant) } : {}),
-              })
-            }
-            const scheduledTaskTool = yield* prompt.scheduledTaskTool({
-              sessionID: SessionID.make(sessionID),
-              routes: Object.fromEntries(taskRoutes),
-              wakeSession: (id): Effect.Effect<void> => withDatabase(coordinator.wake(SessionSchema.ID.make(id))),
-              runChild,
-              metadata: ({ assistantMessageID, callID, value }) =>
-                events.publish(SessionEvent.Tool.Progress, {
-                  sessionID,
-                  timestamp: DateTime.makeUnsafe(Date.now()),
-                  assistantMessageID,
-                  callID,
-                  structured: {
-                    ...(value.metadata ?? {}),
-                    ...(value.title ? { title: value.title } : {}),
-                  },
-                  content: value.title ? [{ type: "text", text: value.title }] : [],
-                }),
-            })
-            return yield* SessionRunner.Service.use((runner) =>
-              runner
-                .run({
-                  sessionID,
-                  force,
-                  billing: options?.billing,
-                  personalJob: options?.personalJob,
-                  onSettled: options?.onSettled,
-                  settlementCollector: options?.settlementCollector,
-                  ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
-                  modelTaskCalls: true,
+      let location: EventV2.PublishOptions["location"]
+      return yield* reportDrainFailure(
+        Effect.gen(function* () {
+          const session = yield* sessions.get(sessionID)
+          if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
+          location = session.location
+          return yield* instances.provide(
+            { directory: session.location.directory },
+            Effect.scoped(
+              Effect.gen(function* () {
+                // The formal Core runner is the execution owner, but the mature
+                // HTTP/CLI transports still consume the legacy session.status
+                // stream. Project its lifecycle at this single adapter boundary
+                // so callers get one busy→idle transition without introducing a
+                // second runner or a second status authority.
+                yield* status.set(sessionID, { type: "busy" })
+                const taskRoutes = new Map<
+                  string,
+                  { readonly modelID: string; readonly providerID: string; readonly variant?: string }
+                >()
+                const context = yield* sessions.context(sessionID)
+                const admitted = [
+                  ...(yield* SessionInput.listPending(database.db, sessionID, "steer")),
+                  ...(yield* SessionInput.listPending(database.db, sessionID, "queue")),
+                ]
+                const taskInputs = [
+                  ...context.flatMap((message) => (message.type === "user" ? (message.scheduledTasks ?? []) : [])),
+                  ...admitted.flatMap((input) => input.prompt.scheduledTasks ?? []),
+                ]
+                for (const task of taskInputs) {
+                  const route = task.model ?? session.model
+                  if (!route) continue
+                  taskRoutes.set(task.id, {
+                    modelID: String(route.id),
+                    providerID: String(route.providerID),
+                    ...(session.model?.variant ? { variant: String(session.model.variant) } : {}),
+                  })
+                }
+                const scheduledTaskTool = yield* prompt.scheduledTaskTool({
+                  sessionID: SessionID.make(sessionID),
+                  routes: Object.fromEntries(taskRoutes),
+                  wakeSession: (id): Effect.Effect<void> => withDatabase(coordinator.wake(SessionSchema.ID.make(id))),
+                  runChild,
+                  metadata: ({ assistantMessageID, callID, value }) =>
+                    events.publish(SessionEvent.Tool.Progress, {
+                      sessionID,
+                      timestamp: DateTime.makeUnsafe(Date.now()),
+                      assistantMessageID,
+                      callID,
+                      structured: {
+                        ...(value.metadata ?? {}),
+                        ...(value.title ? { title: value.title } : {}),
+                      },
+                      content: value.title ? [{ type: "text", text: value.title }] : [],
+                    }),
                 })
-                .pipe(
-                  Effect.provideService(SessionRunner.ExternalContext, externalContext),
-                  // Always close the compatibility projection, including
-                  // model/transport failures and interrupts. The runner's
-                  // durable terminal status remains authoritative for V2;
-                  // this event is only the legacy transport wake-up.
-                  Effect.onExit(() => status.set(sessionID, { type: "idle" }).pipe(Effect.ignore)),
-                  Effect.provideService(SessionRunner.ExternalTools, toolBridge.snapshot),
-                ),
-            )
-          }),
-        ).pipe(
-          Effect.provide(locations.get(session.location)),
-          Effect.provideService(
-            SessionRunnerModel.CredentialScope,
-            options?.credentialIDs && options.credentialIDs.length > 0 ? options.credentialIDs : undefined,
-          ),
-        ),
+                return yield* SessionRunner.Service.use((runner) =>
+                  runner
+                    .run({
+                      sessionID,
+                      force,
+                      billing: options?.billing,
+                      personalJob: options?.personalJob,
+                      onSettled: options?.onSettled,
+                      settlementCollector: options?.settlementCollector,
+                      ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
+                      modelTaskCalls: true,
+                    })
+                    .pipe(
+                      Effect.provideService(SessionRunner.ExternalContext, externalContext),
+                      Effect.provideService(SessionRunner.ExternalTools, toolBridge.snapshot),
+                    ),
+                )
+                // Preparation and durable admission can fail before runner.run starts.
+                // Close only the compatibility status; durable run/input facts keep
+                // their original owner and terminal or pending state.
+              }).pipe(Effect.ensuring(status.set(sessionID, { type: "idle" }).pipe(Effect.ignore))),
+            ).pipe(
+              Effect.provide(locations.get(session.location)),
+              Effect.provideService(
+                SessionRunnerModel.CredentialScope,
+                options?.credentialIDs && options.credentialIDs.length > 0 ? options.credentialIDs : undefined,
+              ),
+            ),
+          )
+        }),
+        { sessionID, events: executionEvents, location: () => location },
       )
     })
 
@@ -292,7 +310,51 @@ const layer = Layer.effect(
         ),
       )
 
-    return SessionExecution.Service.of({
+    const owned = <A, E, R>(sessionID: SessionSchema.ID, work: (session: SessionSchema.Info) => Effect.Effect<A, E, R>) => Effect.gen(function* () {
+      const session = yield* sessions.get(sessionID)
+      if (!session) return yield* new SessionExecution.OperationError({ operation: "session", reason: "conflict", message: "Session source is no longer available" })
+      return yield* instances.provide({ directory: session.location.directory }, Effect.scoped(
+        Effect.gen(function* () {
+          const current = yield* sessions.get(sessionID)
+          if (!current || canonicalHash(current.location) !== canonicalHash(session.location))
+            return yield* new SessionExecution.OperationError({ operation: "session", reason: "conflict", message: "Session source changed before execution" })
+          return yield* work(current)
+        }),
+      ).pipe(Effect.provide(locations.get(session.location))))
+    })
+
+    const result: SessionExecution.Interface = SessionExecution.Service.of({
+      preparePrompt: input => withDatabase(owned(input.sessionID, () => prompt.prepareDurableCommand(input))),
+      shell: input => withDatabase(owned(input.sessionID, session => Effect.gen(function* () {
+        const agent = input.agent ?? session.agent ?? (yield* agents.defaultInfo()).name
+        yield* prompt.shell({
+          sessionID: SessionID.make(input.sessionID),
+          messageID: input.id ? MessageID.make(input.id) : undefined,
+          command: input.command, agent,
+          ...(input.model ? { model: { providerID: input.model.providerID, modelID: input.model.id } } : {}),
+        }).pipe(
+          Effect.provideService(SessionExecution.Service, result),
+          Effect.catchTag("SessionBusyError", () => Effect.fail(new SessionExecution.OperationError({ operation: "shell", reason: "busy", message: "Session is busy" }))),
+        )
+      })).pipe(Effect.catchCause(operationFailure("shell")))),
+      compact: input => withDatabase(Effect.gen(function* () {
+        let outcome: Exit.Exit<void, SessionExecution.OperationError> | undefined
+        const accepted = yield* coordinator.exclusive(input.sessionID, owned(input.sessionID, () =>
+          Effect.gen(function* () {
+            yield* status.set(input.sessionID, { type: "busy" })
+            yield* SessionManualCompaction.Service.use(service => service.run(input))
+          }).pipe(
+            Effect.ensuring(status.set(input.sessionID, { type: "idle" }).pipe(Effect.ignore)),
+          ),
+        ).pipe(
+          Effect.catchCause(operationFailure("compact")),
+          Effect.exit,
+          Effect.tap(exit => Effect.sync(() => { outcome = exit })),
+          Effect.asVoid,
+        )).pipe(Effect.catchCause(operationFailure("compact")))
+        if (!accepted) return yield* new SessionExecution.OperationError({ operation: "compact", reason: "busy", message: "Session is busy" })
+        if (outcome && Exit.isFailure(outcome)) return yield* Effect.failCause(outcome.cause)
+      }).pipe(Effect.catchCause(operationFailure("compact")))),
       active: coordinator.active,
       exclusive: (sessionID, work, beforeInterrupt) =>
         withDatabase(coordinator.exclusive(sessionID, work, beforeInterrupt)),
@@ -311,6 +373,7 @@ const layer = Layer.effect(
           }),
         ),
     })
+    return result
   }),
 )
 
@@ -320,6 +383,7 @@ export const node = makeGlobalNode({
   deps: [
     Database.node,
     EventV2.node,
+    EventV2Bridge.node,
     DurableRun.globalNode,
     LocationServiceMap.node,
     SessionStore.node,

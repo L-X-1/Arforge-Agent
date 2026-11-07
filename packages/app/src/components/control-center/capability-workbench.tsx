@@ -1,3 +1,12 @@
+import { ManagementViews, type ManagementView } from "./management-views"
+import { ManagementCollection, createManagementRecordIdentity } from "./management-collection"
+import { ManagementTasks, type ManagementTask } from "./management-tasks"
+import { useConfirmAction } from "@/components/confirm-action"
+import { createManagementConfirmationGuard } from "./management-confirmation"
+import { ManagementStatus } from "@/components/settings-v2/management-status"
+import { ManagementActionToolbar } from "./management-action-toolbar"
+import { Spinner } from "@arforge-ai/ui/spinner"
+import "./workbench-detail-polish.css"
 import { Button } from "@arforge-ai/ui/button"
 import { TextField } from "@arforge-ai/ui/text-field"
 import { For, Show, createEffect, on } from "solid-js"
@@ -15,6 +24,126 @@ import {
   type DiagnosisMode,
   type DiagnosisSeverity,
 } from "./diagnostics-presentation"
+
+/** Independent, read-only partitions retain their last successful values until scope reset. */
+export function createWorkbenchReads<Key extends string>(keys: readonly Key[]) {
+  const [state, setState] = createStore({
+    parts: keys.map((key) => ({ key, loaded: false, fresh: false, error: "", readAt: "" })),
+  })
+  const index = (key: Key) => keys.indexOf(key)
+  return {
+    parts: state.parts,
+    loaded: () => state.parts.some((part) => part.loaded),
+    fresh: () => state.parts.every((part) => part.fresh),
+    reset: () => keys.forEach((_, i) => setState("parts", i, { loaded: false, fresh: false, error: "", readAt: "" })),
+    invalidate: () => keys.forEach((_, i) => setState("parts", i, "fresh", false)),
+    async read<Value>(
+      key: Key,
+      action: () => Promise<Value>,
+      commit: (value: Value) => void,
+      isCurrent: () => boolean,
+    ) {
+      setState("parts", index(key), { fresh: false, error: "" })
+      try {
+        const value = await action()
+        if (!isCurrent()) return
+        commit(value)
+        setState("parts", index(key), { loaded: true, fresh: true, error: "", readAt: new Date().toISOString() })
+      } catch (error) {
+        if (isCurrent()) setState("parts", index(key), { fresh: false, error: publicErrorMessage(error) })
+      }
+    },
+  }
+}
+
+export function WorkbenchReadStatus<Key extends string>(props: {
+  reads: ReturnType<typeof createWorkbenchReads<Key>>
+  loading: boolean
+  scope?: string
+  label: (key: Key) => string
+  retry: (key: Key) => void
+}) {
+  const language = useLanguage()
+  const freshness = () =>
+    language.locale().startsWith("zh")
+      ? { title: "来源与新鲜度", fresh: "当前读取", stale: "需重新读取" }
+      : { title: "Sources and freshness", fresh: "Current read", stale: "Read again" }
+  const lastRead = () =>
+    props.reads.parts
+      .map((part) => part.readAt)
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+  return (
+    <>
+      <ManagementStatus loading={props.loading} initialLoading={!props.reads.loaded()} scope={props.scope} />
+      <Show when={props.reads.loaded()}>
+        <details class="arforge-management-freshness">
+          <summary>
+            {freshness().title} ·{" "}
+            <Show when={lastRead()}>
+              {(value) => <time dateTime={value()}>{new Date(value()).toLocaleString(language.intl())}</time>}
+            </Show>
+            <Show when={!props.reads.fresh()}> · {freshness().stale}</Show>
+          </summary>
+          <dl>
+            <For each={props.reads.parts}>
+              {(part) => (
+                <div>
+                  <dt>{props.label(part.key)}</dt>
+                  <dd>
+                    {part.fresh ? freshness().fresh : freshness().stale} ·{" "}
+                    <Show when={part.readAt}>
+                      {(value) => <time dateTime={value()}>{new Date(value()).toLocaleString(language.intl())}</time>}
+                    </Show>
+                  </dd>
+                </div>
+              )}
+            </For>
+          </dl>
+        </details>
+      </Show>
+      <For each={props.reads.parts}>
+        {(part) => (
+          <Show when={part.error}>
+            <ManagementStatus
+              scope={props.label(part.key)}
+              error={part.error}
+              lastRead={part.readAt}
+              partial={props.reads.loaded()}
+              loading={false}
+              onRetry={props.loading ? undefined : () => props.retry(part.key)}
+            />
+          </Show>
+        )}
+      </For>
+    </>
+  )
+}
+
+export function useWorkbenchWriteReason() {
+  const language = useLanguage()
+  return (busy: boolean, fresh: boolean) =>
+    busy
+      ? language.locale().startsWith("zh")
+        ? "正在处理，请等待当前操作完成。"
+        : "Wait for the current operation to finish."
+      : !fresh
+        ? language.locale().startsWith("zh")
+          ? "请先刷新或重试读取，确认当前数据后再更改。"
+          : "Refresh or retry the reads before changing this data."
+        : undefined
+}
+
+function WorkbenchBusy(props: { when: boolean }) {
+  return (
+    <Show when={props.when}>
+      <span class="workbench-detail-busy" aria-hidden="true">
+        <Spinner />
+      </span>
+    </Show>
+  )
+}
 
 type LocationInput = {
   location: {
@@ -553,10 +682,14 @@ const useCopy = () => {
 }
 
 function Result(props: { value: unknown }) {
+  const c = useCopy()
   return (
-    <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background-stronger p-3 text-11-regular text-text-weak">
-      {JSON.stringify(props.value, null, 2)}
-    </pre>
+    <details class="arforge-management-raw-details">
+      <summary>{c().diagnosisRaw}</summary>
+      <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background-stronger p-3 text-11-regular text-text-weak">
+        {JSON.stringify(props.value, null, 2)}
+      </pre>
+    </details>
   )
 }
 
@@ -734,7 +867,7 @@ export function DiagnosticsWorkbench(props: {
   const locale = () => language.locale() as Locale
   const [state, setState] = createStore({
     loading: "",
-    error: "",
+    errors: { diagnosis: "", repo: "", quality: "" },
     notice: "",
     repoPath: ".",
     filename: "",
@@ -754,7 +887,7 @@ export function DiagnosticsWorkbench(props: {
   }
   const scopeGuard = createScopeRequestGuard(locationScopeKey)
   const run = async (
-    kind: string,
+    kind: "diagnosis" | "repo" | "quality",
     action: (location: LocationInput, request: ScopeRequestToken, signal: AbortSignal) => Promise<void>,
   ) => {
     if (!props.ready() || state.loading) return
@@ -762,13 +895,14 @@ export function DiagnosticsWorkbench(props: {
     const requestedLocation = props.location()
     const controller = new AbortController()
     activeController = controller
-    setState({ loading: kind, error: "", notice: "" })
+    setState({ loading: kind, notice: "" })
+    setState("errors", kind, "")
     try {
       await action(requestedLocation, request, controller.signal)
     } catch (error) {
       if (scopeGuard.isCurrent(request)) {
-        if (controller.signal.aborted) setState({ error: "", notice: c().diagnosisCancelled })
-        else setState("error", publicErrorMessage(error))
+        if (controller.signal.aborted) setState("notice", c().diagnosisCancelled)
+        else setState("errors", kind, publicErrorMessage(error))
       }
     } finally {
       if (activeController === controller) activeController = undefined
@@ -782,46 +916,94 @@ export function DiagnosticsWorkbench(props: {
       () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
       (scopeKey) => {
         scopeGuard.current()
-        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
-        previousScopeKey = scopeKey
-        if (!props.ready() || !scopeChanged) return
+        const currentScopeKey = locationScopeKey()
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== currentScopeKey
+        previousScopeKey = currentScopeKey
+        if (!props.ready()) {
+          scopeGuard.invalidate()
+          activeController?.abort()
+          activeController = undefined
+          setState("loading", "")
+          return
+        }
+        if (!scopeChanged) return
         activeController?.abort()
         activeController = undefined
-        setState({ loading: "", error: "", notice: "", diagnosis: undefined, repo: undefined, quality: undefined })
+        setState({
+          loading: "",
+          errors: { diagnosis: "", repo: "", quality: "" },
+          notice: "",
+          diagnosis: undefined,
+          repo: undefined,
+          quality: undefined,
+        })
       },
     ),
   )
-  return (
-    <section
-      class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
-      data-testid="diagnostics-workbench"
-      aria-busy={!!state.loading}
-    >
-      <header>
-        <h2 class="text-14-medium text-text-strong">{c().diagnostics}</h2>
-        <p class="mt-1 text-12-regular text-text-weak">{c().diagnosticsHelp}</p>
-      </header>
-      <Show when={state.error}>
-        <div role="alert" class="rounded-md border border-border-danger p-3 text-12-regular text-text-danger">
-          {state.error}
-        </div>
-      </Show>
-      <Show when={state.notice}>
-        <div role="status" class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak">
-          {state.notice}
-        </div>
-      </Show>
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+  const runDiagnosis = () =>
+    void run("diagnosis", async (location, request, signal) => {
+      const result = await props.api().diagnostics.diagnose(
+        {
+          ...location,
+          filename: state.filename.trim(),
+          ...(state.extractedText ? { extractedText: state.extractedText } : {}),
+          limit: 20,
+          mode: state.diagnosisMode,
+        },
+        { signal },
+      )
+      if (scopeGuard.isCurrent(request)) setState("diagnosis", result)
+    })
+  const runRepo = () =>
+    void run("repo", async (location, request, signal) => {
+      const result = await props.api().agentCapabilities.repoScale(
+        {
+          ...location,
+          path: state.repoPath.trim() || ".",
+          ...(state.repoQuery.trim() ? { query: state.repoQuery.trim() } : {}),
+          maxFiles: 5_000,
+          limit: 30,
+        },
+        { signal },
+      )
+      if (scopeGuard.isCurrent(request)) setState("repo", result.data)
+    })
+  const runQuality = () =>
+    void run("quality", async (location, request, signal) => {
+      const files = state.qualityFiles
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean)
+      const result = await props.api().agentCapabilities.qualityAssess(
+        {
+          ...location,
+          ...(files.length ? { files } : {}),
+          ...(state.patchText ? { patchText: state.patchText } : {}),
+        },
+        { signal },
+      )
+      if (scopeGuard.isCurrent(request)) setState("quality", result.data)
+    })
+  const taskCopy = () =>
+    language.locale().startsWith("zh")
+      ? { loaded: "当前来源已有结果", ready: "按需运行原查询；不表示已验证通过" }
+      : { loaded: "Results available for this source", ready: "Run the existing query on demand; not yet verified" }
+  const formTasks: ManagementTask[] = [
+    {
+      id: "diagnosis",
+      title: () => c().multimodal,
+      description: () => (state.diagnosis ? taskCopy().loaded : taskCopy().ready),
+      render: () => (
         <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-          <h3 class="text-13-medium text-text-strong">{c().multimodal}</h3>
-          <label class="flex flex-col gap-1 text-11-regular text-text-weak">
+          <h3 class="text-text-strong arforge-management-section-title">{c().multimodal}</h3>
+          <label class="flex flex-col gap-1  text-text-weak arforge-management-copy">
             <span>{c().mode}</span>
             <select
-              class="rounded-md border border-border-weak-base bg-background-base p-2 text-12-regular text-text-strong"
+              class="rounded-md border border-border-weak-base bg-background-base p-2  text-text-strong arforge-management-field"
               aria-label={c().mode}
               data-testid="diagnostics-mode"
               value={state.diagnosisMode}
-              disabled={!!state.loading}
+              disabled={!props.ready() || !!state.loading}
               onChange={(event) => setState("diagnosisMode", event.currentTarget.value as DiagnosisMode)}
             >
               <option value="error">{c().modeError}</option>
@@ -829,12 +1011,12 @@ export function DiagnosticsWorkbench(props: {
               <option value="javascript">{c().modeJavaScript}</option>
             </select>
           </label>
-          <p class="text-11-regular text-text-weak" data-testid="diagnostics-mode-help">
+          <p class="text-text-weak arforge-management-copy" data-testid="diagnostics-mode-help">
             {c().modeHelp} {diagnosisModeHint(state.diagnosisMode, locale())}
           </p>
           <TextField label={c().file} value={state.filename} onChange={(value) => setState("filename", value)} />
           <textarea
-            class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
+            class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 arforge-management-field"
             aria-label={c().extracted}
             placeholder={c().extracted}
             value={state.extractedText}
@@ -844,23 +1026,10 @@ export function DiagnosticsWorkbench(props: {
             <Button
               size="small"
               variant="secondary"
-              disabled={!state.filename.trim() || !!state.loading}
-              onClick={() =>
-                void run("diagnosis", async (location, request, signal) => {
-                  const result = await props.api().diagnostics.diagnose(
-                    {
-                      ...location,
-                      filename: state.filename.trim(),
-                      ...(state.extractedText ? { extractedText: state.extractedText } : {}),
-                      limit: 20,
-                      mode: state.diagnosisMode,
-                    },
-                    { signal },
-                  )
-                  if (scopeGuard.isCurrent(request)) setState("diagnosis", result)
-                })
-              }
+              disabled={!props.ready() || !state.filename.trim() || !!state.loading}
+              onClick={runDiagnosis}
             >
+              <WorkbenchBusy when={state.loading === "diagnosis"} />
               {state.loading === "diagnosis" ? c().running : c().run}
             </Button>
             <Show when={state.loading === "diagnosis"}>
@@ -869,82 +1038,96 @@ export function DiagnosticsWorkbench(props: {
               </Button>
             </Show>
           </div>
+          <ManagementStatus
+            loading={state.loading === "diagnosis"}
+            initialLoading={!state.diagnosis}
+            error={state.errors.diagnosis}
+            onRetry={!state.loading ? runDiagnosis : undefined}
+          />
           <Show when={state.diagnosis}>
             {(value) => <DiagnosisResultView value={value()} locale={locale()} copy={c()} />}
           </Show>
         </article>
+      ),
+    },
+    {
+      id: "repo",
+      title: () => c().repo,
+      description: () => (state.repo ? taskCopy().loaded : taskCopy().ready),
+      render: () => (
         <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-          <h3 class="text-13-medium text-text-strong">{c().repo}</h3>
+          <h3 class="text-text-strong arforge-management-section-title">{c().repo}</h3>
           <TextField label={c().repoPath} value={state.repoPath} onChange={(value) => setState("repoPath", value)} />
-          <p class="text-11-regular text-text-weak">{c().repoPathHelp}</p>
+          <p class="text-text-weak arforge-management-copy">{c().repoPathHelp}</p>
           <TextField label={c().repoQuery} value={state.repoQuery} onChange={(value) => setState("repoQuery", value)} />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={!!state.loading}
-            onClick={() =>
-              void run("repo", async (location, request, signal) => {
-                const result = await props.api().agentCapabilities.repoScale(
-                  {
-                    ...location,
-                    path: state.repoPath.trim() || ".",
-                    ...(state.repoQuery.trim() ? { query: state.repoQuery.trim() } : {}),
-                    maxFiles: 5_000,
-                    limit: 30,
-                  },
-                  { signal },
-                )
-                if (scopeGuard.isCurrent(request)) setState("repo", result.data)
-              })
-            }
-          >
+          <Button size="small" variant="secondary" disabled={!props.ready() || !!state.loading} onClick={runRepo}>
+            <WorkbenchBusy when={state.loading === "repo"} />
             {state.loading === "repo" ? c().running : c().scan}
           </Button>
+          <ManagementStatus
+            loading={state.loading === "repo"}
+            initialLoading={!state.repo}
+            error={state.errors.repo}
+            onRetry={!state.loading ? runRepo : undefined}
+          />
           <Show when={state.repo}>{(value) => <Result value={value()} />}</Show>
         </article>
+      ),
+    },
+    {
+      id: "quality",
+      title: () => c().quality,
+      description: () => (state.quality ? taskCopy().loaded : taskCopy().ready),
+      render: () => (
         <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-          <h3 class="text-13-medium text-text-strong">{c().quality}</h3>
+          <h3 class="text-text-strong arforge-management-section-title">{c().quality}</h3>
           <textarea
-            class="min-h-20 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
+            class="min-h-20 rounded-md border border-border-weak-base bg-background-base p-3 arforge-management-field"
             aria-label={c().files}
             placeholder={c().files}
             value={state.qualityFiles}
             onInput={(event) => setState("qualityFiles", event.currentTarget.value)}
           />
           <textarea
-            class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
+            class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 arforge-management-field"
             aria-label={c().patch}
             placeholder={c().patch}
             value={state.patchText}
             onInput={(event) => setState("patchText", event.currentTarget.value)}
           />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={!!state.loading}
-            onClick={() =>
-              void run("quality", async (location, request, signal) => {
-                const files = state.qualityFiles
-                  .split(/\r?\n/)
-                  .map((value) => value.trim())
-                  .filter(Boolean)
-                const result = await props.api().agentCapabilities.qualityAssess(
-                  {
-                    ...location,
-                    ...(files.length ? { files } : {}),
-                    ...(state.patchText ? { patchText: state.patchText } : {}),
-                  },
-                  { signal },
-                )
-                if (scopeGuard.isCurrent(request)) setState("quality", result.data)
-              })
-            }
-          >
+          <Button size="small" variant="secondary" disabled={!props.ready() || !!state.loading} onClick={runQuality}>
+            <WorkbenchBusy when={state.loading === "quality"} />
             {state.loading === "quality" ? c().running : c().assess}
           </Button>
+          <ManagementStatus
+            loading={state.loading === "quality"}
+            initialLoading={!state.quality}
+            error={state.errors.quality}
+            onRetry={!state.loading ? runQuality : undefined}
+          />
           <Show when={state.quality}>{(value) => <Result value={value()} />}</Show>
         </article>
-      </div>
+      ),
+    },
+  ]
+  return (
+    <section
+      data-workbench-detail=""
+      class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
+      data-testid="diagnostics-workbench"
+      aria-busy={!!state.loading}
+    >
+      <header>
+        <h2 class="text-14-medium text-text-strong">{c().diagnostics}</h2>
+        <p class="mt-1 text-12-regular text-text-weak">{c().diagnosticsHelp}</p>
+      </header>
+      <ManagementStatus notice={state.notice} />
+      <ManagementTasks
+        label={c().diagnostics}
+        scope={locationScopeKey()}
+        scopeLabel={props.location().location.directory}
+        tasks={formTasks}
+      />
     </section>
   )
 }
@@ -956,6 +1139,19 @@ export function MemoryLearningGovernance(props: {
   sessionID?: string
 }) {
   const c = useCopy()
+  const language = useLanguage()
+  const readOnlyIdentity = createManagementRecordIdentity()
+  const confirmAction = useConfirmAction()
+  const writeReason = useWorkbenchWriteReason()
+  const reads = createWorkbenchReads([
+    "memory",
+    "conflicts",
+    "learning",
+    "feedback",
+    "feedbackSummary",
+    "history",
+  ] as const)
+  type ReadKey = (typeof reads.parts)[number]["key"]
   type MemoryStatus = Awaited<ReturnType<OperationsApi["memories"]["status"]>>
   type SemanticResults = Awaited<ReturnType<OperationsApi["memories"]["semantic"]>>
   type Governance = Awaited<ReturnType<OperationsApi["memories"]["governancePreview"]>>
@@ -969,6 +1165,8 @@ export function MemoryLearningGovernance(props: {
   type FusionEvidence = Extract<SessionHistory["data"][number], { type: "session.next.context.fusion.prepared" }>
   const [state, setState] = createStore({
     loading: false,
+    saving: false,
+    operation: "",
     error: "",
     notice: "",
     content: "",
@@ -1022,79 +1220,146 @@ export function MemoryLearningGovernance(props: {
     const value = props.location().location
     return value.directory + "\u0000" + (value.workspace ?? "")
   }
-  const scopeGuard = createScopeRequestGuard(locationScopeKey)
+  const scopeGuard = createScopeRequestGuard(() => locationScopeKey() + "\u0000" + (props.sessionID ?? ""))
+  const captureConfirmation = createManagementConfirmationGuard({
+    source: props.api,
+    key: () => `${props.ready()}\u0000${locationScopeKey()}\u0000${props.sessionID ?? ""}`,
+    blocked: () => !props.ready() || state.loading || !reads.fresh(),
+    invalidate: scopeGuard.invalidate,
+  })
   let previousScopeKey: string | undefined
-  const refresh = async () => {
+  const canWrite = () => props.ready() && !state.loading && reads.fresh()
+  const readLabel = (key: ReadKey) =>
+    key === "memory"
+      ? c().recentMemories
+      : key === "conflicts"
+        ? c().conflictGovernance
+        : key === "learning"
+          ? c().learning
+          : key === "feedback" || key === "feedbackSummary"
+            ? c().feedback
+            : c().contextFusionEvidence
+  const refresh = async (only?: ReadKey) => {
     if (!props.ready() || state.loading) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "" })
+    const api = props.api()
+    const current = () => scopeGuard.isCurrent(request)
+    const includeClosed = state.showConflictHistory
+    setState("loading", true)
     try {
-      const [memory, conflicts, learning, feedback, feedbackSummary, history] = await Promise.all([
-        props.api().memories.status(requestedLocation),
-        props.api().memories.conflictList({
-          ...requestedLocation,
-          ...(state.showConflictHistory ? { includeClosed: "true" as const } : {}),
-          limit: 100,
-        }),
-        props.api().learning.status(requestedLocation),
-        props.api().feedback.list({ ...requestedLocation, limit: 50 }),
-        props.api().feedback.summary(requestedLocation),
-        props.sessionID
-          ? props.api().sessions.history({
-              sessionID: props.sessionID as Parameters<OperationsApi["sessions"]["history"]>[0]["sessionID"],
-              limit: 100,
-            })
-          : Promise.resolve(undefined),
+      await Promise.all([
+        !only || only === "memory"
+          ? reads.read(
+              "memory",
+              () => api.memories.status(requestedLocation),
+              (value) => setState("memory", value),
+              current,
+            )
+          : undefined,
+        !only || only === "conflicts"
+          ? reads.read(
+              "conflicts",
+              () =>
+                api.memories.conflictList({
+                  ...requestedLocation,
+                  ...(includeClosed ? { includeClosed: "true" as const } : {}),
+                  limit: 100,
+                }),
+              (value) => setState("conflicts", value),
+              current,
+            )
+          : undefined,
+        !only || only === "learning"
+          ? reads.read(
+              "learning",
+              () => api.learning.status(requestedLocation),
+              (value) => setState("learning", value),
+              current,
+            )
+          : undefined,
+        !only || only === "feedback"
+          ? reads.read(
+              "feedback",
+              () => api.feedback.list({ ...requestedLocation, limit: 50 }),
+              (value) => setState("feedback", value),
+              current,
+            )
+          : undefined,
+        !only || only === "feedbackSummary"
+          ? reads.read(
+              "feedbackSummary",
+              () => api.feedback.summary(requestedLocation),
+              (value) => setState("feedbackSummary", value),
+              current,
+            )
+          : undefined,
+        !only || only === "history"
+          ? reads.read(
+              "history",
+              () =>
+                props.sessionID
+                  ? api.sessions.history({
+                      sessionID: props.sessionID as Parameters<OperationsApi["sessions"]["history"]>[0]["sessionID"],
+                      limit: 100,
+                    })
+                  : Promise.resolve(undefined),
+              (history) =>
+                setState({
+                  recallEvidence: (history?.data.filter(
+                    (event) => event.type === "session.next.memory.context.prepared",
+                  ) ?? []) as RecallEvidence[],
+                  fusionEvidence: (history?.data.filter(
+                    (event) => event.type === "session.next.context.fusion.prepared",
+                  ) ?? []) as FusionEvidence[],
+                }),
+              current,
+            )
+          : undefined,
       ])
-      if (scopeGuard.isCurrent(request)) {
-        setState({
-          memory,
-          conflicts,
-          learning,
-          feedback,
-          feedbackSummary,
-          recallEvidence: (history?.data.filter((event) => event.type === "session.next.memory.context.prepared") ??
-            []) as RecallEvidence[],
-          fusionEvidence: (history?.data.filter((event) => event.type === "session.next.context.fusion.prepared") ??
-            []) as FusionEvidence[],
-        })
-      }
-    } catch (error) {
-      if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      if (scopeGuard.isCurrent(request)) setState("loading", false)
+      if (current()) setState("loading", false)
     }
   }
   const mutate = async (
     action: (location: LocationInput, request: ScopeRequestToken) => Promise<unknown>,
     notice: string,
   ) => {
-    if (!props.ready() || state.loading) return
+    if (!canWrite()) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "" })
+    setState({ loading: true, saving: true, operation: "write", error: "", notice: "" })
     try {
+      reads.invalidate()
       await action(requestedLocation, request)
       if (scopeGuard.isCurrent(request)) setState("notice", notice)
     } catch (error) {
       if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      if (scopeGuard.isCurrent(request)) setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState({ loading: false, saving: false, operation: "" })
     }
     if (scopeGuard.isCurrent(request)) await refresh()
   }
   createEffect(
     on(
-      () => (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey(),
+      () =>
+        (props.ready() ? "ready" : "not-ready") + "\u0000" + locationScopeKey() + "\u0000" + (props.sessionID ?? ""),
       (scopeKey) => {
         scopeGuard.current()
-        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== scopeKey
-        previousScopeKey = scopeKey
-        if (!props.ready()) return
+        const currentScopeKey = locationScopeKey() + "\u0000" + (props.sessionID ?? "")
+        const scopeChanged = previousScopeKey !== undefined && previousScopeKey !== currentScopeKey
+        previousScopeKey = currentScopeKey
+        if (!props.ready()) {
+          reads.invalidate()
+          setState({ loading: false, saving: false, operation: "" })
+          return
+        }
         if (scopeChanged) {
+          reads.reset()
           setState({
             loading: false,
+            saving: false,
+            operation: "",
             error: "",
             notice: "",
             recallExecuted: false,
@@ -1119,26 +1384,36 @@ export function MemoryLearningGovernance(props: {
       },
     ),
   )
-  const createMemory = () =>
+  const createMemory = () => {
+    const content = state.content
+    const tags = state.tags
+    const importance = state.importance
     void mutate(async (location, request) => {
       await props.api().memories.create({
         ...location,
-        content: state.content.trim(),
-        tags: state.tags
+        content: content.trim(),
+        tags: tags
           .split(",")
           .map((value) => value.trim())
           .filter(Boolean),
-        importance: state.importance,
+        importance,
         source: "user",
         scope: "workspace",
       })
-      if (scopeGuard.isCurrent(request)) setState({ content: "", tags: "" })
+      if (
+        scopeGuard.isCurrent(request) &&
+        state.content === content &&
+        state.tags === tags &&
+        state.importance === importance
+      )
+        setState({ content: "", tags: "" })
     }, c().createMemory)
+  }
   const preview = async () => {
     if (!props.ready() || state.loading) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "" })
+    setState({ loading: true, error: "" })
     try {
       const governance = await props.api().memories.governancePreview({ ...requestedLocation, sampleLimit: 100 })
       if (scopeGuard.isCurrent(request)) setState("governance", governance)
@@ -1153,7 +1428,7 @@ export function MemoryLearningGovernance(props: {
     if (!props.ready() || !query || state.loading) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "", recallExecuted: false, recallResult: undefined })
+    setState({ loading: true, error: "", recallExecuted: false, recallResult: undefined })
     try {
       const recallResult = await props.api().memories.semantic({
         ...requestedLocation,
@@ -1169,15 +1444,34 @@ export function MemoryLearningGovernance(props: {
       if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
-  const apply = () => {
-    if (!state.governance || !window.confirm(c().warningApply)) return
-    void mutate((location) => props.api().memories.governanceApply(location), c().apply)
+  const apply = async () => {
+    const confirmation = captureConfirmation()
+    const governance = state.governance
+    const requestedLocation = { location: { ...props.location().location } }
+    const isCurrent = () => confirmation.canWrite() && state.governance === governance && !!governance?.candidateCount
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningApply, { isCurrent, danger: true }))) return
+    if (!isCurrent()) return
+    await mutate(() => confirmation.source.memories.governanceApply(requestedLocation), c().apply)
   }
-  const restore = (item: NonNullable<MemoryStatus>["recent"][number]) => {
+  const restore = async (item: NonNullable<MemoryStatus>["recent"][number]) => {
     const source =
       item.source === "quarantined:model" ? "model" : item.source === "quarantined:auto" ? "auto" : undefined
-    if (!source || !window.confirm(c().warningRestore)) return
-    void mutate((location) => props.api().memories.update({ ...location, memoryID: item.id, source }), c().restore)
+    if (!source) return
+    const confirmation = captureConfirmation()
+    const originalSource = item.source
+    const payload: Parameters<OperationsApi["memories"]["update"]>[0] = {
+      location: { ...props.location().location },
+      memoryID: item.id,
+      source,
+    }
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      !!state.memory?.recent.some((value) => value.id === payload.memoryID && value.source === originalSource)
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningRestore, { isCurrent }))) return
+    if (!isCurrent()) return
+    await mutate(() => confirmation.source.memories.update(payload), c().restore)
   }
   const beginCorrection = (item: NonNullable<MemoryStatus>["recent"][number]) => {
     setState({
@@ -1193,15 +1487,23 @@ export function MemoryLearningGovernance(props: {
   const saveCorrection = () => {
     const item = state.memory?.recent.find((memory) => memory.id === state.correctingID)
     if (!item || !state.correctionContent.trim() || !state.correctionReason.trim()) return
+    const content = state.correctionContent
+    const reason = state.correctionReason
     void mutate(async (location, request) => {
       await props.api().memories.correct({
         ...location,
         memoryID: item.id,
-        content: state.correctionContent.trim(),
-        reason: state.correctionReason.trim(),
+        content: content.trim(),
+        reason: reason.trim(),
         expectedUpdatedAt: item.time.updated,
       })
-      if (scopeGuard.isCurrent(request)) cancelCorrection()
+      if (
+        scopeGuard.isCurrent(request) &&
+        state.correctingID === item.id &&
+        state.correctionContent === content &&
+        state.correctionReason === reason
+      )
+        cancelCorrection()
     }, c().corrected)
   }
   const loadCorrectionHistory = async (memoryID: string) => {
@@ -1212,7 +1514,7 @@ export function MemoryLearningGovernance(props: {
     }
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "" })
+    setState({ loading: true, error: "" })
     try {
       const correctionHistory = await props.api().memories.correctionHistory({ ...requestedLocation, memoryID })
       if (!scopeGuard.isCurrent(request)) return
@@ -1226,23 +1528,36 @@ export function MemoryLearningGovernance(props: {
       if (scopeGuard.isCurrent(request)) setState("loading", false)
     }
   }
-  const undoCorrection = (correctionID: string, successorMemoryID: string) => {
-    if (!window.confirm(c().warningUndoCorrection)) return
-    void mutate(async (location, request) => {
-      const successor = await props.api().memories.get({ ...location, memoryID: successorMemoryID })
-      await props.api().memories.undoCorrection({
-        ...location,
+  const undoCorrection = async (correctionID: string, successorMemoryID: string) => {
+    const confirmation = captureConfirmation()
+    const requestedLocation = { location: { ...props.location().location } }
+    const correction = state.correctionHistory?.items.find((item) => item.id === correctionID)
+    const correctionSnapshot = JSON.stringify(correction)
+    const sameCorrection = () =>
+      correction?.status === "active" &&
+      JSON.stringify(state.correctionHistory?.items.find((item) => item.id === correctionID)) === correctionSnapshot
+    const isCurrent = () => confirmation.canWrite() && sameCorrection()
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningUndoCorrection, { isCurrent, danger: true }))) return
+    if (!isCurrent()) return
+    await mutate(async (_location, request) => {
+      const successor = await confirmation.source.memories.get({ ...requestedLocation, memoryID: successorMemoryID })
+      if (!confirmation.isCurrent() || !scopeGuard.isCurrent(request) || !sameCorrection()) return
+      await confirmation.source.memories.undoCorrection({
+        ...requestedLocation,
         correctionID,
         expectedSuccessorUpdatedAt: successor.time.updated,
       })
-      if (scopeGuard.isCurrent(request)) setState({ historyMemoryID: "", correctionHistory: undefined })
+      if (confirmation.isCurrent() && scopeGuard.isCurrent(request) && sameCorrection())
+        setState({ historyMemoryID: "", correctionHistory: undefined })
     }, c().correctionUndone)
   }
   const scanConflicts = async () => {
-    if (!props.ready() || state.loading) return
+    if (!canWrite()) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "", conflictScanNotice: "" })
+    reads.invalidate()
+    setState({ loading: true, saving: true, operation: "scan", error: "", notice: "", conflictScanNotice: "" })
     try {
       const conflicts = await props.api().memories.conflictScan({
         ...requestedLocation,
@@ -1260,15 +1575,16 @@ export function MemoryLearningGovernance(props: {
     } catch (error) {
       if (scopeGuard.isCurrent(request)) setState("error", publicErrorMessage(error))
     } finally {
-      if (scopeGuard.isCurrent(request)) setState("loading", false)
+      if (scopeGuard.isCurrent(request)) setState({ loading: false, saving: false, operation: "" })
     }
+    if (scopeGuard.isCurrent(request)) await refresh()
   }
   const toggleConflictHistory = async () => {
     if (!props.ready() || state.loading) return
     const includeClosed = !state.showConflictHistory
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ loading: true, error: "", notice: "" })
+    setState({ loading: true, error: "" })
     try {
       const conflicts = await props.api().memories.conflictList({
         ...requestedLocation,
@@ -1285,56 +1601,967 @@ export function MemoryLearningGovernance(props: {
   const beginConflictReview = (conflictID: string) =>
     setState({ reviewingConflictID: conflictID, conflictReason: "", error: "" })
   const cancelConflictReview = () => setState({ reviewingConflictID: "", conflictReason: "" })
-  const resolveConflict = (item: NonNullable<ConflictPage>["items"][number], chosenMemoryID: string) => {
-    if (!state.conflictReason.trim() || !window.confirm(c().warningResolveConflict)) return
-    void mutate(async (location, request) => {
-      await props.api().memories.resolveConflict({
-        ...location,
-        conflictID: item.conflict.id,
-        chosenMemoryID,
-        reason: state.conflictReason.trim(),
-        expectedLeftUpdatedAt: item.left.time.updated,
-        expectedRightUpdatedAt: item.right.time.updated,
-      })
-      if (scopeGuard.isCurrent(request)) cancelConflictReview()
+  const resolveConflict = async (item: NonNullable<ConflictPage>["items"][number], chosenMemoryID: string) => {
+    const confirmation = captureConfirmation()
+    const reason = state.conflictReason.trim()
+    const payload = {
+      location: { ...props.location().location },
+      conflictID: item.conflict.id,
+      chosenMemoryID,
+      reason,
+      expectedLeftUpdatedAt: item.left.time.updated,
+      expectedRightUpdatedAt: item.right.time.updated,
+    }
+    const sameReview = () => state.reviewingConflictID === payload.conflictID && state.conflictReason.trim() === reason
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      !!reason &&
+      sameReview() &&
+      !!state.conflicts?.items.some(
+        (value) =>
+          value.conflict.id === payload.conflictID &&
+          value.left.time.updated === payload.expectedLeftUpdatedAt &&
+          value.right.time.updated === payload.expectedRightUpdatedAt,
+      )
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningResolveConflict, { isCurrent }))) return
+    if (!isCurrent()) return
+    await mutate(async (_location, request) => {
+      await confirmation.source.memories.resolveConflict(payload)
+      if (confirmation.isCurrent() && scopeGuard.isCurrent(request) && sameReview()) cancelConflictReview()
     }, c().conflictResolved)
   }
-  const dismissConflict = (item: NonNullable<ConflictPage>["items"][number]) => {
-    if (!state.conflictReason.trim() || !window.confirm(c().warningDismissConflict)) return
-    void mutate(async (location, request) => {
-      await props.api().memories.dismissConflict({
-        ...location,
-        conflictID: item.conflict.id,
-        reason: state.conflictReason.trim(),
-        expectedLeftUpdatedAt: item.left.time.updated,
-        expectedRightUpdatedAt: item.right.time.updated,
-      })
-      if (scopeGuard.isCurrent(request)) cancelConflictReview()
+  const dismissConflict = async (item: NonNullable<ConflictPage>["items"][number]) => {
+    const confirmation = captureConfirmation()
+    const reason = state.conflictReason.trim()
+    const payload = {
+      location: { ...props.location().location },
+      conflictID: item.conflict.id,
+      reason,
+      expectedLeftUpdatedAt: item.left.time.updated,
+      expectedRightUpdatedAt: item.right.time.updated,
+    }
+    const sameReview = () => state.reviewingConflictID === payload.conflictID && state.conflictReason.trim() === reason
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      !!reason &&
+      sameReview() &&
+      !!state.conflicts?.items.some(
+        (value) =>
+          value.conflict.id === payload.conflictID &&
+          value.left.time.updated === payload.expectedLeftUpdatedAt &&
+          value.right.time.updated === payload.expectedRightUpdatedAt,
+      )
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningDismissConflict, { isCurrent }))) return
+    if (!isCurrent()) return
+    await mutate(async (_location, request) => {
+      await confirmation.source.memories.dismissConflict(payload)
+      if (confirmation.isCurrent() && scopeGuard.isCurrent(request) && sameReview()) cancelConflictReview()
     }, c().conflictDismissed)
   }
-  const undoConflict = (item: NonNullable<ConflictPage>["items"][number]) => {
-    if (!window.confirm(c().warningUndoConflict)) return
-    void mutate(
-      (location) =>
-        props.api().memories.undoConflict({
-          ...location,
-          conflictID: item.conflict.id,
-          expectedLeftUpdatedAt: item.left.time.updated,
-          expectedRightUpdatedAt: item.right.time.updated,
-        }),
-      c().conflictResolutionUndone,
-    )
+  const undoConflict = async (item: NonNullable<ConflictPage>["items"][number]) => {
+    const confirmation = captureConfirmation()
+    const payload = {
+      location: { ...props.location().location },
+      conflictID: item.conflict.id,
+      expectedLeftUpdatedAt: item.left.time.updated,
+      expectedRightUpdatedAt: item.right.time.updated,
+    }
+    const isCurrent = () =>
+      confirmation.canWrite() &&
+      !!state.conflicts?.items.some(
+        (value) =>
+          value.conflict.id === payload.conflictID &&
+          value.left.time.updated === payload.expectedLeftUpdatedAt &&
+          value.right.time.updated === payload.expectedRightUpdatedAt,
+      )
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningUndoConflict, { isCurrent, danger: true }))) return
+    if (!isCurrent()) return
+    await mutate(() => confirmation.source.memories.undoConflict(payload), c().conflictResolutionUndone)
   }
-  const undo = (outcomeID: NonNullable<Learning>["recent"][number]["id"]) => {
-    if (!window.confirm(c().warningUndo)) return
-    void mutate((location) => props.api().learning.undo({ ...location, outcomeID }), c().undo)
+  const undo = async (outcomeID: NonNullable<Learning>["recent"][number]["id"]) => {
+    const confirmation = captureConfirmation()
+    const payload = { location: { ...props.location().location }, outcomeID }
+    const isCurrent = () => confirmation.canWrite() && !!state.learning?.recent.some((item) => item.id === outcomeID)
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningUndo, { isCurrent, danger: true }))) return
+    if (!isCurrent()) return
+    await mutate(() => confirmation.source.learning.undo(payload), c().undo)
   }
-  const removeFeedback = (feedbackID: NonNullable<FeedbackPage>["items"][number]["id"]) => {
-    if (!window.confirm(c().warningFeedback)) return
-    void mutate((location) => props.api().feedback.delete({ ...location, feedbackID }), c().delete)
+  const removeFeedback = async (feedbackID: NonNullable<FeedbackPage>["items"][number]["id"]) => {
+    const confirmation = captureConfirmation()
+    const payload = { location: { ...props.location().location }, feedbackID }
+    const isCurrent = () => confirmation.canWrite() && !!state.feedback?.items.some((item) => item.id === feedbackID)
+    if (!isCurrent()) return
+    if (!(await confirmAction(c().warningFeedback, { isCurrent, danger: true }))) return
+    if (!isCurrent()) return
+    await mutate(() => confirmation.source.feedback.delete(payload), c().delete)
   }
+  const memoryViews: ManagementView[] = [
+    {
+      id: "memory-0",
+      label: () => (language.locale().startsWith("zh") ? "检索记忆" : "Search memories"),
+      render: () => (
+        <article class="arforge-management-task-form">
+          <textarea
+            class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 arforge-management-field"
+            aria-label={c().content}
+            placeholder={c().content}
+            value={state.content}
+            onInput={(event) => setState("content", event.currentTarget.value)}
+          />
+          <div class="flex flex-col gap-3">
+            <TextField label={c().tags} value={state.tags} onChange={(value) => setState("tags", value)} />
+            <label class="text-text-weak arforge-management-copy">
+              {c().importance}
+              <input
+                class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3"
+                type="number"
+                min="0"
+                max="5"
+                value={state.importance}
+                onInput={(event) => setState("importance", Number(event.currentTarget.value))}
+              />
+            </label>
+          </div>
+          <Button
+            size="small"
+            variant="secondary"
+            disabled={!canWrite() || !state.content.trim()}
+            onClick={createMemory}
+          >
+            {c().create}
+          </Button>
+        </article>
+      ),
+    },
+    {
+      id: "memory-1",
+      label: () => c().contextFusionEvidence,
+      render: () => (
+        <article class="arforge-management-task-form" data-testid="context-fusion-evidence">
+          <header>
+            <h3 class="text-text-strong arforge-management-section-title">{c().contextFusionEvidence}</h3>
+            <p class="mt-1 max-w-3xl  leading-relaxed text-text-weak arforge-management-copy">
+              {c().contextFusionEvidenceHelp}
+            </p>
+          </header>
+          <Show
+            when={props.sessionID}
+            fallback={<p class="text-text-weak arforge-management-copy">{c().recallNoSession}</p>}
+          >
+            <Show
+              when={state.fusionEvidence.length > 0}
+              fallback={<p class="text-text-weak arforge-management-copy">{c().fusionNoEvidence}</p>}
+            >
+              <div class="grid gap-2">
+                <ManagementCollection
+                  label={c().contextFusionEvidence}
+                  scope={locationScopeKey()}
+                  scopeLabel={props.location().location.directory}
+                  items={state.fusionEvidence.toReversed().map((item, index) => ({ item, index }))}
+                  identity={(entry) => {
+                    const event = entry.item
+                    return readOnlyIdentity(event)
+                  }}
+                  title={(entry) => {
+                    const event = entry.item
+                    return c().contextFusionEvidence + " · " + (entry.index + 1)
+                  }}
+                  description={(entry) => {
+                    const event = entry.item
+                    return props.location().location.directory
+                  }}
+                >
+                  {(entry) => {
+                    const event = entry.item
+                    return (
+                      <article
+                        class="grid gap-3 rounded-md border bg-background-weak p-3"
+                        classList={{
+                          "border-border-danger": event.data.degraded,
+                          "border-border-weak-base": !event.data.degraded,
+                        }}
+                      >
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                          <span
+                            class=" arforge-management-label"
+                            classList={{
+                              "text-text-danger": event.data.degraded,
+                              "text-text-strong": !event.data.degraded,
+                            }}
+                          >
+                            {event.data.degraded ? c().fusionDegraded : c().fusionHealthy}
+                          </span>
+                          <time
+                            class="text-text-weak arforge-management-copy"
+                            dateTime={new Date(event.data.timestamp).toISOString()}
+                          >
+                            {new Date(event.data.timestamp).toLocaleString()}
+                          </time>
+                        </div>
+                        <dl class="grid gap-x-4 gap-y-2  sm:grid-cols-2 arforge-management-copy">
+                          <RecallFact label={c().sourceSession} value={event.data.sessionID} />
+                          <RecallFact label={c().sourceUserMessage} value={event.data.userMessageID} />
+                          <RecallFact label={c().sourceTurnStep} value={String(event.data.turnStep)} />
+                          <RecallFact label={c().injectedBytes} value={String(event.data.totalInjectedBytes)} />
+                          <RecallFact
+                            label={c().fusionBridge}
+                            value={event.data.assemblyProtocol ?? event.data.bridgeProtocol ?? "unknown"}
+                          />
+                          <RecallFact label={c().combinedDigest} value={event.data.combinedContextDigest} />
+                        </dl>
+                        <div class="grid gap-2 lg:grid-cols-3">
+                          <FusionContribution
+                            title={c().fusionMemory}
+                            runtime={event.data.memory.runtime}
+                            status={
+                              event.data.memory.status === "prepared" ? c().recallPrepared : c().recallUnavailable
+                            }
+                            bytes={event.data.memory.injectedBytes}
+                            digest={event.data.memory.contextDigest}
+                            detail={`${c().fusionCandidates}: ${event.data.memory.candidateCount}`}
+                            degraded={event.data.memory.status === "unavailable"}
+                          />
+                          <FusionContribution
+                            title={c().fusionLearning}
+                            runtime={event.data.learning.runtime}
+                            status={
+                              event.data.learning.status === "prepared" ? c().recallPrepared : c().recallUnavailable
+                            }
+                            bytes={event.data.learning.injectedBytes}
+                            digest={event.data.learning.contextDigest}
+                            degraded={event.data.learning.status === "unavailable"}
+                          />
+                          <FusionContribution
+                            title={c().fusionEvolution}
+                            runtime={event.data.evolution.runtime}
+                            status={
+                              event.data.evolution.status === "prepared" ? c().recallPrepared : c().recallUnavailable
+                            }
+                            bytes={event.data.evolution.injectedBytes}
+                            digest={event.data.evolution.contextDigest}
+                            detail={`${c().fusionActiveCandidates}: ${event.data.evolution.activeCandidateCount} · ${c().fusionInjectedCandidates}: ${event.data.evolution.injectedCandidateCount}`}
+                            degraded={event.data.evolution.status === "unavailable"}
+                          />
+                        </div>
+                      </article>
+                    )
+                  }}
+                </ManagementCollection>
+              </div>
+            </Show>
+          </Show>
+        </article>
+      ),
+    },
+    {
+      id: "memory-2",
+      label: () => c().actualRecallEvidence,
+      render: () => (
+        <article class="arforge-management-task-form" data-testid="memory-recall-evidence">
+          <header>
+            <h3 class="text-text-strong arforge-management-section-title">{c().actualRecallEvidence}</h3>
+            <p class="mt-1 max-w-3xl  leading-relaxed text-text-weak arforge-management-copy">
+              {c().actualRecallEvidenceHelp}
+            </p>
+          </header>
+          <Show
+            when={props.sessionID}
+            fallback={<p class="text-text-weak arforge-management-copy">{c().recallNoSession}</p>}
+          >
+            <Show
+              when={state.recallEvidence.length > 0}
+              fallback={<p class="text-text-weak arforge-management-copy">{c().recallNoEvidence}</p>}
+            >
+              <div class="grid gap-2">
+                <ManagementCollection
+                  label={c().actualRecallEvidence}
+                  scope={locationScopeKey()}
+                  scopeLabel={props.location().location.directory}
+                  items={state.recallEvidence.toReversed().map((item, index) => ({ item, index }))}
+                  identity={(entry) => {
+                    const event = entry.item
+                    return readOnlyIdentity(event)
+                  }}
+                  title={(entry) => {
+                    const event = entry.item
+                    return c().actualRecallEvidence + " · " + (entry.index + 1)
+                  }}
+                  description={(entry) => {
+                    const event = entry.item
+                    return props.location().location.directory
+                  }}
+                >
+                  {(entry) => {
+                    const event = entry.item
+                    return (
+                      <article class="grid gap-3 rounded-md bg-background-weak p-3">
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                          <span class="text-text-strong arforge-management-label">
+                            {event.data.status === "prepared" ? c().recallPrepared : c().recallUnavailable}
+                          </span>
+                          <time
+                            class="text-text-weak arforge-management-copy"
+                            dateTime={new Date(event.data.timestamp).toISOString()}
+                          >
+                            {new Date(event.data.timestamp).toLocaleString()}
+                          </time>
+                        </div>
+                        <dl class="grid gap-x-4 gap-y-2  sm:grid-cols-2 arforge-management-copy">
+                          <RecallFact label={c().sourceSession} value={event.data.sessionID} />
+                          <RecallFact label={c().sourceUserMessage} value={event.data.userMessageID} />
+                          <RecallFact label={c().sourceTurnStep} value={String(event.data.turnStep)} />
+                          <RecallFact label={c().injectedBytes} value={String(event.data.injectedBytes)} />
+                          <RecallFact label={c().queryDigest} value={event.data.queryDigest} />
+                          <RecallFact label={c().contextDigest} value={event.data.contextDigest} />
+                        </dl>
+                        <Show when={event.data.candidates.length > 0}>
+                          <ol class="grid gap-1 border-t border-border-weak-base pt-2">
+                            <For each={event.data.candidates}>
+                              {(candidate) => (
+                                <li class="flex flex-wrap items-center justify-between gap-2 arforge-management-copy">
+                                  <span class="text-text-strong">
+                                    #{candidate.rank} · <code class="break-all">{candidate.memoryID}</code>
+                                  </span>
+                                  <span class="text-text-weak">
+                                    {c().recallScore} {candidate.score.toFixed(3)} · {c().recallLexical}{" "}
+                                    {candidate.lexicalScore.toFixed(3)} · {c().recallVector}{" "}
+                                    {candidate.vectorScore.toFixed(3)}
+                                  </span>
+                                </li>
+                              )}
+                            </For>
+                          </ol>
+                        </Show>
+                      </article>
+                    )
+                  }}
+                </ManagementCollection>
+              </div>
+            </Show>
+          </Show>
+        </article>
+      ),
+    },
+    {
+      id: "memory-3",
+      label: () => c().recallInspector,
+      render: () => (
+        <article class="arforge-management-task-form" data-testid="memory-recall-inspector">
+          <header>
+            <h3 class="text-text-strong arforge-management-section-title">{c().recallInspector}</h3>
+            <p class="mt-1 max-w-3xl  leading-relaxed text-text-weak arforge-management-copy">
+              {c().recallInspectorHelp}
+            </p>
+          </header>
+          <div class="grid items-end gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+            <TextField
+              label={c().recallQuery}
+              value={state.recallQuery}
+              onChange={(value) => setState("recallQuery", value)}
+            />
+            <Button
+              size="small"
+              variant="secondary"
+              disabled={state.loading || !state.recallQuery.trim()}
+              onClick={() => void inspectRecall()}
+            >
+              {state.loading ? c().running : c().inspectRecall}
+            </Button>
+          </div>
+          <Show
+            when={state.recallResult}
+            fallback={
+              <p class="text-text-weak arforge-management-copy">
+                {state.recallExecuted ? c().recallNoHits : c().recallNotRun}
+              </p>
+            }
+          >
+            {(result) => (
+              <div class="grid gap-3" data-testid="memory-recall-result">
+                <section aria-label={c().recallPipeline} class="grid gap-2 sm:grid-cols-2">
+                  <RecallStep label={c().recallNormalize} value={state.recallQuery.trim()} />
+                  <RecallStep label={c().recallScope} value={`${c().recallLocal}: ${result().localOnly ? "✓" : "—"}`} />
+                  <RecallStep label={c().recallRank} value={`${c().recallAlgorithm}: ${result().algorithm}`} />
+                  <RecallStep label={c().recallSelect} value={`${c().recallCandidates}: ${result().count}`} />
+                </section>
+                <p class="rounded-md bg-background-weak p-3  leading-relaxed text-text-weak arforge-management-copy">
+                  {c().recallEvidenceCaveat}
+                </p>
+                <Show
+                  when={result().items.length > 0}
+                  fallback={<p class="text-text-weak arforge-management-copy">{c().recallNoHits}</p>}
+                >
+                  <div class="grid gap-2">
+                    <ManagementCollection
+                      label={c().recallInspector}
+                      scope={locationScopeKey()}
+                      scopeLabel={props.location().location.directory}
+                      items={result().items}
+                      identity={(hit) => hit.memory.id}
+                      title={(hit) => hit.memory.content}
+                      description={(hit) => String(hit.score)}
+                    >
+                      {(hit, index) => (
+                        <article class="grid gap-2 rounded-md bg-background-weak p-3" data-memory-id={hit.memory.id}>
+                          <div class="flex flex-wrap items-start justify-between gap-2">
+                            <div class="min-w-0">
+                              <div class="text-text-strong arforge-management-label">
+                                #{index() + 1} · <code class="break-all">{hit.memory.id}</code>
+                              </div>
+                              <p class="mt-1  leading-relaxed text-text-strong arforge-management-copy">
+                                {hit.memory.content}
+                              </p>
+                            </div>
+                            <span class="rounded-full border border-border-weak-base px-2 py-1  text-text-strong arforge-management-label">
+                              {c().recallScore}: {hit.score.toFixed(3)}
+                            </span>
+                          </div>
+                          <dl class="grid gap-x-4 gap-y-2  sm:grid-cols-3 arforge-management-copy">
+                            <RecallFact label={c().recallLexical} value={hit.lexicalScore.toFixed(3)} />
+                            <RecallFact label={c().recallVector} value={hit.vectorScore.toFixed(3)} />
+                            <RecallFact
+                              label={c().recallTerms}
+                              value={hit.matchedTerms.length ? [...new Set(hit.matchedTerms)].join(", ") : "—"}
+                            />
+                            <RecallFact
+                              label={c().recallSource}
+                              value={`${sourceLabel(hit.memory.source)} / ${hit.memory.scope}`}
+                            />
+                          </dl>
+                        </article>
+                      )}
+                    </ManagementCollection>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </Show>
+        </article>
+      ),
+    },
+    {
+      id: "memory-4",
+      label: () => c().conflictGovernance,
+      render: () => (
+        <article class="arforge-management-task-form" data-testid="memory-conflict-governance">
+          <header class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="text-text-strong arforge-management-section-title">{c().conflictGovernance}</h3>
+              <p class="mt-1 max-w-3xl  text-text-weak arforge-management-copy">{c().conflictHelp}</p>
+            </div>
+            <ManagementActionToolbar
+              primary={
+                <Button size="small" variant="secondary" disabled={!canWrite()} onClick={() => void scanConflicts()}>
+                  <WorkbenchBusy when={state.operation === "scan"} />
+                  {c().scanConflicts}
+                </Button>
+              }
+              actions={[
+                {
+                  id: "conflict-history",
+                  label: state.showConflictHistory ? c().conflictOpenOnly : c().conflictHistory,
+                  run: () => toggleConflictHistory(),
+                  disabled: !props.ready() || state.loading,
+                },
+              ]}
+              disabledReason={writeReason(state.loading, reads.fresh())}
+            />
+          </header>
+          <Show when={state.conflictScanNotice}>
+            <p role="status" aria-live="polite" class="text-text-weak arforge-management-copy">
+              {state.conflictScanNotice}
+            </p>
+          </Show>
+          <Show
+            when={(state.conflicts?.items.length ?? 0) > 0}
+            fallback={
+              <ManagementStatus
+                empty={!state.loading && reads.parts.some((part) => part.key === "conflicts" && part.fresh)}
+                emptyText={c().noConflicts}
+                onRetry={() => void refresh("conflicts")}
+              />
+            }
+          >
+            <div class="flex flex-col gap-3">
+              <ManagementCollection
+                label={c().conflictGovernance}
+                scope={locationScopeKey()}
+                scopeLabel={props.location().location.directory}
+                items={state.conflicts?.items ?? []}
+                identity={(item) => item.conflict.conflictKey}
+                title={(item) => item.conflict.conflictKey}
+                description={(item) => item.left.id + " · " + item.right.id}
+              >
+                {(item) => {
+                  const titleID = `memory-conflict-${item.conflict.id}`
+                  const canReview = () => item.conflict.status === "pending" || item.conflict.status === "undone"
+                  return (
+                    <section
+                      class="flex flex-col gap-3 rounded-md bg-background-weak p-3"
+                      aria-labelledby={titleID}
+                      data-conflict-id={item.conflict.id}
+                      data-conflict-status={item.conflict.status}
+                    >
+                      <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <h4 id={titleID} class="text-text-strong arforge-management-section-title">
+                            {c().conflictKey}: {item.conflict.conflictKey}
+                          </h4>
+                          <p class="mt-1  text-text-weak arforge-management-copy">
+                            {conflictBasisLabel(item.conflict.basis)} · {conflictStatusLabel(item.conflict.status)} ·{" "}
+                            {item.conflict.id}
+                          </p>
+                        </div>
+                        <Show when={canReview() && state.reviewingConflictID !== item.conflict.id}>
+                          <Button
+                            size="small"
+                            variant="secondary"
+                            disabled={state.loading}
+                            onClick={() => beginConflictReview(item.conflict.id)}
+                          >
+                            {c().reviewConflict}
+                          </Button>
+                        </Show>
+                        <Show when={item.conflict.status === "resolved"}>
+                          <Button
+                            size="small"
+                            variant="ghost"
+                            disabled={state.loading}
+                            onClick={() => void undoConflict(item)}
+                          >
+                            {c().undo}
+                          </Button>
+                        </Show>
+                      </div>
+                      <div class="grid gap-3 md:grid-cols-2">
+                        <ConflictMemory
+                          side="left"
+                          item={item.left}
+                          source={sourceLabel(item.left.source)}
+                          disposition={
+                            conflictDisposition(item.conflict, item.left.id) === "chosen"
+                              ? c().chosenMemory
+                              : conflictDisposition(item.conflict, item.left.id) === "retired"
+                                ? c().retiredMemory
+                                : undefined
+                          }
+                        />
+                        <ConflictMemory
+                          side="right"
+                          item={item.right}
+                          source={sourceLabel(item.right.source)}
+                          disposition={
+                            conflictDisposition(item.conflict, item.right.id) === "chosen"
+                              ? c().chosenMemory
+                              : conflictDisposition(item.conflict, item.right.id) === "retired"
+                                ? c().retiredMemory
+                                : undefined
+                          }
+                        />
+                      </div>
+                      <Show when={item.conflict.decisionReason}>
+                        {(reason) => <p class="text-text-weak arforge-management-copy">{reason()}</p>}
+                      </Show>
+                      <Show when={canReview() && state.reviewingConflictID === item.conflict.id}>
+                        <div class="flex flex-col gap-3 rounded-md border border-border-weak-base bg-background-base p-3">
+                          <TextField
+                            label={c().decisionReason}
+                            value={state.conflictReason}
+                            onChange={(value) => setState("conflictReason", value)}
+                          />
+                          <ManagementActionToolbar
+                            primary={
+                              <Button
+                                size="small"
+                                variant="secondary"
+                                disabled={!canWrite() || !state.conflictReason.trim()}
+                                onClick={() => void resolveConflict(item, item.left.id)}
+                              >
+                                {c().keepLeft}
+                              </Button>
+                            }
+                            actions={[
+                              {
+                                id: "keep-right",
+                                label: c().keepRight,
+                                run: () => resolveConflict(item, item.right.id),
+                                disabled: !canWrite() || !state.conflictReason.trim(),
+                              },
+                              {
+                                id: "cancel-conflict-review",
+                                label: c().cancel,
+                                run: cancelConflictReview,
+                                disabled: state.loading,
+                              },
+                              {
+                                id: "dismiss-conflict",
+                                label: c().dismissConflict,
+                                run: () => dismissConflict(item),
+                                disabled: !canWrite() || !state.conflictReason.trim(),
+                                danger: true,
+                              },
+                            ]}
+                            disabledReason={writeReason(state.loading, reads.fresh())}
+                          />
+                        </div>
+                      </Show>
+                    </section>
+                  )
+                }}
+              </ManagementCollection>
+            </div>
+          </Show>
+        </article>
+      ),
+    },
+    {
+      id: "memory-5",
+      label: () => c().recentMemories,
+      render: () => (
+        <article class="arforge-management-task-form">
+          <ManagementActionToolbar
+            primary={
+              <Show
+                when={state.governance}
+                fallback={
+                  <Button
+                    size="small"
+                    variant="secondary"
+                    disabled={!props.ready() || state.loading}
+                    onClick={() => void preview()}
+                  >
+                    {c().preview}
+                  </Button>
+                }
+              >
+                {(value) => (
+                  <Button
+                    size="small"
+                    variant="primary"
+                    disabled={!canWrite() || value().candidateCount === 0}
+                    onClick={() => void apply()}
+                  >
+                    {c().apply}
+                  </Button>
+                )}
+              </Show>
+            }
+            actions={
+              state.governance
+                ? [
+                    {
+                      id: "refresh-governance-preview",
+                      label: c().preview,
+                      run: preview,
+                      disabled: !props.ready() || state.loading,
+                    },
+                  ]
+                : []
+            }
+            disabledReason={writeReason(state.loading, reads.fresh())}
+          />
+          <Show when={state.governance}>
+            {(value) => (
+              <span class="text-text-weak arforge-management-copy">
+                {value().candidateCount}/{value().scanned}
+              </span>
+            )}
+          </Show>
+          <Show when={state.governance}>
+            {(value) => (
+              <div class="flex max-h-64 flex-col gap-2 overflow-auto">
+                <ManagementCollection
+                  label={c().recentMemories}
+                  scope={locationScopeKey()}
+                  scopeLabel={props.location().location.directory}
+                  items={value().candidates}
+                  identity={(item) => item.id}
+                  title={(item) => item.contentPreview}
+                  description={(item) => item.reason}
+                >
+                  {(item) => (
+                    <div class="rounded-md bg-background-weak p-3 arforge-management-copy">
+                      <div class="text-text-strong">{item.contentPreview}</div>
+                      <div class="mt-1 text-text-weak">
+                        {item.reason} · {item.source} · {item.id}
+                      </div>
+                    </div>
+                  )}
+                </ManagementCollection>
+              </div>
+            )}
+          </Show>
+          <h3 class="text-text-strong arforge-management-section-title">{c().recentMemories}</h3>
+          <ManagementStatus
+            empty={
+              !state.loading &&
+              reads.parts.some((part) => part.key === "memory" && part.fresh) &&
+              !state.memory?.recent.length
+            }
+            emptyText={c().noData}
+            onRetry={() => void refresh("memory")}
+          />
+          <ManagementCollection
+            label={c().recentMemories}
+            scope={locationScopeKey()}
+            scopeLabel={props.location().location.directory}
+            items={state.memory?.recent ?? []}
+            identity={(item) => item.id}
+            title={(item) => item.content}
+            description={(item) => item.source + " · " + item.type}
+          >
+            {(item) => (
+              <div class="flex flex-col gap-3 rounded-md bg-background-weak p-3" data-memory-id={item.id}>
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-text-strong arforge-management-copy">{item.content}</div>
+                    <div class="mt-1  text-text-weak arforge-management-copy">
+                      {sourceLabel(item.source)} · {item.type} · {item.id}
+                    </div>
+                  </div>
+                  <ManagementActionToolbar
+                    primary={
+                      <Show
+                        when={!item.source.startsWith("quarantined")}
+                        fallback={
+                          <Button
+                            size="small"
+                            variant="ghost"
+                            disabled={item.source === "quarantined" || !canWrite()}
+                            onClick={() => void restore(item)}
+                          >
+                            {c().restore}
+                          </Button>
+                        }
+                      >
+                        <Button
+                          size="small"
+                          variant="secondary"
+                          disabled={state.loading}
+                          onClick={() => beginCorrection(item)}
+                        >
+                          {c().correctMemory}
+                        </Button>
+                      </Show>
+                    }
+                    actions={[
+                      {
+                        id: "correction-history",
+                        label: c().history,
+                        run: () => loadCorrectionHistory(item.id),
+                        disabled: !props.ready() || state.loading,
+                      },
+                    ]}
+                    disabledReason={writeReason(state.loading, reads.fresh())}
+                  />
+                </div>
+                <Show when={state.correctingID === item.id}>
+                  <div class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-base p-3">
+                    <textarea
+                      class="min-h-20 rounded-md border border-border-weak-base bg-background-base p-3 arforge-management-field"
+                      aria-label={c().content}
+                      value={state.correctionContent}
+                      onInput={(event) => setState("correctionContent", event.currentTarget.value)}
+                    />
+                    <TextField
+                      label={c().correctionReason}
+                      value={state.correctionReason}
+                      onChange={(value) => setState("correctionReason", value)}
+                    />
+                    <ManagementActionToolbar
+                      primary={
+                        <Button
+                          size="small"
+                          variant="primary"
+                          disabled={
+                            !canWrite() ||
+                            !state.correctionContent.trim() ||
+                            !state.correctionReason.trim() ||
+                            state.correctionContent.trim() === item.content
+                          }
+                          onClick={saveCorrection}
+                        >
+                          {c().saveCorrection}
+                        </Button>
+                      }
+                      actions={[{ id: "cancel-correction", label: c().cancel, run: cancelCorrection }]}
+                      disabledReason={writeReason(state.loading, reads.fresh())}
+                    />
+                  </div>
+                </Show>
+                <Show when={state.historyMemoryID === item.id && state.correctionHistory}>
+                  <div class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-base p-3">
+                    <Show when={(state.correctionHistory?.count ?? 0) > 0} fallback={<p>{c().noData}</p>}>
+                      <ManagementCollection
+                        label={c().recentMemories}
+                        scope={locationScopeKey()}
+                        scopeLabel={props.location().location.directory}
+                        items={state.correctionHistory?.items ?? []}
+                        identity={(correction) => correction.id}
+                        title={(correction) => correction.reason}
+                        description={(correction) => correction.status}
+                      >
+                        {(correction) => (
+                          <div class="flex items-start justify-between gap-3 arforge-management-copy">
+                            <div class="min-w-0">
+                              <div class="text-text-strong">{correction.reason}</div>
+                              <div class="mt-1 text-text-weak">
+                                {correctionStatusLabel(correction.status)} · {correction.id}
+                              </div>
+                            </div>
+                            <Button
+                              size="small"
+                              variant="ghost"
+                              disabled={!canWrite() || correction.status !== "active"}
+                              onClick={() => void undoCorrection(correction.id, correction.successorMemoryID)}
+                            >
+                              {c().undo}
+                            </Button>
+                          </div>
+                        )}
+                      </ManagementCollection>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </ManagementCollection>
+        </article>
+      ),
+    },
+    {
+      id: "memory-6",
+      label: () => c().learning,
+      render: () => (
+        <article class="arforge-management-task-form">
+          <h3 class="text-text-strong arforge-management-section-title">{c().learning}</h3>
+          <div class="grid gap-3 md:grid-cols-3">
+            <Metric label={c().turns} value={state.learning?.totalTurns ?? "—"} />
+            <Metric
+              label={c().successRate}
+              value={state.learning ? `${Math.round(state.learning.successRate * 100)}%` : "—"}
+            />
+            <Metric label={c().patterns} value={state.learning?.patternCount ?? "—"} />
+          </div>
+          <Show when={state.learning?.impact.caveat}>
+            <p class="text-text-weak arforge-management-copy">{c().learningCaveat}</p>
+          </Show>
+          <ManagementStatus
+            empty={
+              !state.loading &&
+              reads.parts.some((part) => part.key === "learning" && part.fresh) &&
+              !state.learning?.recent.length
+            }
+            emptyText={c().noData}
+            onRetry={() => void refresh("learning")}
+          />
+          <ManagementCollection
+            label={c().learning}
+            scope={locationScopeKey()}
+            scopeLabel={props.location().location.directory}
+            items={state.learning?.recent ?? []}
+            identity={(item) => item.id}
+            title={(item) => item.userInput}
+            description={(item) =>
+              item.success
+                ? language.locale().startsWith("zh")
+                  ? "成功"
+                  : "Succeeded"
+                : language.locale() === "zh"
+                  ? "失败"
+                  : language.locale() === "zht"
+                    ? "失敗"
+                    : "Failed"
+            }
+          >
+            {(item) => (
+              <div class="flex items-start justify-between gap-3 rounded-md bg-background-weak p-3">
+                <div class="min-w-0 arforge-management-copy">
+                  <div class="text-text-strong">{item.userInput}</div>
+                  <div class="mt-1 text-text-weak">
+                    {item.success ? "success" : item.errorType || "failed"} · {item.route}
+                  </div>
+                </div>
+                <ManagementActionToolbar
+                  actions={[
+                    {
+                      id: "undo-learning",
+                      label: c().undo,
+                      run: () => undo(item.id),
+                      disabled: !canWrite(),
+                      danger: true,
+                    },
+                  ]}
+                  disabledReason={writeReason(state.loading, reads.fresh())}
+                />
+              </div>
+            )}
+          </ManagementCollection>
+        </article>
+      ),
+    },
+    {
+      id: "memory-7",
+      label: () => c().feedback,
+      render: () => (
+        <article class="arforge-management-task-form">
+          <h3 class="text-text-strong arforge-management-section-title">{c().feedback}</h3>
+          <div class="grid gap-3 md:grid-cols-2">
+            <Metric label={c().total} value={state.feedbackSummary?.total ?? "—"} />
+            <Metric label={c().average} value={state.feedbackSummary?.averageRating?.toFixed(1) ?? "—"} />
+          </div>
+          <ManagementStatus
+            empty={
+              !state.loading &&
+              reads.parts.some((part) => part.key === "feedback" && part.fresh) &&
+              !state.feedback?.items.length
+            }
+            emptyText={c().noData}
+            onRetry={() => void refresh("feedback")}
+          />
+          <ManagementCollection
+            label={c().feedback}
+            scope={locationScopeKey()}
+            scopeLabel={props.location().location.directory}
+            items={state.feedback?.items ?? []}
+            identity={(item) => item.id}
+            title={(item) => item.message}
+            description={(item) => item.category + " · " + item.rating}
+          >
+            {(item) => (
+              <div class="flex items-start justify-between gap-3 rounded-md bg-background-weak p-3">
+                <div class="min-w-0 arforge-management-copy">
+                  <div class="text-text-strong">{item.message}</div>
+                  <div class="mt-1 text-text-weak">
+                    {item.category} · {item.rating}/5
+                  </div>
+                </div>
+                <ManagementActionToolbar
+                  actions={[
+                    {
+                      id: "delete-feedback",
+                      label: c().delete,
+                      run: () => removeFeedback(item.id),
+                      disabled: !canWrite(),
+                      danger: true,
+                    },
+                  ]}
+                  disabledReason={writeReason(state.loading, reads.fresh())}
+                />
+              </div>
+            )}
+          </ManagementCollection>
+        </article>
+      ),
+    },
+  ]
   return (
     <section
+      data-workbench-detail=""
       class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
       data-testid="memory-learning-governance"
       aria-busy={state.loading}
@@ -1348,621 +2575,29 @@ export function MemoryLearningGovernance(props: {
           {c().refresh}
         </Button>
       </header>
-      <Show when={state.error}>
-        <div role="alert" class="rounded-md border border-border-danger p-3 text-12-regular text-text-danger">
-          {state.error}
-        </div>
-      </Show>
-      <Show when={state.notice}>
-        <div role="status" class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak">
-          {state.notice}
-        </div>
-      </Show>
+      <WorkbenchReadStatus
+        reads={reads}
+        loading={state.loading && !state.saving}
+        scope={props.location().location.directory}
+        label={readLabel}
+        retry={(key) => void refresh(key)}
+      />
+      <ManagementStatus
+        saving={state.saving}
+        error={state.error}
+        onRetry={!state.loading ? () => void refresh() : undefined}
+      />
+      <ManagementStatus notice={state.notice} />
+      <p class="workbench-detail-disabled-reason" role="status">
+        {writeReason(state.loading, reads.fresh())}
+      </p>
       <div class="grid gap-3 md:grid-cols-4">
         <Metric label={c().total} value={state.memory?.total ?? "—"} />
         <Metric label={c().important} value={state.memory?.important ?? "—"} />
         <Metric label={c().quarantined} value={state.memory?.quarantined ?? "—"} />
         <Metric label={c().pendingConflicts} value={state.memory?.pendingConflicts ?? "—"} />
       </div>
-      <article class="grid gap-3 rounded-md border border-border-weak-base p-3 md:grid-cols-[1fr_220px_auto]">
-        <textarea
-          class="min-h-24 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
-          aria-label={c().content}
-          placeholder={c().content}
-          value={state.content}
-          onInput={(event) => setState("content", event.currentTarget.value)}
-        />
-        <div class="flex flex-col gap-3">
-          <TextField label={c().tags} value={state.tags} onChange={(value) => setState("tags", value)} />
-          <label class="text-11-regular text-text-weak">
-            {c().importance}
-            <input
-              class="mt-1 h-9 w-full rounded-md border border-border-weak-base bg-background-base px-3"
-              type="number"
-              min="0"
-              max="5"
-              value={state.importance}
-              onInput={(event) => setState("importance", Number(event.currentTarget.value))}
-            />
-          </label>
-        </div>
-        <Button
-          size="small"
-          variant="secondary"
-          disabled={state.loading || !state.content.trim()}
-          onClick={createMemory}
-        >
-          {c().create}
-        </Button>
-      </article>
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="context-fusion-evidence"
-      >
-        <header>
-          <h3 class="text-13-medium text-text-strong">{c().contextFusionEvidence}</h3>
-          <p class="mt-1 max-w-3xl text-11-regular leading-relaxed text-text-weak">{c().contextFusionEvidenceHelp}</p>
-        </header>
-        <Show when={props.sessionID} fallback={<p class="text-11-regular text-text-weak">{c().recallNoSession}</p>}>
-          <Show
-            when={state.fusionEvidence.length > 0}
-            fallback={<p class="text-11-regular text-text-weak">{c().fusionNoEvidence}</p>}
-          >
-            <ol class="grid gap-2">
-              <For each={state.fusionEvidence.toReversed()}>
-                {(event) => (
-                  <li
-                    class="grid gap-3 rounded-md border bg-background-weak p-3"
-                    classList={{
-                      "border-border-danger": event.data.degraded,
-                      "border-border-weak-base": !event.data.degraded,
-                    }}
-                  >
-                    <div class="flex flex-wrap items-start justify-between gap-2">
-                      <span
-                        class="text-11-medium"
-                        classList={{
-                          "text-text-danger": event.data.degraded,
-                          "text-text-strong": !event.data.degraded,
-                        }}
-                      >
-                        {event.data.degraded ? c().fusionDegraded : c().fusionHealthy}
-                      </span>
-                      <time
-                        class="text-10-regular text-text-weak"
-                        dateTime={new Date(event.data.timestamp).toISOString()}
-                      >
-                        {new Date(event.data.timestamp).toLocaleString()}
-                      </time>
-                    </div>
-                    <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-2">
-                      <RecallFact label={c().sourceSession} value={event.data.sessionID} />
-                      <RecallFact label={c().sourceUserMessage} value={event.data.userMessageID} />
-                      <RecallFact label={c().sourceTurnStep} value={String(event.data.turnStep)} />
-                      <RecallFact label={c().injectedBytes} value={String(event.data.totalInjectedBytes)} />
-                      <RecallFact
-                        label={c().fusionBridge}
-                        value={event.data.assemblyProtocol ?? event.data.bridgeProtocol ?? "unknown"}
-                      />
-                      <RecallFact label={c().combinedDigest} value={event.data.combinedContextDigest} />
-                    </dl>
-                    <div class="grid gap-2 lg:grid-cols-3">
-                      <FusionContribution
-                        title={c().fusionMemory}
-                        runtime={event.data.memory.runtime}
-                        status={event.data.memory.status === "prepared" ? c().recallPrepared : c().recallUnavailable}
-                        bytes={event.data.memory.injectedBytes}
-                        digest={event.data.memory.contextDigest}
-                        detail={`${c().fusionCandidates}: ${event.data.memory.candidateCount}`}
-                        degraded={event.data.memory.status === "unavailable"}
-                      />
-                      <FusionContribution
-                        title={c().fusionLearning}
-                        runtime={event.data.learning.runtime}
-                        status={event.data.learning.status === "prepared" ? c().recallPrepared : c().recallUnavailable}
-                        bytes={event.data.learning.injectedBytes}
-                        digest={event.data.learning.contextDigest}
-                        degraded={event.data.learning.status === "unavailable"}
-                      />
-                      <FusionContribution
-                        title={c().fusionEvolution}
-                        runtime={event.data.evolution.runtime}
-                        status={event.data.evolution.status === "prepared" ? c().recallPrepared : c().recallUnavailable}
-                        bytes={event.data.evolution.injectedBytes}
-                        digest={event.data.evolution.contextDigest}
-                        detail={`${c().fusionActiveCandidates}: ${event.data.evolution.activeCandidateCount} · ${c().fusionInjectedCandidates}: ${event.data.evolution.injectedCandidateCount}`}
-                        degraded={event.data.evolution.status === "unavailable"}
-                      />
-                    </div>
-                  </li>
-                )}
-              </For>
-            </ol>
-          </Show>
-        </Show>
-      </article>
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="memory-recall-evidence"
-      >
-        <header>
-          <h3 class="text-13-medium text-text-strong">{c().actualRecallEvidence}</h3>
-          <p class="mt-1 max-w-3xl text-11-regular leading-relaxed text-text-weak">{c().actualRecallEvidenceHelp}</p>
-        </header>
-        <Show when={props.sessionID} fallback={<p class="text-11-regular text-text-weak">{c().recallNoSession}</p>}>
-          <Show
-            when={state.recallEvidence.length > 0}
-            fallback={<p class="text-11-regular text-text-weak">{c().recallNoEvidence}</p>}
-          >
-            <ol class="grid gap-2">
-              <For each={state.recallEvidence.toReversed()}>
-                {(event) => (
-                  <li class="grid gap-3 rounded-md bg-background-weak p-3">
-                    <div class="flex flex-wrap items-start justify-between gap-2">
-                      <span class="text-11-medium text-text-strong">
-                        {event.data.status === "prepared" ? c().recallPrepared : c().recallUnavailable}
-                      </span>
-                      <time
-                        class="text-10-regular text-text-weak"
-                        dateTime={new Date(event.data.timestamp).toISOString()}
-                      >
-                        {new Date(event.data.timestamp).toLocaleString()}
-                      </time>
-                    </div>
-                    <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-2">
-                      <RecallFact label={c().sourceSession} value={event.data.sessionID} />
-                      <RecallFact label={c().sourceUserMessage} value={event.data.userMessageID} />
-                      <RecallFact label={c().sourceTurnStep} value={String(event.data.turnStep)} />
-                      <RecallFact label={c().injectedBytes} value={String(event.data.injectedBytes)} />
-                      <RecallFact label={c().queryDigest} value={event.data.queryDigest} />
-                      <RecallFact label={c().contextDigest} value={event.data.contextDigest} />
-                    </dl>
-                    <Show when={event.data.candidates.length > 0}>
-                      <ol class="grid gap-1 border-t border-border-weak-base pt-2">
-                        <For each={event.data.candidates}>
-                          {(candidate) => (
-                            <li class="flex flex-wrap items-center justify-between gap-2 text-10-regular">
-                              <span class="text-text-strong">
-                                #{candidate.rank} · <code class="break-all">{candidate.memoryID}</code>
-                              </span>
-                              <span class="text-text-weak">
-                                {c().recallScore} {candidate.score.toFixed(3)} · {c().recallLexical}{" "}
-                                {candidate.lexicalScore.toFixed(3)} · {c().recallVector}{" "}
-                                {candidate.vectorScore.toFixed(3)}
-                              </span>
-                            </li>
-                          )}
-                        </For>
-                      </ol>
-                    </Show>
-                  </li>
-                )}
-              </For>
-            </ol>
-          </Show>
-        </Show>
-      </article>
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="memory-recall-inspector"
-      >
-        <header>
-          <h3 class="text-13-medium text-text-strong">{c().recallInspector}</h3>
-          <p class="mt-1 max-w-3xl text-11-regular leading-relaxed text-text-weak">{c().recallInspectorHelp}</p>
-        </header>
-        <div class="grid items-end gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-          <TextField
-            label={c().recallQuery}
-            value={state.recallQuery}
-            onChange={(value) => setState("recallQuery", value)}
-          />
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={state.loading || !state.recallQuery.trim()}
-            onClick={() => void inspectRecall()}
-          >
-            {state.loading ? c().running : c().inspectRecall}
-          </Button>
-        </div>
-        <Show
-          when={state.recallResult}
-          fallback={
-            <p class="text-11-regular text-text-weak">{state.recallExecuted ? c().recallNoHits : c().recallNotRun}</p>
-          }
-        >
-          {(result) => (
-            <div class="grid gap-3" data-testid="memory-recall-result">
-              <section aria-label={c().recallPipeline} class="grid gap-2 sm:grid-cols-2">
-                <RecallStep label={c().recallNormalize} value={state.recallQuery.trim()} />
-                <RecallStep label={c().recallScope} value={`${c().recallLocal}: ${result().localOnly ? "✓" : "—"}`} />
-                <RecallStep label={c().recallRank} value={`${c().recallAlgorithm}: ${result().algorithm}`} />
-                <RecallStep label={c().recallSelect} value={`${c().recallCandidates}: ${result().count}`} />
-              </section>
-              <p class="rounded-md bg-background-weak p-3 text-11-regular leading-relaxed text-text-weak">
-                {c().recallEvidenceCaveat}
-              </p>
-              <Show
-                when={result().items.length > 0}
-                fallback={<p class="text-11-regular text-text-weak">{c().recallNoHits}</p>}
-              >
-                <ol class="grid gap-2">
-                  <For each={result().items}>
-                    {(hit, index) => (
-                      <li class="grid gap-2 rounded-md bg-background-weak p-3" data-memory-id={hit.memory.id}>
-                        <div class="flex flex-wrap items-start justify-between gap-2">
-                          <div class="min-w-0">
-                            <div class="text-11-medium text-text-strong">
-                              #{index() + 1} · <code class="break-all">{hit.memory.id}</code>
-                            </div>
-                            <p class="mt-1 text-11-regular leading-relaxed text-text-strong">{hit.memory.content}</p>
-                          </div>
-                          <span class="rounded-full border border-border-weak-base px-2 py-1 text-10-medium text-text-strong">
-                            {c().recallScore}: {hit.score.toFixed(3)}
-                          </span>
-                        </div>
-                        <dl class="grid gap-x-4 gap-y-2 text-10-regular sm:grid-cols-3">
-                          <RecallFact label={c().recallLexical} value={hit.lexicalScore.toFixed(3)} />
-                          <RecallFact label={c().recallVector} value={hit.vectorScore.toFixed(3)} />
-                          <RecallFact
-                            label={c().recallTerms}
-                            value={hit.matchedTerms.length ? [...new Set(hit.matchedTerms)].join(", ") : "—"}
-                          />
-                          <RecallFact
-                            label={c().recallSource}
-                            value={`${sourceLabel(hit.memory.source)} / ${hit.memory.scope}`}
-                          />
-                        </dl>
-                      </li>
-                    )}
-                  </For>
-                </ol>
-              </Show>
-            </div>
-          )}
-        </Show>
-      </article>
-      <article
-        class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
-        data-testid="memory-conflict-governance"
-      >
-        <header class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <h3 class="text-13-medium text-text-strong">{c().conflictGovernance}</h3>
-            <p class="mt-1 max-w-3xl text-11-regular text-text-weak">{c().conflictHelp}</p>
-          </div>
-          <div class="flex shrink-0 flex-wrap gap-2">
-            <Button size="small" variant="secondary" disabled={state.loading} onClick={() => void scanConflicts()}>
-              {state.loading ? c().running : c().scanConflicts}
-            </Button>
-            <Button size="small" variant="ghost" disabled={state.loading} onClick={() => void toggleConflictHistory()}>
-              {state.showConflictHistory ? c().conflictOpenOnly : c().conflictHistory}
-            </Button>
-          </div>
-        </header>
-        <Show when={state.conflictScanNotice}>
-          <p role="status" aria-live="polite" class="text-11-regular text-text-weak">
-            {state.conflictScanNotice}
-          </p>
-        </Show>
-        <Show
-          when={(state.conflicts?.items.length ?? 0) > 0}
-          fallback={<p class="text-11-regular text-text-weak">{c().noConflicts}</p>}
-        >
-          <div class="flex flex-col gap-3">
-            <For each={state.conflicts?.items ?? []}>
-              {(item) => {
-                const titleID = `memory-conflict-${item.conflict.id}`
-                const canReview = () => item.conflict.status === "pending" || item.conflict.status === "undone"
-                return (
-                  <section
-                    class="flex flex-col gap-3 rounded-md bg-background-weak p-3"
-                    aria-labelledby={titleID}
-                    data-conflict-id={item.conflict.id}
-                    data-conflict-status={item.conflict.status}
-                  >
-                    <div class="flex flex-wrap items-start justify-between gap-2">
-                      <div class="min-w-0">
-                        <h4 id={titleID} class="text-12-medium text-text-strong">
-                          {c().conflictKey}: {item.conflict.conflictKey}
-                        </h4>
-                        <p class="mt-1 text-10-regular text-text-weak">
-                          {conflictBasisLabel(item.conflict.basis)} · {conflictStatusLabel(item.conflict.status)} ·{" "}
-                          {item.conflict.id}
-                        </p>
-                      </div>
-                      <Show when={canReview() && state.reviewingConflictID !== item.conflict.id}>
-                        <Button
-                          size="small"
-                          variant="secondary"
-                          disabled={state.loading}
-                          onClick={() => beginConflictReview(item.conflict.id)}
-                        >
-                          {c().reviewConflict}
-                        </Button>
-                      </Show>
-                      <Show when={item.conflict.status === "resolved"}>
-                        <Button
-                          size="small"
-                          variant="ghost"
-                          disabled={state.loading}
-                          onClick={() => undoConflict(item)}
-                        >
-                          {c().undo}
-                        </Button>
-                      </Show>
-                    </div>
-                    <div class="grid gap-3 md:grid-cols-2">
-                      <ConflictMemory
-                        side="left"
-                        item={item.left}
-                        source={sourceLabel(item.left.source)}
-                        disposition={
-                          conflictDisposition(item.conflict, item.left.id) === "chosen"
-                            ? c().chosenMemory
-                            : conflictDisposition(item.conflict, item.left.id) === "retired"
-                              ? c().retiredMemory
-                              : undefined
-                        }
-                      />
-                      <ConflictMemory
-                        side="right"
-                        item={item.right}
-                        source={sourceLabel(item.right.source)}
-                        disposition={
-                          conflictDisposition(item.conflict, item.right.id) === "chosen"
-                            ? c().chosenMemory
-                            : conflictDisposition(item.conflict, item.right.id) === "retired"
-                              ? c().retiredMemory
-                              : undefined
-                        }
-                      />
-                    </div>
-                    <Show when={item.conflict.decisionReason}>
-                      {(reason) => <p class="text-11-regular text-text-weak">{reason()}</p>}
-                    </Show>
-                    <Show when={canReview() && state.reviewingConflictID === item.conflict.id}>
-                      <div class="flex flex-col gap-3 rounded-md border border-border-weak-base bg-background-base p-3">
-                        <TextField
-                          label={c().decisionReason}
-                          value={state.conflictReason}
-                          onChange={(value) => setState("conflictReason", value)}
-                        />
-                        <div class="flex flex-wrap justify-end gap-2">
-                          <Button size="small" variant="ghost" disabled={state.loading} onClick={cancelConflictReview}>
-                            {c().cancel}
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="ghost"
-                            disabled={state.loading || !state.conflictReason.trim()}
-                            onClick={() => dismissConflict(item)}
-                          >
-                            {c().dismissConflict}
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="secondary"
-                            disabled={state.loading || !state.conflictReason.trim()}
-                            onClick={() => resolveConflict(item, item.left.id)}
-                          >
-                            {c().keepLeft}
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="secondary"
-                            disabled={state.loading || !state.conflictReason.trim()}
-                            onClick={() => resolveConflict(item, item.right.id)}
-                          >
-                            {c().keepRight}
-                          </Button>
-                        </div>
-                      </div>
-                    </Show>
-                  </section>
-                )
-              }}
-            </For>
-          </div>
-        </Show>
-      </article>
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <Button size="small" variant="secondary" disabled={state.loading} onClick={() => void preview()}>
-            {c().preview}
-          </Button>
-          <Show when={state.governance}>
-            {(value) => (
-              <>
-                <span class="text-11-regular text-text-weak">
-                  {value().candidateCount}/{value().scanned}
-                </span>
-                <Button
-                  size="small"
-                  variant="primary"
-                  disabled={state.loading || value().candidateCount === 0}
-                  onClick={apply}
-                >
-                  {c().apply}
-                </Button>
-              </>
-            )}
-          </Show>
-        </div>
-        <Show when={state.governance}>
-          {(value) => (
-            <div class="flex max-h-64 flex-col gap-2 overflow-auto">
-              <For each={value().candidates}>
-                {(item) => (
-                  <div class="rounded-md bg-background-weak p-3 text-11-regular">
-                    <div class="text-text-strong">{item.contentPreview}</div>
-                    <div class="mt-1 text-text-weak">
-                      {item.reason} · {item.source} · {item.id}
-                    </div>
-                  </div>
-                )}
-              </For>
-            </div>
-          )}
-        </Show>
-        <h3 class="text-13-medium text-text-strong">{c().recentMemories}</h3>
-        <For each={state.memory?.recent ?? []}>
-          {(item) => (
-            <div class="flex flex-col gap-3 rounded-md bg-background-weak p-3" data-memory-id={item.id}>
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="text-11-regular text-text-strong">{item.content}</div>
-                  <div class="mt-1 text-10-regular text-text-weak">
-                    {sourceLabel(item.source)} · {item.type} · {item.id}
-                  </div>
-                </div>
-                <div class="flex shrink-0 flex-wrap justify-end gap-1">
-                  <Button
-                    size="small"
-                    variant="ghost"
-                    disabled={state.loading}
-                    onClick={() => void loadCorrectionHistory(item.id)}
-                  >
-                    {c().history}
-                  </Button>
-                  <Show
-                    when={!item.source.startsWith("quarantined")}
-                    fallback={
-                      <Button
-                        size="small"
-                        variant="ghost"
-                        disabled={item.source === "quarantined" || state.loading}
-                        onClick={() => restore(item)}
-                      >
-                        {c().restore}
-                      </Button>
-                    }
-                  >
-                    <Button
-                      size="small"
-                      variant="secondary"
-                      disabled={state.loading}
-                      onClick={() => beginCorrection(item)}
-                    >
-                      {c().correctMemory}
-                    </Button>
-                  </Show>
-                </div>
-              </div>
-              <Show when={state.correctingID === item.id}>
-                <div class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-base p-3">
-                  <textarea
-                    class="min-h-20 rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular"
-                    aria-label={c().content}
-                    value={state.correctionContent}
-                    onInput={(event) => setState("correctionContent", event.currentTarget.value)}
-                  />
-                  <TextField
-                    label={c().correctionReason}
-                    value={state.correctionReason}
-                    onChange={(value) => setState("correctionReason", value)}
-                  />
-                  <div class="flex justify-end gap-2">
-                    <Button size="small" variant="ghost" onClick={cancelCorrection}>
-                      {c().cancel}
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="primary"
-                      disabled={
-                        state.loading ||
-                        !state.correctionContent.trim() ||
-                        !state.correctionReason.trim() ||
-                        state.correctionContent.trim() === item.content
-                      }
-                      onClick={saveCorrection}
-                    >
-                      {c().saveCorrection}
-                    </Button>
-                  </div>
-                </div>
-              </Show>
-              <Show when={state.historyMemoryID === item.id && state.correctionHistory}>
-                <div class="flex flex-col gap-2 rounded-md border border-border-weak-base bg-background-base p-3">
-                  <Show when={(state.correctionHistory?.count ?? 0) > 0} fallback={<p>{c().noData}</p>}>
-                    <For each={state.correctionHistory?.items ?? []}>
-                      {(correction) => (
-                        <div class="flex items-start justify-between gap-3 text-11-regular">
-                          <div class="min-w-0">
-                            <div class="text-text-strong">{correction.reason}</div>
-                            <div class="mt-1 text-text-weak">
-                              {correctionStatusLabel(correction.status)} · {correction.id}
-                            </div>
-                          </div>
-                          <Button
-                            size="small"
-                            variant="ghost"
-                            disabled={state.loading || correction.status !== "active"}
-                            onClick={() => undoCorrection(correction.id, correction.successorMemoryID)}
-                          >
-                            {c().undo}
-                          </Button>
-                        </div>
-                      )}
-                    </For>
-                  </Show>
-                </div>
-              </Show>
-            </div>
-          )}
-        </For>
-      </article>
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <h3 class="text-13-medium text-text-strong">{c().learning}</h3>
-        <div class="grid gap-3 md:grid-cols-3">
-          <Metric label={c().turns} value={state.learning?.totalTurns ?? "—"} />
-          <Metric
-            label={c().successRate}
-            value={state.learning ? `${Math.round(state.learning.successRate * 100)}%` : "—"}
-          />
-          <Metric label={c().patterns} value={state.learning?.patternCount ?? "—"} />
-        </div>
-        <Show when={state.learning?.impact.caveat}>
-          <p class="text-11-regular text-text-weak">{c().learningCaveat}</p>
-        </Show>
-        <For each={state.learning?.recent ?? []}>
-          {(item) => (
-            <div class="flex items-start justify-between gap-3 rounded-md bg-background-weak p-3">
-              <div class="min-w-0 text-11-regular">
-                <div class="text-text-strong">{item.userInput}</div>
-                <div class="mt-1 text-text-weak">
-                  {item.success ? "success" : item.errorType || "failed"} · {item.route}
-                </div>
-              </div>
-              <Button size="small" variant="ghost" onClick={() => undo(item.id)}>
-                {c().undo}
-              </Button>
-            </div>
-          )}
-        </For>
-      </article>
-      <article class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
-        <h3 class="text-13-medium text-text-strong">{c().feedback}</h3>
-        <div class="grid gap-3 md:grid-cols-2">
-          <Metric label={c().total} value={state.feedbackSummary?.total ?? "—"} />
-          <Metric label={c().average} value={state.feedbackSummary?.averageRating?.toFixed(1) ?? "—"} />
-        </div>
-        <For each={state.feedback?.items ?? []}>
-          {(item) => (
-            <div class="flex items-start justify-between gap-3 rounded-md bg-background-weak p-3">
-              <div class="min-w-0 text-11-regular">
-                <div class="text-text-strong">{item.message}</div>
-                <div class="mt-1 text-text-weak">
-                  {item.category} · {item.rating}/5
-                </div>
-              </div>
-              <Button size="small" variant="ghost" onClick={() => removeFeedback(item.id)}>
-                {c().delete}
-              </Button>
-            </div>
-          )}
-        </For>
-      </article>
+      <ManagementViews label={c().memoryLearning} views={memoryViews} />
     </section>
   )
 }

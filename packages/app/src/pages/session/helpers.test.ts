@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { createMemo, createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
+import { hasPromptContent } from "@/context/prompt-state"
+import { prependHistoryEntry } from "@/components/prompt-input/history"
+import { buildRequestParts } from "@/components/prompt-input/build-request-parts"
 import {
   SESSION_OPEN_FILE_TAB,
   createOpenReviewFile,
@@ -8,8 +11,138 @@ import {
   createSessionTabs,
   focusTerminalById,
   getTabReorderIndex,
+  queuedPromptParts,
   shouldShowFileTree,
 } from "./helpers"
+
+describe("queued prompt cache-miss restoration", () => {
+  test("restores queue mentions in place instead of duplicating the canonical text", () => {
+    const uri = "evidence://shared/manual"
+    const prompt = {
+      text: "@manual @manual",
+      files: ["server-A", "server-B"].map((server, index) => ({
+        uri,
+        name: "manual",
+        mime: "text/plain",
+        resource: { server, uri },
+        source: { text: "@manual", start: index * 8, end: index * 8 + 7 },
+      })),
+    }
+    const restored = queuedPromptParts({ id: "queued", sessionID: "session", prompt })
+    expect(restored.map((part) => ("content" in part ? part.content : "")).join("")).toBe(prompt.text)
+    expect(restored.filter((part) => part.type === "file").map((part) => part.source)).toEqual(
+      ["server-A", "server-B"].map((clientName, index) => ({
+        type: "resource",
+        clientName,
+        uri,
+        text: { value: "@manual", start: index * 8, end: index * 8 + 7 },
+      })),
+    )
+  })
+
+  test("keeps MCP identity before classifying data URIs as ordinary images", () => {
+    const uri = "data:image/png;base64,AA=="
+    const prompt = {
+      text: "",
+      files: ["server-A", "server-B"].map((server) => ({
+        uri,
+        mime: "image/png",
+        name: "manual.png",
+        resource: { server, uri },
+      })),
+    }
+    const result = queuedPromptParts({ id: "queued-resource", sessionID: "session", prompt })
+    expect(result.filter((part) => part.type === "image")).toEqual([])
+    expect(result.filter((part) => part.type === "file")).toEqual(
+      ["server-A", "server-B"].map((clientName) => ({
+        type: "file",
+        path: uri,
+        url: uri,
+        mime: "image/png",
+        filename: "manual.png",
+        content: "",
+        start: 0,
+        end: 0,
+        source: { type: "resource", clientName, uri, text: { value: "", start: 0, end: 0 } },
+      })),
+    )
+    expect(result.map((part) => ("content" in part ? part.content : "")).join("")).toBe("")
+    expect(prompt.files[0]?.resource).toEqual({ server: "server-A", uri })
+    expect(hasPromptContent(result)).toBe(true)
+    expect(prependHistoryEntry([], result)).toHaveLength(1)
+    const request = buildRequestParts({
+      prompt: result,
+      context: [],
+      images: [],
+      text: "",
+      sessionID: "session",
+      messageID: "message",
+      sessionDirectory: "/owned",
+    })
+    expect(request.requestParts).toMatchObject(
+      ["server-A", "server-B"].map((clientName) => ({
+        type: "file",
+        mime: "image/png",
+        url: uri,
+        source: { type: "resource", clientName, uri },
+      })),
+    )
+  })
+
+  test("keeps resource mentions, ordinary uploads and agents in the fallback", () => {
+    const uri = "evidence://shared/manual"
+    const result = queuedPromptParts({
+      id: "queued-mixed",
+      sessionID: "session",
+      prompt: {
+        text: "@manual @review",
+        files: [
+          {
+            uri,
+            mime: "text/plain",
+            name: "manual",
+            resource: { server: "server-B", uri },
+            source: { text: "@manual", start: 0, end: 7 },
+          },
+          { uri: "data:image/png;base64,AA==", mime: "image/png", name: "upload.png" },
+          { uri: "data:application/pdf;base64,Qg==", mime: "application/pdf", name: "upload.pdf" },
+        ],
+        agents: [{ name: "review", source: { text: "@review", start: 8, end: 15 } }],
+      },
+    })
+    expect(result.find((part) => part.type === "file")).toMatchObject({
+      type: "file",
+      path: uri,
+      url: uri,
+      filename: "manual",
+      mime: "text/plain",
+      content: "@manual",
+      start: 0,
+      end: 7,
+      source: { type: "resource", clientName: "server-B", uri, text: { value: "@manual", start: 0, end: 7 } },
+    })
+    expect(result.find((part) => part.type === "image" && part.filename === "upload.png")).toMatchObject({
+      type: "image",
+      filename: "upload.png",
+      mime: "image/png",
+      dataUrl: "data:image/png;base64,AA==",
+    })
+    expect(result.find((part) => part.type === "image" && part.filename === "upload.pdf")).toMatchObject({
+      type: "image",
+      filename: "upload.pdf",
+      mime: "application/pdf",
+      dataUrl: "data:application/pdf;base64,Qg==",
+    })
+    expect(result.find((part) => part.type === "agent")).toEqual({
+      type: "agent",
+      name: "review",
+      content: "@review",
+      start: 8,
+      end: 15,
+    })
+    expect(result.map((part) => ("content" in part ? part.content : "")).join("")).toBe("@manual @review")
+  })
+})
 
 describe("shouldShowFileTree", () => {
   test("does not reserve space for a disabled file tree", () => {

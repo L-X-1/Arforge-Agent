@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/arforge
+Working directory: %ARFORGE_REPO%/packages/arforge
 Command: bun test --timeout 60000 test/session/prompt.test.ts -t 'Formal cancellation before response content'
 SOURCE BOUNDARY: improved diagnostic, before final receipt cancellation fix; original dispatching replay guard remains unchanged.
 Exit code: 1

@@ -259,6 +259,26 @@ export function digest(value: unknown): string {
   return createHash("sha256").update(canonical(value)).digest("hex")
 }
 
+/** Request ownership is resolved by the caller against canonical Session rows. */
+export interface PrincipalVisibility {
+  readonly tenantID: string
+  readonly userID: string
+  readonly sessionIDs: ReadonlySet<string>
+}
+
+const visibleSessionRecords = <A extends { readonly sessionID: string }>(
+  records: ReadonlyArray<A>,
+  visibility?: PrincipalVisibility,
+): ReadonlyArray<A> => visibility === undefined ? records : records.filter((record) => visibility.sessionIDs.has(record.sessionID))
+
+const visibleAuditRecords = (entries: ReadonlyArray<AuditEntry>, visibility?: PrincipalVisibility): ReadonlyArray<AuditEntry> =>
+  visibility === undefined ? entries : entries.filter((entry) => {
+    if (entry.tenantID !== undefined || entry.ownerUserID !== undefined)
+      return entry.tenantID === visibility.tenantID && entry.ownerUserID === visibility.userID
+    const sessionID = entry.metadata && typeof entry.metadata === "object" ? entry.metadata.sessionID : undefined
+    return typeof sessionID === "string" && visibility.sessionIDs.has(sessionID)
+  })
+
 export const RuntimeInsight = {
   reset(): void {
     store.contextLayers = []
@@ -285,8 +305,8 @@ export const RuntimeInsight = {
     if (store.contextLayers.length > MAX_CONTEXT_LAYERS) store.contextLayers.shift()
   },
 
-  contextLayers(limit = 20): ReadonlyArray<ContextLayersReport> {
-    return store.contextLayers.slice(-limit).reverse()
+  contextLayers(limit = 20, visibility?: PrincipalVisibility): ReadonlyArray<ContextLayersReport> {
+    return visibleSessionRecords(store.contextLayers, visibility).slice(-limit).reverse()
   },
 
   recordRoutingDecision(decision: RoutingDecision): void {
@@ -294,8 +314,8 @@ export const RuntimeInsight = {
     if (store.routing.length > MAX_ROUTING) store.routing.shift()
   },
 
-  routingDecisions(limit = 50): ReadonlyArray<RoutingDecision> {
-    return store.routing.slice(-limit).reverse()
+  routingDecisions(limit = 50, visibility?: PrincipalVisibility): ReadonlyArray<RoutingDecision> {
+    return visibleSessionRecords(store.routing, visibility).slice(-limit).reverse()
   },
 
   recordVerification(record: VerificationRecord): void {
@@ -316,8 +336,8 @@ export const RuntimeInsight = {
     })
   },
 
-  verifications(limit = 50): ReadonlyArray<VerificationRecord> {
-    return store.verifications.slice(-limit).reverse()
+  verifications(limit = 50, visibility?: PrincipalVisibility): ReadonlyArray<VerificationRecord> {
+    return visibleSessionRecords(store.verifications, visibility).slice(-limit).reverse()
   },
 
   auditRecord(input: {
@@ -371,13 +391,25 @@ export const RuntimeInsight = {
     return record
   },
 
-  auditList(limit = 100, beforeSequence?: number): { entries: ReadonlyArray<AuditEntry>; dropped: number } {
+  auditList(limit = 100, beforeSequence?: number, visibility?: PrincipalVisibility): { entries: ReadonlyArray<AuditEntry>; dropped: number } {
     const entries =
       beforeSequence === undefined ? store.audit : store.audit.filter((entry) => entry.seq < beforeSequence)
-    return { entries: entries.slice(-limit).reverse(), dropped: store.auditDropped }
+    return { entries: visibleAuditRecords(entries, visibility).slice(-limit).reverse(), dropped: visibility === undefined ? store.auditDropped : 0 }
   },
 
-  auditVerify(): { valid: boolean; count: number; headHash: string; issue: string | null } {
+  auditVerify(visibility?: PrincipalVisibility): { valid: boolean; count: number; headHash: string; issue: string | null; scope?: "profile-chain" | "principal-records" } {
+    if (visibility !== undefined) {
+      const entries = visibleAuditRecords(store.audit, visibility)
+      const result = { count: entries.length, headHash: entries.at(-1)?.recordHash ?? "genesis", scope: "principal-records" as const }
+      // The principal owns these original records, not a reconstructed sub-chain.
+      for (const { recordHash, ...record } of entries) {
+        try {
+          if (digest(record) === recordHash) continue
+        } catch { /* A malformed visible record is an owned integrity failure. */ }
+        return { ...result, valid: false, issue: "A visible audit record failed digest verification." }
+      }
+      return { ...result, valid: true, issue: null }
+    }
     let previous = store.chainAnchor
     let index = 0
     for (const entry of store.audit) {
@@ -543,8 +575,8 @@ export const RuntimeInsight = {
     return store.modelCalls.slice(-limit).reverse()
   },
 
-  runs(limit = 50): ReadonlyArray<RunRecord> {
-    return [...store.runs.values()].sort((a, b) => b.startedAt - a.startedAt).slice(0, limit)
+  runs(limit = 50, visibility?: PrincipalVisibility): ReadonlyArray<RunRecord> {
+    return [...visibleSessionRecords([...store.runs.values()], visibility)].sort((a, b) => b.startedAt - a.startedAt).slice(0, limit)
   },
 
   recordMemoryRecall(record: MemoryRecallRecord): void {
@@ -555,8 +587,8 @@ export const RuntimeInsight = {
     if (store.recalls.length > MAX_MEMORY_RECALLS) store.recalls.shift()
   },
 
-  memoryRecalls(limit = 20): ReadonlyArray<MemoryRecallRecord> {
-    return store.recalls.slice(-limit).reverse()
+  memoryRecalls(limit = 20, visibility?: PrincipalVisibility): ReadonlyArray<MemoryRecallRecord> {
+    return visibleSessionRecords(store.recalls, visibility).slice(-limit).reverse()
   },
 
   snapshot(): Record<string, unknown> {

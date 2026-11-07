@@ -45,25 +45,29 @@ import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
-import { SessionTable } from "../sql"
+import { SessionInputTable, SessionTable } from "../sql"
 import { SessionMessage } from "../message"
 import { SessionStore } from "../store"
 import { ExternalContext, ExternalTools, type Interface, type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import * as SessionRunnerHistory from "./history"
-import { createLLMEventPublisher } from "./publish-llm-event"
-import { toLLMMessages } from "./to-llm-message"
+import { createLLMEventPublisher, publicProviderFailure } from "./publish-llm-event"
+import { prepareFileMessages } from "./file-attachments"
+import { ReadToolFileSystem } from "../../tool/read-filesystem"
+import { LocationMutation } from "../../location-mutation"
+import { isResourceAttachmentTool, settleResourceAttachments } from "./resource-attachments"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { PrimaryDeliveryState } from "../../primary-delivery-state"
 import { MemoryV2 } from "../../memory"
+import * as MemoryRunEvidence from "../../memory-run-evidence"
 import { LearningV2 } from "../../learning"
 import { EvolutionV2 } from "../../evolution"
 import { RuntimeInsight, billingStorageValues, digest, type ContextLayerReport } from "../../runtime/insight"
 import { SessionRunUsageTable } from "../../runtime/sql"
-import { and, eq, isNull, isNotNull, sql } from "drizzle-orm"
+import { and, asc, eq, isNull, isNotNull, lte, sql } from "drizzle-orm"
 import * as RuntimeBilling from "../../runtime/billing"
 import { Billing } from "@arforge-ai/schema/billing"
 import * as RuntimeRetry from "../../runtime/retry"
@@ -213,6 +217,20 @@ const evolutionContextCache = new Map<string, { userMessageID: string; prepared:
  * explicit loop starts the next provider turn after local settlement. Configured agent step limits bound the loop.
  */
 
+export const settleRunningGoal = Effect.fn("SessionRunner.settleRunningGoal")(function* (
+  goals: Pick<GoalV2.Interface, "list" | "block">,
+  sessionID: SessionSchema.ID,
+  exit: Exit.Exit<void, RunError>,
+) {
+  const active = (yield* goals.list({ sessionID, includeHistory: false })).active
+  if (!active || active.status !== "running") return
+  const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+  const error = Exit.isSuccess(exit)
+    ? "Session settled without explicitly completing or blocking the active goal"
+    : `Session execution failed: ${failure instanceof LLMError ? publicProviderFailure(failure).message : Cause.pretty(exit.cause)}`
+  yield* goals.block({ sessionID, goalID: active.id, expectedRevision: active.revision, error }).pipe(Effect.ignore)
+})
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -224,6 +242,15 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
+    const attachmentReader = yield* ReadToolFileSystem.Service
+    const attachmentMutation = yield* LocationMutation.Service
+    const prepareMessages = (input: Parameters<typeof prepareFileMessages>[0]) => prepareFileMessages(input).pipe(
+      Effect.provideService(Location.Service, location),
+      Effect.provideService(ReadToolFileSystem.Service, attachmentReader),
+      Effect.provideService(LocationMutation.Service, attachmentMutation),
+      Effect.provideService(ToolRegistry.Service, tools),
+      Effect.orDie,
+    )
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
@@ -233,6 +260,7 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const primaryDeliveries = yield* PrimaryDeliveryState.Service
     const memory = yield* MemoryV2.Service
+    const memoryRunEvidence = yield* MemoryRunEvidence.Service
     const learning = yield* LearningV2.Service
     const evolution = yield* EvolutionV2.Service
     const durableRuns = yield* DurableRun.Service
@@ -723,7 +751,8 @@ const layer = Layer.effect(
               ? yield* models.resolveSmall(current, ["text", ...(first.files ?? []).map((file) => file.mime)])
               : undefined
           const model = small ?? (yield* models.resolve({ ...current, model: agent.model ?? current.model }))
-          const [message] = toLLMMessages([first], model)
+          const [message] = yield* prepareMessages({ context: [first], model, sessionID, agent: agent.id,
+            location: current.location, validateExecution: Effect.void })
           if (!message) return yield* Effect.die(new Error("Initial user message could not be converted"))
           const common = TitleGeneration.prepare({ content: message.content, model, agent, execution: {} })
           const request = rebuildRequest(common, model, SessionRunnerModel.credentialIdentity(model))
@@ -849,11 +878,13 @@ const layer = Layer.effect(
           // would discard the only safe ActionGateway replay path and could
           // cause a replacement worker to mint a duplicate child action.
           const scheduled = tool.name === TurnToolCarrier.scheduledTaskName && scheduledCallIDs.has(tool.id)
-          if (scheduled) {
+          const attachment = isResourceAttachmentTool(tool.name)
+          if (scheduled || attachment) {
             if (!cancelledScheduledRunID) continue
             const action = yield* durableActions
               .load(
                 ActionGateway.stableActionID({
+                  ...(attachment ? { runID: cancelledScheduledRunID } : {}),
                   sessionID,
                   assistantMessageID: message.id,
                   toolCallID: tool.id,
@@ -882,12 +913,15 @@ const layer = Layer.effect(
               ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
             },
           })
-          if (scheduled)
+          if (scheduled || attachment)
             yield* events.publish(SessionEvent.Step.Failed, {
               sessionID,
               timestamp: yield* DateTime.now,
               assistantMessageID: message.id,
-              error: { type: "unknown", message: "Scheduled task interrupted" },
+              error: {
+                type: "unknown",
+                message: attachment ? "MCP attachment interrupted" : "Scheduled task interrupted",
+              },
             })
         }
       }
@@ -1213,11 +1247,12 @@ const layer = Layer.effect(
             ),
           )
         : undefined
-      const session = yield* getSession(sessionID)
-      if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+      const beforePromotion = yield* getSession(sessionID)
+      if (
+        beforePromotion.location.directory !== location.directory ||
+        beforePromotion.location.workspaceID !== location.workspaceID
+      )
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(session.id, agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       type LocalToolOutcome = {
         readonly id: string
@@ -1236,19 +1271,66 @@ const layer = Layer.effect(
       let currentStep = step
       const currentRun = (yield* durableRuns.load(runID).pipe(Effect.orDie)).run
       const personalJob = "admission" in currentRun ? currentRun.admission?.personalJob : undefined
+      const cutoff = promotion ? yield* EventV2.latestSequence(db, sessionID) : 0
+      // Sample the agent from the same queue/steer boundary as promotion, but
+      // initialize its context before consuming any durable pending input.
+      // In particular, an unavailable newly routed agent must leave every
+      // admission pending so the original message IDs can be retried safely.
+      const queued =
+        promotion === "queue"
+          ? yield* db
+              .select({ id: SessionInputTable.id, prompt: SessionInputTable.prompt })
+              .from(SessionInputTable)
+              .where(
+                and(
+                  eq(SessionInputTable.session_id, sessionID),
+                  isNull(SessionInputTable.promoted_seq),
+                  eq(SessionInputTable.delivery, "queue"),
+                  personalJob ? eq(SessionInputTable.id, personalJob.occurrence.messageID) : undefined,
+                ),
+              )
+              .orderBy(asc(SessionInputTable.admitted_seq))
+              .limit(1)
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+      const steers =
+        promotion && !personalJob
+          ? yield* db
+              .select({ prompt: SessionInputTable.prompt })
+              .from(SessionInputTable)
+              .where(
+                and(
+                  eq(SessionInputTable.session_id, sessionID),
+                  isNull(SessionInputTable.promoted_seq),
+                  eq(SessionInputTable.delivery, "steer"),
+                  lte(SessionInputTable.admitted_seq, cutoff),
+                ),
+              )
+              .orderBy(asc(SessionInputTable.admitted_seq))
+              .all()
+              .pipe(Effect.orDie)
+          : []
+      let agentID = queued?.prompt.route?.agent ?? beforePromotion.agent
+      for (const input of steers) agentID = input.prompt.route?.agent ?? agentID
+      const agent = yield* agents.select(agentID)
+      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(sessionID, agent), sessionID)
+      let promoted = 0
       if (promotion) {
-        const cutoff = yield* EventV2.latestSequence(db, session.id)
-        let promoted = 0
         if (promotion === "steer" && !personalJob)
-          promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          promoted = yield* SessionInput.promoteSteers(db, events, sessionID, cutoff)
         if (promotion === "queue") {
-          promoted += Number(
-            yield* SessionInput.promoteNextQueued(db, events, session.id, personalJob?.occurrence.messageID),
-          )
-          if (!personalJob) promoted += yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
+          if (queued) promoted += Number(yield* SessionInput.promoteNextQueued(db, events, sessionID, queued.id))
+          if (!personalJob) promoted += yield* SessionInput.promoteSteers(db, events, sessionID, cutoff)
         }
         if (promoted > 0) currentStep = 1
       }
+      // Promotion applies the admitted route to the Session projection. Capture
+      // the actual post-promotion model with the agent sampled for this request;
+      // later selections must not change a request already being prepared/sent.
+      const session = promoted > 0 ? yield* getSession(sessionID) : beforePromotion
+      if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+        return yield* Effect.interrupt
       const system =
         initialized ??
         (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(session.id, agent), session.id))
@@ -1405,15 +1487,23 @@ const layer = Layer.effect(
       const injectedLearningBytes = new TextEncoder().encode(learningContext).byteLength
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const externalSource = yield* ExternalTools
+      const resources = context.flatMap((message) =>
+        message.type === "user" ? (message.files ?? []).flatMap((file) => (file.resource ? [file.resource] : [])) : [],
+      )
       const externalTools =
-        !isLastStep && externalSource
+        (!isLastStep || resources.length > 0) && externalSource
           ? yield* externalSource({
               sessionID: session.id,
               agent: String(agent.id),
               modelID: String(model.id),
               providerID: String(model.provider),
+              resources,
             })
           : undefined
+      // Attachment-only aliases are never offered to the model as extra tools.
+      const modelExternalTools =
+        externalTools &&
+        Object.fromEntries(Object.entries(externalTools).filter(([name]) => !isResourceAttachmentTool(name)))
       const modelTaskOptions =
         scheduledTaskRuntime?.modelCalls && !isLastStep ? { modelTaskTool: scheduledTaskRuntime.tool } : {}
       const toolMaterialization = structuredFormat
@@ -1421,11 +1511,14 @@ const layer = Layer.effect(
             includeRegistered: !isLastStep,
             structuredOutput: structuredFormat.schema,
             ...modelTaskOptions,
-            externalTools,
+            externalTools: modelExternalTools,
           })
         : isLastStep
           ? undefined
-          : yield* tools.materialize(agent.info?.permissions, session.id, { ...modelTaskOptions, externalTools })
+          : yield* tools.materialize(agent.info?.permissions, session.id, {
+              ...modelTaskOptions,
+              externalTools: modelExternalTools,
+            })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       if (latestRequest !== undefined) {
         try {
@@ -1488,8 +1581,31 @@ const layer = Layer.effect(
       } catch (error) {
         console.error("runtime: compile failed", error)
       }
+      if (
+        resources.length > 0 &&
+        (yield* settleResourceAttachments({
+          sessionID: session.id,
+          runID,
+          context,
+          agent: agent.id,
+          model: ModelV2.Ref.make({ id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) }),
+          permissions: agent.info?.permissions,
+          externalTools,
+          isLastStep,
+          validateExecution,
+        }).pipe(
+          Effect.provideService(EventV2.Service, events),
+          Effect.provideService(ToolRegistry.Service, tools),
+          Effect.provideService(DurableAction.Service, durableActions),
+          Effect.provideService(SessionStore.Service, store),
+        ))
+      ) {
+        entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
+        context = entries.map((entry) => entry.message)
+      }
       const rawRequestMessages = [
-        ...toLLMMessages(context, model),
+        ...yield* prepareMessages({ context, model, sessionID: session.id, agent: agent.id,
+          location: session.location, validateExecution }),
         ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
       const configuredOutputTokens = model.defaults?.generation?.maxTokens ?? model.route.defaults.generation?.maxTokens
@@ -2446,7 +2562,7 @@ const layer = Layer.effect(
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
-            yield* withPublication(publisher.failAssistant(llmFailure.reason.message))
+            yield* withPublication(publisher.failAssistant(llmFailure.reason.message, llmFailure))
           }
           if (stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)) yield* FiberSet.clear(toolFibers)
           const settled = yield* restore(awaitToolFibers(toolFibers)).pipe(Effect.exit)
@@ -2642,7 +2758,7 @@ const layer = Layer.effect(
                   )
                 : Effect.void
             return Effect.all(
-              [learningMaintenance, memory.extract(latestRequest).pipe(Effect.ignore), evolutionMaintenance],
+              [learningMaintenance, evolutionMaintenance],
               { concurrency: "unbounded", discard: true },
             )
           }
@@ -2654,8 +2770,10 @@ const layer = Layer.effect(
             yield* maintain(
               false,
               failure instanceof Error ? failure.constructor.name : "ProviderError",
-              overflowFailure?.message ??
-                (failure instanceof Error ? failure.message : failure === undefined ? "" : String(failure)),
+              llmFailure
+                ? publicProviderFailure(llmFailure).message
+                : (overflowFailure?.message ??
+                    (failure instanceof Error ? failure.message : failure === undefined ? "" : String(failure))),
             )
             return yield* Effect.failCause(stream.cause)
           }
@@ -3094,25 +3212,6 @@ const layer = Layer.effect(
       }
     })
 
-    const settleRunningGoal = Effect.fn("SessionRunner.settleRunningGoal")(function* (
-      sessionID: SessionSchema.ID,
-      exit: Exit.Exit<void, RunError>,
-    ) {
-      const active = (yield* goals.list({ sessionID, includeHistory: false })).active
-      if (!active || active.status !== "running") return
-      const error = Exit.isSuccess(exit)
-        ? "Session settled without explicitly completing or blocking the active goal"
-        : `Session execution failed: ${Cause.pretty(exit.cause)}`
-      yield* goals
-        .block({
-          sessionID,
-          goalID: active.id,
-          expectedRevision: active.revision,
-          error,
-        })
-        .pipe(Effect.ignore)
-    })
-
     const run: Interface["run"] = (input) =>
       Effect.gen(function* () {
         if ("scheduledTask" in input)
@@ -3520,15 +3619,19 @@ const layer = Layer.effect(
                 : `Independent verification failed: ${verification.failedChecks.join(", ")}`
             } else {
               status = interrupted || billingPending || recoveryPending ? "paused" : "failed"
+              const terminalFailure = Cause.squash(exit.cause)
               reason = billingPending
                 ? "Provider usage reconciliation remains pending; resume after usage is available"
                 : recoveryPending
                   ? String(Cause.squash(exit.cause)).slice(0, 500)
                   : interrupted
                     ? "Execution interrupted and can be resumed from its latest checkpoint"
-                    : Cause.pretty(exit.cause).slice(0, 500)
+                    : terminalFailure instanceof LLMError
+                      ? publicProviderFailure(terminalFailure).message
+                      : Cause.pretty(exit.cause).slice(0, 500)
             }
-            if (!interrupted && !billingPending && !recoveryPending) yield* settleRunningGoal(input.sessionID, exit)
+            if (!interrupted && !billingPending && !recoveryPending)
+              yield* settleRunningGoal(goals, input.sessionID, exit)
             yield* RunnerInvariants.assert(invariants, {
               kind: "terminal",
               sessionID: String(input.sessionID),
@@ -3582,6 +3685,12 @@ const layer = Layer.effect(
               { status, attempt, requireCheckpoint: status === "completed" },
             ).pipe(Effect.exit)
             if (Exit.isSuccess(terminalHistory)) {
+              // Provenance can only be derived after the durable terminal
+              // transition and committed-history validation. This producer
+              // never activates Memory or changes the settled Run outcome.
+              yield* memory.extractRun(runID).pipe(Effect.provideService(MemoryRunEvidence.Service, memoryRunEvidence), Effect.catchCause(() =>
+                Effect.logWarning("Terminal Memory candidate extraction failed", { sessionID: input.sessionID, runID }),
+              ))
               if (input.onSettled !== undefined)
                 yield* input.onSettled(terminalHistory.value.summary).pipe(
                   Effect.catchCause(() =>
@@ -3649,6 +3758,8 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     Location.node,
+    ReadToolFileSystem.node,
+    LocationMutation.node,
     SystemContextRegistry.node,
     SkillGuidance.node,
     ReferenceGuidance.node,
@@ -3659,6 +3770,7 @@ export const node = makeLocationNode({
     Database.node,
     PrimaryDeliveryState.node,
     MemoryV2.node,
+    MemoryRunEvidence.node,
     LearningV2.node,
     EvolutionV2.node,
     DurableRun.node,

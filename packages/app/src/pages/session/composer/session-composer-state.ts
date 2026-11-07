@@ -10,6 +10,9 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 import { isPermissionRequestGone } from "./permission-reply-error"
+import { ScopedKey } from "@/utils/server-scope"
+import { publicErrorMessage } from "@/utils/public-error"
+import { managementErrorText } from "@/components/settings-v2/management-state"
 
 export const todoState = (input: {
   count: number
@@ -65,29 +68,43 @@ export function createSessionComposerController(options?: { closeMs?: number | (
   const [store, setStore] = createStore({
     sessionID: params.id,
     responding: undefined as string | undefined,
+    permissionError: "",
+    failedPermission: undefined as { key: string; response: "once" | "always" | "reject" } | undefined,
     dock: todos().length > 0 && !done() && live(),
     closing: false,
     opening: false,
   })
 
-  const permissionResponding = createMemo(() => {
+  const permissionKey = () => {
     const perm = permissionRequest()
-    if (!perm) return false
-    return store.responding === perm.id
+    return perm ? ScopedKey.from(sdk().scope, sdk().directory, params.id ?? "", perm.sessionID, perm.id) : undefined
+  }
+  const permissionResponding = createMemo(() => !!permissionKey() && store.responding === permissionKey())
+  const permissionError = createMemo(() =>
+    store.failedPermission?.key === permissionKey() ? store.permissionError : "",
+  )
+  let disposed = false
+  onCleanup(() => {
+    disposed = true
   })
 
   const decide = (response: "once" | "always" | "reject") => {
     const perm = permissionRequest()
     if (!perm) return
-    if (store.responding === perm.id) return
+    const key = permissionKey()!
+    if (store.responding === key) return
+    const source = sdk()
+    const originSync = sync()
+    const current = () => !disposed && key === permissionKey() && sdk().api === source.api && sync() === originSync
 
-    setStore("responding", perm.id)
-    sdk()
-      .api.permission.reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
+    setStore({ responding: key, permissionError: "", failedPermission: undefined })
+    source.api.permission
+      .reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
       .catch((err: unknown) => {
+        if (!current()) return
         if (isPermissionRequestGone(err, perm.id)) {
-          const pending = sync().data.permission[perm.sessionID] ?? []
-          sync().set(
+          const pending = originSync.data.permission[perm.sessionID] ?? []
+          originSync.set(
             "permission",
             perm.sessionID,
             pending.filter((item) => item.id !== perm.id),
@@ -101,11 +118,15 @@ export function createSessionComposerController(options?: { closeMs?: number | (
           showToast({ title: language.t("notification.permission.title"), description })
           return
         }
-        const description = err instanceof Error ? err.message : String(err)
+        const description = publicErrorMessage(managementErrorText(err, language.t("common.requestFailed"))).slice(
+          0,
+          500,
+        )
+        setStore({ permissionError: description, failedPermission: { key, response } })
         showToast({ title: language.t("common.requestFailed"), description })
       })
       .finally(() => {
-        setStore("responding", (id) => (id === perm.id ? undefined : id))
+        if (!disposed) setStore("responding", (id) => (id === key ? undefined : id))
       })
   }
 
@@ -207,6 +228,11 @@ export function createSessionComposerController(options?: { closeMs?: number | (
     questionRequest,
     permissionRequest,
     permissionResponding,
+    permissionError,
+    retryPermission: () => {
+      const failed = store.failedPermission
+      if (failed && failed.key === permissionKey()) decide(failed.response)
+    },
     decide,
     todos,
     dock: () =>

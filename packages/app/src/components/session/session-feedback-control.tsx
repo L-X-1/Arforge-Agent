@@ -11,7 +11,9 @@ import type { OperationsApi } from "@/utils/server"
 import { createStore } from "solid-js/store"
 import { useSessionOperationsText } from "./session-operations-text"
 
-export function SessionFeedbackControl(props: { api: () => OperationsApi; sessionID: string; disabled?: boolean }) {
+type SessionLocation = Awaited<ReturnType<OperationsApi["sessions"]["get"]>>["location"]
+
+export function SessionFeedbackControl(props: { api: () => OperationsApi; sessionID: string; location: SessionLocation | undefined; disabled?: boolean }) {
   const language = useLanguage()
   const c = useSessionOperationsText()
   const [state, setState] = createStore({
@@ -19,7 +21,7 @@ export function SessionFeedbackControl(props: { api: () => OperationsApi; sessio
     rating: 5,
     message: "",
     saving: false,
-    error: "",
+    error: undefined as unknown,
     notice: "",
   })
   const source = props.api()
@@ -27,12 +29,14 @@ export function SessionFeedbackControl(props: { api: () => OperationsApi; sessio
   const scope = createManagementScope(source, sessionID, () => ({ source: props.api(), sessionID: props.sessionID }))
   onCleanup(scope.dispose)
   const api = bindManagementApi(source, scope)
-  const blocked = () => !scope.live() || !!props.disabled || state.saving
+  const blocked = () => !scope.live() || !props.location?.directory || !!props.disabled || state.saving
   const submit = async () => {
-    if (blocked() || !state.message.trim()) return
+    const location = props.location
+    if (blocked() || !location || !state.message.trim()) return
     setState({ saving: true, error: "", notice: "" })
     try {
       await api.feedback.submit({
+        location: { directory: location.directory, workspace: location.workspaceID },
         category: state.category,
         rating: state.rating,
         message: state.message.trim(),
@@ -40,7 +44,7 @@ export function SessionFeedbackControl(props: { api: () => OperationsApi; sessio
       })
       setState({ message: "", notice: managementCopy(language.locale()).saved })
     } catch (error) {
-      if (scope.live()) setState("error", error instanceof Error ? error.message : String(error))
+      if (scope.live()) setState("error", error)
     } finally {
       if (scope.live()) setState("saving", false)
     }

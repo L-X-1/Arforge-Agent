@@ -22,6 +22,15 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
       ),
     )
     .handle("mcp.capabilities", () => response(Effect.succeed([])))
+    .handle("mcp.tool.describe", () =>
+      Effect.fail(
+        new InvalidRequestError({
+          kind: "mcp-tool-details-unavailable",
+          field: "query",
+          message: "MCP tool details are unavailable in the embedded Core runtime.",
+        }),
+      ),
+    )
     .handle("mcp.action.reconciliation", () =>
       Effect.fail(
         new InvalidRequestError({

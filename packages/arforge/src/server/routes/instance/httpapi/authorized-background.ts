@@ -1,17 +1,16 @@
 import { Database } from "@arforge-ai/core/database/database"
+import * as TransactionEffects from "@arforge-ai/core/database/transaction-effects"
 import { IdentityContext } from "@arforge-ai/server/identity-context"
-import { Effect, FiberSet } from "effect"
+import { Context, Effect, FiberSet } from "effect"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 
 export interface AuthorizedBackground {
   /**
    * Launch work from the server-owned runtime instead of the request fiber.
    *
-   * PostgreSQL authorization wraps a request in a transaction so RLS settings
-   * are transaction-local. A child fork must not inherit that transaction's
-   * connection: the HTTP response can commit it while the child is still
-   * running, leaving the child with invalid savepoints. The detached runtime
-   * starts with clean fiber refs and establishes a fresh principal transaction.
+   * Admission must commit before work starts. A child must not inherit an
+   * admission transaction's connection or commit queue. Bind identity for the
+   * execution lifetime; each SQL operation establishes its own short RLS scope.
    */
   readonly launch: (principal: IdentityContext.Principal, effect: Effect.Effect<void>) => Effect.Effect<void>
 }
@@ -28,10 +27,11 @@ export const makeAuthorizedBackground = Effect.gen(function* () {
         // other request FiberRef (especially the SQL transaction) behind.
         const instance = yield* InstanceRef
         const workspaceID = yield* WorkspaceRef
-        yield* Effect.sync(() => {
-          fork(
-            database
-              .runAsPrincipal(
+        yield* Database.afterCommit(
+          database,
+          Effect.sync(() => {
+            fork(
+              Database.principalContext(
                 principal,
                 effect.pipe(
                   // The detached FiberSet runtime deliberately drops the
@@ -44,10 +44,18 @@ export const makeAuthorizedBackground = Effect.gen(function* () {
                   Effect.provideService(InstanceRef, instance),
                   Effect.provideService(WorkspaceRef, workspaceID),
                 ),
-              )
-              .pipe(Effect.orDie, Effect.asVoid),
-          )
-        })
+              ).pipe(
+                // The helper's runtime may itself have been constructed in an
+                // admission transaction; providing services only merges context.
+                Effect.updateContext((context: Context.Context<never>) =>
+                  TransactionEffects.detachedContext(database.db.$client, context),
+                ),
+                Effect.orDie,
+                Effect.asVoid,
+              ),
+            )
+          }),
+        )
       }),
   } satisfies AuthorizedBackground
 })

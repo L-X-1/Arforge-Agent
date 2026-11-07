@@ -10,6 +10,8 @@ type Model = {
   name?: string
   limit: {
     context: number
+    input?: number
+    output?: number
   }
 }
 
@@ -62,4 +64,10 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Context | 
 
 export function getSessionContext(messages: Message[] = [], providers: Provider[] = []) {
   return build(messages, providers)
+}
+
+/** A partial streaming counter is not a confirmed provider settlement. */
+export function getConfirmedSessionContext(messages: Message[] = [], providers: Provider[] = []) {
+  return build(messages.filter(message => message.role === "assistant" &&
+    !!message.time.completed && !!message.finish && message.finish !== "error" && !message.error), providers)
 }

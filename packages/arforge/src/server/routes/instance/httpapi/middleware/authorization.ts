@@ -15,9 +15,7 @@ export {
   authorizationLayer as serverAuthorizationLayer,
 } from "@arforge-ai/server/middleware/authorization"
 
-const AUTH_TOKEN_QUERY = "auth_token"
 const UNAUTHORIZED = 401
-const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
 
 /**
  * Private mode is one server-owned security principal. It is intentionally
@@ -71,7 +69,7 @@ function userAuthorized<A, E, R>(
       return yield* new HttpApiError.Unauthorized({})
     const principal = yield* UserAuth.authenticate(database.db, config, request.headers.cookie)
     if (Option.isNone(principal)) return yield* new HttpApiError.Unauthorized({})
-    return yield* database.runAsPrincipal(
+    return yield* Database.principalContext(
       principal.value,
       Effect.provideService(effect, IdentityContext.Current, principal.value),
     )
@@ -97,7 +95,7 @@ function userAuthorizedRaw<A, E, R>(
       return HttpServerResponse.empty({ status: UNAUTHORIZED })
     const principal = yield* UserAuth.authenticate(database.db, config, request.headers.cookie)
     if (Option.isNone(principal)) return HttpServerResponse.empty({ status: UNAUTHORIZED })
-    return yield* database.runAsPrincipal(
+    return yield* Database.principalContext(
       principal.value,
       Effect.provideService(effect, IdentityContext.Current, principal.value),
     )
@@ -132,12 +130,16 @@ function validateCredential<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   credential: ServerAuth.DecodedCredentials,
   config: ServerAuth.Info,
+  url: URL,
+  request: HttpServerRequest.HttpServerRequest,
 ) {
   return Effect.gen(function* () {
     if (!ServerAuth.required(config)) return yield* effect
     if (!ServerAuth.authorized(credential, config)) {
       yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-        Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),
+        Effect.succeed(
+          HttpServerResponse.setHeaders(response, SessionAuth.basicChallengeHeaders(url, request.headers)),
+        ),
       )
       return yield* new HttpApiError.Unauthorized({})
     }
@@ -161,12 +163,8 @@ function decodeCredential(input: string) {
   )
 }
 
-function credentialFromRequest(request: HttpServerRequest.HttpServerRequest) {
-  return credentialFromURL(new URL(request.url, "http://localhost"), request)
-}
-
 function credentialFromURL(url: URL, request: HttpServerRequest.HttpServerRequest) {
-  const token = url.searchParams.get(AUTH_TOKEN_QUERY)
+  const token = url.searchParams.get(SessionAuth.AUTH_TOKEN_QUERY)
   if (token) return decodeCredential(token)
   const match = /^Basic\s+(.+)$/i.exec(request.headers.authorization ?? "")
   if (match) return decodeCredential(match[1])
@@ -177,13 +175,15 @@ function validateRawCredential<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   credential: ServerAuth.DecodedCredentials,
   config: ServerAuth.Info,
+  url: URL,
+  request: HttpServerRequest.HttpServerRequest,
 ) {
   if (!ServerAuth.required(config)) return effect
   if (!ServerAuth.authorized(credential, config))
     return Effect.succeed(
       HttpServerResponse.empty({
         status: UNAUTHORIZED,
-        headers: { "www-authenticate": WWW_AUTHENTICATE },
+        headers: SessionAuth.basicChallengeHeaders(url, request.headers),
       }),
     )
   return effect
@@ -212,7 +212,9 @@ export const authorizationRouterMiddleware = HttpRouter.middleware()(
         if (isPublicUIPath(request.method, url.pathname)) return yield* effect
         if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
         return yield* credentialFromURL(url, request).pipe(
-          Effect.flatMap((credential) => validateRawCredential(localAuthorized(effect, database), credential, config)),
+          Effect.flatMap((credential) =>
+            validateRawCredential(localAuthorized(effect, database), credential, config, url, request),
+          ),
         )
       })
   }),
@@ -237,8 +239,11 @@ export const authorizationLayer = Layer.effect(
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
-        return yield* credentialFromRequest(request).pipe(
-          Effect.flatMap((credential) => validateCredential(localAuthorized(effect, database), credential, config)),
+        const url = new URL(request.url, "http://localhost")
+        return yield* credentialFromURL(url, request).pipe(
+          Effect.flatMap((credential) =>
+            validateCredential(localAuthorized(effect, database), credential, config, url, request),
+          ),
         )
       }),
     )
@@ -269,7 +274,9 @@ export const ptyConnectAuthorizationLayer = Layer.effect(
         if (hasPtyConnectTicketURL(url)) return yield* localAuthorized(effect, database)
         if (sessionAuthorized(request, config)) return yield* localAuthorized(effect, database)
         return yield* credentialFromURL(url, request).pipe(
-          Effect.flatMap((credential) => validateCredential(localAuthorized(effect, database), credential, config)),
+          Effect.flatMap((credential) =>
+            validateCredential(localAuthorized(effect, database), credential, config, url, request),
+          ),
         )
       }),
     )

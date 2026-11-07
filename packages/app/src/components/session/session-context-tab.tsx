@@ -1,4 +1,5 @@
 import { createMemo, createEffect, on, onCleanup, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import type { JSX } from "solid-js"
 import { useSync } from "@/context/sync"
 import { checksum } from "@arforge-ai/core/util/encode"
@@ -14,11 +15,17 @@ import type { Message, Part, UserMessage } from "@arforge-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { useLocal } from "@/context/local"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { getSessionContext } from "./session-context-metrics"
+import { getConfirmedSessionContext } from "./session-context-metrics"
+import { contextCopy, contextServerLabel } from "./session-context-copy"
+import { ContextPreviewChanged, contextReadRevision, createContextPreviewController, type ContextPreviewState } from "./session-context-preview"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
 import { createSessionContextFormatter } from "./session-context-format"
+import { managementErrorText } from "@/components/settings-v2/management-state"
 import "@/components/preview/workbench-review.css"
+import "./session-context.css"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
   system: "var(--syntax-info)",
@@ -96,6 +103,9 @@ export function SessionContextTab() {
   const sync = useSync()
   const language = useLanguage()
   const sdk = useSDK()
+  const server = useServerSDK()
+  const local = useLocal()
+  const copy = createMemo(() => contextCopy(language.locale()))
   const providers = useProviders(() => sdk().directory)
   const { params, view } = useSessionLayout()
 
@@ -135,8 +145,70 @@ export function SessionContextTab() {
       }),
   )
 
-  const ctx = createMemo(() => getSessionContext(messages(), [...providers.all().values()]))
+  const ctx = createMemo(() => getConfirmedSessionContext(messages(), [...providers.all().values()]))
   const formatter = createMemo(() => createSessionContextFormatter(language.intl()))
+  const capacity = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined
+  const sampledLimit = createMemo(() => capacity(ctx()?.limit))
+  const sampledUsage = createMemo(() => {
+    const usage = ctx()?.usage
+    return sampledLimit() !== undefined && typeof usage === "number" && Number.isFinite(usage) ? usage : undefined
+  })
+  const selectedModel = createMemo(() => local.model.current())
+  const busy = createMemo(() => {
+    const status = params.id ? sync().data.session_status[params.id] : undefined
+    return !!status && status.type !== "idle"
+  })
+  const scope = createMemo(() => JSON.stringify([
+    sdk().scope, sdk().directory, params.id, selectedModel()?.provider.id, selectedModel()?.id,
+    selectedModel()?.limit.context, selectedModel()?.limit.input, selectedModel()?.limit.output,
+    local.model.variant.current(), info()?.time.updated, info()?.revert?.messageID, busy(),
+    sync().data.config.compaction, messages().map(message => [message.id, message.time.created,
+      message.role === "assistant" ? message.time.completed : undefined]),
+  ]))
+  const [preview, setPreview] = createStore<ContextPreviewState>({ phase: "closed" })
+  const previewController = createContextPreviewController({
+    update: next => setPreview({ phase: next.phase, snapshot: next.snapshot, error: next.error }),
+    capture: () => {
+      const id = params.id
+      if (!id) return
+      const sessionID = id as Parameters<ReturnType<typeof server>["operationsApi"]["sessions"]["get"]>[0]["sessionID"]
+      const origin = scope(), source = server(), bound = sdk(), model = selectedModel()
+      const directory = bound.directory
+      return {
+        key: origin,
+        isCurrent: () => scope() === origin && server() === source && sdk() === bound,
+        read: async () => {
+          const [session, context] = await Promise.all([
+            source.operationsApi.sessions.get({ sessionID }),
+            source.operationsApi.sessions.context({ sessionID }),
+          ])
+          if (session.id !== sessionID || session.location.directory !== directory) throw new ContextPreviewChanged()
+          return {
+            sessionID: session.id, directory: session.location.directory, projectID: session.projectID,
+            updatedAt: session.time.updated, sampledAt: Date.now(),
+            revision: await contextReadRevision({ session, context }),
+            contextJSON: JSON.stringify(context, null, 2),
+            candidates: context.map(message => ({ id: message.id, type: message.type, createdAt: message.time.created })),
+          }
+        },
+        compact: async (snapshot) => {
+          if (!model || busy()) throw new ContextPreviewChanged()
+          return bound.api.session.compact({ sessionID, model: { providerID: model.provider.id, modelID: model.id, variant: local.model.variant.current() }, expectedContext: snapshot.contextJSON, expectedDirectory: snapshot.directory })
+        },
+      }
+    },
+  })
+  createEffect(on(() => [scope(), server(), sdk()], () => previewController.invalidate(), { defer: true }))
+  onCleanup(() => previewController.dispose())
+  const previewWorking = () => ["loading", "checking", "submitting"].includes(preview.phase)
+  const previewError = () => {
+    const error = preview.error
+    if (error instanceof ContextPreviewChanged) return copy().stale
+    if (!error) return ""
+    const nested = typeof error === "object" && "data" in error ? error.data : undefined
+    return managementErrorText(nested ?? error, copy().readError).slice(0, 500)
+  }
 
   const cost = createMemo(() => {
     return usd().format(info()?.cost ?? 0)
@@ -203,9 +275,9 @@ export function SessionContextTab() {
     { label: "context.stats.messages", value: () => counts().all.toLocaleString(language.intl()) },
     { label: "context.stats.provider", value: providerLabel },
     { label: "context.stats.model", value: modelLabel },
-    { label: "context.stats.limit", value: () => formatter().number(ctx()?.limit) },
+    { label: "context.stats.limit", value: () => formatter().number(sampledLimit()) },
     { label: "context.stats.totalTokens", value: () => formatter().number(ctx()?.total) },
-    { label: "context.stats.usage", value: () => formatter().percent(ctx()?.usage) },
+    { label: "context.stats.usage", value: () => formatter().percent(sampledUsage()) },
     { label: "context.stats.inputTokens", value: () => formatter().number(ctx()?.input) },
     { label: "context.stats.outputTokens", value: () => formatter().number(ctx()?.message.tokens.output) },
     { label: "context.stats.reasoningTokens", value: () => formatter().number(ctx()?.message.tokens.reasoning) },
@@ -279,13 +351,58 @@ export function SessionContextTab() {
       }}
       onScroll={handleScroll}
     >
-      <div class="px-6 pt-4 pb-10 flex flex-col gap-10">
-        <div data-slot="context-stats" class="grid grid-cols-1 @[32rem]:grid-cols-2 gap-4">
+      <div class="arforge-context-panel" data-component="session-context-accounting">
+        <section class="arforge-context-section arforge-context-summary" aria-label={copy().confirmed}>
+          <h2>{copy().confirmed}</h2>
+          <p class="arforge-context-note">{ctx() ? copy().accounting : copy().noConfirmed}</p>
+          <div class="arforge-context-summary-grid">
+            <Stat label={copy().sampledUsage} value={formatter().percent(sampledUsage())} />
+            <Stat label={copy().tokens} value={formatter().number(ctx()?.total)} />
+            <Stat label={copy().cost} value={cost()} />
+          </div>
+        </section>
+        <div class="arforge-context-owner-budget">
+        <section class="arforge-context-section" aria-label={copy().source}>
+          <h2>{copy().source}</h2>
+          <div class="arforge-context-source">
+            <Stat label={copy().server} value={contextServerLabel(sdk().url)} />
+            <Stat label={copy().directory} value={sdk().directory} />
+            <Stat label={copy().session} value={params.id ?? "—"} />
+          </div>
+        </section>
+        <section class="arforge-context-section" aria-label={copy().budget}>
+          <h2>{copy().budget}</h2>
+          <Stat label={copy().selectedModel} value={selectedModel()
+            ? `${selectedModel()!.provider.id} / ${selectedModel()!.id}` : copy().unknown} />
+          <div class="arforge-context-grid">
+            <Stat label={copy().context} value={formatter().number(capacity(selectedModel()?.limit.context))} />
+            <Stat label={copy().input} value={formatter().number(selectedModel()?.limit.input)} />
+            <Stat label={copy().output} value={formatter().number(selectedModel()?.limit.output)} />
+          </div>
+        </section>
+        </div>
+        <details class="arforge-context-section arforge-context-accounting-detail" open>
+          <summary><h2>{copy().details}</h2></summary>
+          <div class="arforge-context-accounting-body">
+          <div class="arforge-context-grid">
+            <Stat label={copy().sample} value={ctx()?.message.id ?? copy().unknown} />
+            <Stat label={copy().settledAt} value={formatter().time(ctx()?.message.time.completed)} />
+            <Stat label={copy().sampledModel} value={ctx()
+              ? `${ctx()!.message.providerID} / ${ctx()!.message.modelID}` : copy().unknown} />
+          </div>
+        <div data-slot="context-stats" class="arforge-context-grid">
           <For each={stats}>
             {(stat) => <Stat label={language.t(stat.label as Parameters<typeof language.t>[0])} value={stat.value()} />}
           </For>
         </div>
+          </div>
+        </details>
 
+        <section class="arforge-context-section" aria-label={copy().estimate}>
+          <h2>{copy().estimate}</h2>
+          <p class="arforge-context-note">{copy().estimateBasis}</p>
+          <p class="arforge-context-note">{copy().loaded}: {counts().all} · {messages()[0]?.id ?? "—"} → {messages().at(-1)?.id ?? "—"}</p>
+          <Show when={!ctx()?.input}><p class="arforge-context-note">{copy().noEstimate}</p></Show>
         <Show when={breakdown().length > 0}>
           <div class="flex flex-col gap-2">
             <div class="text-12-regular text-text-weak">{language.t("context.breakdown.title")}</div>
@@ -316,6 +433,47 @@ export function SessionContextTab() {
             <div class="text-12-regular text-text-weak">{language.t("context.breakdown.note")}</div>
           </div>
         </Show>
+        </section>
+
+        <section class="arforge-context-section" aria-label={copy().preview} data-component="context-compression-preview">
+          <h2>{copy().preview}</h2>
+          <p class="arforge-context-note">{copy().readonly}</p>
+          <div class="arforge-context-actions">
+            <button class="arforge-context-action" type="button" disabled={!params.id || previewWorking()}
+              onClick={() => void previewController.open()}>{preview.phase === "closed" ? copy().open : copy().refresh}</button>
+            <Show when={preview.phase !== "closed"}>
+              <button class="arforge-context-action" type="button" disabled={previewWorking()}
+                onClick={() => previewController.close()}>{copy().close}</button>
+            </Show>
+          </div>
+          <Show when={previewWorking()}><p class="arforge-context-note" role="status">{preview.phase === "loading" ? copy().loading : preview.phase === "checking" ? copy().checking : copy().submitting}</p></Show>
+          <Show when={previewError()}><p class="arforge-context-note" role="alert">{previewError()}</p></Show>
+          <Show when={preview.snapshot}>{snapshot => <>
+            <div class="arforge-context-grid">
+              <Stat label={copy().recordedAt} value={formatter().time(snapshot().sampledAt)} />
+              <Stat label={copy().revision} value={snapshot().revision} />
+              <Stat label={copy().keep} value={copy().unknownRange} />
+              <Stat label={copy().compact} value={copy().unknownRange} />
+              <Stat label={copy().existing} value={snapshot().candidates.filter(message => message.type === "compaction").length} />
+            </div>
+            <p class="arforge-context-note">{copy().candidates}: {snapshot().candidates.length}</p>
+            <ul class="arforge-context-candidates" aria-label={copy().candidates}>
+              <For each={snapshot().candidates}>{message => <li><span>{message.type} · {message.id}</span><span>{formatter().time(message.createdAt)}</span></li>}</For>
+            </ul>
+            <Show when={!snapshot().candidates.length}><p class="arforge-context-note">{copy().none}</p></Show>
+            <details class="arforge-context-input-json">
+              <summary>{copy().inputJSON}</summary>
+              <pre>{snapshot().contextJSON}</pre>
+            </details>
+            <p class="arforge-context-note">{copy().unknownResult}</p>
+            <p class="arforge-context-note">{copy().rangeCaveat}</p>
+            <p class="arforge-context-note">{copy().confirmNote}</p>
+            <Show when={!selectedModel() || busy()}><p class="arforge-context-note" role="status">{busy() ? copy().busy : copy().modelMissing}</p></Show>
+            <button class="arforge-context-action" type="button" disabled={!selectedModel() || busy() || !snapshot().candidates.length || !["ready", "error"].includes(preview.phase)}
+              onClick={() => void previewController.confirm()}>{copy().confirm}</button>
+          </>}</Show>
+          <Show when={preview.phase === "admitted"}><p class="arforge-context-note" role="status">{copy().admitted}</p></Show>
+        </section>
 
         <Show when={systemPrompt()}>
           {(prompt) => (

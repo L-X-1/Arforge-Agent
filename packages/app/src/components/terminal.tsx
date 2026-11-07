@@ -14,7 +14,7 @@ import { useSDK } from "@/context/sdk"
 import { useServerSDK } from "@/context/server-sdk"
 import { terminalFontFamily, useSettings } from "@/context/settings"
 import type { LocalPTY } from "@/context/terminal"
-import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
+import { bindTerminalContainerFocus, disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
 import { terminalWriter } from "@/utils/terminal-writer"
 import { terminalWebSocketURL } from "@/utils/terminal-websocket-url"
 
@@ -126,6 +126,7 @@ const useTerminalUiBindings = (input: {
 
   input.container.addEventListener("pointerdown", input.handlePointerDown)
   input.cleanups.push(() => input.container.removeEventListener("pointerdown", input.handlePointerDown))
+  input.cleanups.push(bindTerminalContainerFocus(input.container, () => input.term.focus()))
 
   input.container.addEventListener("click", input.handleLinkClick, {
     capture: true,
@@ -358,8 +359,6 @@ export const Terminal = (props: TerminalProps) => {
     const t = term
     if (!t) return
     t.focus()
-    t.textarea?.focus()
-    setTimeout(() => t.textarea?.focus(), 0)
   }
   const handlePointerDown = () => {
     const activeElement = document.activeElement
@@ -398,7 +397,7 @@ export const Terminal = (props: TerminalProps) => {
         cursorStyle: "bar",
         cols: restoreSize?.cols,
         rows: restoreSize?.rows,
-        fontSize: 14,
+        fontSize: 13,
         fontFamily: terminalFontFamily(settings.appearance.terminalFont()),
         allowTransparency: false,
         convertEol: false,
@@ -413,6 +412,12 @@ export const Terminal = (props: TerminalProps) => {
       }
       _ghostty = g
       term = t
+      // Ghostty's focus() schedules a second, unconditional container focus.
+      // A newer rename/composer focus can happen before that callback. Use its
+      // actual input synchronously, including the focus performed by open().
+      t.focus = () => {
+        if (!disposed) t.textarea?.focus()
+      }
       setOptionIfSupported(t, "colorScheme", theme.mode() === "dark" ? "dark" : "light")
       output = terminalWriter((data, done) =>
         t.write(data, () => {
@@ -456,8 +461,7 @@ export const Terminal = (props: TerminalProps) => {
       if (local.autoFocus === true) {
         focusTerminal()
         local.onAutoFocus?.()
-      }
-      if (local.autoFocus !== true) {
+      } else {
         const restoreFocus = () => {
           const current = document.activeElement
           if (current !== container && !container.contains(current)) return
@@ -466,8 +470,6 @@ export const Terminal = (props: TerminalProps) => {
           if (active instanceof HTMLElement && active.isConnected) active.focus()
         }
         restoreFocus()
-        const timer = setTimeout(restoreFocus, 0)
-        cleanups.push(() => clearTimeout(timer))
       }
 
       if (typeof document !== "undefined" && document.fonts) {

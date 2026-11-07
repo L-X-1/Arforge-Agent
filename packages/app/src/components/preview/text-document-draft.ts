@@ -1,4 +1,6 @@
 import { TextDocument } from "@arforge-ai/schema/text-document"
+import { batch } from "solid-js"
+import { createStore } from "solid-js/store"
 
 export interface TextDraft {
   readonly format: 1
@@ -22,6 +24,13 @@ export function acknowledgeSave(draft: TextDraft, saved: TextDocument.Info): Tex
 export function createTextDraftRepository(storage: () => DraftStorage) {
   const memory = new Map<string, TextDraft | null>()
   const observed = new Map<string, string | null>()
+  // Presentation subscribers track a key without changing storage or close-guard behavior.
+  const [revisions, setRevisions] = createStore<Record<string, number>>({})
+  const [saves, setSaves] = createStore<Record<string, { baseVersion: string; saved: TextDocument.Info }>>({})
+  const remember = (key: string, draft: TextDraft | null) => {
+    memory.set(key, draft)
+    setRevisions(key, (revision) => (revision ?? 0) + 1)
+  }
   return {
     restore(key: string): TextDraft | undefined {
       if (memory.has(key)) return memory.get(key) ?? undefined
@@ -30,16 +39,38 @@ export function createTextDraftRepository(storage: () => DraftStorage) {
       if (raw === null) return
       const value: unknown = JSON.parse(raw)
       if (
-        !value || typeof value !== "object" || !("format" in value) || value.format !== 1 ||
-        !("base" in value) || !TextDocument.isInfo(value.base) ||
-        !("text" in value) || typeof value.text !== "string"
-      ) throw new Error("The stored draft could not be decoded. It was not deleted.")
+        !value ||
+        typeof value !== "object" ||
+        !("format" in value) ||
+        value.format !== 1 ||
+        !("base" in value) ||
+        !TextDocument.isInfo(value.base) ||
+        !("text" in value) ||
+        typeof value.text !== "string"
+      )
+        throw new Error("The stored draft could not be decoded. It was not deleted.")
       const draft: TextDraft = { format: 1, base: value.base, text: value.text }
       memory.set(key, draft)
       return draft
     },
-    remember(key: string, draft: TextDraft | null) {
-      memory.set(key, draft)
+    revision(key: string) {
+      return revisions[key] ?? 0
+    },
+    remember,
+    saveAcknowledgement(key: string) {
+      return saves[key]
+    },
+    acknowledge(key: string, submitted: TextDraft, saved: TextDocument.Info): TextDraft {
+      const latest = memory.get(key)
+      // Another editor may already have loaded or saved a newer disk revision.
+      if (latest && latest.base.version !== submitted.base.version) return latest
+      // An explicitly discarded draft must not be resurrected by a delayed response.
+      const next = acknowledgeSave(latest ?? { format: 1, base: saved, text: saved.text }, saved)
+      batch(() => {
+        remember(key, isDirty(next) ? next : null)
+        setSaves(key, { baseVersion: submitted.base.version, saved })
+      })
+      return next
     },
     flush(key: string) {
       if (!memory.has(key)) return

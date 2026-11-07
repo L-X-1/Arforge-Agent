@@ -309,11 +309,13 @@
 [data-sidebar-session-skeleton-row],
 [data-component="button"][data-sidebar-session-load-failure],
 [data-sidebar-session-empty] {
-  height: 32px;
+  min-height: 36px;
+  height: auto;
 }
 
 [data-sidebar-session-row][data-dense="true"] {
-  height: 28px;
+  min-height: 36px;
+  height: auto;
 }
 
 [data-sidebar-session-status-lane] {
@@ -828,3 +830,5 @@
     color: HighlightText;
   }
 }
+
+@media(pointer:coarse){[data-sidebar-session-row],[data-sidebar-session-skeleton-row],[data-component="button"][data-sidebar-session-load-failure],[data-sidebar-session-empty]{min-height:44px}[data-sidebar-session-row][data-dense="true"]{min-height:44px}}

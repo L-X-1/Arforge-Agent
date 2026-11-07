@@ -15,6 +15,8 @@ import { DurableRun } from "./runtime/durable-run"
 import * as RuntimeEvaluation from "./runtime/evaluation"
 import { SessionSchema } from "./session/schema"
 import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import { LLMError, UnknownProviderReason } from "@arforge-ai/llm"
+import { publicProviderFailure } from "./session/runner/publish-llm-event"
 
 export const OutcomeID = Learning.OutcomeID
 export type OutcomeID = Learning.OutcomeID
@@ -103,6 +105,18 @@ export class Service extends Context.Service<Service, Interface>()("@arforge/v2/
 
 const MaximumSync = 1_000
 const MinimumImpactCohort = 3
+
+/** Old runner outcomes retained only this typed diagnostic string. Do not infer
+ * quota/rate categories from an arbitrary or truncated body, or rewrite storage. */
+const retainedProviderMessage = (errorType: string, message: string): string | undefined => {
+  if (errorType !== "LLMError") return undefined
+  const match = /^RequestExecutor\.execute: Provider request failed with HTTP ([45]\d{2})(?::|$)/.exec(message)
+  if (!match) return undefined
+  return publicProviderFailure(new LLMError({
+    module: "Learning", method: "retainedProviderFailure",
+    reason: new UnknownProviderReason({ message: "Previously recorded provider request failed", status: Number(match[1]) }),
+  })).message
+}
 export const ProposalPolicy = {
   minimumFrequency: 3,
   minimumConfidence: 0.7,
@@ -140,6 +154,32 @@ const layer = Layer.effect(
         eq(LearningPatternTable.project_id, projectID),
         eq(LearningPatternTable.workspace_path, workspacePath),
       )
+
+    // Retained failure patterns copied the diagnostic into their description.
+    // Recover the user's input from its owned source row, never from provider text.
+    const projectRetainedPatterns = Effect.fn("Learning.projectRetainedPatterns")(function* (rows: ReadonlyArray<PatternRow>) {
+      const affected = rows.filter(row => row.type === "failure" && row.tags.includes("LLMError") &&
+        row.description.startsWith("Error: ") && retainedProviderMessage("LLMError", row.description.slice(7)) !== undefined)
+      if (!affected.length) return rows
+      const ownership = yield* currentOwnership
+      const sources = yield* db.select({
+        patternID: LearningOutcomePatternTable.pattern_id,
+        errorType: LearningOutcomeTable.error_type,
+        errorMessage: LearningOutcomeTable.error_message,
+        userInput: LearningOutcomeTable.user_input,
+      }).from(LearningOutcomePatternTable).innerJoin(LearningOutcomeTable, eq(LearningOutcomePatternTable.outcome_id, LearningOutcomeTable.id)).where(and(
+        eq(LearningOutcomePatternTable.tenant_id, ownership.tenantID), eq(LearningOutcomePatternTable.owner_user_id, ownership.userID),
+        outcomeScope(ownership), inArray(LearningOutcomePatternTable.pattern_id, affected.map(row => row.id)),
+      )).orderBy(desc(LearningOutcomeTable.time_created)).all().pipe(Effect.orDie)
+      return rows.map(row => {
+        if (!affected.some(item => item.id === row.id)) return row
+        const source = sources.find(item => item.patternID === row.id && retainedProviderMessage(item.errorType, item.errorMessage) !== undefined)
+        const message = source
+          ? retainedProviderMessage(source.errorType, source.errorMessage)
+          : retainedProviderMessage("LLMError", row.description.slice(7))
+        return { ...row, description: boundedText(`Error: ${message}${source ? ` | Input: ${source.userInput.slice(0, 100)}` : ""}`, 500) }
+      })
+    })
 
     type PersistInput = RecordInput & {
       readonly runID?: string
@@ -489,7 +529,7 @@ const layer = Layer.effect(
           : 0,
         topTags: facet(outcomes.flatMap((row) => row.tags)).slice(0, 10),
         recent: outcomes.slice(0, 5).map(toOutcome),
-        patterns: patterns.slice(0, 5).map(toPattern),
+        patterns: (yield* projectRetainedPatterns(patterns.slice(0, 5))).map(toPattern),
         impact: {
           status: enough ? "observed" : "insufficient_data",
           injectedCount: injected.length,
@@ -524,12 +564,12 @@ const layer = Layer.effect(
         .limit(100)
         .all()
         .pipe(Effect.orDie)
-      const rankedPatterns = patterns
+      const rankedPatterns = (yield* projectRetainedPatterns(patterns))
         .map((row) => ({ row, score: overlap(terms, tokenize(`${row.description} ${row.tags.join(" ")}`)) }))
         .filter((item) => item.score > 0)
         .toSorted((a, b) => b.score - a.score || b.row.frequency - a.row.frequency)
         .slice(0, 4)
-      const rankedOutcomes = outcomes
+      const rankedOutcomes = outcomes.map(row => ({ ...row, error_message: retainedProviderMessage(row.error_type, row.error_message) ?? row.error_message }))
         .filter((row) => row.fix_strategy || !row.success || row.user_feedback)
         .map((row) => ({
           row,
@@ -582,7 +622,7 @@ const layer = Layer.effect(
         .limit(ProposalPolicy.maximumCandidates)
         .all()
         .pipe(Effect.orDie)
-      return patterns.map(toPattern)
+      return (yield* projectRetainedPatterns(patterns)).map(toPattern)
     })
 
     const syncDogfood: Interface["syncDogfood"] = Effect.fn("Learning.syncDogfood")(function* (candidates) {
@@ -657,7 +697,7 @@ function toOutcome(row: OutcomeRow): Outcome {
     tools: row.tools,
     success: row.success,
     errorType: row.error_type,
-    errorMessage: row.error_message,
+    errorMessage: retainedProviderMessage(row.error_type, row.error_message) ?? row.error_message,
     userFeedback: row.user_feedback,
     fixStrategy: row.fix_strategy,
     regression: row.regression,

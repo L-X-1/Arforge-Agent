@@ -1,0 +1,34 @@
+[data-component="session-execution-overlay"] {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 30;
+  width: min(380px, 36vw);
+  min-height: 0;
+  box-shadow: var(--v2-elevation-floating);
+  animation: session-execution-enter 140ms ease-out;
+}
+[data-component="session-execution-overlay"] > .execution-dock.arforge-review-workbench.execution-dock--open { width: 100%; max-width: 100%; }
+[data-component="session-execution-overlay"][data-narrow] {
+  inset: 0;
+  width: 100%;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--v2-background-bg-base);
+}
+[data-component="session-execution-overlay"][data-narrow] > .execution-dock { border-radius: 0; border-inline: 0; }
+[data-component="session-execution-overlay"][data-narrow] .execution-dock__content { overflow-y: auto; overscroll-behavior: contain; }
+[data-component="session-execution-overlay"][data-narrow] .execution-dock__header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--v2-background-bg-base);
+}
+[data-component="session-execution-overlay"][data-narrow] .execution-workbench { flex: none; overflow: visible; }
+[data-component="session-execution-overlay"][data-narrow] .execution-workbench > .execution-dock__steps { max-height: none; }
+@keyframes session-execution-enter {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-component="session-execution-overlay"] { animation: none; }
+}

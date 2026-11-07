@@ -1,6 +1,7 @@
 import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
+import { Database } from "@arforge-ai/core/database/database"
 import { EventV2 } from "@arforge-ai/core/event"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
@@ -33,9 +34,18 @@ function parseBody(body: string) {
 
 function eventResponse() {
   return Effect.gen(function* () {
+    const principal = yield* Database.CurrentPrincipal
     yield* Effect.logInfo("global event connected")
     const events = Stream.callback<GlobalBusEvent>((queue) => {
-      const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+      const handler = ({ principal: owner, ...event }: GlobalBusEvent) => {
+        if (event.payload.type === "project.updated") {
+          const visible = owner
+            ? principal?.tenantID === owner.tenantID && principal?.userID === owner.userID
+            : principal && Database.isDefaultLocalPrincipal(principal)
+          if (!visible) return
+        }
+        Queue.offerUnsafe(queue, event)
+      }
       return Effect.acquireRelease(
         Effect.sync(() => GlobalBus.on("event", handler)),
         () => Effect.sync(() => GlobalBus.off("event", handler)),

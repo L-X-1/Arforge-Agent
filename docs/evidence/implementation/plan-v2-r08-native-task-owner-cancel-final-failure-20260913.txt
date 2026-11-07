@@ -1,5 +1,5 @@
 Final-source known failure, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/arforge
+Working directory: %ARFORGE_REPO%/packages/arforge
 Command: bun test --timeout 60000 test/session/prompt.test.ts -t 'Formal cancellation before response content'
 Exit code: 1
 

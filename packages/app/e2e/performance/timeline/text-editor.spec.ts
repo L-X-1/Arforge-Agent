@@ -2,6 +2,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/TextEditor"
@@ -55,6 +56,7 @@ async function setup(page: Page) {
 async function openEditor(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "notes.md", exact: true }).click()

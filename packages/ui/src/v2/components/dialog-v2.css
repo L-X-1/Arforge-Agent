@@ -174,3 +174,14 @@
     height: min(calc(100vh - 92px), 600px);
   }
 }
+
+/* R26/C08: the body scrolls independently of the title and decision actions. */
+[data-component="dialog-overlay"]{background:rgb(0 0 0 / 12%)}
+[data-component="dialog-v2"] [data-slot="dialog-container"]{max-width:calc(100vw - 32px);max-height:80dvh;background:var(--v2-background-bg-base);border-radius:16px}
+[data-component="dialog-v2"][data-size="normal"] [data-slot="dialog-container"]{width:480px;height:auto;max-height:80dvh}
+[data-component="dialog-v2"][data-size="large"] [data-slot="dialog-container"]{width:720px;max-height:80dvh}
+[data-component="dialog-v2"] [data-slot="dialog-content"]{min-height:0;overflow:hidden}
+[data-component="dialog-v2"] [data-slot="dialog-body"]{min-height:0;overflow-y:auto}
+[data-component="dialog-v2"] [data-slot="dialog-header"],[data-component="dialog-v2"] [data-slot="dialog-footer"]{flex-shrink:0}
+[data-component="dialog-v2"] [data-slot="dialog-close-button"]{width:32px;height:32px;border-radius:8px}
+@media(pointer:coarse){[data-component="dialog-v2"] [data-slot="dialog-close-button"]{width:44px;height:44px}}

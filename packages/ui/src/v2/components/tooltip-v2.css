@@ -69,3 +69,6 @@
     animation: none;
   }
 }
+
+/* C05: bounded help text also fits narrow viewports and keyboard focus. */
+[data-component="tooltip-v2"]{max-width:min(280px,calc(100vw - 16px));white-space:normal;overflow-wrap:anywhere}

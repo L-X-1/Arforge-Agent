@@ -1,3 +1,4 @@
+import { useConfirmAction, confirmationSnapshot } from "@/components/confirm-action"
 import { bindManagementApi, createManagementScope, loadManagementPartition } from "@/components/settings-v2/management-async"
 import { ManagementStatus } from "@/components/settings-v2/management-status"
 import "@/components/settings-v2/management-review.css"
@@ -13,10 +14,14 @@ import { useSessionOperationsAuxText } from "./session-operations-aux-text"
 
 type QueueItem = Awaited<ReturnType<OperationsApi["sessions"]["promptQueueList"]>>[number]
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
 export function SessionPromptQueueControl(props: { sessionID: string; disabled?: boolean }) {
   const serverSDK = useServerSDK()
+  const confirmAction = useConfirmAction()
+  const confirmCurrent = (message: string) => {
+    const snapshot = confirmationSnapshot(state)
+    if (snapshot === undefined) return Promise.resolve(false)
+    return confirmAction(message, { isCurrent: () => !blocked() && confirmationSnapshot(state) === snapshot })
+  }
   const language = useLanguage()
   const c = useSessionOperationsText()
   const aux = useSessionOperationsAuxText()
@@ -24,7 +29,7 @@ export function SessionPromptQueueControl(props: { sessionID: string; disabled?:
     loading: true,
     fresh: false,
     saving: false,
-    error: "",
+    error: undefined as unknown,
     notice: "",
     items: [] as QueueItem[],
     editingItem: undefined as QueueItem | undefined,
@@ -41,7 +46,7 @@ export function SessionPromptQueueControl(props: { sessionID: string; disabled?:
     () => api().promptQueueList({ sessionID }), {
       start: () => setState({ loading: true, fresh: false, error: "" }),
       commit: (items) => setState({ items: [...items], fresh: true }),
-      fail: (error) => setState("error", message(error)),
+      fail: (error) => setState("error", error),
       finish: () => setState("loading", false),
     })
   const cancelEdit = () => setState({ editingItem: undefined, editingText: "" })
@@ -62,14 +67,14 @@ export function SessionPromptQueueControl(props: { sessionID: string; disabled?:
       cancelEdit()
       setState("notice", "Queued prompt updated without changing FIFO position.")
     } catch (error) {
-      if (scope.live()) setState({ error: message(error), fresh: false })
+      if (scope.live()) setState({ error, fresh: false })
     } finally {
       if (scope.live()) setState("saving", false)
     }
   }
   const remove = async (item: QueueItem) => {
     if (blocked()) return
-    if (!window.confirm(`Remove queued prompt “${item.prompt.text.slice(0, 80)}”?`)) return
+    if (!await confirmCurrent(`Remove queued prompt “${item.prompt.text.slice(0, 80)}”?`)) return
     setState({ saving: true, error: "", notice: "" })
     try {
       await api().promptQueueRemove({
@@ -78,9 +83,10 @@ export function SessionPromptQueueControl(props: { sessionID: string; disabled?:
         expectedAdmittedSeq: item.admittedSeq,
       })
       setState("items", (items) => items.filter((candidate) => candidate.id !== item.id))
+      if (state.editingItem?.id === item.id) cancelEdit()
       setState("notice", "Queued prompt removed.")
     } catch (error) {
-      if (scope.live()) setState({ error: message(error), fresh: false })
+      if (scope.live()) setState({ error, fresh: false })
     } finally {
       if (scope.live()) setState("saving", false)
     }

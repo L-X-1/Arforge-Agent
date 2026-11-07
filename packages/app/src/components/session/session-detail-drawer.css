@@ -1,0 +1,71 @@
+[data-component="session-detail-drawer"] {
+  position: fixed;
+  z-index: 45;
+  inset-block-start: 0;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100vw);
+  max-width: 100%;
+  min-height: 0;
+  border-inline-start: 1px solid var(--v2-border-border-muted);
+  background: var(--v2-background-bg-layer-01);
+  color: var(--v2-text-text-base);
+  font-family: var(--font-family-sans);
+  font-size: 14px;
+  box-shadow: -8px 0 28px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 24%));
+  animation: session-detail-enter 140ms ease-out;
+}
+.session-detail-drawer-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--v2-border-border-muted);
+}
+.session-detail-drawer-heading { flex: 1; min-width: 0; }
+.session-detail-drawer-heading h2 { margin: 0; font-size: 17px; font-weight: 500; line-height: 1.5; }
+.session-detail-drawer-heading p {
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
+.session-detail-drawer-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+[data-component="session-detail-drawer"] .session-detail-drawer-tabs { width: 100%; height: 100%; min-height: 0; overflow: visible; }
+.session-detail-drawer-footer { flex: none; padding: 12px max(16px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); border-top: 1px solid var(--v2-border-border-muted); }
+.session-detail-drawer-loading, .session-detail-drawer-error { padding: 20px 16px; overflow-wrap: anywhere; }
+[data-component="session-detail-drawer"] .settings-v2-panel { width: 100%; height: auto; min-height: 100%; overflow: visible; }
+[data-component="session-detail-drawer"] .session-settings-header { position: static; padding: 16px; gap: 12px; background: transparent; }
+[data-component="session-detail-drawer"] .session-settings-header > .settings-v2-tab-title { display: none; }
+[data-component="session-detail-drawer"] .session-settings-body { padding: 0 16px 20px; gap: 16px; }
+[data-component="session-detail-drawer"] .session-settings-body > section { padding: 16px; border-radius: 12px; }
+[data-component="session-detail-drawer"] .session-settings-body .grid { grid-template-columns: minmax(0, 1fr); }
+[data-component="session-detail-drawer"] .session-settings-context { flex-wrap: wrap; gap: 8px; }
+[data-component="session-detail-drawer"] .session-settings-context-copy { flex: 1; }
+[data-component="session-detail-drawer"] :is(input, textarea, pre, code, select) { max-width: 100%; }
+[data-component="session-detail-drawer"] :is(pre, table) { overflow-x: auto; }
+[data-component="session-detail-drawer"] :is(button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+@keyframes session-detail-enter {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (max-width: 639px) {
+  [data-component="session-detail-drawer"] { width: 100%; }
+}
+@media (pointer: coarse) {
+  [data-component="session-detail-drawer"] button { min-height: 44px; min-width: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-component="session-detail-drawer"] { animation: none; }
+}
+@media (forced-colors: active) {
+  [data-component="session-detail-drawer"] :is(button, input, textarea, select):focus-visible { outline-color: Highlight; }
+}

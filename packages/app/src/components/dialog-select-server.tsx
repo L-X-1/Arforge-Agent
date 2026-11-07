@@ -9,7 +9,7 @@ import { TextField } from "@arforge-ai/ui/text-field"
 import { useMutation } from "@tanstack/solid-query"
 import { showToast } from "@/utils/toast"
 import { useNavigate } from "@solidjs/router"
-import { createEffect, createMemo, createResource, Show } from "solid-js"
+import { createEffect, createMemo, createRenderEffect, createResource, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { ServerHealthIndicator, ServerRow } from "@/components/server/server-row"
 import { useGlobal } from "@/context/global"
@@ -20,6 +20,7 @@ import { detectServerProtocol } from "@/utils/server-protocol"
 import { type ServerHealth, useCheckServerHealth } from "@/utils/server-health"
 import { useSettings } from "@/context/settings"
 import { useTabs } from "@/context/tabs"
+import { createScopeRequestGuard } from "@/utils/scope-request"
 
 const DEFAULT_USERNAME = "arforge"
 
@@ -221,7 +222,54 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     },
   })
 
+  // These fingerprints stay in memory. A URL alone does not identify the
+  // credentials/revision that was checked, and returning to an old source or
+  // re-adding a removed target must not revive an earlier form operation.
+  const identity = (conn?: ServerConnection.Any) => conn && [
+    ServerConnection.key(conn), conn.type, conn.displayName, conn.label,
+    conn.http.url, conn.http.username, conn.http.password,
+    conn.type === "http" ? conn.authToken : undefined,
+  ]
+  const formIdentity = () => {
+    const target = store.editServer.id ?? normalizeServerUrl(store.addServer.url)
+    const destination = normalizeServerUrl(store.editServer.id ? store.editServer.value : store.addServer.url)
+    return [
+      server.key, identity(server.current),
+      identity(server.list.find(conn => conn.type === "http" && conn.http.url === target)),
+      identity(server.list.find(conn => conn.type === "http" && conn.http.url === destination)),
+      store.addServer.showForm, store.editServer.id,
+    ]
+  }
+  const scope = createScopeRequestGuard(() => JSON.stringify([
+    ...formIdentity(), store.addServer.url, store.addServer.name,
+    store.addServer.username, store.addServer.password,
+    store.editServer.value, store.editServer.name,
+    store.editServer.username, store.editServer.password,
+  ]))
+  // A display-name edit does not change a health request's connection. Keep
+  // that pending result valid while fencing URL, credentials and lifetime.
+  const previewScope = createScopeRequestGuard(() => JSON.stringify([
+    ...formIdentity(), store.addServer.url, store.addServer.username, store.addServer.password,
+    store.editServer.value, store.editServer.username, store.editServer.password,
+  ]))
+  let disposed = false
+  createRenderEffect(() => { scope.current(); previewScope.current() })
+  onCleanup(() => { disposed = true; scope.invalidate() })
+  const captureForm = (guard = scope) => {
+    const request = guard.capture()
+    return () => !disposed && guard.isCurrent(request)
+  }
+  const preview = (part: "addServer" | "editServer", value: string, username: string, password: string) => {
+    const current = captureForm(previewScope)
+    void previewStatus(value, username, password, next => {
+      if (current()) setStore(part, { status: next })
+    })
+  }
+  type Submission = { value: string; name: string; username: string; password: string; current: () => boolean }
+
   const resetAdd = () => {
+    scope.invalidate()
+    previewScope.invalidate()
     setStore("addServer", {
       url: "",
       name: "",
@@ -233,6 +281,8 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     })
   }
   const resetEdit = () => {
+    scope.invalidate()
+    previewScope.invalidate()
     setStore("editServer", {
       id: undefined,
       value: "",
@@ -245,8 +295,9 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   }
 
   const addMutation = useMutation(() => ({
-    mutationFn: async (value: string) => {
-      const normalized = normalizeServerUrl(value)
+    mutationFn: async (input: Submission) => {
+      if (!input.current()) return
+      const normalized = normalizeServerUrl(input.value)
       if (!normalized) {
         resetAdd()
         return
@@ -256,20 +307,22 @@ export function useServerManagementController(options: { onSelect?: () => void; 
         type: "http",
         http: { url: normalized },
       }
-      if (store.addServer.name.trim()) conn.displayName = store.addServer.name.trim()
-      if (store.addServer.password) conn.http.password = store.addServer.password
-      if (store.addServer.password && store.addServer.username) conn.http.username = store.addServer.username
+      if (input.name.trim()) conn.displayName = input.name.trim()
+      if (input.password) conn.http.password = input.password
+      if (input.password && input.username) conn.http.username = input.username
       const result = await checkServerHealth(conn.http)
+      if (!input.current()) return
       if (!result.healthy) {
         setStore("addServer", { error: language.t("dialog.server.add.error") })
         return
       }
-      if (
-        !settings.general.newLayoutDesigns() &&
-        (await detectServerProtocol(conn.http, platform.fetch ?? globalThis.fetch)) === "v2"
-      ) {
-        setStore("addServer", { error: language.t("dialog.server.add.error") })
-        return
+      if (!settings.general.newLayoutDesigns()) {
+        const protocol = await detectServerProtocol(conn.http, platform.fetch ?? globalThis.fetch)
+        if (!input.current()) return
+        if (protocol === "v2") {
+          setStore("addServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
       }
 
       resetAdd()
@@ -283,7 +336,8 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   }))
 
   const editMutation = useMutation(() => ({
-    mutationFn: async (input: { original: ServerConnection.Any; value: string }) => {
+    mutationFn: async (input: Submission & { original: ServerConnection.Any }) => {
+      if (!input.current()) return
       if (input.original.type !== "http") return
       const normalized = normalizeServerUrl(input.value)
       if (!normalized) {
@@ -291,9 +345,9 @@ export function useServerManagementController(options: { onSelect?: () => void; 
         return
       }
 
-      const name = store.editServer.name.trim() || undefined
-      const username = store.editServer.username || undefined
-      const password = store.editServer.password || undefined
+      const name = input.name.trim() || undefined
+      const username = input.username || undefined
+      const password = input.password || undefined
       const existingName = input.original.displayName
       if (
         normalized === input.original.http.url &&
@@ -311,16 +365,18 @@ export function useServerManagementController(options: { onSelect?: () => void; 
         http: { url: normalized, username, password },
       }
       const result = await checkServerHealth(conn.http)
+      if (!input.current()) return
       if (!result.healthy) {
         setStore("editServer", { error: language.t("dialog.server.add.error") })
         return
       }
-      if (
-        !settings.general.newLayoutDesigns() &&
-        (await detectServerProtocol(conn.http, platform.fetch ?? globalThis.fetch)) === "v2"
-      ) {
-        setStore("editServer", { error: language.t("dialog.server.add.error") })
-        return
+      if (!settings.general.newLayoutDesigns()) {
+        const protocol = await detectServerProtocol(conn.http, platform.fetch ?? globalThis.fetch)
+        if (!input.current()) return
+        if (protocol === "v2") {
+          setStore("editServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
       }
       if (normalized === input.original.http.url) {
         server.add(conn)
@@ -396,9 +452,7 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   const handleAddChange = (value: string) => {
     if (addMutation.isPending) return
     setStore("addServer", { url: value, error: "" })
-    void previewStatus(value, store.addServer.username, store.addServer.password, (next) =>
-      setStore("addServer", { status: next }),
-    )
+    preview("addServer", value, store.addServer.username, store.addServer.password)
   }
 
   const handleAddNameChange = (value: string) => {
@@ -409,25 +463,19 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   const handleAddUsernameChange = (value: string) => {
     if (addMutation.isPending) return
     setStore("addServer", { username: value, error: "" })
-    void previewStatus(store.addServer.url, value, store.addServer.password, (next) =>
-      setStore("addServer", { status: next }),
-    )
+    preview("addServer", store.addServer.url, value, store.addServer.password)
   }
 
   const handleAddPasswordChange = (value: string) => {
     if (addMutation.isPending) return
     setStore("addServer", { password: value, error: "" })
-    void previewStatus(store.addServer.url, store.addServer.username, value, (next) =>
-      setStore("addServer", { status: next }),
-    )
+    preview("addServer", store.addServer.url, store.addServer.username, value)
   }
 
   const handleEditChange = (value: string) => {
     if (editMutation.isPending) return
     setStore("editServer", { value, error: "" })
-    void previewStatus(value, store.editServer.username, store.editServer.password, (next) =>
-      setStore("editServer", { status: next }),
-    )
+    preview("editServer", value, store.editServer.username, store.editServer.password)
   }
 
   const handleEditNameChange = (value: string) => {
@@ -438,17 +486,13 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   const handleEditUsernameChange = (value: string) => {
     if (editMutation.isPending) return
     setStore("editServer", { username: value, error: "" })
-    void previewStatus(store.editServer.value, value, store.editServer.password, (next) =>
-      setStore("editServer", { status: next }),
-    )
+    preview("editServer", store.editServer.value, value, store.editServer.password)
   }
 
   const handleEditPasswordChange = (value: string) => {
     if (editMutation.isPending) return
     setStore("editServer", { password: value, error: "" })
-    void previewStatus(store.editServer.value, store.editServer.username, value, (next) =>
-      setStore("editServer", { status: next }),
-    )
+    preview("editServer", store.editServer.value, store.editServer.username, value)
   }
 
   const mode = createMemo<"list" | "add" | "edit">(() => {
@@ -465,10 +509,12 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   const resetForm = () => {
     resetAdd()
     resetEdit()
+    addMutation.reset()
+    editMutation.reset()
   }
 
   const startAdd = () => {
-    resetEdit()
+    resetForm()
     setStore("addServer", {
       showForm: true,
       url: "",
@@ -481,7 +527,7 @@ export function useServerManagementController(options: { onSelect?: () => void; 
   }
 
   const startEdit = (conn: ServerConnection.Http) => {
-    resetAdd()
+    resetForm()
     setStore("editServer", {
       id: conn.http.url,
       value: conn.http.url,
@@ -497,14 +543,21 @@ export function useServerManagementController(options: { onSelect?: () => void; 
     if (mode() === "add") {
       if (addMutation.isPending) return
       setStore("addServer", { error: "" })
-      addMutation.mutate(store.addServer.url)
+      addMutation.mutate({
+        value: store.addServer.url, name: store.addServer.name,
+        username: store.addServer.username, password: store.addServer.password, current: captureForm(),
+      })
       return
     }
     const original = editing()
     if (!original) return
     if (editMutation.isPending) return
     setStore("editServer", { error: "" })
-    editMutation.mutate({ original, value: store.editServer.value })
+    editMutation.mutate({
+      original: { ...original, http: { ...original.http } }, value: store.editServer.value,
+      name: store.editServer.name, username: store.editServer.username,
+      password: store.editServer.password, current: captureForm(),
+    })
   }
 
   const isFormMode = createMemo(() => mode() !== "list")

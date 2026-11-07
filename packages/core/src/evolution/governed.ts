@@ -4,6 +4,7 @@ import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { Project } from "@arforge-ai/schema/project"
 import { Context, Effect, Layer, Schema } from "effect"
 import * as ActionGateway from "../action-gateway"
+import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import * as ControlClaimIndex from "../runtime/control-claim-index"
 import { ControlPrincipal } from "../runtime/control-principal"
@@ -12,6 +13,7 @@ import { AbsolutePath } from "../schema"
 import { canonicalHash } from "../util/canonical-hash"
 import {
   DurableEvolutionV1,
+  DurableEvolutionIdentityError,
   type ArtifactInput,
   type ProposalProjection,
   type TrustedEvolutionIdentity,
@@ -432,7 +434,7 @@ const layer = Layer.effect(
     const durable = yield* DurableEvolutionV1.Service
     const exposures = yield* EvolutionExposureV1.Service
 
-    const execute = <A>(mutation: Mutation<A>): Effect.Effect<A, unknown> =>
+    const executeOwned = <A>(mutation: Mutation<A>): Effect.Effect<A, unknown> =>
       Effect.gen(function* () {
         const principal = { tenantID: mutation.identity.tenantID, userID: mutation.identity.userID }
         const claim = yield* claims
@@ -539,6 +541,20 @@ const layer = Layer.effect(
           ),
         )
         return yield* executeWithLease
+      })
+
+    const execute = <A>(mutation: Mutation<A>): Effect.Effect<A, unknown> =>
+      Effect.gen(function* () {
+        const principal = { tenantID: mutation.identity.tenantID, userID: mutation.identity.userID }
+        const caller = yield* Database.CurrentPrincipal
+        if (caller && (caller.tenantID !== principal.tenantID || caller.userID !== principal.userID))
+          return yield* new DurableEvolutionIdentityError({
+            reason: "Evolution mutation identity does not match the current database principal.",
+          })
+        // The claim's short SQL scope ends before lease acquisition. Retain
+        // only its trusted identity across approval, execution and cleanup;
+        // each query/transaction still establishes its own database scope.
+        return yield* Database.principalContext(principal, executeOwned(mutation))
       })
 
     const createProposalWith = (input: CreateProposalInput, mode: GovernanceMode) => {

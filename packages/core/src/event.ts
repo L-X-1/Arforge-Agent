@@ -248,12 +248,25 @@ export const commitDurableEventInTransaction = Effect.fn("EventV2.commitDurableE
       }),
     )
   }
+  const principal = yield* Database.CurrentPrincipal
+  const effectivePrincipal = principal ?? Database.DefaultLocalPrincipal
+  const ownership = principal ? { tenant_id: principal.tenantID, owner_user_id: principal.userID } : {}
   const row = yield* input.transaction
-    .select({ seq: EventSequenceTable.seq, ownerID: EventSequenceTable.owner_id })
+    .select({
+      seq: EventSequenceTable.seq,
+      ownerID: EventSequenceTable.owner_id,
+      tenantID: EventSequenceTable.tenant_id,
+      userID: EventSequenceTable.owner_user_id,
+    })
     .from(EventSequenceTable)
     .where(eq(EventSequenceTable.aggregate_id, aggregateID))
     .get()
     .pipe(Effect.orDie)
+  if (row && (row.tenantID !== effectivePrincipal.tenantID || row.userID !== effectivePrincipal.userID))
+    return yield* Effect.die(new InvalidDurableEventError({
+      type: input.event.type,
+      message: "Durable aggregate belongs to a different principal",
+    }))
   const latest = row?.seq ?? -1
   if (input.expectedSequence !== undefined && latest !== input.expectedSequence)
     return yield* Effect.die(new AggregateSequenceConflictError(aggregateID, input.expectedSequence, latest))
@@ -334,7 +347,7 @@ export const commitDurableEventInTransaction = Effect.fn("EventV2.commitDurableE
   if (input.beforeInsert) yield* input.beforeInsert(committedEvent, seq, input.transaction)
   yield* input.transaction
     .insert(EventSequenceTable)
-    .values([{ aggregate_id: aggregateID, seq, owner_id: input.replay?.ownerID }])
+    .values([{ ...ownership, aggregate_id: aggregateID, seq, owner_id: input.replay?.ownerID }])
     .onConflictDoUpdate({
       target: EventSequenceTable.aggregate_id,
       set: {
@@ -348,6 +361,7 @@ export const commitDurableEventInTransaction = Effect.fn("EventV2.commitDurableE
     .insert(EventTable)
     .values([
       {
+        ...ownership,
         id: input.event.id,
         aggregate_id: aggregateID,
         seq,
@@ -604,7 +618,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/Event") {}
 
-export const allBounded = (events: Interface, capacity: number) =>
+export const allBounded = (events: Pick<Interface, "listen">, capacity: number) =>
   Effect.gen(function* () {
     const queue = yield* Queue.dropping<Payload, SubscriberOverflowError>(capacity)
     const unsubscribe = yield* events.listen((event) =>
@@ -634,7 +648,8 @@ export const layerWith = (options?: LayerOptions) =>
       const projectors = new Map<string, Subscriber[]>()
       // TODO: Bind durable projectors to exact type+version before supporting incompatible historical payloads.
       const listeners = new Array<Subscriber>()
-      const { db } = yield* Database.Service
+      const database = yield* Database.Service
+      const { db } = database
 
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
@@ -711,10 +726,13 @@ export const layerWith = (options?: LayerOptions) =>
                     )
                     .pipe(Effect.orDie)
                   if (committed?.inserted) {
-                    yield* Effect.forEach(
-                      pubsub.durable.get(committed.aggregateID) ?? [],
-                      (wake) => PubSub.publish(wake, undefined),
-                      { discard: true },
+                    yield* Database.afterCommit(
+                      database,
+                      Effect.forEach(
+                        pubsub.durable.get(committed.aggregateID) ?? [],
+                        (wake) => PubSub.publish(wake, undefined),
+                        { discard: true },
+                      ),
                     )
                   }
                   return committed?.inserted ? committed : undefined
@@ -814,16 +832,19 @@ export const layerWith = (options?: LayerOptions) =>
         )
 
       function notify(event: Payload, isolateListeners: boolean) {
-        return Effect.gen(function* () {
-          yield* Effect.forEach(
-            listeners,
-            (listener) => (isolateListeners ? observe(event, listener) : listener(event)),
-            { discard: true },
-          )
-          const typed = pubsub.typed.get(event.type)
-          if (typed) yield* PubSub.publish(typed, event)
-          yield* PubSub.publish(pubsub.all, event)
-        })
+        return Database.afterCommit(
+          database,
+          Effect.gen(function* () {
+            yield* Effect.forEach(
+              listeners,
+              (listener) => (isolateListeners ? observe(event, listener) : listener(event)),
+              { discard: true },
+            )
+            const typed = pubsub.typed.get(event.type)
+            if (typed) yield* PubSub.publish(typed, event)
+            yield* PubSub.publish(pubsub.all, event)
+          }),
+        )
       }
 
       function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {

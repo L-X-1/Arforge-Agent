@@ -4,9 +4,10 @@ import * as http from "node:http"
 import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
-import { app } from "electron"
+import { app, dialog } from "electron"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -16,7 +17,8 @@ import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
 import { APP_IDS, APP_NAMES, CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
-import { forwardInitializationFailure } from "./initialization"
+import { forwardInitializationFailure, readyLocalServer } from "./initialization"
+import { createQuitCoordinator, createStartupGate } from "./lifecycle"
 import { isolatedRuntimeEnv, shouldRunLegacyProfileMigration } from "./isolation-env"
 import { exportDebugLogs, initCrashReporter, initLogging, startNetLog, write as writeLog } from "./logging"
 import { parseMarkdown } from "./markdown"
@@ -38,6 +40,8 @@ import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import { safeWebContentsURL } from "./window-state"
 import {
   getLastFocusedWindow,
+  hasMainWindows,
+  closeMainWindowsForQuit,
   registerRendererProtocol,
   setRelaunchHandler,
   setAppQuitting,
@@ -52,6 +56,9 @@ import { migrate } from "./migrate"
 import { shouldDisableHardwareAcceleration } from "./rendering"
 import { resolveRelaunchOptions } from "./relaunch"
 import { cleanupStoreFiles } from "./store-cleanup"
+import { desktopProfile } from "./profile"
+import { dispatchDesktopEntry } from "./postgres-maintenance"
+import { postgresMaintenanceCopy } from "./postgres-maintenance-copy"
 
 const TEST_ONBOARDING = process.env.ARFORGE_TEST_ONBOARDING === "1"
 const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
@@ -86,8 +93,8 @@ function emitDeepLinks(urls: string[]) {
 async function killSidecar() {
   if (!server) return
   const current = server
-  server = null
   await current.stop()
+  if (server === current) server = null
 }
 
 function ensureLoopbackNoProxy() {
@@ -119,15 +126,6 @@ const main = Effect.gen(function* () {
     isAbsolute(acceptanceUserData) &&
     resolve(acceptanceUserData) === acceptanceUserData
 
-  // on macOS apps run in `/` which can cause issues with ripgrep
-  // A validated isolated acceptance instance must retain its explicitly scoped
-  // workspace instead of silently switching back to the real user's home.
-  if (!isolatedAcceptanceInstance) {
-    try {
-      process.chdir(homedir())
-    } catch {}
-  }
-
   process.env.ARFORGE_DISABLE_EMBEDDED_WEB_UI = "true"
 
   const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.arforge.desktop.dev"
@@ -148,18 +146,40 @@ const main = Effect.gen(function* () {
   })()
   app.setName(app.isPackaged ? APP_NAMES[CHANNEL] : "Arforge Dev")
   app.setAppUserModelId(appId)
+  const profile = desktopProfile({
+    appData: app.getPath("appData"),
+    appId,
+    commandLineUserData: acceptanceUserData,
+    environmentUserData: process.env.ARFORGE_DESKTOP_USER_DATA_DIR,
+  })
   app.setPath(
     "userData",
     isolatedAcceptanceInstance
       ? acceptanceUserData
       : onboardingTestRoot
         ? join(onboardingTestRoot, "desktop")
-        : join(app.getPath("appData"), appId),
+        : profile.userData,
   )
   if (isolatedAcceptanceInstance) app.setPath("sessionData", join(acceptanceUserData, "session"))
   else if (onboardingTestRoot) app.setPath("sessionData", join(onboardingTestRoot, "session"))
+  else if (profile.sessionData) app.setPath("sessionData", profile.sessionData)
+  if (profile.documents && !onboardingTestRoot) {
+    mkdirSync(profile.documents, { recursive: true })
+    app.setPath("documents", profile.documents)
+  }
+  const portableHome = profile.sessionData && process.env.ARFORGE_HOME ? resolve(process.env.ARFORGE_HOME) : undefined
+  if (!isolatedAcceptanceInstance) {
+    if (portableHome) {
+      mkdirSync(portableHome, { recursive: true })
+      process.chdir(portableHome)
+    } else {
+      // Keep the established normal launch directory when no portable profile is selected.
+      try {
+        process.chdir(homedir())
+      } catch {}
+    }
+  }
   if (isolatedAcceptanceInstance) {
-    app.setPath("documents", join(acceptanceUserData, "documents"))
     const isolatedEnv = isolatedRuntimeEnv(acceptanceUserData)
     for (const directory of Object.values(isolatedEnv)) mkdirSync(directory, { recursive: true })
     Object.assign(process.env, isolatedEnv)
@@ -183,13 +203,22 @@ const main = Effect.gen(function* () {
       },
     },
   )
+  const startupGate = createStartupGate()
   const stopSidecars = async () => {
-    await killSidecar()
-    wslServers.stopAll()
+    startupGate.close()
+    await Promise.all([killSidecar(), wslServers.stopAll()])
   }
+  const shutdownFailure = (error: unknown) => {
+    logger.error("owned backend shutdown failed", error)
+    dialog.showErrorBox(
+      "Arforge could not finish shutting down",
+      "An owned backend has not exited. Close active terminals and retry Quit. Your other applications and shared services were not stopped.",
+    )
+  }
+  const shutdown = createQuitCoordinator({ stop: stopSidecars, quit: () => app.quit(), onError: shutdownFailure })
   const relaunch = () => {
     setAppQuitting()
-    void stopSidecars().finally(() => {
+    void shutdown.stop().then(() => {
       app.relaunch(
         resolveRelaunchOptions({
           isPackaged: app.isPackaged,
@@ -200,7 +229,7 @@ const main = Effect.gen(function* () {
         }),
       )
       app.exit(0)
-    })
+    }, shutdownFailure)
   }
 
   try {
@@ -250,15 +279,33 @@ const main = Effect.gen(function* () {
     emitDeepLinks([url])
   })
 
-  app.on("before-quit", () => {
+  let preparingQuit: Promise<void> | undefined
+  app.on("before-quit", (event) => {
+    if (preparingQuit) {
+      event.preventDefault()
+      return
+    }
+    if (hasMainWindows()) {
+      event.preventDefault()
+      setAppQuitting()
+      preparingQuit = closeMainWindowsForQuit().then(
+        (closed) => {
+          preparingQuit = undefined
+          if (closed) app.quit()
+          else setAppQuitting(false)
+        },
+        () => {
+          preparingQuit = undefined
+          setAppQuitting(false)
+        },
+      )
+      return
+    }
     setAppQuitting()
-    void stopSidecars()
+    shutdown.beforeQuit(event)
   })
 
-  app.on("will-quit", () => {
-    setAppQuitting()
-    void stopSidecars()
-  })
+  app.on("window-all-closed", () => app.quit())
 
   app.on("child-process-gone", (_event, details) => {
     writeLog("utility", "child process gone", { details }, "error")
@@ -275,7 +322,7 @@ const main = Effect.gen(function* () {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       setAppQuitting()
-      void stopSidecars().finally(() => app.exit(0))
+      void shutdown.stop().then(() => app.exit(0), shutdownFailure)
     })
   }
 
@@ -396,50 +443,70 @@ const main = Effect.gen(function* () {
 
     logger.log("spawning sidecar", { url })
     const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, username, password, {
-        userDataPath: app.getPath("userData"),
-        onStdout: (message) => writeLog("server", "stdout", { message }),
-        onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
-        onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
-      }),
+      startupGate.start(
+        () => {
+          const windows = restoreMainWindows()
+          if (windows.length)
+            createMenu({
+              trigger: (id) => {
+                const win = getLastFocusedWindow()
+                if (win) sendMenuCommand(win, id)
+              },
+              relaunch,
+            })
+        },
+        () =>
+          spawnLocalServer(hostname, port, username, password, {
+            userDataPath: app.getPath("userData"),
+            onListener: (listener) => {
+              server = listener
+            },
+            onStdout: (message) => writeLog("server", "stdout", { message }),
+            onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
+            onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+          }),
+      ),
     )
     server = listener
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username,
-      password,
-    })
+    const initialized = yield* Effect.promise(() =>
+      readyLocalServer(
+        { listener, health },
+        {
+          url,
+          username,
+          password,
+        },
+      ),
+    )
+    yield* Deferred.succeed(serverReady, initialized)
 
     if (process.platform === "win32") {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
-    yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("30 seconds"),
-      Effect.catch((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-    )
-
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
 
   yield* Fiber.await(loadingTask)
-
-  const windows = restoreMainWindows()
-  if (windows.length) {
-    createMenu({
-      trigger: (id) => {
-        const win = getLastFocusedWindow()
-        if (win) sendMenuCommand(win, id)
-      },
-      relaunch: () => {
-        relaunch()
-      },
-    })
-  }
 })
 
-Effect.runFork(main)
+dispatchDesktopEntry({
+  argv: process.argv,
+  normal: () => {
+    Effect.runFork(main)
+  },
+  maintenance: (mode) => {
+    void import("./postgres-maintenance-main")
+      .then(({ runPostgresMaintenance }) =>
+        runPostgresMaintenance(mode, fileURLToPath(new URL("./postgres-maintenance-worker.js", import.meta.url))),
+      )
+      .catch(() => {
+        void app.whenReady().then(() => {
+          const copy = postgresMaintenanceCopy(app.getLocale())
+          dialog.showErrorBox(copy.title, copy.startupFailed)
+          // A live owned utility is retained by its controller on cleanup failure.
+          app.exit(1)
+        })
+      })
+  },
+})

@@ -34,6 +34,7 @@ export type LinuxDisplayBackend = "wayland" | "auto"
 export type TitlebarTheme = {
   mode: "light" | "dark"
   scheme?: "system" | "light" | "dark"
+  locale?: string
 }
 export type FatalRendererError = {
   error: string
@@ -68,6 +69,7 @@ export type ElectronAPI = {
   storeClear: (name: string) => Promise<void>
   storeKeys: (name: string) => Promise<string[]>
   storeLength: (name: string) => Promise<number>
+  onPrepareClose: (callback: () => Promise<void>) => () => void
 
   getWindowCount: () => Promise<number>
   getWindowID: () => Promise<string>

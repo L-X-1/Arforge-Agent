@@ -151,12 +151,13 @@ function CommandPaletteView(props: {
   })
 
   createEffect(() => {
-    props.highlight(activeEntry())
+    props.highlight(entries.loading ? undefined : activeEntry())
   })
 
   let resultsRef: HTMLDivElement | undefined
 
   const move = (delta: -1 | 1) => {
+    if (entries.loading) return
     const count = visibleEntries().length
     if (count === 0) return
     setActive((index) => (index + delta + count) % count)
@@ -166,6 +167,7 @@ function CommandPaletteView(props: {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === "ArrowDown") {
       event.preventDefault()
       move(1)
@@ -178,6 +180,7 @@ function CommandPaletteView(props: {
     }
     if (event.key === "Enter") {
       event.preventDefault()
+      if (entries.loading) return
       props.select(activeEntry())
       return
     }
@@ -204,7 +207,7 @@ function CommandPaletteView(props: {
           />
         </div>
         <ScrollView class="command-palette-v2-scroll" viewportRef={(el) => (resultsRef = el)}>
-          <div class="command-palette-v2-results" role="listbox">
+          <div class="command-palette-v2-results" role="listbox" aria-busy={entries.loading}>
             <Show
               when={visibleEntries().length > 0}
               fallback={
@@ -223,6 +226,7 @@ function CommandPaletteView(props: {
                       {(item) => (
                         <PaletteRow
                           item={item}
+                          disabled={entries.loading}
                           active={activeEntry()?.id === item.id}
                           language={language}
                           sessionOpen={
@@ -230,8 +234,8 @@ function CommandPaletteView(props: {
                               ? openSessions().has(`${item.server}\0${item.sessionID}`)
                               : false
                           }
-                          onActive={() => setActive(visibleEntries().findIndex((entry) => entry.id === item.id))}
-                          onSelect={() => props.select(item)}
+                          onActive={() => { if (!entries.loading) setActive(visibleEntries().findIndex((entry) => entry.id === item.id)) }}
+                          onSelect={() => { if (!entries.loading) props.select(item) }}
                         />
                       )}
                     </For>
@@ -248,6 +252,7 @@ function CommandPaletteView(props: {
 
 function PaletteRow(props: {
   item: CommandPaletteEntry
+  disabled: boolean
   active: boolean
   language: ReturnType<typeof useLanguage>
   sessionOpen: boolean
@@ -264,6 +269,7 @@ function PaletteRow(props: {
       type="button"
       class="command-palette-v2-row group"
       role="option"
+      disabled={props.disabled}
       aria-selected={props.active}
       data-active={props.active ? "" : undefined}
       onMouseMove={(event) => {

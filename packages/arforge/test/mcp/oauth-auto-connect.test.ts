@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { join } from "node:path"
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
@@ -41,6 +42,7 @@ interface OAuthMcpOptions {
   blockTokenExchange?: boolean
   initializeDelay?: number
   listToolsDelay?: number
+  rotatingRefresh?: boolean
 }
 
 function serveOAuthMcp(options: OAuthMcpOptions = {}) {
@@ -49,6 +51,9 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
       const capabilities = options.capabilities ?? "tools"
       let listToolsCalls = 0
       let tokenExchanges = 0
+      let refreshExchanges = 0
+      let accessToken = "replacement-token"
+      let refreshToken = crypto.randomUUID()
       let requiresAuth = true
       let releaseTokenExchange: (() => void) | undefined
       let signalTokenExchange: (() => void) | undefined
@@ -132,18 +137,35 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
                 signalTokenExchange?.()
               })
             const body = new URLSearchParams(await request.text())
+            if (options.rotatingRefresh && body.get("grant_type") === "refresh_token") {
+              refreshExchanges++
+              if (body.get("refresh_token") !== refreshToken)
+                return Response.json({ error: "invalid_grant" }, { status: 400 })
+              accessToken = crypto.randomUUID()
+              refreshToken = crypto.randomUUID()
+              return Response.json({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                token_type: "Bearer",
+                expires_in: 3600,
+              })
+            }
             if (body.get("code") !== "valid-code") {
               return Response.json(
                 { error: "invalid_grant", error_description: "Token exchange failed" },
                 { status: 400 },
               )
             }
-            return Response.json({ access_token: "replacement-token", token_type: "Bearer" })
+            return Response.json({
+              access_token: accessToken,
+              token_type: "Bearer",
+              ...(options.rotatingRefresh ? { refresh_token: refreshToken, expires_in: 3600 } : {}),
+            })
           }
           if (url.pathname !== "/mcp") return new Response("Not found", { status: 404 })
 
           if (request.method === "GET") return new Response(null, { status: 405 })
-          if (requiresAuth && request.headers.get("authorization") !== "Bearer replacement-token") {
+          if (requiresAuth && request.headers.get("authorization") !== "Bearer " + accessToken) {
             return new Response("Unauthorized", {
               status: 401,
               headers: {
@@ -166,6 +188,10 @@ function serveOAuthMcp(options: OAuthMcpOptions = {}) {
         },
         listToolsCalls: () => listToolsCalls,
         tokenExchanges: () => tokenExchanges,
+        refreshExchanges: () => refreshExchanges,
+        expireAccess: () => {
+          accessToken = crypto.randomUUID()
+        },
         waitForTokenExchange: () => tokenExchangeStarted ?? Promise.resolve(),
         releaseTokenExchange: () => releaseTokenExchange?.(),
         resetMcp,
@@ -186,6 +212,60 @@ const remote = (url: string, enabled = true) => ({
 })
 
 const stopOAuthCallback = Effect.addFinalizer(() => Effect.promise(() => McpOAuthCallback.stop()).pipe(Effect.ignore))
+
+mcpTest.instance("post-commit SDK refresh restores the configured instance in the production token-write fence", () =>
+  Effect.gen(function* () {
+    yield* stopOAuthCallback
+    const server = yield* serveOAuthMcp({ capabilities: "resources", rotatingRefresh: true })
+    const name = "oauth-post-commit-context"
+    const directory = (yield* TestInstance).directory
+    // A configured server keeps the runtime override map empty, just as a
+    // first-launch product config does. mcp.add would bypass the live fallback.
+    yield* Effect.promise(() =>
+      Bun.write(join(directory, "arforge.json"), JSON.stringify({ mcp: { [name]: remote(server.url) } })),
+    )
+    const config = yield* Config.Service
+    expect((yield* config.get()).mcp?.[name]).toEqual(remote(server.url))
+    const mcp = yield* MCP.Service
+    expect((yield* mcp.status())[name]?.status).toBe("needs_auth")
+    const started = yield* mcp.startAuth(name)
+    expect((yield* mcp.finishAuth(name, "valid-code", started.oauthState)).status).toBe("connected")
+    expect(yield* mcp.hasStoredTokens(name)).toBe(true)
+
+    let saves = 0
+    const failures: string[] = []
+    const resources = yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const original = McpOAuthProvider.prototype.saveTokens
+        McpOAuthProvider.prototype.saveTokens = async function (tokens) {
+          saves++
+          try {
+            return await original.call(this, tokens)
+          } catch (error) {
+            failures.push(error instanceof Error ? error.message : "Non-Error token-write failure")
+            throw error
+          }
+        }
+        return () => {
+          McpOAuthProvider.prototype.saveTokens = original
+        }
+      }),
+      () => {
+        server.expireAccess()
+        // The real SDK calls the committed provider, which enters its real
+        // withTokenWrite callback through a fresh Effect.runPromise.
+        return mcp.resources()
+      },
+      (restore) => Effect.sync(restore),
+    )
+    expect(failures).toEqual([])
+    expect(saves).toBe(1)
+    expect(server.refreshExchanges()).toBe(1)
+    expect(Object.values(resources)).toContainEqual(expect.objectContaining({ uri: "docs://readme" }))
+    expect(yield* mcp.hasStoredTokens(name)).toBe(true)
+    expect((yield* mcp.status())[name]?.status).toBe("connected")
+  }),
+)
 
 mcpTest.instance("authentication without a redirect applies the request phase to its bounded catalog", () =>
   Effect.gen(function* () {

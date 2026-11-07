@@ -1,7 +1,7 @@
 // @refresh reload
 
 import { render } from "solid-js/web"
-import { Match, onMount, Show, Switch } from "solid-js"
+import { Match, onCleanup, onMount, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { AppBaseProviders, AppInterface } from "@/app"
 import { PrivateLogin } from "@/components/private-login"
@@ -12,6 +12,7 @@ import { handleNotificationClick } from "@/utils/notification-click"
 import { authFromToken } from "@/utils/server"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
+import { WebSessionActionsOwner } from "./components/web-session-actions"
 
 const DEFAULT_SERVER_URL_KEY = "arforge.settings.dat:defaultServerUrl"
 
@@ -56,11 +57,28 @@ const setStorage = (key: string, value: string | null) => {
 const readDefaultServerUrl = () => getStorage(DEFAULT_SERVER_URL_KEY)
 const writeDefaultServerUrl = (url: string | null) => setStorage(DEFAULT_SERVER_URL_KEY, url)
 
-const decodeSession = (value: unknown) => {
-  if (!value || typeof value !== "object") return { authenticated: false, mode: "private" as const }
+type SessionPrincipal = { userId: string; tenantId: string }
+
+const decodeId = (value: unknown) => {
+  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") return value.id
+}
+
+const decodeSession = (
+  value: unknown,
+):
+  | { authenticated?: boolean; sessionRequired?: boolean; mode?: "private" | "users"; principal?: SessionPrincipal }
+  | undefined => {
+  if (!value || typeof value !== "object") return
+  const mode = "mode" in value ? value.mode : undefined
+  const userId = mode === "users" && "user" in value ? decodeId(value.user) : undefined
+  const tenantId = mode === "users" && "tenant" in value ? decodeId(value.tenant) : undefined
   return {
-    authenticated: "authenticated" in value && value.authenticated === true,
-    mode: "mode" in value && value.mode === "users" ? ("users" as const) : ("private" as const),
+    authenticated:
+      "authenticated" in value && typeof value.authenticated === "boolean" ? value.authenticated : undefined,
+    sessionRequired:
+      "sessionRequired" in value && typeof value.sessionRequired === "boolean" ? value.sessionRequired : undefined,
+    mode: mode === "users" || mode === "private" ? mode : undefined,
+    principal: userId && tenantId ? { userId, tenantId } : undefined,
   }
 }
 
@@ -159,45 +177,134 @@ if (root instanceof HTMLElement) {
     const [state, setState] = createStore<{
       status: "loading" | "authenticated" | "anonymous"
       mode: "private" | "users"
+      sessionRequired?: boolean
     }>({
-      status: auth ? ("authenticated" as const) : ("loading" as "loading" | "authenticated" | "anonymous"),
+      status: auth ? "authenticated" : "loading",
       mode: "private",
     })
+    const sessionURL = new URL("/auth/session", server.http.url)
+    let channel: BroadcastChannel | undefined
+    let sessionCheck: { controller: AbortController; signingIn: boolean } | undefined
+    let principal: SessionPrincipal | undefined
+    let generation = 0
+    let disposed = false
 
-    onMount(async () => {
-      if (auth) return
-      const response = await fetch(new URL("/auth/session", getCurrentUrl()), {
-        credentials: "include",
-        headers: { accept: "application/json" },
-      }).catch(() => undefined)
-      if (!response?.ok) {
-        setState("status", "anonymous")
-        return
-      }
-      const session = decodeSession(await response.json().catch(() => undefined))
-      setState({
-        status:
-          session.authenticated && !(session.mode === "users" && hasUserActionToken) ? "authenticated" : "anonymous",
-        mode: session.mode === "users" ? "users" : "private",
-      })
-    })
-
-    const logout = async () => {
-      await fetch(new URL("/auth/logout", getCurrentUrl()), {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-      }).catch(() => undefined)
-      setState("status", "anonymous")
+    const invalidateSessionChecks = () => {
+      generation++
+      sessionCheck?.controller.abort()
+      sessionCheck = undefined
     }
 
-    const logoutAll = async () => {
-      await fetch(new URL("/auth/logout-all", getCurrentUrl()), {
+    const retireSession = (mode = state.mode) => {
+      invalidateSessionChecks()
+      principal = undefined
+      setState({ status: "anonymous", mode })
+    }
+
+    const fetchSession = (signal: AbortSignal) =>
+      fetch(sessionURL, {
+        credentials: "include",
+        cache: "no-store",
+        headers: { accept: "application/json" },
+        signal,
+      }).catch(() => undefined)
+
+    const checkSession = async (reason: "passive" | "refresh" | "login" | "late-logout" = "passive") => {
+      if (auth || disposed || (state.status === "authenticated" && !state.sessionRequired)) return
+      const loading = state.status === "loading"
+      const signingIn = reason === "login" || sessionCheck?.signingIn === true
+      if (state.status === "anonymous" && !signingIn && reason !== "late-logout") return
+      if (sessionCheck && reason === "passive") return
+      sessionCheck?.controller.abort()
+      const check = { controller: new AbortController(), signingIn }
+      sessionCheck = check
+      const { signal } = check.controller
+      let response = await fetchSession(signal)
+      if (!response && reason !== "passive" && !signal.aborted) response = await fetchSession(signal)
+      const session = response?.ok ? decodeSession(await response.json().catch(() => undefined)) : undefined
+      if (sessionCheck !== check) return
+      sessionCheck = undefined
+
+      if (loading || signingIn) {
+        const users = session?.mode === "users" || (signingIn && state.mode === "users")
+        const authenticated = session?.authenticated === true && (!users || !!session.principal)
+        const enterWorkspace = authenticated && !(loading && users && hasUserActionToken)
+        if (signingIn && !enterWorkspace) return
+        principal = enterWorkspace ? session?.principal : undefined
+        setState({
+          status: enterWorkspace ? "authenticated" : "anonymous",
+          mode: session?.mode ?? "private",
+          sessionRequired: session?.sessionRequired ?? (signingIn ? (state.sessionRequired ?? true) : undefined),
+        })
+        return
+      }
+      if (state.status !== "authenticated") return
+      const replacement =
+        session?.authenticated === true &&
+        principal &&
+        session.principal &&
+        (session.principal.userId !== principal.userId || session.principal.tenantId !== principal.tenantId)
+      if (replacement || (session?.authenticated === false && session.sessionRequired === true))
+        retireSession(session?.mode)
+    }
+
+    const checkOnFocus = () => {
+      if (document.visibilityState === "visible") void checkSession()
+    }
+    const checkOnPageShow = (event: PageTransitionEvent) => {
+      if (document.visibilityState === "visible") void checkSession(event.persisted ? "refresh" : "passive")
+    }
+    onMount(() => {
+      if (auth) return
+      window.addEventListener("focus", checkOnFocus)
+      window.addEventListener("pageshow", checkOnPageShow)
+      document.addEventListener("visibilitychange", checkOnFocus)
+      void checkSession()
+      if (typeof BroadcastChannel === "function") {
+        try {
+          channel = new BroadcastChannel(`arforge:web-session:${sessionURL.origin}`)
+        } catch {
+          return
+        }
+        channel.onmessage = (event) => {
+          // An earlier read may still reflect the cookie from before the peer changed it.
+          if (event.data === "logout" || event.data === "login") void checkSession("refresh")
+        }
+      }
+    })
+    onCleanup(() => {
+      disposed = true
+      invalidateSessionChecks()
+      channel?.close()
+      channel = undefined
+      window.removeEventListener("focus", checkOnFocus)
+      window.removeEventListener("pageshow", checkOnPageShow)
+      document.removeEventListener("visibilitychange", checkOnFocus)
+    })
+
+    const logout = async (path: "/auth/logout" | "/auth/logout-all") => {
+      const current = generation
+      const response = await fetch(new URL(path, sessionURL), {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json" },
-      }).catch(() => undefined)
-      setState("status", "anonymous")
+      })
+      if (!response.ok) throw new Error("Sign out did not complete")
+      channel?.postMessage("logout")
+      if (disposed) return
+      if (current !== generation) {
+        // The late response may have cleared the cookie for a newer local sign-in.
+        await checkSession("late-logout")
+        return
+      }
+      retireSession()
+    }
+
+    const signIn = () => {
+      if (disposed || state.status !== "anonymous") return
+      invalidateSessionChecks()
+      if (state.mode === "users") channel?.postMessage("login")
+      void checkSession("login")
     }
 
     return (
@@ -208,30 +315,17 @@ if (root instanceof HTMLElement) {
           </div>
         </Match>
         <Match when={state.status === "anonymous"}>
-          <PrivateLogin
-            serverUrl={getCurrentUrl()}
-            mode={state.mode}
-            onAuthenticated={() => setState("status", "authenticated")}
-          />
+          <PrivateLogin serverUrl={getCurrentUrl()} mode={state.mode} onAuthenticated={signIn} />
         </Match>
         <Match when={state.status === "authenticated"}>
           <div class="arforge-private-app">
-            <div class="arforge-private-app__session-actions">
-              <button type="button" onClick={logout}>
-                {state.mode === "users"
-                  ? getLocale() === "zh"
-                    ? "退出登录"
-                    : "Sign out"
-                  : getLocale() === "zh"
-                    ? "锁定"
-                    : "Lock"}
-              </button>
-              <Show when={state.mode === "users"}>
-                <button type="button" onClick={logoutAll}>
-                  {getLocale() === "zh" ? "退出所有设备" : "Sign out all devices"}
-                </button>
-              </Show>
-            </div>
+            <WebSessionActionsOwner
+              mode={state.mode}
+              serverURL={getCurrentUrl()}
+              logout={() => logout("/auth/logout")}
+              logoutAll={() => logout("/auth/logout-all")}
+              chinese={getLocale() === "zh"}
+            />
             <PlatformProvider value={platform}>
               <AppBaseProviders>
                 <AppInterface

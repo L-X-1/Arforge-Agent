@@ -206,16 +206,12 @@ export const make = (input: {
       }
     }
 
-    yield* input.durable
-      .checkpointControl(controlLease, {
-        runID,
-        state: {
-          kind: "preimage-receipt",
-          receiptDigest: receipt.digest,
-          receiptPath: receiptFile,
-          files: receipt.files,
-        },
-        lastActionID: actionID,
+    yield* command
+      .checkpointControl({
+        kind: "preimage-receipt",
+        receiptDigest: receipt.digest,
+        receiptPath: receiptFile,
+        files: receipt.files,
       })
       .pipe(Effect.mapError(() => recoveryError(actionID, "The preimage receipt checkpoint could not be persisted.")))
 
@@ -286,12 +282,8 @@ export const make = (input: {
       files: outcomes,
       sessionEventHighWaterMark: sequence,
     }
-    yield* input.durable
-      .checkpointControl(controlLease, {
-        runID,
-        state: { kind: "verified", observation: result },
-        lastActionID: actionID,
-      })
+    yield* command
+      .checkpointControl({ kind: "verified", observation: result })
       .pipe(Effect.mapError(() => recoveryError(actionID, "The verified restore observation could not be persisted.")))
   }),
 })

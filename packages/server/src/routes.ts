@@ -4,6 +4,8 @@ import { httpClient } from "@arforge-ai/core/effect/app-node-platform"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { EventV2 } from "@arforge-ai/core/event"
 import { Credential } from "@arforge-ai/core/credential"
+import { providerConfigurationDependencies } from "./provider-configuration"
+import * as ModelsDev from "@arforge-ai/core/models-dev"
 import { PermissionSaved } from "@arforge-ai/core/permission/saved"
 import { PtyTicket } from "@arforge-ai/core/pty/ticket"
 import { SessionV2 } from "@arforge-ai/core/session"
@@ -46,6 +48,8 @@ import { node as rollbackArtifactNode } from "@arforge-ai/core/runtime/rollback-
  * into handler environments and makes the composition fail only at runtime.
  */
 export const applicationServices = LayerNode.group([
+  providerConfigurationDependencies,
+  ModelsDev.node,
   Database.node,
   EventV2.node,
   httpClient,

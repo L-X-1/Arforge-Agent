@@ -11,9 +11,6 @@ import { IdentityContext } from "../identity-context"
 import { Database } from "@arforge-ai/core/database/database"
 import { Option } from "effect"
 
-const AUTH_TOKEN_QUERY = "auth_token"
-const WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
-
 /** Private mode is a server-owned owner principal, never a request-derived identity. */
 const LocalIdentityPrincipal = IdentityContext.LocalPrincipal
 
@@ -41,9 +38,8 @@ function decodeCredential(input: string) {
   )
 }
 
-function credentialFromRequest(request: HttpServerRequest.HttpServerRequest) {
-  const url = new URL(request.url, "http://localhost")
-  const token = url.searchParams.get(AUTH_TOKEN_QUERY)
+function credentialFromRequest(url: URL, request: HttpServerRequest.HttpServerRequest) {
+  const token = url.searchParams.get(SessionAuth.AUTH_TOKEN_QUERY)
   if (token) return decodeCredential(token)
   const match = /^Basic\s+(.+)$/i.exec(request.headers.authorization ?? "")
   if (match) return decodeCredential(match[1])
@@ -72,7 +68,9 @@ export const authorizationLayer = Layer.effect(
             return yield* new UnauthorizedError({ message: "Authentication required" })
           const principal = yield* UserAuth.authenticate(database.db, userConfig, request.headers.cookie)
           if (Option.isNone(principal)) return yield* new UnauthorizedError({ message: "Authentication required" })
-          return yield* database.runAsPrincipal(
+          // Handlers may await a model run. Each database operation establishes
+          // its own short RLS transaction; the request binds identity only.
+          return yield* Database.principalContext(
             principal.value,
             Effect.provideService(effect, IdentityContext.Current, principal.value),
           )
@@ -83,10 +81,10 @@ export const authorizationLayer = Layer.effect(
     return Authorization.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
+        const url = new URL(request.url, "http://localhost")
         // Browsers cannot set headers on WebSocket upgrades, so a ticketed PTY connect skips
         // credential checks here; the connect handler consumes and validates the ticket.
-        if (hasPtyConnectTicketURL(new URL(request.url, "http://localhost")))
-          return yield* localAuthorized(effect, database)
+        if (hasPtyConnectTicketURL(url)) return yield* localAuthorized(effect, database)
         if (
           SessionAuth.requestAuthorized(
             {
@@ -99,10 +97,12 @@ export const authorizationLayer = Layer.effect(
           )
         )
           return yield* localAuthorized(effect, database)
-        const credential = yield* credentialFromRequest(request)
+        const credential = yield* credentialFromRequest(url, request)
         if (ServerAuth.authorized(credential, config)) return yield* localAuthorized(effect, database)
         yield* HttpEffect.appendPreResponseHandler((_request, response) =>
-          Effect.succeed(HttpServerResponse.setHeader(response, "www-authenticate", WWW_AUTHENTICATE)),
+          Effect.succeed(
+            HttpServerResponse.setHeaders(response, SessionAuth.basicChallengeHeaders(url, request.headers)),
+          ),
         )
         return yield* new UnauthorizedError({ message: "Authentication required" })
       }),

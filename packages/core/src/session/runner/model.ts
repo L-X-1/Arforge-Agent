@@ -12,8 +12,11 @@ import { Catalog } from "../../catalog"
 import { Credential } from "../../credential"
 import * as CredentialStore from "../../credential"
 import { Integration } from "../../integration"
+import { SecretProvider } from "../../secret-provider"
+import { providerCredentialTarget, providerCredentialTargetKey } from "../../provider-credential-target"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
+import { ModelRequestOptions } from "../../model-request-options"
 import { SessionSchema } from "../schema"
 import type * as RuntimeRetry from "../../runtime/retry"
 
@@ -129,7 +132,7 @@ export const layerWith = (resolve: Interface["resolve"], resolveFallback?: Inter
   Layer.succeed(Service, Service.of(resolveFallback === undefined ? { resolve } : { resolve, resolveFallback }))
 
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
-  if (credential?.type === "key") return Auth.value(credential.key)
+  if (credential?.type === "key") return credential.key ? Auth.value(credential.key) : undefined
   if (credential?.type === "oauth") return Auth.value(credential.access)
   const value = model.request.body.apiKey ?? model.api.settings?.apiKey
   if (typeof value === "string") return Auth.value(value)
@@ -140,11 +143,13 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
   const httpBody = Object.hasOwn(body, "apiKey")
     ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== "apiKey"))
     : body
+  const options = ModelRequestOptions.split(httpBody, model.api)
   return route.with({
     provider: model.providerID,
     endpoint: model.api.url === undefined ? undefined : { baseURL: model.api.url },
     headers: model.request.headers,
-    http: { body: httpBody },
+    http: { body: options.httpBody },
+    generation: options.generation,
     limits: { context: model.limit.context, output: model.limit.output },
   })
 }
@@ -180,11 +185,24 @@ export const fromCatalogModel = (
   model: ModelV2.Info,
   credential?: Credential.Value,
 ): Effect.Effect<Model, UnsupportedApiError> => {
+  const credentialMetadata = credential?.type === "key" ? credential.metadata : undefined
+  const target = credentialMetadata?.[providerCredentialTargetKey]
+  if (target !== undefined && target !== providerCredentialTarget(model.providerID, model.api))
+    return Effect.die(new Error("Provider credential target changed; reconnect this provider"))
   const resolved =
-    credential?.type !== "key" || credential.metadata === undefined
+    credentialMetadata === undefined
       ? model
       : produce(model, (draft) => {
-          Object.assign(draft.request.body, credential.metadata)
+          const {
+            ["arforge.provider.headers.v1"]: headers,
+            ["arforge.provider.key-env.v1"]: _env,
+            [providerCredentialTargetKey]: _target,
+            ...metadata
+          } = credentialMetadata
+          Object.assign(draft.request.body, metadata)
+          if (headers && typeof headers === "object" && !Array.isArray(headers))
+            for (const [name, value] of Object.entries(headers))
+              if (typeof value === "string") draft.request.headers[name] = value
         })
   const key = apiKey(resolved, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
@@ -220,6 +238,10 @@ export const fromCatalogModel = (
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, credential?: Credential.Value) =>
   withVariant(model, session.model?.variant).pipe(Effect.flatMap((model) => fromCatalogModel(model, credential)))
 
+/** Saved-model diagnostics use exactly the normal default-variant merge, without creating a Session. */
+export const fromConfiguredModel = (model: ModelV2.Info, credential?: Credential.Value) =>
+  withVariant(model, undefined).pipe(Effect.flatMap((selected) => fromCatalogModel(selected, credential)))
+
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&
   (model.api.package === "@ai-sdk/openai" ||
@@ -233,12 +255,23 @@ export const locationLayer = Layer.effect(
     const catalog = yield* Catalog.Service
     const integrations = yield* Integration.Service
     const credentials = yield* CredentialStore.Service
+    const secrets = Option.getOrUndefined(yield* Effect.serviceOption(SecretProvider.Service))
     const resolveBound = Effect.fn("SessionRunnerModel.resolveBound")(function* (
       session: SessionSchema.Info,
       selected: ModelV2.Info,
       snapshot: Integration.ResolvedCredential | undefined,
     ) {
-      const model = yield* resolve(session, selected, snapshot?.value)
+      let value = snapshot?.value
+      const env = value?.type === "key" ? value.metadata?.["arforge.provider.key-env.v1"] : undefined
+      if (value?.type === "key" && !value.key && typeof env === "string") {
+        if (!secrets) return yield* Effect.die(new Error("Model credential environment is unavailable"))
+        const key = yield* secrets
+          .resolve(env)
+          .pipe(Effect.catch(() => Effect.die(new Error("Model credential environment could not be resolved"))))
+        if (!key) return yield* Effect.die(new Error("Model credential environment is unavailable"))
+        value = Credential.Key.make({ ...value, key })
+      }
+      const model = yield* resolve(session, selected, value)
       if (snapshot?.identity) {
         const identity = Object.freeze({ ...snapshot.identity })
         const validate = Effect.gen(function* () {
@@ -355,5 +388,5 @@ export const locationLayer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer: locationLayer,
-  deps: [Catalog.node, Integration.node, CredentialStore.node],
+  deps: [Catalog.node, Integration.node, CredentialStore.node, SecretProvider.node],
 })

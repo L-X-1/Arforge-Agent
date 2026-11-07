@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LLM } from "@arforge-ai/llm"
 import { LLMClient } from "@arforge-ai/llm/route"
-import { DateTime, Effect, Exit, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer, Schema } from "effect"
 import { Headers } from "effect/unstable/http"
 import { Catalog } from "@arforge-ai/core/catalog"
 import { Credential } from "@arforge-ai/core/credential"
@@ -11,6 +11,7 @@ import { ModelV2 } from "@arforge-ai/core/model"
 import { ProviderV2 } from "@arforge-ai/core/provider"
 import { ProjectV2 } from "@arforge-ai/core/project"
 import { SessionRunnerModel } from "@arforge-ai/core/session/runner/model"
+import { providerCredentialTarget, providerCredentialTargetKey } from "@arforge-ai/core/provider-credential-target"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { it } from "./lib/effect"
@@ -44,6 +45,54 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
   })
 
 describe("SessionRunnerModel", () => {
+  it.effect("durable credential target permits the original API and rejects a changed BaseURL", () =>
+    Effect.gen(function* () {
+      const original = model({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "http://127.0.0.1:4781/v1" })
+      const target = providerCredentialTarget(original.providerID, original.api)
+      expect(target).toBe(providerCredentialTarget(original.providerID, { ...original.api }))
+      const credential = Credential.Key.make({
+        type: "key",
+        key: "owned-bound",
+        metadata: { [providerCredentialTargetKey]: target },
+      })
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(original, credential)
+      expect(resolved.route.defaults.http?.body?.[providerCredentialTargetKey]).toBeUndefined()
+      const moved = ModelV2.Info.make({ ...original, api: { ...original.api, url: "http://127.0.0.1:4782/v1" } })
+      expect(Exit.isFailure(yield* SessionRunnerModel.fromCatalogModel(moved, credential).pipe(Effect.exit))).toBe(true)
+    }),
+  )
+  it.effect("sealed custom headers stay in one request and reserved metadata never enters the body", () =>
+    Effect.gen(function* () {
+      const source = ModelV2.Info.make({
+        ...model({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "http://127.0.0.1/v1" }),
+        request: { headers: {}, body: {} },
+      })
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        source,
+        Credential.Key.make({
+          type: "key",
+          key: "",
+          metadata: {
+            "arforge.provider.headers.v1": { "x-private": "owned-header" },
+            "arforge.provider.key-env.v1": "OWNED_ENV",
+            original_extension: true,
+          },
+        }),
+      )
+      const request = LLM.request({ model: resolved, prompt: "owned" })
+      const auth = yield* resolved.route.auth.apply({
+        request,
+        method: "POST",
+        url: "http://127.0.0.1/v1/chat/completions",
+        body: "{}",
+        headers: Headers.empty,
+      })
+      expect(auth.authorization).toBeUndefined()
+      expect(resolved.route.defaults.headers).toEqual({ "x-private": "owned-header" })
+      expect(resolved.route.defaults.http?.body).toEqual({ original_extension: true })
+      expect(source.request).toEqual({ headers: {}, body: {} })
+    }),
+  )
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
@@ -138,8 +187,19 @@ describe("SessionRunnerModel", () => {
         custom_extension: { enabled: true },
         store: false,
         service_tier: "priority",
+      })
+      expect(resolved.route.defaults.generation).toMatchObject({ temperature: 0.2, reasoning: { effort: "high" } })
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Owned variant check" }))
+      expect(
+        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(prepared.transmission!.body),
+      ).toMatchObject({
+        model: "api-test-model",
         temperature: 0.2,
         reasoning: { effort: "high" },
+        max_output_tokens: 20,
+        custom_extension: { enabled: true },
+        store: false,
+        service_tier: "priority",
       })
     }),
   )
@@ -172,7 +232,17 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route.defaults.http?.body).toEqual({
         custom_extension: { enabled: true },
         store: false,
+      })
+      expect(resolved.route.defaults.generation?.reasoning).toMatchObject({ effort: "high" })
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Owned variant check" }))
+      expect(
+        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(prepared.transmission!.body),
+      ).toMatchObject({
+        model: "api-test-model",
         reasoning_effort: "high",
+        max_tokens: 20,
+        custom_extension: { enabled: true },
+        store: false,
       })
     }),
   )
@@ -209,13 +279,16 @@ describe("SessionRunnerModel", () => {
 
   it.effect("overlays selected Anthropic Session variant bodies", () =>
     Effect.gen(function* () {
-      const catalog = model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }, [
-        {
-          id: ModelV2.VariantID.make("high"),
-          headers: {},
-          body: { thinking: { type: "enabled", budget_tokens: 12000 } },
-        },
-      ])
+      const catalog = ModelV2.Info.make({
+        ...model({ type: "aisdk", package: "@ai-sdk/anthropic", url: "https://anthropic.example/v1" }, [
+          {
+            id: ModelV2.VariantID.make("high"),
+            headers: {},
+            body: { thinking: { type: "enabled", budget_tokens: 12000 } },
+          },
+        ]),
+        limit: { context: 24000, output: 16000 },
+      })
       const session = SessionV2.Info.make({
         id: SessionV2.ID.make("ses_anthropic_variant"),
         projectID: ProjectV2.ID.global,
@@ -231,7 +304,16 @@ describe("SessionRunnerModel", () => {
 
       expect(resolved.route.defaults.http?.body).toEqual({
         custom_extension: { enabled: true },
+      })
+      expect(resolved.route.defaults.generation?.reasoning).toMatchObject({ mode: "enabled", budgetTokens: 12000 })
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Owned variant check" }))
+      expect(
+        Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(prepared.transmission!.body),
+      ).toMatchObject({
+        model: "api-test-model",
         thinking: { type: "enabled", budget_tokens: 12000 },
+        max_tokens: 16000,
+        custom_extension: { enabled: true },
       })
     }),
   )

@@ -205,6 +205,35 @@ test("focuses a terminal created from the new-terminal button", async ({ page })
   await expect.poll(() => terminal.evaluate((element) => element.contains(document.activeElement))).toBe(true)
 })
 
+test("reconnects from the narrow terminal menu with keyboard focus before typing", async ({ page }) => {
+  const writes: string[] = []
+  let connections = 0
+  await page.routeWebSocket(new RegExp(`/api/pty/${ptyID}/connect`), (socket) => {
+    connections++
+    socket.onMessage((data) => writes.push(String(data)))
+  })
+  await page.route(/\/api\/pty(?:\?|$)/, (route) => route.fulfill({
+    status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+    body: JSON.stringify({ location: ptyLocation(), data: route.request().method() === "GET" ? [] : ptyInfo(ptyID, "Terminal 1") }),
+  }))
+  await page.setViewportSize({ width: 375, height: 800 })
+  await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
+  await expectSessionTitle(page, "Terminal composer focus")
+  await page.getByRole("button", { name: "Toggle terminal", exact: true }).click()
+  const terminal = page.locator('#terminal-panel [data-component="terminal"]')
+  await expect(terminal.locator("textarea")).toHaveCount(1)
+  await expect.poll(() => connections).toBe(1)
+  await page.getByRole("button", { name: "Terminal actions and all tabs", exact: true }).click()
+  await page.locator("[data-terminal-workbench-menu]").getByRole("menuitem", { name: "Reconnect", exact: true }).click()
+  await expect.poll(() => connections).toBe(2)
+  // Do not click/focus the terminal here: that would conceal a menu handoff bug.
+  await expect.poll(() => terminal.evaluate((element) => element.contains(document.activeElement) && document.activeElement?.tagName === "TEXTAREA")).toBe(true)
+  await page.keyboard.type("echo NARROW_RECONNECT_FOCUS")
+  await page.keyboard.press("Enter")
+  await expect.poll(() => writes.join("")).toContain("echo NARROW_RECONNECT_FOCUS\r")
+  await expect(page.locator('[data-component="prompt-input"]')).toHaveText("")
+})
+
 function seedCachedTerminal(page: Page) {
   return page.addInitScript(
     ({ terminalKey, ptyID }) => {

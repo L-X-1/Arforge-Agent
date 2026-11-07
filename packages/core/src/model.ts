@@ -21,6 +21,9 @@ export const Cost = Model.Cost
 export const Profile = Model.Profile
 export type Profile = Model.Profile
 
+export const PresetReference = Model.PresetReference
+export type PresetReference = Model.PresetReference
+
 export const Ref = Model.Ref
 export type Ref = typeof Ref.Type
 

@@ -1,6 +1,10 @@
 export * as SessionExecution from "./execution"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
+import type { SessionMessage } from "./message"
+import type { ModelV2 } from "../model"
+import type { PromptInput } from "@arforge-ai/schema/prompt-input"
+import type { Prompt } from "./prompt"
 import { LayerNode } from "../effect/layer-node"
 import { Node } from "../effect/app-node"
 import { Credential } from "@arforge-ai/schema/credential"
@@ -22,7 +26,39 @@ export interface RunOptions {
   readonly settlementCollector?: RunnerSettlementCollector
 }
 
+export class OperationError extends Schema.TaggedErrorClass<OperationError>()("SessionExecution.OperationError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["invalid", "conflict", "busy", "unavailable"]),
+  message: Schema.String,
+}) {}
+
+export type ShellInput = {
+  readonly sessionID: SessionSchema.ID
+  readonly id?: SessionMessage.ID
+  readonly command: string
+  readonly agent?: string
+  readonly model?: ModelV2.Ref
+}
+
+export type CompactInput = {
+  readonly sessionID: SessionSchema.ID
+  readonly model?: ModelV2.Ref
+  /** Exact server context projection captured by a preview, checked under the execution slot. */
+  readonly expectedContext?: string
+  readonly expectedDirectory?: string
+}
+
 export interface Interface {
+  /** Product adapters reuse their existing direct Shell owner, including its exclusive slot and L3 gateway. */
+  readonly shell?: (input: ShellInput) => Effect.Effect<void, OperationError>
+  /** Resolve named commands before durable admission, for both idle and queued submission. */
+  readonly preparePrompt?: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly id: SessionMessage.ID
+    readonly prompt: PromptInput.Prompt
+  }) => Effect.Effect<Prompt, OperationError>
+  /** Manual compaction must settle through the Core transaction/checkpoint owner before returning. */
+  readonly compact?: (input: CompactInput) => Effect.Effect<void, OperationError>
   /** Snapshots active execution owned by this process. */
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   /** One-off work shares the session owner; false means busy without executing work. */

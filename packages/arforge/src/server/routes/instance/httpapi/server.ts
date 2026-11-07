@@ -128,6 +128,7 @@ import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@arforge-ai/server/handlers"
+import { providerConfigurationDependencies } from "@arforge-ai/server/provider-configuration"
 import { buildSharedLocationServiceMap, LocationServiceMap } from "@arforge-ai/core/location-services"
 import { layer as locationLayer } from "@arforge-ai/server/location"
 import { sessionLocationLayer } from "@arforge-ai/server/middleware/session-location"
@@ -248,6 +249,7 @@ type RouteRequirements =
   | HttpRouter.Request<"GlobalRequires", never>
 
 const app = LayerNode.group([
+  providerConfigurationDependencies,
   Npm.node,
   FSUtil.node,
   Database.node,

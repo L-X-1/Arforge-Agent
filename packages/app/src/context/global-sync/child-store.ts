@@ -1,4 +1,4 @@
-import { createRoot, createSignal, getOwner, onCleanup, runWithOwner, type Owner } from "solid-js"
+import { createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner, type Owner } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import type { VcsInfo } from "@arforge-ai/sdk/v2/client"
@@ -47,9 +47,31 @@ export function createChildStoreManager(input: {
   const mcpToggles = new Map<string, (enabled: boolean) => void>()
   const activeDirectories = new Set<string>()
   const activationToggles = new Map<string, (enabled: boolean) => void>()
+  let disposed = false
+
+  runWithOwner(input.owner, () =>
+    onCleanup(() => {
+      disposed = true
+      for (const [key, dispose] of disposers) {
+        dispose()
+        input.onDispose(key)
+      }
+      disposers.clear()
+      for (const key of Object.keys(children)) delete children[key]
+      vcsCache.clear()
+      metaCache.clear()
+      iconCache.clear()
+      lifecycle.clear()
+      pins.clear()
+      mcpDirectories.clear()
+      mcpToggles.clear()
+      activeDirectories.clear()
+      activationToggles.clear()
+    }),
+  )
 
   const markKey = (key: DirectoryKey) => {
-    if (!key) return
+    if (disposed || !key) return
     lifecycle.set(key, { lastAccessAt: Date.now() })
     runEviction(key)
   }
@@ -60,6 +82,7 @@ export function createChildStoreManager(input: {
   }
 
   const pin = (directory: string) => {
+    if (disposed) return
     const key = directoryKey(directory)
     if (!key) return
     pins.set(key, (pins.get(key) ?? 0) + 1)
@@ -67,6 +90,7 @@ export function createChildStoreManager(input: {
   }
 
   const unpin = (directory: string) => {
+    if (disposed) return
     const key = directoryKey(directory)
     if (!key) return
     const next = (pins.get(key) ?? 0) - 1
@@ -150,6 +174,7 @@ export function createChildStoreManager(input: {
   }
 
   function ensureChild(directory: string) {
+    if (disposed) throw new Error("Directory sync owner is disposed")
     const key = directoryKey(directory)
     if (!key) console.error("No directory provided")
     if (!children[key]) {
@@ -200,6 +225,16 @@ export function createChildStoreManager(input: {
             ...input.queryOptions.references(key),
             enabled: instanceQueriesEnabled(),
           }))
+          const agentsQuery = useQuery(() => ({
+            ...input.queryOptions.agents(key),
+            enabled: instanceQueriesEnabled(),
+          }))
+          // The scoped query remains authoritative after bootstrap completes or
+          // fails. Retain its last successful list during background errors;
+          // an actual successful empty response must still remove unavailable Agents.
+          const agents = createMemo<State["agent"]>((previous) =>
+            instanceQueriesEnabled() && agentsQuery.isSuccess ? (agentsQuery.data ?? []) : (previous ?? []),
+          )
 
           const child = createStore<State>({
             project: "",
@@ -221,7 +256,9 @@ export function createChildStoreManager(input: {
               return pathQuery.data ?? EMPTY
             },
             status: "loading" as const,
-            agent: [],
+            get agent() {
+              return agents()
+            },
             command: [],
             get reference() {
               return referenceQuery.isLoading ? [] : (referenceQuery.data ?? [])

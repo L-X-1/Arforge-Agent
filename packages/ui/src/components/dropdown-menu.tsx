@@ -1,6 +1,7 @@
 import { DropdownMenu as Kobalte } from "@kobalte/core/dropdown-menu"
 import { splitProps } from "solid-js"
 import type { ComponentProps, ParentProps } from "solid-js"
+import { useUIPresentation } from "../context/presentation"
 
 export interface DropdownMenuProps extends ComponentProps<typeof Kobalte> {}
 export interface DropdownMenuTriggerProps extends ComponentProps<typeof Kobalte.Trigger> {}
@@ -23,7 +24,7 @@ export interface DropdownMenuSubTriggerProps extends ComponentProps<typeof Kobal
 export interface DropdownMenuSubContentProps extends ComponentProps<typeof Kobalte.SubContent> {}
 
 function DropdownMenuRoot(props: DropdownMenuProps) {
-  return <Kobalte {...props} data-component="dropdown-menu" />
+  return <Kobalte gutter={4} overflowPadding={8} {...props} data-component="dropdown-menu" />
 }
 
 function DropdownMenuTrigger(props: ParentProps<DropdownMenuTriggerProps>) {
@@ -63,11 +64,13 @@ function DropdownMenuPortal(props: DropdownMenuPortalProps) {
 }
 
 function DropdownMenuContent(props: ParentProps<DropdownMenuContentProps>) {
+  const presentation = useUIPresentation()
   const [local, rest] = splitProps(props, ["class", "classList", "children"])
   return (
     <Kobalte.Content
       {...rest}
       data-component="dropdown-menu-content"
+      data-presentation={presentation()}
       data-arforge-material="floating"
       classList={{
         ...local.classList,
@@ -252,7 +255,7 @@ function DropdownMenuCheckboxItem(props: ParentProps<DropdownMenuCheckboxItemPro
 }
 
 function DropdownMenuSub(props: DropdownMenuSubProps) {
-  return <Kobalte.Sub {...props} />
+  return <Kobalte.Sub gutter={4} overflowPadding={8} {...props} />
 }
 
 function DropdownMenuSubTrigger(props: ParentProps<DropdownMenuSubTriggerProps>) {
@@ -272,11 +275,13 @@ function DropdownMenuSubTrigger(props: ParentProps<DropdownMenuSubTriggerProps>)
 }
 
 function DropdownMenuSubContent(props: ParentProps<DropdownMenuSubContentProps>) {
+  const presentation = useUIPresentation()
   const [local, rest] = splitProps(props, ["class", "classList", "children"])
   return (
     <Kobalte.SubContent
       {...rest}
       data-component="dropdown-menu-sub-content"
+      data-presentation={presentation()}
       data-arforge-material="floating"
       classList={{
         ...local.classList,

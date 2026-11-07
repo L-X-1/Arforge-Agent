@@ -148,10 +148,10 @@ const AnthropicToolChoice = Schema.Union([
   Schema.Struct({ type: Schema.tag("tool"), name: Schema.String }),
 ])
 
-const AnthropicThinking = Schema.Struct({
-  type: Schema.tag("enabled"),
-  budget_tokens: Schema.Number,
-})
+const AnthropicThinking = Schema.Union([
+  Schema.Struct({ type: Schema.tag("enabled"), budget_tokens: Schema.Number }),
+  Schema.Struct({ type: Schema.Literals(["disabled", "adaptive"]) }),
+])
 
 const AnthropicBodyFields = {
   model: Schema.String,
@@ -166,6 +166,9 @@ const AnthropicBodyFields = {
   top_k: Schema.optional(Schema.Number),
   stop_sequences: optionalArray(Schema.String),
   thinking: Schema.optional(AnthropicThinking),
+  output_config: Schema.optional(
+    Schema.Struct({ effort: Schema.Literals(["none", "minimal", "low", "medium", "high", "xhigh", "max"]) }),
+  ),
 }
 const AnthropicMessagesBody = Schema.Struct(AnthropicBodyFields)
 export type AnthropicMessagesBody = Schema.Schema.Type<typeof AnthropicMessagesBody>
@@ -491,6 +494,12 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
 const anthropicOptions = (request: LLMRequest) => request.providerOptions?.anthropic
 
 const lowerThinking = Effect.fn("AnthropicMessages.lowerThinking")(function* (request: LLMRequest) {
+  const canonical = request.generation?.reasoning
+  if (canonical?.mode === "disabled" || canonical?.mode === "adaptive") return { type: canonical.mode }
+  if (canonical?.mode === "enabled") {
+    if (canonical.budgetTokens === undefined) return yield* invalid("Anthropic enabled thinking requires budgetTokens")
+    return { type: "enabled" as const, budget_tokens: canonical.budgetTokens }
+  }
   const thinking = anthropicOptions(request)?.thinking
   if (!ProviderShared.isRecord(thinking) || thinking.type !== "enabled") return undefined
   const budget =
@@ -549,6 +558,9 @@ const fromRequest = Effect.fn("AnthropicMessages.fromRequest")(function* (reques
     top_k: generation?.topK,
     stop_sequences: generation?.stop,
     thinking: yield* lowerThinking(request),
+    ...(request.generation?.reasoning?.effort
+      ? { output_config: { effort: request.generation.reasoning.effort } }
+      : {}),
   }
 })
 

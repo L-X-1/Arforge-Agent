@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { acknowledgeSave, createTextDraftRepository, isDirty, textDraftKey, type DraftStorage, type TextDraft } from "./text-document-draft"
+import {
+  acknowledgeSave,
+  createTextDraftRepository,
+  isDirty,
+  textDraftKey,
+  type DraftStorage,
+  type TextDraft,
+} from "./text-document-draft"
 
 const base = { path: "notes.md", text: "base", version: "a".repeat(64), bom: false, lineEnding: "lf" as const }
 const draft: TextDraft = { format: 1, base, text: "my draft" }
@@ -9,15 +16,25 @@ function storage() {
   const values = new Map<string, string>()
   const api: DraftStorage = {
     getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => { values.set(key, value) },
-    removeItem: (key) => { values.delete(key) },
+    setItem: (key, value) => {
+      values.set(key, value)
+    },
+    removeItem: (key) => {
+      values.delete(key)
+    },
   }
   return { values, api }
 }
 
 describe("text document drafts", () => {
   test("isolates servers, workspaces and paths without separator collisions", () => {
-    const keys = [key, textDraftKey("remote", "C:/project", base.path), textDraftKey("local", "C:/other", base.path), textDraftKey("local", "C:/project", "other.md"), textDraftKey("local|C:/project", "", base.path)]
+    const keys = [
+      key,
+      textDraftKey("remote", "C:/project", base.path),
+      textDraftKey("local", "C:/other", base.path),
+      textDraftKey("local", "C:/project", "other.md"),
+      textDraftKey("local|C:/project", "", base.path),
+    ]
     expect(new Set(keys).size).toBe(keys.length)
     expect(key.startsWith("arforge.")).toBe(false)
   })
@@ -31,17 +48,62 @@ describe("text document drafts", () => {
     expect(first.hasUnsaved()).toBe(true)
   })
   test("a completed save does not replace newer typing", () => {
-    const result = acknowledgeSave({ ...draft, text: "typed during save" }, { ...base, text: "my draft", version: "b".repeat(64) })
+    const result = acknowledgeSave(
+      { ...draft, text: "typed during save" },
+      { ...base, text: "my draft", version: "b".repeat(64) },
+    )
     expect(result.text).toBe("typed during save")
     expect(result.base.text).toBe("my draft")
     expect(isDirty(result)).toBe(true)
     expect(isDirty(acknowledgeSave(draft, { ...base, text: draft.text, version: "b".repeat(64) }))).toBe(false)
   })
+  test("a late save acknowledges the current reopened draft rather than the disposed editor", () => {
+    const target = storage()
+    const repository = createTextDraftRepository(() => target.api)
+    repository.restore(key)
+    repository.remember(key, draft)
+    const reopened = { ...draft, text: "newer reopened draft" }
+    repository.remember(key, reopened)
+    const saved = { ...base, text: draft.text, version: "b".repeat(64) }
+    expect(repository.acknowledge(key, draft, saved)).toEqual({ ...reopened, base: saved })
+    repository.flush(key)
+    expect(repository.restore(key)?.text).toBe("newer reopened draft")
+    expect(JSON.parse(target.values.get(key)!).base.version).toBe(saved.version)
+    expect(repository.saveAcknowledgement(key)).toEqual({ baseVersion: base.version, saved })
+  })
+  test("an old save cannot roll back an already newer disk base or affect another source", () => {
+    const target = storage()
+    const repository = createTextDraftRepository(() => target.api)
+    const newer = { ...draft, base: { ...base, version: "c".repeat(64) }, text: "new base draft" }
+    const other = textDraftKey("remote", "C:/project", base.path)
+    repository.remember(key, newer)
+    repository.remember(other, draft)
+    expect(repository.acknowledge(key, draft, { ...base, version: "b".repeat(64) })).toBe(newer)
+    expect(repository.restore(key)).toBe(newer)
+    expect(repository.restore(other)).toBe(draft)
+    expect(repository.saveAcknowledgement(key)).toBeUndefined()
+    expect(repository.saveAcknowledgement(other)).toBeUndefined()
+  })
+  test("acknowledgement never resurrects a discarded edit and clean saves remain clean", () => {
+    const target = storage()
+    const repository = createTextDraftRepository(() => target.api)
+    repository.remember(key, draft)
+    repository.remember(key, null)
+    const saved = { ...base, text: draft.text, version: "b".repeat(64) }
+    expect(isDirty(repository.acknowledge(key, draft, saved))).toBe(false)
+    expect(repository.restore(key)).toBeUndefined()
+    expect(repository.hasUnsaved()).toBe(false)
+  })
   test("quota failure keeps both the prior stored draft and the newest in-memory edit", () => {
     const target = storage()
     const prior = JSON.stringify(draft)
     target.values.set(key, prior)
-    const api = { ...target.api, setItem: () => { throw new Error("QuotaExceededError") } }
+    const api = {
+      ...target.api,
+      setItem: () => {
+        throw new Error("QuotaExceededError")
+      },
+    }
     const repository = createTextDraftRepository(() => api)
     repository.restore(key)
     const newer = { ...draft, text: "newer text" }

@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events"
+import { browserOwnerZoomWillChange } from "./browser-owner-zoom"
 
 type EventSource = Pick<EventEmitter, "on" | "once" | "removeListener">
 
@@ -16,6 +17,7 @@ export function observeWorkbenchBrowserOwner(
   owner.on("resize", suspend)
   owner.on("blur", suspend)
   owner.on("minimize", suspend)
+  owner.on(browserOwnerZoomWillChange, suspend)
   owner.once("closed", dispose)
   contents.on("did-start-navigation", navigation)
   contents.once("render-process-gone", dispose)
@@ -26,6 +28,7 @@ export function observeWorkbenchBrowserOwner(
     owner.removeListener("resize", suspend)
     owner.removeListener("blur", suspend)
     owner.removeListener("minimize", suspend)
+    owner.removeListener(browserOwnerZoomWillChange, suspend)
     owner.removeListener("closed", dispose)
     contents.removeListener("did-start-navigation", navigation)
     contents.removeListener("render-process-gone", dispose)

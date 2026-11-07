@@ -1,4 +1,5 @@
 import { createStore, produce, reconcile } from "solid-js/store"
+import { onCleanup } from "solid-js"
 import type { FileNode } from "@arforge-ai/sdk/v2"
 
 type DirectoryState = {
@@ -26,8 +27,17 @@ export function createFileTreeStore(options: TreeStoreOptions) {
   })
 
   const inflight = new Map<string, Promise<void>>()
+  let generation = 0
+  let disposed = false
+
+  onCleanup(() => {
+    disposed = true
+    generation++
+    inflight.clear()
+  })
 
   const reset = () => {
+    generation++
     inflight.clear()
     setTree("node", reconcile({}))
     setTree("dir", reconcile({}))
@@ -40,6 +50,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
   }
 
   const listDir = (input: string, opts?: { force?: boolean }) => {
+    if (disposed) return Promise.resolve()
     const dir = options.normalizeDir(input)
     ensureDir(dir)
 
@@ -59,11 +70,13 @@ export function createFileTreeStore(options: TreeStoreOptions) {
     )
 
     const directory = options.scope()
+    const requestGeneration = generation
+    const currentRequest = () => !disposed && generation === requestGeneration && options.scope() === directory
 
     const promise = options
       .list(dir)
       .then((nodes) => {
-        if (options.scope() !== directory) return
+        if (!currentRequest()) return
         const prevChildren = tree.dir[dir]?.children ?? []
         const nextChildren = nodes.map((node) => node.path)
         const nextSet = new Set(nextChildren)
@@ -108,7 +121,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
         )
       })
       .catch((e) => {
-        if (options.scope() !== directory) return
+        if (!currentRequest()) return
         setTree(
           "dir",
           dir,
@@ -120,7 +133,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
         options.onError(e.message)
       })
       .finally(() => {
-        inflight.delete(dir)
+        if (inflight.get(dir) === promise) inflight.delete(dir)
       })
 
     inflight.set(dir, promise)

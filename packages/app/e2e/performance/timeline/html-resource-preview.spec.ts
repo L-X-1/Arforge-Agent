@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
 import { createPreviewResourceHost } from "../../../../server/src/preview-resource-host"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/HtmlResources"
@@ -52,6 +53,7 @@ function json(route: Route, data: unknown, status = 200) {
 async function openPreview(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).click()
@@ -132,6 +134,7 @@ test("HTML resources failure leaves safe preview usable", async ({ page }) => {
   await expect(frame.locator("#heading")).toHaveCSS("color", "rgb(1, 2, 3)")
   await expect(preview.getByRole("button", { name: "Load local resources", exact: true })).toBeEnabled()
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
 })
 
 test("HTML resources revoke when leaving the preview", async ({ page }) => {

@@ -12,7 +12,10 @@ export const rendererContentSecurityPolicy = [
   "form-action 'none'",
   "script-src 'self' 'wasm-unsafe-eval'",
   "script-src-attr 'none'",
-  "style-src 'self' 'unsafe-inline'",
+  // srcdoc previews inherit this policy in addition to their own grant-scoped
+  // policy. Permit the dedicated resource host here so explicitly authorized
+  // local stylesheets can load; the child still restricts the exact grant path.
+  "style-src 'self' 'unsafe-inline' http://127.0.0.2:*",
   "img-src 'self' data: blob: http: https:",
   "font-src 'self' data: https:",
   "connect-src 'self' http: https: ws: wss: data: blob:",

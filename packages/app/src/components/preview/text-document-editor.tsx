@@ -2,14 +2,62 @@ import { basicSetup, EditorView } from "codemirror"
 import { markdown } from "@codemirror/lang-markdown"
 import { createEffect, createSignal, ErrorBoundary, lazy, onCleanup, onMount, Show, Suspense } from "solid-js"
 import { createStore } from "solid-js/store"
+import { createPanelFocusReturn } from "@/pages/session/panel-focus-return"
+import { Dynamic } from "solid-js/web"
+import { useFileComponent } from "@arforge-ai/ui/context/file"
 import { TextDocument } from "@arforge-ai/schema/text-document"
 import { TextDocumentRequestError, type TextDocumentApi } from "@/utils/text-document-api"
 import { acknowledgeSave, isDirty, textDraftKey, textDrafts, type TextDraft } from "./text-document-draft"
 import { isHtmlDocument } from "./html-preview-policy"
 import "./html-preview.css"
+import "./file-preview-polish.css"
+import { PreviewLoading } from "./preview-loading"
 
 const HtmlPreview = lazy(() => import("./html-preview").then((module) => ({ default: module.HtmlPreview })))
 const MarkdownPreview = lazy(() => import("./markdown-preview").then((module) => ({ default: module.MarkdownPreview })))
+
+function ModificationPreview(props: {
+  path: string
+  directory: string
+  version: string
+  before: string
+  after: string
+  chinese: boolean
+}) {
+  const File = useFileComponent()
+  return (
+    <section
+      data-slot="text-editor-change-preview"
+      role="region"
+      aria-label={props.chinese ? "修改预览" : "Modification preview"}
+    >
+      <p data-slot="text-editor-change-scope" title={props.version}>
+        {props.chinese ? "保存前基线与当前草稿" : "Before-save baseline and current draft"} · {props.directory}/
+        {props.path} · {props.version.slice(0, 12)}
+      </p>
+      <ErrorBoundary
+        fallback={(error) => (
+          <div role="alert">
+            <p>{String(error)}</p>
+            <pre>{props.before}</pre>
+            <pre>{props.after}</pre>
+          </div>
+        )}
+      >
+        <div data-slot="text-editor-change-scroll" data-scrollable tabIndex={0}>
+          <Dynamic
+            component={File}
+            mode="diff"
+            diffStyle="unified"
+            media={{ mode: "off" }}
+            before={{ name: props.path, contents: props.before }}
+            after={{ name: props.path, contents: props.after }}
+          />
+        </div>
+      </ErrorBoundary>
+    </section>
+  )
+}
 
 function CodeEditor(props: { text: string; path: string; onChange: (text: string) => void }) {
   let host!: HTMLDivElement
@@ -67,14 +115,46 @@ export default function TextDocumentEditor(props: {
   const [saved, setSaved] = createSignal(false)
   const [confirm, setConfirm] = createSignal<"close" | "reload">()
   const [revision, setRevision] = createSignal(0)
-  const [display, setDisplay] = createStore({ livePreview: true })
+  const [display, setDisplay] = createStore({ livePreview: true, changes: false })
   const [comparison, setComparison] = createStore({ disk: undefined as TextDocument.Info | undefined })
   const supportsPreview = () => isHtmlDocument(props.path) || /\.(?:md|markdown)$/i.test(props.path)
   let timer: ReturnType<typeof setTimeout> | undefined
   let alive = true
-  const t = (zh: string, en: string) => props.chinese ? zh : en
+  let confirmation: HTMLDivElement | undefined
+  let cancelConfirmation: HTMLButtonElement | undefined
+  createPanelFocusReturn({
+    opened: () => !!confirm(),
+    readOpened: () => !alive || !!confirm(),
+    source: () => props.scope,
+    scope: () => JSON.stringify([props.directory, props.path]),
+    region: () => confirmation,
+  })
+  createEffect(() => {
+    if (!confirm()) return
+    const source = props.scope
+    const path = props.path
+    queueMicrotask(() => {
+      if (!alive || !confirm() || source !== props.scope || path !== props.path) return
+      cancelConfirmation?.focus({ preventScroll: true })
+    })
+  })
+  const t = (zh: string, en: string) => (props.chinese ? zh : en)
   const dirty = () => isDirty(draft())
   const tooLarge = () => (draft()?.text.length ?? 0) > TextDocument.MAX_TEXT_LENGTH
+
+  createEffect(() => {
+    const acknowledgement = textDrafts.saveAcknowledgement(key)
+    const current = draft()
+    if (
+      !acknowledgement ||
+      !current ||
+      current.base.version !== acknowledgement.baseVersion ||
+      current.base.version === acknowledgement.saved.version
+    )
+      return
+    // A reopened editor keeps its own current buffer, while adopting the acknowledged base.
+    setDraft(acknowledgeSave(current, acknowledgement.saved))
+  })
 
   const persist = () => {
     if (timer !== undefined) clearTimeout(timer)
@@ -83,7 +163,10 @@ export default function TextDocumentEditor(props: {
       textDrafts.flush(key)
       if (alive) setWarning("")
     } catch (cause) {
-      if (alive) setWarning(`${t("草稿仅保留在内存中，请勿退出：", "Draft retained in memory only; do not exit: ")}${String(cause)}`)
+      if (alive)
+        setWarning(
+          `${t("草稿仅保留在内存中，请勿退出：", "Draft retained in memory only; do not exit: ")}${String(cause)}`,
+        )
     }
   }
 
@@ -101,9 +184,8 @@ export default function TextDocumentEditor(props: {
       const current = await props.api.read({ directory: props.directory, path: props.path })
       if (!alive) return
       const existing = discard ? undefined : draft()
-      const next: TextDraft = existing && existing.text !== current.text
-        ? existing
-        : { format: 1, base: current, text: current.text }
+      const next: TextDraft =
+        existing && existing.text !== current.text ? existing : { format: 1, base: current, text: current.text }
       setDraft(next)
       setConflict(next.base.version !== current.version)
       setComparison("disk", next.base.version !== current.version ? current : undefined)
@@ -146,7 +228,7 @@ export default function TextDocumentEditor(props: {
         baseVersion: value.base.version,
         text: value.text,
       })
-      const next = acknowledgeSave(draft() ?? value, result)
+      const next = textDrafts.acknowledge(key, value, result)
       // Also complete persistence if the user switched tabs during the request.
       setDraft(next)
       remember(next, true)
@@ -156,7 +238,8 @@ export default function TextDocumentEditor(props: {
       try {
         await props.onSaved()
       } catch (cause) {
-        if (alive) setWarning(`${t("文件已保存，但预览刷新失败：", "File saved, but preview refresh failed: ")}${String(cause)}`)
+        if (alive)
+          setWarning(`${t("文件已保存，但预览刷新失败：", "File saved, but preview refresh failed: ")}${String(cause)}`)
       }
       if (alive && close && !isDirty(draft())) props.onClose()
     } catch (cause) {
@@ -168,7 +251,10 @@ export default function TextDocumentEditor(props: {
           const current = await props.api.read({ directory: props.directory, path: props.path })
           if (alive) setComparison("disk", current)
         } catch (readError) {
-          if (alive) setWarning(`${t("无法读取磁盘版本进行对照：", "Could not read the disk version for comparison: ")}${String(readError)}`)
+          if (alive)
+            setWarning(
+              `${t("无法读取磁盘版本进行对照：", "Could not read the disk version for comparison: ")}${String(readError)}`,
+            )
         }
       }
     } finally {
@@ -213,74 +299,211 @@ export default function TextDocumentEditor(props: {
     >
       <header data-slot="text-editor-toolbar">
         <span title={props.path}>{props.path}</span>
-        <span role="status">{saving() ? t("正在保存…", "Saving...") : dirty() ? t("未保存", "Unsaved") : saved() ? t("已保存", "Saved") : t("未修改", "Unchanged")}</span>
-        <button type="button" disabled={!dirty() || saving() || loading() || conflict() || tooLarge()} onClick={() => void save()}>
+        <span data-slot="text-editor-state" role="status">
+          <Show when={dirty()}>
+            <span data-slot="text-editor-dirty-dot" aria-hidden="true" />
+          </Show>
+          {saving()
+            ? t("正在保存…", "Saving...")
+            : dirty()
+              ? t("未保存", "Unsaved")
+              : saved()
+                ? t("已保存", "Saved")
+                : t("未修改", "Unchanged")}
+        </span>
+        <Show when={isHtmlDocument(props.path)}>
+          <button
+            type="button"
+            aria-pressed={display.changes}
+            disabled={loading() || !draft() || tooLarge()}
+            onClick={() => setDisplay("changes", !display.changes)}
+          >
+            {t("查看修改", "View changes")}
+          </button>
+        </Show>
+        <button
+          type="button"
+          data-variant="primary"
+          disabled={!dirty() || saving() || loading() || conflict() || tooLarge()}
+          onClick={() => void save()}
+        >
           {t("保存", "Save")}
         </button>
-        <button type="button" disabled={saving() || loading()} onClick={requestClose}>{t("返回预览", "Back to preview")}</button>
+        <button type="button" disabled={saving() || loading()} onClick={requestClose}>
+          {t("返回预览", "Back to preview")}
+        </button>
         <Show when={supportsPreview()}>
-          <button type="button" aria-pressed={display.livePreview} onClick={() => setDisplay("livePreview", !display.livePreview)}>
+          <button
+            type="button"
+            aria-pressed={display.livePreview && !display.changes}
+            onClick={() =>
+              display.changes
+                ? setDisplay({ changes: false, livePreview: true })
+                : setDisplay("livePreview", !display.livePreview)
+            }
+          >
             {t("\u5b9e\u65f6\u9884\u89c8", "Live preview")}
           </button>
         </Show>
       </header>
-      <p data-slot="text-editor-hint">{t("Ctrl/Cmd+S 保存；Ctrl/Cmd+F 查找。关闭标签后草稿仍保留，重新点击“编辑文件”可恢复。", "Ctrl/Cmd+S saves; Ctrl/Cmd+F searches. Drafts survive tab closure; use Edit file to restore them.")}</p>
-      <Show when={restored()}><p role="status">{t("已恢复未保存草稿。", "Unsaved draft restored.")}</p></Show>
-      <Show when={warning()}><p role="alert">{warning()}</p></Show>
-      <Show when={error()}><p role="alert">{error()}</p></Show>
+      <p data-slot="text-editor-hint">
+        {t(
+          "Ctrl/Cmd+S 保存；Ctrl/Cmd+F 查找。关闭标签后草稿仍保留，重新点击“编辑文件”可恢复。",
+          "Ctrl/Cmd+S saves; Ctrl/Cmd+F searches. Drafts survive tab closure; use Edit file to restore them.",
+        )}
+      </p>
+      <Show when={restored()}>
+        <p role="status">{t("已恢复未保存草稿。", "Unsaved draft restored.")}</p>
+      </Show>
+      <Show when={warning()}>
+        <p role="alert">{warning()}</p>
+      </Show>
+      <Show when={error()}>
+        <p role="alert">{error()}</p>
+      </Show>
       <Show when={conflict()}>
         <div role="alert">
-          <p>{t("磁盘文件已被其他操作修改。草稿已保留，保存已暂停，不会覆盖外部改动。", "The file changed on disk. Your draft is retained and saving is paused to protect external changes.")}</p>
+          <p>
+            {t(
+              "磁盘文件已被其他操作修改。草稿已保留，保存已暂停，不会覆盖外部改动。",
+              "The file changed on disk. Your draft is retained and saving is paused to protect external changes.",
+            )}
+          </p>
           <Show when={comparison.disk}>
             <div data-slot="text-editor-conflict">
-              <section><h3>{t("当前草稿", "Your draft")}</h3><pre>{draft()?.text}</pre></section>
-              <section><h3>{t("磁盘版本", "Disk version")}</h3><pre>{comparison.disk?.text}</pre></section>
+              <section>
+                <h3>{t("当前草稿", "Your draft")}</h3>
+                <pre>{draft()?.text}</pre>
+              </section>
+              <section>
+                <h3>{t("磁盘版本", "Disk version")}</h3>
+                <pre>{comparison.disk?.text}</pre>
+              </section>
             </div>
           </Show>
-          <button type="button" disabled={loading() || saving()} onClick={() => setConfirm("reload")}>{t("重新读取磁盘文件", "Reload disk file")}</button>
+          <button type="button" disabled={loading() || saving()} onClick={() => setConfirm("reload")}>
+            {t("重新读取磁盘文件", "Reload disk file")}
+          </button>
         </div>
       </Show>
-      <Show when={tooLarge()}><p role="alert">{t("超过 500,000 字符，缩短内容后才能保存。", "Over 500,000 characters; shorten the content before saving.")}</p></Show>
+      <Show when={tooLarge()}>
+        <p role="alert">
+          {t("超过 500,000 字符，缩短内容后才能保存。", "Over 500,000 characters; shorten the content before saving.")}
+        </p>
+      </Show>
       <Show when={confirm()}>
-        <div role="alertdialog" aria-label={t("处理未保存的修改", "Unsaved changes")} tabIndex={-1}>
-          <p>{t("是否丢弃当前草稿？取消将继续保留编辑内容。", "Discard the current draft? Cancel keeps your edits.")}</p>
-          <Show when={confirm() === "close"}>
-            <button type="button" disabled={saving() || conflict() || tooLarge()} onClick={() => { setConfirm(undefined); void save(true) }}>
-              {t("保存并返回", "Save and close")}
+        <div
+          ref={confirmation}
+          role="alertdialog"
+          aria-label={t("处理未保存的修改", "Unsaved changes")}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.isComposing || event.keyCode === 229) return
+            if (event.key === "Escape") {
+              event.preventDefault()
+              event.stopPropagation()
+              setConfirm(undefined)
+            } else if (event.key === "Tab") {
+              const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")]
+              const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+              if (event.shiftKey ? index <= 0 : index === buttons.length - 1) {
+                event.preventDefault()
+                buttons[event.shiftKey ? buttons.length - 1 : 0]?.focus()
+              }
+            }
+          }}
+        >
+          <p>
+            {t("是否丢弃当前草稿？取消将继续保留编辑内容。", "Discard the current draft? Cancel keeps your edits.")}
+          </p>
+          <p data-slot="text-editor-confirm-path">{props.path}</p>
+          <p data-slot="text-editor-confirm-directory">{props.directory}</p>
+          <div data-slot="text-editor-confirm-actions">
+            <button ref={cancelConfirmation} type="button" data-action="cancel" onClick={() => setConfirm(undefined)}>
+              {t("取消", "Cancel")}
             </button>
-          </Show>
-          <button type="button" onClick={() => void discard()}>{t("丢弃草稿", "Discard draft")}</button>
-          <button type="button" onClick={() => setConfirm(undefined)}>{t("取消", "Cancel")}</button>
-        </div>
-      </Show>
-      <Show when={!loading()} fallback={<p role="status">{t("正在读取文件版本…", "Reading file version...")}</p>}>
-        <Show when={draft()} fallback={<button type="button" onClick={() => void load()}>{t("重试", "Retry")}</button>}>
-          <div data-component="text-editor-layout" data-preview={supportsPreview() && display.livePreview ? "true" : "false"}>
-            <Show when={revision() + 1} keyed>
-            {(_revision) => <CodeEditor
-              text={draft()!.text}
-              path={props.path}
-              onChange={(text) => {
-                const current = draft()
-                if (!current || current.text === text) return
-                const next = { ...current, text }
-                setDraft(next)
-                setSaved(false)
-                remember(next)
-              }}
-            />}
-            </Show>
-            <Show when={supportsPreview() && display.livePreview}>
-              <ErrorBoundary fallback={(error) => <p role="alert">{String(error)}</p>}>
-                <Suspense fallback={<p role="status">{t("\u6b63\u5728\u52a0\u8f7d\u9884\u89c8...", "Loading preview...")}</p>}>
-                  <Show when={isHtmlDocument(props.path)} fallback={<MarkdownPreview text={draft()!.text} />}>
-                    <HtmlPreview path={props.path} text={draft()!.text} live />
-                  </Show>
-                </Suspense>
-              </ErrorBoundary>
+            <button type="button" onClick={() => void discard()}>
+              {t("丢弃草稿", "Discard draft")}
+            </button>
+            <Show when={confirm() === "close"}>
+              <button
+                type="button"
+                data-variant="primary"
+                disabled={saving() || conflict() || tooLarge()}
+                onClick={() => {
+                  setConfirm(undefined)
+                  void save(true)
+                }}
+              >
+                {t("保存并返回", "Save and close")}
+              </button>
             </Show>
           </div>
-          <footer>{draft()!.base.bom ? "UTF-8 BOM" : "UTF-8"} · {draft()!.base.lineEnding.toUpperCase()}</footer>
+        </div>
+      </Show>
+      <Show
+        when={!loading()}
+        fallback={<PreviewLoading kind="text" label={t("正在读取文件版本…", "Reading file version...")} />}
+      >
+        <Show
+          when={draft()}
+          fallback={
+            <button type="button" onClick={() => void load()}>
+              {t("重试", "Retry")}
+            </button>
+          }
+        >
+          <div
+            data-component="text-editor-layout"
+            data-preview={display.changes || (supportsPreview() && display.livePreview) ? "true" : "false"}
+          >
+            <Show when={revision() + 1} keyed>
+              {(_revision) => (
+                <CodeEditor
+                  text={draft()!.text}
+                  path={props.path}
+                  onChange={(text) => {
+                    const current = draft()
+                    if (!current || current.text === text) return
+                    const next = { ...current, text }
+                    setDraft(next)
+                    setSaved(false)
+                    remember(next)
+                  }}
+                />
+              )}
+            </Show>
+            <Show
+              when={display.changes}
+              fallback={
+                <Show when={supportsPreview() && display.livePreview}>
+                  <ErrorBoundary fallback={(error) => <p role="alert">{String(error)}</p>}>
+                    <Suspense
+                      fallback={
+                        <p role="status">{t("\u6b63\u5728\u52a0\u8f7d\u9884\u89c8...", "Loading preview...")}</p>
+                      }
+                    >
+                      <Show when={isHtmlDocument(props.path)} fallback={<MarkdownPreview text={draft()!.text} />}>
+                        <HtmlPreview path={props.path} text={draft()!.text} live />
+                      </Show>
+                    </Suspense>
+                  </ErrorBoundary>
+                </Show>
+              }
+            >
+              <ModificationPreview
+                path={props.path}
+                directory={props.directory}
+                version={draft()!.base.version}
+                before={draft()!.base.text}
+                after={draft()!.text}
+                chinese={props.chinese}
+              />
+            </Show>
+          </div>
+          <footer>
+            {draft()!.base.bom ? "UTF-8 BOM" : "UTF-8"} · {draft()!.base.lineEnding.toUpperCase()}
+          </footer>
         </Show>
       </Show>
     </section>

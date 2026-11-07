@@ -2,13 +2,12 @@ export type ReasoningLevel = "default" | "high" | "max"
 
 export type ReasoningProfile = {
   readonly level: ReasoningLevel
-  readonly mascotForm: 1 | 2 | 3
 }
 
 const profiles: Record<ReasoningLevel, ReasoningProfile> = {
-  default: { level: "default", mascotForm: 1 },
-  high: { level: "high", mascotForm: 2 },
-  max: { level: "max", mascotForm: 3 },
+  default: { level: "default" },
+  high: { level: "high" },
+  max: { level: "max" },
 }
 
 export function reasoningLevel(variant?: string): ReasoningLevel {

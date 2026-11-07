@@ -8,9 +8,8 @@ import { useServerSDK } from "./server-sdk"
 import { RECENTLY_CLOSED_DISPLAY_LIMIT, ServerConnection, useServer } from "./server"
 import { usePlatform } from "./platform"
 import { Project } from "@arforge-ai/sdk/v2"
-import { normalizeProjectInfo } from "./global-sync/utils"
+import { captureProjectMetadata, resolveProjectMetadataID, updateProjectMetadata } from "./project-metadata"
 import { Persist, persisted, removePersisted } from "@/utils/persist"
-import { pathKey } from "@/utils/path-key"
 import { decode64 } from "@/utils/base64"
 import { same } from "@/utils/same"
 import { createScrollPersistence, type SessionScroll } from "./layout-scroll"
@@ -31,10 +30,10 @@ export { createSessionKeyReader, ensureSessionKey, pruneSessionKeys }
 export type { ProjectAvatarVariant }
 
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
-const DEFAULT_SIDEBAR_WIDTH = 216
-const DEFAULT_FILE_TREE_WIDTH = 200
-const DEFAULT_SESSION_WIDTH = 600
-const DEFAULT_TERMINAL_HEIGHT = 280
+const DEFAULT_SIDEBAR_WIDTH = 264
+const DEFAULT_FILE_TREE_WIDTH = 216
+const DEFAULT_SESSION_WIDTH = 760
+const DEFAULT_TERMINAL_HEIGHT = 240
 const DEFAULT_REVIEW_PANEL_OPENED = false
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
 
@@ -94,7 +93,7 @@ export type ReviewChangeMode = "git" | "branch" | "turn"
 export type ReviewPanelSource = "context-button" | "other"
 
 export type LayoutRoute =
-  | { type: "home" }
+  | { type: "home"; draftID?: string; server?: ServerConnection.Key }
   | { type: "draft"; draftID: string; server?: ServerConnection.Key }
   | { type: "dir-new-sesssion"; dir: string; dirBase64: string; server?: ServerConnection.Key }
   | { type: "session"; sessionId: string; server?: ServerConnection.Key }
@@ -133,7 +132,13 @@ const normalizeStoredSessionTabs = (key: string, tabs: SessionTabs) => {
 
 export const currentRoute = (pathname: string, search: string): LayoutRoute => {
   const parts = pathname.split("/").filter(Boolean)
-  if (parts.length === 0) return { type: "home" }
+  if (parts.length === 0) {
+    const query = new URLSearchParams(search)
+    const draftID = query.get("draftId")
+    return draftID && query.get("history") !== "1" && query.get("archived") !== "1"
+      ? { type: "home", draftID }
+      : { type: "home" }
+  }
 
   if (parts[0] === "new-session") {
     const draftID = new URLSearchParams(search).get("draftId")
@@ -174,9 +179,9 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     useTextDocumentNavigationGuard()
     const route = createMemo(() => {
       const value = currentRoute(location.pathname, location.search)
-      if (value.type === "home") return value
+      if (value.type === "home" && !value.draftID) return value
       if (value.server) return value
-      if (value.type === "draft") {
+      if (value.type === "draft" || (value.type === "home" && value.draftID)) {
         const draft = tabs.store.find((tab): tab is DraftTab => tab.type === "draft" && tab.draftID === value.draftID)
         if (draft) return { ...value, server: draft.server }
       }
@@ -200,6 +205,11 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         }
       })()
 
+      const session = value.session
+      const migratedSession =
+        isRecord(session) && typeof session.widthExplicit !== "boolean"
+          ? { ...session, widthExplicit: typeof session.width === "number" && Number.isFinite(session.width) }
+          : session
       const review = value.review
       const fileTree = value.fileTree
       const migratedFileTree = (() => {
@@ -217,13 +227,18 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
       const migratedReview = (() => {
         if (!isRecord(review)) return review
-        if (typeof review.panelOpened === "boolean") return review
+        const diffStyleExplicit =
+          typeof review.diffStyleExplicit === "boolean"
+            ? review.diffStyleExplicit
+            : review.diffStyle === "split" || review.diffStyle === "unified"
+        if (typeof review.panelOpened === "boolean" && typeof review.diffStyleExplicit === "boolean") return review
 
         const opened =
           isRecord(fileTree) && typeof fileTree.opened === "boolean" ? fileTree.opened : DEFAULT_REVIEW_PANEL_OPENED
         return {
           ...review,
-          panelOpened: opened,
+          diffStyleExplicit,
+          panelOpened: typeof review.panelOpened === "boolean" ? review.panelOpened : opened,
         }
       })()
 
@@ -254,6 +269,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       })()
 
       if (
+        migratedSession === session &&
         migratedSidebar === sidebar &&
         migratedReview === review &&
         migratedFileTree === fileTree &&
@@ -265,6 +281,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
       return {
         ...value,
+        session: migratedSession,
         sidebar: migratedSidebar,
         review: migratedReview,
         fileTree: migratedFileTree,
@@ -289,6 +306,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
         review: {
           diffStyle: "split" as ReviewDiffStyle,
+          diffStyleExplicit: false,
           panelOpened: DEFAULT_REVIEW_PANEL_OPENED,
         },
         fileTree: {
@@ -298,6 +316,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
         session: {
           width: DEFAULT_SESSION_WIDTH,
+          widthExplicit: false,
         },
         mobileSidebar: {
           opened: false,
@@ -440,7 +459,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     })
 
     const [colors, setColors] = createStore<Record<string, AvatarColorKey>>({})
-    const colorRequested = new Map<string, AvatarColorKey>()
+    const colorRequested = new Map<string, { color: AvatarColorKey; current: () => boolean }>()
 
     function pickAvailableColor(used: Set<string>): AvatarColorKey {
       const available = AVATAR_COLOR_KEYS.filter((c) => !used.has(c))
@@ -458,7 +477,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       // Preserve local icon override from per-workspace localStorage cache (childStore.icon).
       // Without this, different subdirectories of the same git repo would share the same
       // icon from the database instead of using their individual overrides.
-      const base = { ...metadata, ...project }
+      const base = { ...metadata, id: metadata?.id || projectID || undefined, ...project }
       if (childStore.icon) {
         return { ...base, icon: { ...base.icon, override: childStore.icon } }
       }
@@ -520,6 +539,18 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
     })
 
     const enriched = createMemo(() => server.projects.list().map(enrich))
+    function captureMetadata(project: LocalProject) {
+      const sdk = serverSdk()
+      const sync = serverSync()
+      const key = server.key
+      return captureProjectMetadata(
+        { sdk, sync },
+        server.projects.list,
+        project,
+        () => serverSdk.isAlive() && server.key === key && serverSdk() === sdk && serverSync() === sync,
+      )
+    }
+
     const list = createMemo(() => {
       const projects = enriched()
       return projects.map((project) => {
@@ -544,6 +575,9 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
     createEffect(() => {
       const projects = enriched()
+      for (const [worktree, request] of colorRequested) {
+        if (!request.current()) colorRequested.delete(worktree)
+      }
       if (projects.length === 0) return
 
       for (const project of projects) {
@@ -565,27 +599,34 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           used.add(color)
           setColors(worktree, color)
         }
-        if (!project.id) continue
+        if (!project.id && !serverSync().ready) continue
 
-        const requested = colorRequested.get(worktree)
-        if (requested === color) continue
-        colorRequested.set(worktree, color)
+        if (colorRequested.get(worktree)?.color === color) continue
+        const request = captureMetadata(project)
+        if (!request?.current()) continue
+        const pending = { color, current: request.current }
+        colorRequested.set(worktree, pending)
 
-        if (project.id === "global") {
-          serverSync().project.meta(worktree, { icon: { color } })
-          continue
+        const release = () => {
+          if (colorRequested.get(worktree) === pending) colorRequested.delete(worktree)
         }
-
-        void serverSdk()
-          .api.project.update({ projectID: project.id, icon: { color } })
-          .then((result) =>
-            serverSync().set("project", (items) =>
-              items.map((item) => (item.id === result.id ? normalizeProjectInfo(result) : item)),
-            ),
-          )
-          .catch(() => {
-            if (colorRequested.get(worktree) === color) colorRequested.delete(worktree)
-          })
+        const applyColor = async () => {
+          const id = request.id ?? (await resolveProjectMetadataID(request))
+          if (!id || !request.current()) return undefined
+          if (id !== "global") {
+            const icon = request.sync.data.project.find((item) => item.id === id)?.icon
+            if (icon?.color || icon?.override || icon?.url) return "superseded"
+            return updateProjectMetadata({ ...request, id }, { icon: { color } })
+          }
+          request.sync.project.meta(worktree, { icon: { color } })
+          return "saved"
+        }
+        void applyColor().then(
+          (result) => {
+            if (!result) release()
+          },
+          release,
+        )
       }
     })
 
@@ -632,11 +673,10 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       },
       projects: {
         list,
+        captureMetadata,
         recentlyClosed: createMemo(() => {
-          const known = new Set(serverSync().data.project.map((project) => pathKey(project.worktree)))
           return server.projects
             .recentlyClosed()
-            .filter((worktree) => known.has(pathKey(worktree)))
             .slice(0, RECENTLY_CLOSED_DISPLAY_LIMIT)
             .map((worktree) => enrich({ worktree, expanded: false }))
         }),
@@ -693,12 +733,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       },
       review: {
         diffStyle: createMemo(() => store.review?.diffStyle ?? "split"),
+        diffStylePreference: createMemo(() => (store.review?.diffStyleExplicit ? store.review.diffStyle : null)),
         setDiffStyle(diffStyle: ReviewDiffStyle) {
           if (!store.review) {
-            setStore("review", { diffStyle, panelOpened: DEFAULT_REVIEW_PANEL_OPENED })
+            setStore("review", { diffStyle, diffStyleExplicit: true, panelOpened: DEFAULT_REVIEW_PANEL_OPENED })
             return
           }
-          setStore("review", "diffStyle", diffStyle)
+          setStore("review", { ...store.review, diffStyle, diffStyleExplicit: true })
         },
       },
       fileTree: {
@@ -743,12 +784,13 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       },
       session: {
         width: createMemo(() => store.session?.width ?? DEFAULT_SESSION_WIDTH),
+        widthPreference: createMemo(() => (store.session?.widthExplicit ? store.session.width : null)),
         resize(width: number) {
           if (!store.session) {
-            setStore("session", { width })
+            setStore("session", { width, widthExplicit: true })
             return
           }
-          setStore("session", "width", width)
+          setStore("session", { ...store.session, width, widthExplicit: true })
         },
       },
       mobileSidebar: {
@@ -838,7 +880,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           const current = store.review
           if (!current) {
             batch(() => {
-              setStore("review", { diffStyle: "split" as ReviewDiffStyle, panelOpened: next })
+              setStore("review", { diffStyle: "split" as ReviewDiffStyle, diffStyleExplicit: false, panelOpened: next })
               setEphemeral("reviewPanelSource", nextSource)
             })
             return

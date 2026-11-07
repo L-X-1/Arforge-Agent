@@ -29,6 +29,13 @@ export const Source = Schema.Struct({
   text: Schema.String,
 }).annotate({ identifier: "Prompt.Source" })
 
+/** Exact connected MCP source; URI alone cannot identify its owning server. */
+export interface McpResourceReference extends Schema.Schema.Type<typeof McpResourceReference> {}
+export const McpResourceReference = Schema.Struct({
+  server: Schema.String,
+  uri: Schema.String,
+}).annotate({ identifier: "Prompt.McpResourceReference" })
+
 export interface FileAttachment extends Schema.Schema.Type<typeof FileAttachment> {}
 export const FileAttachment = Schema.Struct({
   uri: Schema.String,
@@ -36,6 +43,7 @@ export const FileAttachment = Schema.Struct({
   name: Schema.String.pipe(optional),
   description: Schema.String.pipe(optional),
   source: Source.pipe(optional),
+  resource: McpResourceReference.pipe(optional),
 })
   .annotate({ identifier: "Prompt.FileAttachment" })
   .pipe(
@@ -47,6 +55,7 @@ export const FileAttachment = Schema.Struct({
           name: input.name,
           description: input.description,
           source: input.source,
+          resource: input.resource,
         }),
     })),
   )
@@ -106,6 +115,7 @@ export const Prompt = Schema.Struct({
   command: Schema.Struct({
     name: Schema.String,
     arguments: Schema.String,
+    requestDigest: Schema.String.pipe(optional),
   }).pipe(optional),
   format: OutputFormat.pipe(optional),
 })

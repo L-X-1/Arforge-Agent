@@ -11,6 +11,8 @@ import type {
   SessionsActiveOutput,
   SessionsGetInput,
   SessionsGetOutput,
+  SessionsRenameInput,
+  SessionsRenameOutput,
   SessionsTagsUpdateInput,
   SessionsTagsUpdateOutput,
   SessionsCheckpointCreateInput,
@@ -27,6 +29,10 @@ import type {
   SessionsSwitchModelOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
+  SessionsShellInput,
+  SessionsShellOutput,
+  SessionsCommandInput,
+  SessionsCommandOutput,
   SessionsPromptQueueListInput,
   SessionsPromptQueueListOutput,
   SessionsPromptQueueUpdateInput,
@@ -373,6 +379,8 @@ import type {
   McpResourceCatalogOutput,
   McpCapabilitiesInput,
   McpCapabilitiesOutput,
+  McpToolDetailsInput,
+  McpToolDetailsOutput,
   McpActionReconciliationInput,
   McpActionReconciliationOutput,
   McpRecordReconciliationInput,
@@ -409,6 +417,18 @@ import type {
   ModelsDefaultOutput,
   ModelsListInput,
   ModelsListOutput,
+  ProvidersConfigurationGetInput,
+  ProvidersConfigurationGetOutput,
+  ProvidersConfigurationTestInput,
+  ProvidersConfigurationTestOutput,
+  ProvidersCapabilityInput,
+  ProvidersCapabilityOutput,
+  ProvidersSaveInput,
+  ProvidersSaveOutput,
+  ProvidersCredentialInput,
+  ProvidersCredentialOutput,
+  ProvidersDisconnectInput,
+  ProvidersDisconnectOutput,
   ProvidersListInput,
   ProvidersListOutput,
   ProvidersGetInput,
@@ -462,6 +482,8 @@ import type {
   SkillsListInput,
   SkillsListOutput,
   EventsSubscribeOutput,
+  PtysShellsInput,
+  PtysShellsOutput,
   PtysListInput,
   PtysListOutput,
   PtysCreateInput,
@@ -788,6 +810,19 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      rename: (input: SessionsRenameInput, requestOptions?: RequestOptions) =>
+        request<SessionsRenameOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/rename`,
+            body: { title: input["title"] },
+            successStatus: 204,
+            declaredStatuses: [400, 404, 409, 401],
+            empty: true,
+            binary: false,
+          },
+          requestOptions,
+        ),
       tagsUpdate: (input: SessionsTagsUpdateInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsTagsUpdateOutput }>(
           {
@@ -831,9 +866,13 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/rewind/preview`,
-            body: { checkpointID: input["checkpointID"] },
+            body: {
+              checkpointID: input["checkpointID"],
+              messageID: input["messageID"],
+              expectedDirectory: input["expectedDirectory"],
+            },
             successStatus: 200,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 409, 400, 401],
             empty: false,
             binary: false,
           },
@@ -844,7 +883,13 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/rewind/apply`,
-            body: { checkpointID: input["checkpointID"], expectedLastSequence: input["expectedLastSequence"] },
+            body: {
+              checkpointID: input["checkpointID"],
+              messageID: input["messageID"],
+              expectedDirectory: input["expectedDirectory"],
+              expectedLastSequence: input["expectedLastSequence"],
+              expectedRevision: input["expectedRevision"],
+            },
             successStatus: 200,
             declaredStatuses: [404, 409, 400, 401],
             empty: false,
@@ -885,7 +930,42 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
             body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
             successStatus: 200,
-            declaredStatuses: [409, 404, 400, 401],
+            declaredStatuses: [409, 400, 503, 404, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      shell: (input: SessionsShellInput, requestOptions?: RequestOptions) =>
+        request<SessionsShellOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/shell`,
+            body: { id: input["id"], command: input["command"], agent: input["agent"], model: input["model"] },
+            successStatus: 204,
+            declaredStatuses: [409, 400, 404, 503, 401],
+            empty: true,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      command: (input: SessionsCommandInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsCommandOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/command`,
+            body: {
+              id: input["id"],
+              command: input["command"],
+              arguments: input["arguments"],
+              agent: input["agent"],
+              model: input["model"],
+              files: input["files"],
+              delivery: input["delivery"],
+              resume: input["resume"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 404, 503, 401],
             empty: false,
             binary: false,
           },
@@ -910,7 +990,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt/queue/${encodeURIComponent(input.messageID)}`,
             body: { expectedAdmittedSeq: input["expectedAdmittedSeq"], prompt: input["prompt"] },
             successStatus: 200,
-            declaredStatuses: [409, 404, 400, 401],
+            declaredStatuses: [409, 400, 503, 404, 401],
             empty: false,
             binary: false,
           },
@@ -934,8 +1014,13 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/compact`,
+            body: {
+              model: input["model"],
+              expectedContext: input["expectedContext"],
+              expectedDirectory: input["expectedDirectory"],
+            },
             successStatus: 204,
-            declaredStatuses: [404, 503, 400, 401],
+            declaredStatuses: [409, 400, 404, 503, 401],
             empty: true,
             binary: false,
           },
@@ -3457,6 +3542,24 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      toolDetails: (input: McpToolDetailsInput, requestOptions?: RequestOptions) =>
+        request<McpToolDetailsOutput>(
+          {
+            method: "GET",
+            path: `/api/mcp/tool`,
+            query: {
+              location: input["location"],
+              server: input["server"],
+              capabilityID: input["capabilityID"],
+              generation: input["generation"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
       actionReconciliation: (input: McpActionReconciliationInput, requestOptions?: RequestOptions) =>
         request<McpActionReconciliationOutput>(
           {
@@ -3725,7 +3828,7 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/model`,
-            query: { location: input?.["location"] },
+            query: { location: input?.["location"], includePresets: input?.["includePresets"] },
             successStatus: 200,
             declaredStatuses: [503, 401, 400],
             empty: false,
@@ -3735,6 +3838,98 @@ export function make(options: ClientOptions) {
         ),
     },
     providers: {
+      configurationGet: (input: ProvidersConfigurationGetInput, requestOptions?: RequestOptions) =>
+        request<ProvidersConfigurationGetOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/configuration`,
+            query: { location: input["location"] },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 400, 503, 404, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      configurationTest: (input: ProvidersConfigurationTestInput, requestOptions?: RequestOptions) =>
+        request<ProvidersConfigurationTestOutput>(
+          {
+            method: "POST",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/configuration/test`,
+            query: { location: input["location"] },
+            body: { revision: input["revision"], modelID: input["modelID"] },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 400, 503, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      capability: (input?: ProvidersCapabilityInput, requestOptions?: RequestOptions) =>
+        request<ProvidersCapabilityOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/configuration/capability`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      save: (input: ProvidersSaveInput, requestOptions?: RequestOptions) =>
+        request<ProvidersSaveOutput>(
+          {
+            method: "PUT",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/configuration`,
+            query: { location: input["location"] },
+            body: {
+              name: input["name"],
+              baseURL: input["baseURL"],
+              models: input["models"],
+              authentication: input["authentication"],
+              apiFormat: input["apiFormat"],
+              disabled: input["disabled"],
+              deletedModelIDs: input["deletedModelIDs"],
+              env: input["env"],
+              revision: input["revision"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 400, 503, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      credential: (input: ProvidersCredentialInput, requestOptions?: RequestOptions) =>
+        request<ProvidersCredentialOutput>(
+          {
+            method: "POST",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/configuration/credential`,
+            query: { location: input["location"] },
+            body: { revision: input["revision"], key: input["key"], headers: input["headers"] },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 400, 503, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
+      disconnect: (input: ProvidersDisconnectInput, requestOptions?: RequestOptions) =>
+        request<ProvidersDisconnectOutput>(
+          {
+            method: "POST",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/configuration/disconnect`,
+            query: { location: input["location"] },
+            body: { revision: input["revision"] },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 400, 503, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
       list: (input?: ProvidersListInput, requestOptions?: RequestOptions) =>
         request<ProvidersListOutput>(
           {
@@ -4113,6 +4308,19 @@ export function make(options: ClientOptions) {
         ),
     },
     ptys: {
+      shells: (input?: PtysShellsInput, requestOptions?: RequestOptions) =>
+        request<PtysShellsOutput>(
+          {
+            method: "GET",
+            path: `/api/pty/shells`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ),
       list: (input?: PtysListInput, requestOptions?: RequestOptions) =>
         request<PtysListOutput>(
           {

@@ -2,6 +2,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/HtmlPreview"
@@ -62,6 +63,7 @@ async function setup(page: Page, text: string) {
 async function openFile(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).click()
@@ -169,7 +171,7 @@ test("HTML preview splits responsively, refreshes the file and releases frames o
   expect(Math.abs(widePreview!.y - wideSource!.y)).toBeLessThan(2)
   await sourcePane.evaluate((node) => { node.scrollTop = 100 })
   expect(await frame.locator("body").evaluate(() => window.scrollY)).toBe(0)
-  await split.evaluate((node) => { node.style.maxWidth = "420px" })
+  await preview.evaluate((node) => { node.style.maxWidth = "420px" })
   const narrowSource = await sourcePane.boundingBox()
   const narrowPreview = await previewPane.boundingBox()
   expect(narrowPreview!.y).toBeGreaterThanOrEqual(narrowSource!.y + narrowSource!.height)

@@ -1,10 +1,12 @@
 import { EventEmitter } from "events"
 import { Identifier } from "@/id/id"
+import type { Database } from "@arforge-ai/core/database/database"
 
 export type GlobalEvent = {
   directory?: string
   project?: string
   workspace?: string
+  principal?: Database.Principal
   payload: any
 }
 

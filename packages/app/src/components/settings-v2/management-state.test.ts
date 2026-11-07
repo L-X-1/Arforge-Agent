@@ -23,6 +23,17 @@ describe("management feedback states", () => {
     expect(managementState({ error: "Service unavailable" })).toBe("error")
   })
 
+  test("keeps refresh, read-only, partial and acknowledged-write recovery distinct", () => {
+    expect(managementState({ loading: true, refreshing: true, empty: true })).toBe("refreshing")
+    expect(managementState({ readOnly: "Managed by the environment" })).toBe("readonly")
+    expect(managementState({ noResults: true, empty: true })).toBe("noresults")
+    expect(managementState({ error: "Read failed", partial: true })).toBe("partial")
+    expect(managementState({ error: "Read failed", acknowledged: true, notice: "Write confirmed" })).toBe("ack")
+    expect(managementState({ error: { status: 409 }, partial: true })).toBe("conflict")
+    expect(managementState({ offline: true, empty: true })).toBe("offline")
+    expect(managementState({ error: new TypeError("Failed to fetch") })).toBe("offline")
+  })
+
   test("renders only a public message and does not serialize a credential-bearing object", () => {
     expect(managementErrorText({ token: "sensitive", response: { password: "secret" } }, "Failed")).toBe("Failed")
     expect(managementErrorText({ message: "Revision 7 is stale", token: "sensitive" })).toBe("Revision 7 is stale")

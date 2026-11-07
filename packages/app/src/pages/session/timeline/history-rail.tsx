@@ -1,7 +1,8 @@
 import { createEffect, createMemo, createUniqueId, For, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
-import { historyDestination, historyExcerpt, historyWindow, type HistoryEntry } from "./history-rail-model"
+import { Icon } from "@arforge-ai/ui/v2/icon"
+import { historyDestination, historyExcerpt, historyWindow, historyPreviewPosition, type HistoryEntry } from "./history-rail-model"
 import { createHistoryPreviewTimers } from "./history-rail-preview"
 import "./history-rail.css"
 
@@ -25,6 +26,8 @@ export function HistoryRail(props: {
     windowStart: undefined as number | undefined,
     top: 0,
     left: 0,
+    viewportWidth: 0,
+    viewportHeight: 0,
     capacity: 28,
     fetching: false,
     jumping: false,
@@ -67,17 +70,17 @@ export function HistoryRail(props: {
     button?.focus({ preventScroll: true })
     returningFocus = false
   }
-  const position = (button: HTMLButtonElement) => {
-    const rect = button.getBoundingClientRect()
+  const position = (button?: HTMLButtonElement) => {
+    const rect = button?.getBoundingClientRect()
     const viewport = window.visualViewport
     const originX = viewport?.offsetLeft ?? 0
     const originY = viewport?.offsetTop ?? 0
     const width = viewport?.width ?? window.innerWidth
     const height = viewport?.height ?? window.innerHeight
-    const cardWidth = Math.min(380, width - 32)
     setState({
-      left: Math.max(originX + 8, Math.min(rect.right + 12, originX + width - cardWidth - 16)),
-      top: Math.max(originY + 8, Math.min(rect.top - 24, originY + height - (card?.offsetHeight ?? 300) - 8)),
+      ...historyPreviewPosition({ viewport: { left: originX, top: originY, width, height }, previous: state,
+        anchor: rect, cardHeight: card?.offsetHeight ?? 300 }),
+      viewportWidth: width, viewportHeight: height,
     })
   }
   const show = (entry: HistoryEntry, button: HTMLButtonElement, immediate = false, persistent = false) => {
@@ -170,18 +173,20 @@ export function HistoryRail(props: {
       const available = Math.max(44, (rail?.clientHeight ?? 500) - 140)
       setState("capacity", Math.max(1, Math.min(28, Math.floor(available / (coarse.matches ? 44 : 14)))))
       const button = buttons.get(state.previewID ?? "")
-      if (button) position(button)
+      if (state.previewID) position(button)
     }
     const observer = new ResizeObserver(resize)
     if (rail) observer.observe(rail)
     resize()
     window.addEventListener("resize", resize)
     window.visualViewport?.addEventListener("resize", resize)
+    window.visualViewport?.addEventListener("scroll", resize)
     coarse.addEventListener("change", resize)
     onCleanup(() => {
       observer.disconnect()
       window.removeEventListener("resize", resize)
       window.visualViewport?.removeEventListener("resize", resize)
+      window.visualViewport?.removeEventListener("scroll", resize)
       coarse.removeEventListener("change", resize)
     })
   })
@@ -193,6 +198,12 @@ export function HistoryRail(props: {
     }
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return
+      // A hover preview may still be open after focus moves to another surface.
+      // Let that surface handle Escape without returning focus to the rail.
+      if (!(event.target instanceof Node) || (!rail?.contains(event.target) && !card?.contains(event.target))) {
+        hide()
+        return
+      }
       event.preventDefault()
       event.stopPropagation()
       restoreEntry()
@@ -226,13 +237,13 @@ export function HistoryRail(props: {
             disabled={props.loading || state.fetching}
             aria-label={label("加载更早的提问", "Load earlier prompts")}
             onClick={() => void loadOlder()}
-          >{props.loading || state.fetching ? "\u2026" : "+"}</button>
+          ><Icon name={props.loading || state.fetching ? "outline-dots" : "plus"} /></button>
         </Show>
         <Show when={range().start > 0}>
           <button type="button" class="history-rail-action"
             aria-label={label("上一组提问", "Previous prompts")}
             onClick={() => focus(Math.max(0, range().start - 1))}
-          >{"\u2039"}</button>
+          ><Icon name="chevron-down" class="rotate-180" /></button>
         </Show>
         <div class="history-rail-marks">
           <For each={visible()}>
@@ -281,7 +292,7 @@ export function HistoryRail(props: {
           <button type="button" class="history-rail-action"
             aria-label={label("下一组提问", "Next prompts")}
             onClick={() => focus(range().end)}
-          >{"\u203a"}</button>
+          ><Icon name="chevron-down" /></button>
         </Show>
         <Show when={state.error}>
           <span class="history-rail-error" role="alert">{label("历史提问加载失败，请重试", "Could not load earlier prompts. Please retry.")}</span>
@@ -293,7 +304,9 @@ export function HistoryRail(props: {
             <div ref={card} id={previewID} role="dialog" aria-modal="false"
               aria-label={label("历史提问预览", "Prompt preview")}
               data-component="history-rail-preview"
-              style={{ top: state.top + "px", left: state.left + "px" }}
+              style={{ top: state.top + "px", left: state.left + "px",
+                "--history-preview-viewport-width": state.viewportWidth ? state.viewportWidth + "px" : undefined,
+                "--history-preview-viewport-height": state.viewportHeight ? state.viewportHeight + "px" : undefined }}
               onPointerEnter={() => timers.keepOpen()}
               onPointerLeave={() => timers.leave()}
               onFocusIn={() => timers.keepOpen()}
@@ -302,7 +315,15 @@ export function HistoryRail(props: {
                 timers.leave()
               }}
             >
+              <div class="history-rail-preview-header">
+                <span>{label("历史提问", "Prompt preview")}</span>
+                <button type="button" class="history-rail-preview-close" data-history-close
+                  aria-label={label("关闭历史预览", "Close prompt preview")} onClick={restoreEntry}>
+                  <Icon name="outline-xmark" />
+                </button>
+              </div>
               <div class="history-rail-preview-title">{historyExcerpt(entry().text, 1000)}</div>
+              <div class="history-rail-preview-label">{label("对应回复开头", "Reply opening")}</div>
               <div class="history-rail-preview-reply">{reply() || label("暂无回复", "No reply yet")}</div>
               <Show when={props.replying?.(entry().id)}>
                 <div class="history-rail-preview-hint" role="status">{label("正在回复", "Replying")}</div>
@@ -314,7 +335,6 @@ export function HistoryRail(props: {
                 <button type="button" disabled={state.jumping} data-history-jump onClick={() => void select(entry().id)}>
                   {state.jumping ? label("正在定位", "Locating") : label("跳转到这次提问", "Jump to prompt")}
                 </button>
-                <button type="button" data-history-close onClick={restoreEntry}>{label("关闭", "Close")}</button>
               </div>
             </div>
           </Portal>

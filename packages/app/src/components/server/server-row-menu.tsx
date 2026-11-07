@@ -57,7 +57,7 @@ export const ServerRowMenuView: Component<{
   const builtin = () => ServerConnection.builtin(props.server)
   const httpServer = () => (props.server.type === "http" ? props.server : undefined)
   return (
-    <MenuV2 gutter={6} modal={false} placement="bottom-end" open={props.open} onOpenChange={props.onOpenChange}>
+    <MenuV2 gutter={4} modal={false} placement="bottom-end" open={props.open} onOpenChange={props.onOpenChange}>
       <MenuV2.Trigger
         as={IconButtonV2}
         variant="ghost-muted"

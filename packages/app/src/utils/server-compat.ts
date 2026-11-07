@@ -8,7 +8,6 @@ import type {
   SessionCommandInput,
   SessionCommandOutput,
   SessionCompactInput,
-  SessionCompactOutput,
   SessionInfo,
   SessionPromptInput,
   SessionPromptOutput,
@@ -25,7 +24,7 @@ type CompatibleSessionApi = Omit<
   prompt: (input: SessionPromptInput & LegacyPrompt) => Promise<SessionPromptOutput>
   command: (input: SessionCommandInput) => Promise<SessionCommandOutput>
   shell: (input: DirectShellInput & LegacyPrompt) => Promise<SessionShellOutput>
-  compact: (input: SessionCompactInput & { model?: LegacyPrompt["model"] }) => Promise<SessionCompactOutput>
+  compact: (input: SessionCompactInput & { model?: LegacyPrompt["model"] & { variant?: string }; expectedContext?: string; expectedDirectory?: string }) => Promise<void>
   rename: (input: Parameters<SessionApi["rename"]>[0] & LegacyLocation) => ReturnType<SessionApi["rename"]>
   archive: (input: Parameters<SessionApi["archive"]>[0] & LegacyLocation) => ReturnType<SessionApi["archive"]>
   remove: (input: Parameters<SessionApi["remove"]>[0] & LegacyLocation) => ReturnType<SessionApi["remove"]>
@@ -35,9 +34,15 @@ type CompatiblePermissionApi = Omit<ServerApi["permission"], "reply"> & {
     input: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } },
   ) => ReturnType<ServerApi["permission"]["reply"]>
 }
-export type CompatibleApi = Omit<ServerApi, "session" | "permission"> & {
+type ProjectUpdate = ServerApi["project"]["update"]
+type ProjectUpdateInput = Parameters<ProjectUpdate>[0] & { directory?: string }
+type CompatibleProjectApi = Omit<ServerApi["project"], "update"> & {
+  update: (input: ProjectUpdateInput, options?: Parameters<ProjectUpdate>[1]) => ReturnType<ProjectUpdate>
+}
+export type CompatibleApi = Omit<ServerApi, "session" | "permission" | "project"> & {
   readonly session: CompatibleSessionApi
   readonly permission: CompatiblePermissionApi
+  readonly project: CompatibleProjectApi
 }
 type LegacyPrompt = {
   agent?: string
@@ -90,10 +95,19 @@ function sessionInfo(session: Session): SessionInfo {
 
 export function createCompatibleApi(input: CompatibleInput): CompatibleApi {
   const v1 = createV1Api(input)
-  return lazyApi(
-    input.protocol.then((protocol) => (protocol === "v1" ? v1 : input.current)),
-    input.current,
-  )
+  const current: CompatibleApi = {
+    ...input.current,
+    project: {
+      ...input.current.project,
+      update: ({ directory, ...value }, options) => {
+        if (!directory) return input.current.project.update(value, options)
+        const headers = new Headers(options?.headers)
+        headers.set("x-arforge-directory", encodeURIComponent(directory))
+        return input.current.project.update(value, { ...options, headers })
+      },
+    },
+  }
+  return lazyApi(input.protocol.then((protocol) => (protocol === "v1" ? v1 : current)), current)
 }
 
 function lazyApi<T extends object>(implementation: Promise<T>, shape: T): T {
@@ -286,13 +300,6 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
           providerID: value.model.providerID,
           modelID: value.model.modelID,
         })
-        return {
-          admittedSeq: 0,
-          id: value.id ?? "",
-          sessionID: value.sessionID,
-          timeCreated: Date.now(),
-          type: "compaction",
-        }
       },
       revert: {
         stage: async (value: Parameters<ServerApi["session"]["revert"]["stage"]>[0]) => {
@@ -315,11 +322,12 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
         if (!result.data) throw new Error("Project not found")
         return { id: result.data.id, directory: result.data.worktree } satisfies ProjectCurrent
       },
-      async update(value: Parameters<ServerApi["project"]["update"]>[0]) {
-        const project = (await legacy().project.list()).data?.find((item) => item.id === value.projectID)
-        const result = await legacy({ directory: project?.worktree }).project.update({
+      async update({ directory, ...value }: ProjectUpdateInput) {
+        const worktree =
+          directory ?? (await legacy().project.list()).data?.find((item) => item.id === value.projectID)?.worktree
+        const result = await legacy({ directory: worktree }).project.update({
           ...value,
-          directory: project?.worktree,
+          directory: worktree,
         })
         if (!result.data) throw new Error(`Project not found: ${value.projectID}`)
         return result.data as Project

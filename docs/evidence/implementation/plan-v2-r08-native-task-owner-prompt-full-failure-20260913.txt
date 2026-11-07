@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/arforge
+Working directory: %ARFORGE_REPO%/packages/arforge
 Command: bun test --timeout 60000 test/session/prompt.test.ts
 SOURCE BOUNDARY: started after native-owner retirement, BEFORE final Gateway receipt fixes and cancellation diagnostic race; not final-source all-green evidence.
 Exit code: 1

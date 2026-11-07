@@ -9,8 +9,8 @@ import { WorkspaceEvent } from "../src/workspace-event"
 
 describe("public event manifest", () => {
   test("owns the complete public event surface", () => {
-    expect(EventManifest.ServerDefinitions.length).toBe(128)
-    expect(EventManifest.Definitions.length).toBe(160)
+    expect(EventManifest.ServerDefinitions.length).toBe(137)
+    expect(EventManifest.Definitions.length).toBe(167)
     expect(SessionV1.Event.Definitions).toEqual([
       SessionV1.Event.Created,
       SessionV1.Event.Updated,
@@ -23,8 +23,23 @@ describe("public event manifest", () => {
       SessionV1.Event.Diff,
       SessionV1.Event.Error,
     ])
-    expect(EventManifest.Latest.size).toBe(160)
-    expect(EventManifest.Durable.size).toBe(95)
+    expect(EventManifest.Latest.size).toBe(167)
+    expect(EventManifest.Durable.size).toBe(102)
+  })
+
+  test("native events retain the canonical pre-step session error without other V1 live events", () => {
+    expect(EventManifest.ServerDefinitions.filter((definition) => definition.type === "session.error")).toEqual([
+      SessionV1.Event.Error,
+    ])
+    expect(EventManifest.ServerDefinitions.find((definition) => definition.type === "session.error")).toBe(
+      SessionV1.Event.Error,
+    )
+    const live = SessionV1.Event.Definitions.filter((definition) => definition.durable === undefined)
+    const nativeLive = EventManifest.ServerDefinitions.filter((definition) =>
+      live.some((event) => event.type === definition.type),
+    )
+    expect(nativeLive).toEqual([SessionV1.Event.Error])
+    expect(SessionV1.Event.Error.durable).toBeUndefined()
   })
 
   test("uses canonical definitions for current public events", () => {
@@ -37,6 +52,7 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest.get("session.next.context.fusion.prepared")).toBe(SessionEvent.ContextFusionPrepared)
     expect(EventManifest.Latest.get("todo.updated")).toBe(SessionTodo.Event.Updated)
     expect(EventManifest.Latest.get("project.updated")).toBe(Project.Event.Updated)
+    expect(EventManifest.ServerDefinitions).toContain(Project.Event.Updated)
     expect(Project.Event.Definitions).toEqual([Project.Event.Updated])
     expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Edited])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])

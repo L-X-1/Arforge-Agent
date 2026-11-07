@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createRoot, For, onCleanup, onMount } from "solid-js"
+import { createEffect, createMemo, createResource, createRoot, For, Show, onCleanup, onMount } from "solid-js"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { DragDropProvider, PointerSensor } from "@dnd-kit/solid"
 import { isSortable, useSortable } from "@dnd-kit/solid/sortable"
@@ -16,6 +16,9 @@ import { useTabs } from "@/context/tabs"
 import { createTabPromptState } from "@/context/prompt"
 import { base64Encode } from "@arforge-ai/core/util/encode"
 import { canStartTabDrag, isTabCloseTarget } from "./titlebar-tab-gesture"
+import { MenuV2 } from "@arforge-ai/ui/v2/menu-v2"
+import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
 import { preloadNewSessionRoute } from "@/utils/new-session-route"
 
 export function SessionTabSlot(props: {
@@ -185,6 +188,16 @@ export function TitlebarTabStrip(props: {
 }) {
   const global = useGlobal()
   const language = useLanguage()
+  const tabs = useTabs()
+  const tabTitle = (tab: Tab) => {
+    if (tab.type !== "session") return language.t("command.session.new")
+    const conn = global.servers.list().find((value) => ServerConnection.key(value) === tab.server)
+    return (
+      (conn ? global.ensureServerCtx(conn).sync.session.peek(tab.sessionId)?.title : undefined) ??
+      tabs.info[tabKey(tab)]?.title ??
+      language.t("session.tab.unknown")
+    )
+  }
   let scrollRef!: HTMLDivElement
   let listRef!: HTMLDivElement
   let resizeFrame: number | undefined
@@ -222,10 +235,10 @@ export function TitlebarTabStrip(props: {
   })
 
   return (
-    <div data-slot="titlebar-tabs" class="relative min-w-0">
+    <div data-slot="titlebar-tabs" class="relative min-w-0 flex items-center gap-1">
       <div
         data-slot="titlebar-tabs-scroll"
-        class="flex min-w-0 flex-row items-center gap-1.5 overflow-x-auto no-scrollbar [app-region:no-drag]"
+        class="flex min-w-0 flex-1 flex-row items-center gap-1.5 overflow-x-auto no-scrollbar [app-region:no-drag]"
         ref={scrollRef}
       >
         <DragDropProvider
@@ -322,6 +335,34 @@ export function TitlebarTabStrip(props: {
         aria-hidden="true"
         class="pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-[linear-gradient(to_left,var(--v2-background-bg-deep),transparent)]"
       />
+      <Show when={props.tabs.length > 1}>
+        <MenuV2 placement="bottom-end" gutter={4} modal={false}>
+          <MenuV2.Trigger
+            as={IconButtonV2}
+            variant="ghost-muted"
+            size="small"
+            icon={<IconV2 name="chevron-down" />}
+            aria-label={language.locale().startsWith("zh") ? "全部会话标签" : "All session tabs"}
+          />
+          <MenuV2.Portal>
+            <MenuV2.Content>
+              <For each={props.tabs}>
+                {(tab) => (
+                  <MenuV2.Item
+                    onSelect={() => props.onNavigate(tab)}
+                    classList={{ "bg-v2-background-bg-layer-02": props.currentTab() === tab }}
+                  >
+                    <span class="min-w-0 flex-1 truncate">{tabTitle(tab)}</span>
+                    <Show when={props.currentTab() === tab}>
+                      <IconV2 name="check" size="small" />
+                    </Show>
+                  </MenuV2.Item>
+                )}
+              </For>
+            </MenuV2.Content>
+          </MenuV2.Portal>
+        </MenuV2>
+      </Show>
     </div>
   )
 }

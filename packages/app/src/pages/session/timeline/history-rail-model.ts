@@ -18,6 +18,22 @@ export type HistoryEntry = {
   created?: number
 }
 
+/** Keep an open preview visible even when resizing unmounts its virtual marker. */
+export function historyPreviewPosition(input: {
+  viewport: { left: number; top: number; width: number; height: number }
+  previous: { left: number; top: number }
+  anchor?: { right: number; top: number }
+  cardHeight: number
+}) {
+  const view = input.viewport
+  const width = Math.min(340, Math.max(0, view.width - 32))
+  const height = Math.min(input.cardHeight, 360, Math.max(0, view.height - 32))
+  return {
+    left: Math.max(view.left + 8, Math.min(input.anchor ? input.anchor.right + 8 : input.previous.left, view.left + view.width - width - 16)),
+    top: Math.max(view.top + 8, Math.min(input.anchor ? input.anchor.top - 24 : input.previous.top, view.top + view.height - height - 8)),
+  }
+}
+
 export function historyExcerpt(text: string, limit = 240) {
   const value = text.replace(/\s+/g, " ").trim()
   return value.length <= limit ? value : value.slice(0, Math.max(0, limit - 1)) + "\u2026"

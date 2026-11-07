@@ -167,6 +167,45 @@ describe("SkillLifecycle", () => {
     expect(rolledBack.audit.at(-1)?.evidenceIDs).toEqual(["evd_rollback"])
   })
 
+  test.each([
+    { baselineSuccess: false, candidateSuccess: false },
+    { baselineSuccess: true, candidateSuccess: true },
+    { baselineSuccess: false, candidateSuccess: true },
+  ])("blocks reported new failures without a success regression: %j", ({ baselineSuccess, candidateSuccess }) => {
+    const baseline = skill("release-baseline")
+    const candidate = skill("release-new-failures")
+    const measured = observations.map((observation) => ({
+      ...observation,
+      baseline: { ...observation.baseline, success: baselineSuccess },
+      candidate: { ...observation.candidate, success: candidateSuccess, newFailures: 1 },
+    }))
+    const report = evaluateSkill({ baselineSkill: baseline, candidateSkill: candidate, observations: measured })
+    expect(report.newFailureCount).toBe(2)
+    expect(report.regressionCases).toEqual([])
+    expect(report.checks.utilityNonRegression).toBe(true)
+    expect(report.checks.noNewSecret).toBe(true)
+    expect(report.checks.noNewEgress).toBe(true)
+    const controller = new SkillCanaryController()
+    expect(() => controller.start({ candidate, evaluation: report, cohortKey: "new-failures", trafficPercent: 100 }))
+      .toThrow("failed skill evaluation cannot start canary")
+    expect(controller.get(candidate.digest)).toBeUndefined()
+    expect(report.checks.noRegression).toBe(false)
+    expect(report.passed).toBe(false)
+
+    const cleanReport = evaluateSkill({
+      baselineSkill: baseline,
+      candidateSkill: candidate,
+      observations: measured.map((observation) => ({
+        ...observation,
+        candidate: { ...observation.candidate, newFailures: 0 },
+      })),
+    })
+    expect(cleanReport.checks.noRegression).toBe(true)
+    expect(cleanReport.passed).toBe(true)
+    expect(controller.start({ candidate, evaluation: cleanReport, cohortKey: "new-failures", trafficPercent: 100 }).status)
+      .toBe("canary")
+  })
+
   test("blocks canary promotion after a safety incident", () => {
     const candidate = skill("release-safety")
     const report = evaluateSkill({ baselineSkill: skill("release-baseline"), candidateSkill: candidate, observations })

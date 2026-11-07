@@ -9,7 +9,9 @@ export function spawn(file: string, args: string[], opts: Opts): Proc {
     ...(process.platform === "win32" ? { useConptyDll: true } : {}),
   })
   return {
-    pid: proc.pid,
+    get pid() {
+      return proc.pid
+    },
     onData(listener) {
       return proc.onData(listener)
     },

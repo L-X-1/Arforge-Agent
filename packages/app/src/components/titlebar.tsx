@@ -1,4 +1,15 @@
-import { createEffect, createMemo, createResource, createSignal, Match, onMount, Show, Switch, untrack } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  Match,
+  onMount,
+  onCleanup,
+  Show,
+  Switch,
+  untrack,
+} from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { IconButton } from "@arforge-ai/ui/icon-button"
@@ -17,6 +28,7 @@ import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
 import { WindowsAppMenu } from "./windows-app-menu"
+import { WebSessionActionsMenu } from "./web-session-actions"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
 import { TitlebarTabStrip } from "@/components/titlebar-tab-strip"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -29,7 +41,7 @@ import type { PromptSession } from "@/context/prompt"
 import "./titlebar.css"
 import { SHELL_DRAWER_QUERY } from "@/pages/layout/workspace-shell-state"
 import { newTabTooltipKeybind } from "./command-tooltip-keybind"
-import { normalizeSessionInfo } from "@/utils/session"
+import { useTitlebarTabs } from "./titlebar-tabs-controller"
 
 type TauriDesktopWindow = {
   startDragging?: () => Promise<void>
@@ -66,6 +78,24 @@ export type TitlebarUpdate = {
 export function useTitlebarRightMount() {
   const [mount, setMount] = createSignal<HTMLElement | null>(null)
   onMount(() => setMount(document.getElementById("arforge-titlebar-right")))
+  return mount
+}
+
+export function useTitlebarSessionMount() {
+  const [mount, setMount] = createSignal<HTMLElement | null>(null)
+  onMount(() => {
+    const find = () => {
+      const element = document.getElementById("arforge-titlebar-session-toolbar")
+      if (element) setMount(element)
+      return !!element
+    }
+    if (find()) return
+    const observer = new MutationObserver(() => {
+      if (find()) observer.disconnect()
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    onCleanup(() => observer.disconnect())
+  })
   return mount
 }
 
@@ -241,12 +271,18 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
       style={{
         "min-height": minHeight(),
         // Keep native macOS traffic lights clear even when the desktop window is narrow.
-        "padding-left": mac() ? `${84 / zoom()}px` : 0,
+        "padding-left": mac()
+          ? `${Math.max(0, 84 / zoom() - (useV2Titlebar() && !narrow() && !location.pathname.startsWith("/settings") ? (layout.sidebar.opened() ? layout.sidebar.width() : 52) : 0))}px`
+          : 0,
         width: electronWindows()
-          ? `min(100%, env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()})))`
+          ? useV2Titlebar()
+            ? `calc(100% - ${windowsControlsWidth()})`
+            : `min(100%, env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()})))`
           : undefined,
         "max-width": electronWindows()
-          ? `min(100%, env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()})))`
+          ? useV2Titlebar()
+            ? `calc(100% - ${windowsControlsWidth()})`
+            : `min(100%, env(titlebar-area-width, calc(100vw - ${windowsControlsWidth()})))`
           : undefined,
         "align-self": electronWindows() ? "flex-start" : undefined,
       }}
@@ -257,258 +293,37 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
       <Switch>
         <Match when={useV2Titlebar()}>
           {(_) => {
-            const layout = useLayout()
-            const global = useGlobal()
-
             const tabs = useTabs()
             const tabsStore = tabs.store
             const tabsStoreActions = tabs
-            const [session] = createResource(
-              () => {
-                const route = layout.route()
-                if (route.type !== "session") return undefined
-                const conn = global.servers
-                  .list()
-                  .find((item) => ServerConnection.key(item) === (route.server ?? server.key))
-                return conn ? { route, sdk: global.ensureServerCtx(conn).sdk } : undefined
-              },
-              ({ route, sdk }) =>
-                sdk.api.session
-                  .get({ sessionID: route.sessionId })
-                  .then(normalizeSessionInfo)
-                  .catch(() => {}),
-            )
-
-            const matchRoute = (route: LayoutRoute) => {
-              if (route.type === "home") return
-              if (route.type === "draft") {
-                return tabsStore.find((item) => item.type === "draft" && item.draftID === route.draftID)
-              }
-              if (route.type === "session") {
-                const main = tabsStore.find(
-                  (item) =>
-                    item.type === "session" && item.server === route.server && item.sessionId === route.sessionId,
-                )
-                if (main) return main
-                const s = session()
-                if (s?.parentID) {
-                  const parentID = s.parentID
-                  const parent = tabsStore.find(
-                    (item) => item.type === "session" && item.server === route.server && item.sessionId === parentID,
-                  )
-                  if (parent) return parent
-                }
-              }
-            }
-
-            const currentTab = () => matchRoute(layout.route())
-
-            createEffect(() => {
-              const route = layout.route()
-              if (!tabs.ready()) return
-              const tab = currentTab()
-              if (tab) {
-                tabs.remember(tab)
-                return
-              }
-
-              if (route.type === "session") {
-                const s = session()
-                if (!s) return
-                const sessionId = s.parentID ?? s.id
-                const next = { server: route.server ?? server.key, sessionId }
-                tabsStoreActions.addSessionTab(next)
-              }
-            })
-
-            makeEventListener(window, SESSION_TABS_REMOVED_EVENT, (event) => {
-              const detail = readSessionTabsRemovedDetail(event)
-              if (!detail) return
-              tabsStoreActions.removeSessions(detail)
-            })
-
-            const openNewTab = () => {
-              const route = layout.route()
-              const activeSession = session()
-              if (route.type === "session" && activeSession) {
-                const sessionTab = {
-                  type: "session" as const,
-                  server: route.server ?? server.key,
-                  sessionId: activeSession.id,
-                }
-                const model = tabs.stateValue<PromptSession>(sessionTab, "prompt")?.model.current()
-                tabs.newDraft({ server: sessionTab.server, directory: activeSession.directory }, "", model)
-                return
-              }
-
-              const activeTab = currentTab()
-              if (activeTab?.type === "draft") {
-                const model = tabs.stateValue<PromptSession>(activeTab, "prompt")?.model.current()
-                tabs.newDraft({ server: activeTab.server, directory: activeTab.directory }, "", model)
-                return
-              }
-
-              if (route.type === "home") {
-                const selection = layout.home.selection()
-                const conn = global.servers.list().find((item) => ServerConnection.key(item) === selection.server)
-                const project = conn
-                  ? global
-                      .ensureServerCtx(conn)
-                      .projects.list()
-                      .find((item) => item.worktree === selection.directory)
-                  : undefined
-                if (conn && project) {
-                  tabs.newDraft({ server: ServerConnection.key(conn), directory: project.worktree }, "")
-                  return
-                }
-              }
-
-              const current = layout.projects.list()[0]
-              if (current) {
-                tabs.newDraft({ server: server.key, directory: current.worktree }, "")
-                return
-              }
-
-              const fallback = global.servers.list().flatMap((conn) => {
-                const project = global.ensureServerCtx(conn).projects.list()[0]
-                return project ? [{ server: ServerConnection.key(conn), project }] : []
-              })[0]
-              if (!fallback) return
-
-              tabs.newDraft({ server: fallback.server, directory: fallback.project.worktree }, "")
-            }
-            const toggleHome = () => tabs.toggleHome({ home: layout.route().type === "home", current: currentTab() })
-
-            command.register("titlebar-home", () => [
-              {
-                id: "home.toggle",
-                title: language.t("home.title"),
-                category: language.t("command.category.view"),
-                keybind: "mod+shift+h",
-                hidden: true,
-                onSelect: toggleHome,
-              },
-            ])
-
-            command.register("tabs", () => {
-              const current = currentTab()
-
-              return [
-                {
-                  id: "tab.new",
-                  category: "标签页",
-                  title: language.t("command.session.new"),
-                  keybind: "mod+t,mod+n",
-                  hidden: true,
-                  onSelect: openNewTab,
-                },
-                current && {
-                  id: "tab.close",
-                  category: "标签页",
-                  title: language.t("command.tab.close"),
-                  keybind: "mod+w",
-                  hidden: true,
-                  onSelect: () => {
-                    tabsStoreActions.closeTab(tabsStore.findIndex((tab) => current === tab))
-                  },
-                },
-                {
-                  id: "tab.reopenClosed",
-                  category: language.t("command.category.file"),
-                  title: language.t("command.tab.reopenClosed"),
-                  keybind: "mod+shift+t",
-                  onSelect: () => tabsStoreActions.reopenClosedTab(),
-                },
-                {
-                  id: `tab.prev`,
-                  category: "标签页",
-                  title: "",
-                  keybind: `mod+option+ArrowLeft,ctrl+shift+tab`,
-                  hidden: true,
-                  onSelect: () => {
-                    let index = tabsStore.findIndex((tab) => tab === currentTab())
-                    if (index === -1) return
-
-                    index -= 1
-                    if (index === -1) index = tabsStore.length - 1
-
-                    const next = tabsStore[index]
-                    if (next) tabs.select(next)
-                  },
-                },
-                {
-                  id: `tab.next`,
-                  category: "标签页",
-                  title: "",
-                  keybind: `mod+option+ArrowRight,ctrl+tab`,
-                  hidden: true,
-                  onSelect: () => {
-                    let index = tabsStore.findIndex((tab) => tab === currentTab())
-                    if (index === -1) return
-
-                    index += 1
-                    if (index === tabsStore.length) index = 0
-
-                    const next = tabsStore[index]
-                    if (next) tabs.select(next)
-                  },
-                },
-              ].filter((v) => v !== undefined)
-            })
+            const { currentTab, openNewTab } = useTitlebarTabs()
 
             const [tabsAreOverflowing, setTabsAreOverflowing] = createSignal(false)
 
             return (
               <div
-                class="h-full flex-1 overflow-hidden flex flex-row items-center gap-1.5 px-2 md:pr-3"
-                classList={{
-                  "pt-2": !bottom(),
-                  "pb-2": bottom(),
-                  "md:pl-2": mac(),
-                  "md:pl-4": !mac(),
-                }}
+                data-component="workspace-titlebar-content"
+                class="h-full min-w-0 flex-1 flex flex-row items-center gap-2 px-3"
               >
-                <TooltipV2 placement="bottom" value={language.t("command.sidebar.toggle")}>
-                  <IconButtonV2
-                    type="button"
-                    data-action="workspace-sidebar-toggle"
-                    variant="ghost-muted"
-                    size="large"
-                    class="shrink-0"
-                    icon={<IconV2 name="menu" />}
-                    onClick={() => narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle()}
-                    aria-label={language.t("command.sidebar.toggle")}
-                    aria-controls="workspace-navigation"
-                    aria-expanded={narrow() ? layout.mobileSidebar.opened() : layout.sidebar.opened()}
-                  />
-                </TooltipV2>
-                <ChannelIndicator debugTools={props.debugTools} />
-                <Show when={windows() || linux()}>
-                  <WindowsAppMenu command={command} platform={platform} variant="v2" />
+                <Show when={narrow()}>
+                  <TooltipV2 placement="bottom" value={language.t("command.sidebar.toggle")}>
+                    <IconButtonV2
+                      type="button"
+                      data-action="workspace-sidebar-toggle"
+                      variant="ghost-muted"
+                      size="large"
+                      class="shrink-0"
+                      icon={<IconV2 name="menu" />}
+                      onClick={() => (narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle())}
+                      aria-label={language.t("command.sidebar.toggle")}
+                      aria-controls="workspace-navigation"
+                      aria-expanded={narrow() ? layout.mobileSidebar.opened() : layout.sidebar.opened()}
+                    />
+                  </TooltipV2>
                 </Show>
-                <TooltipV2
-                  placement="bottom"
-                  value={
-                    <>
-                      {language.t("home.title")}
-                      <KeybindV2 keys={command.keybindParts("home.toggle")} variant="neutral" />
-                    </>
-                  }
-                  class="shrink-0"
-                >
-                  <IconButtonV2
-                    type="button"
-                    variant="ghost-muted"
-                    size="large"
-                    class="!w-9 shrink-0"
-                    icon={<IconV2 name="grid-plus" />}
-                    state={layout.route().type === "home" ? "pressed" : undefined}
-                    onClick={toggleHome}
-                    aria-label={language.t("home.title")}
-                    aria-pressed={layout.route().type === "home"}
-                  />
-                </TooltipV2>
-
+                <Show when={(windows() || linux()) && (narrow() || !layout.sidebar.opened())}>
+                  <WindowsAppMenu command={command} platform={platform} variant="brand" />
+                </Show>
                 <TitlebarTabStrip
                   tabs={tabsStore}
                   currentTab={currentTab}
@@ -524,7 +339,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   }}
                   onReorder={(keys) => tabsStoreActions.reorder(keys)}
                 />
-                <Show when={!creating()}>
+                <Show when={!creating() && (tabsStore.length > 1 || narrow() || !layout.sidebar.opened())}>
                   <TooltipV2
                     placement="bottom"
                     value={
@@ -546,17 +361,20 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                   </TooltipV2>
                 </Show>
                 <div class="flex-1" />
-                <TooltipV2 placement="bottom" value="Arforge 设置">
-                  <IconButtonV2
-                    type="button"
-                    variant="ghost-muted"
-                    size="large"
-                    class="shrink-0"
-                    icon={<IconV2 name="settings-gear" />}
-                    onClick={() => command.trigger("control-center.open")}
-                    aria-label="打开 Arforge 设置"
-                  />
-                </TooltipV2>
+                <Show when={narrow() || !layout.sidebar.opened()}>
+                  <TooltipV2 placement="bottom" value={language.t("controlCenter.m001")}>
+                    <IconButtonV2
+                      type="button"
+                      variant="ghost-muted"
+                      size="large"
+                      class="shrink-0"
+                      icon={<IconV2 name="settings-gear" />}
+                      onClick={() => command.trigger("control-center.open")}
+                      data-action="workspace-settings"
+                      aria-label={language.t("controlCenter.m001")}
+                    />
+                  </TooltipV2>
+                </Show>
                 <TitlebarV2Right state={v2RightState()} />
                 <Show when={windows() && !electronWindows()}>
                   <div data-tauri-decorum-tb class="flex flex-row" />
@@ -744,7 +562,9 @@ function TitlebarV2Right(props: { state: TitlebarV2RightState }) {
       <Show when={props.state.update.visible}>
         <TitlebarUpdateIconButton state={props.state.update} />
       </Show>
+      <div id="arforge-titlebar-session-toolbar" class="flex min-w-0 shrink-0 items-center" />
       <div id="arforge-titlebar-right" class="flex shrink-0 items-center justify-end gap-0" />
+      <WebSessionActionsMenu />
     </div>
   )
 }

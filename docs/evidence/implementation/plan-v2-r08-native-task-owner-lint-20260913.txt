@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent
+Working directory: %ARFORGE_REPO%
 Command: bun x oxlint <16 scoped source/test files>; retained summary (warnings not cleared)
 Exit code: 0
 Raw captured output:

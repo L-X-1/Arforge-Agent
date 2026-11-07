@@ -1,10 +1,13 @@
-import { createEffect, For, Match, on, onCleanup, onMount, Show, Switch, type Accessor, type JSX } from "solid-js"
+import { createEffect, createSignal, For, Match, on, onCleanup, onMount, Show, Switch, type Accessor, type JSX } from "solid-js"
 import { animate, type AnimationPlaybackControls } from "motion"
 import { useI18n } from "@arforge-ai/ui/context/i18n"
 import { createStore } from "solid-js/store"
 import { Collapsible } from "@arforge-ai/ui/collapsible"
 import type { IconProps } from "@arforge-ai/ui/icon"
 import { TextShimmer } from "@arforge-ai/ui/text-shimmer"
+import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
+import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
+import { BoundedToolOutput } from "./bounded-tool-output"
 
 export type TriggerTitle = {
   title: string
@@ -28,6 +31,7 @@ export interface BasicToolProps {
   children?: JSX.Element
   status?: string
   hideDetails?: boolean
+  disabled?: boolean
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -255,7 +259,7 @@ export function BasicTool(props: BasicToolProps) {
   )
 
   return (
-    <Collapsible open={open()} onOpenChange={handleOpenChange} class="tool-collapsible">
+    <Collapsible open={open()} onOpenChange={handleOpenChange} disabled={props.disabled} class="tool-collapsible">
       <Show
         when={props.triggerAsLink || props.triggerHref}
         fallback={
@@ -320,13 +324,57 @@ function args(input: Record<string, unknown> | undefined) {
     .slice(0, 3)
 }
 
-export function GenericTool(props: {
+export interface GenericToolProps {
   tool: string
   status?: string
   hideDetails?: boolean
   input?: Record<string, unknown>
-}) {
+  output?: string
+  defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  deferContent?: boolean
+  forceOpen?: boolean
+  locked?: boolean
+  onContentRendered?: () => void
+}
+
+function GenericToolOutput(props: { text: string; onContentRendered?: () => void }) {
   const i18n = useI18n()
+  const [copied, setCopied] = createSignal(false)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const reset = () => { clearTimeout(timer); setCopied(false) }
+  onCleanup(() => clearTimeout(timer))
+  onMount(() => props.onContentRendered?.())
+  createEffect(on(() => props.text, () => { reset(); props.onContentRendered?.() }, { defer: true }))
+  const copy = async () => {
+    const text = props.text
+    if (!text || !navigator.clipboard?.writeText) return
+    try { await navigator.clipboard.writeText(text) } catch { return }
+    if (props.text !== text) return
+    clearTimeout(timer)
+    setCopied(true)
+    timer = setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div data-component="bash-output" data-generic-tool-output>
+      <div data-slot="bash-copy">
+        <IconButtonV2 type="button" size="normal" variant="ghost-muted"
+          icon={<IconV2 name={copied() ? "check" : "outline-copy"} size="small" />}
+          aria-label={i18n.t(copied() ? "ui.message.copied" : "ui.message.copy")}
+          onMouseDown={(event) => event.preventDefault()} onClick={() => { void copy() }} />
+      </div>
+      <div data-slot="bash-scroll" data-scrollable tabIndex={0} role="region" aria-label={i18n.t("ui.scrollView.ariaLabel")}>
+        <BoundedToolOutput text={props.text} slot="bash-pre" code />
+      </div>
+    </div>
+  )
+}
+
+export function GenericTool(props: GenericToolProps) {
+  const i18n = useI18n()
+  const output = () => typeof props.output === "string" ? props.output : ""
+  const details = () => !props.hideDetails && props.status !== "pending" && props.status !== "running" && output().trim().length > 0
 
   return (
     <BasicTool
@@ -337,7 +385,18 @@ export function GenericTool(props: {
         subtitle: label(props.input),
         args: args(props.input),
       }}
-      hideDetails={props.hideDetails}
-    />
+      hideDetails={!details()}
+      disabled={!details()}
+      defaultOpen={props.defaultOpen}
+      open={details() ? props.open : false}
+      onOpenChange={(value) => { if (details()) props.onOpenChange?.(value) }}
+      defer={props.deferContent !== false}
+      forceOpen={details() && props.forceOpen}
+      locked={props.locked}
+    >
+      <Show when={details()}>
+        <GenericToolOutput text={output()} onContentRendered={props.onContentRendered} />
+      </Show>
+    </BasicTool>
   )
 }

@@ -1,6 +1,6 @@
 // @refresh reload
 
-import { createEffect, onMount } from "solid-js"
+import { createEffect, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createSimpleContext } from "../context/helper"
@@ -26,7 +26,10 @@ let known: Set<string> | undefined
 
 function getFiles() {
   if (files) return files
-  files = import.meta.glob<{ default: DesktopTheme }>("./themes/*.json")
+  // Built-in themes ship with the application. Keep the async loader API without
+  // making opening settings depend on dozens of optional network chunks.
+  const modules = import.meta.glob<{ default: DesktopTheme }>("./themes/*.json", { eager: true })
+  files = Object.fromEntries(Object.entries(modules).map(([path, module]) => [path, () => Promise.resolve(module)]))
   return files
 }
 
@@ -98,23 +101,32 @@ function read(key: string) {
   }
 }
 
-function write(key: string, value: string) {
-  if (typeof localStorage !== "object") return
+function save(values: ReadonlyMap<string, string | null>) {
+  const previous = new Map<string, string | null>()
+  const changed: string[] = []
   try {
-    localStorage.setItem(key, value)
-  } catch {}
-}
-
-function drop(key: string) {
-  if (typeof localStorage !== "object") return
-  try {
-    localStorage.removeItem(key)
-  } catch {}
-}
-
-function clear() {
-  drop(STORAGE_KEYS.THEME_CSS_LIGHT)
-  drop(STORAGE_KEYS.THEME_CSS_DARK)
+    if (typeof localStorage !== "object") return false
+    for (const key of values.keys()) previous.set(key, localStorage.getItem(key))
+    for (const [key, value] of values) {
+      if (previous.get(key) === value) continue
+      if (value === null) localStorage.removeItem(key)
+      else localStorage.setItem(key, value)
+      changed.push(key)
+    }
+    return true
+  } catch {
+    // Restore only this attempt's completed writes, never unrelated preferences
+    // or a value another window replaced in the meantime.
+    for (const key of changed.reverse()) {
+      try {
+        if (localStorage.getItem(key) !== values.get(key)) continue
+        const value = previous.get(key)
+        if (value == null) localStorage.removeItem(key)
+        else localStorage.setItem(key, value)
+      } catch {}
+    }
+    return false
+  }
 }
 
 function ensureThemeStyleElement(): HTMLStyleElement {
@@ -140,10 +152,6 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   const v2 = themeV2ToCss(v2Tokens)
   const canvas = themeCanvasColor({ ...tokens, ...v2Tokens }, isDark)
 
-  if (themeId !== "arforge-default") {
-    write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
-  }
-
   const fullCss = `:root {
   color-scheme: ${mode};
   --text-mix-blend-mode: ${isDark ? "plus-lighter" : "multiply"};
@@ -155,6 +163,8 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   ensureThemeStyleElement().textContent = fullCss
   document.documentElement.dataset.theme = themeId
   document.documentElement.dataset.colorScheme = mode
+  // Startup/loader may own an inline scheme, which outranks this stylesheet.
+  document.documentElement.style.colorScheme = mode
   const nativeGlass = document.documentElement.dataset.runtime === "desktop"
   document.documentElement.style.backgroundColor = nativeGlass ? "transparent" : canvas
 
@@ -163,16 +173,23 @@ function applyThemeCss(theme: DesktopTheme, themeId: string, mode: "light" | "da
   if (meta) meta.setAttribute("content", canvas)
 }
 
-function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
-  if (themeId === "arforge-default") return
+function themeStorageValues(theme: DesktopTheme, themeId: string) {
+  const values = new Map<string, string | null>()
   for (const mode of ["light", "dark"] as const) {
+    const key = mode === "dark" ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT
+    if (themeId === "arforge-default") {
+      values.set(key, null)
+      continue
+    }
     const isDark = mode === "dark"
     const variant = isDark ? theme.dark : theme.light
     const tokens = resolveThemeVariant(variant, isDark)
     const css = themeToCss(tokens)
     const v2 = themeV2ToCss(resolveThemeVariantV2(variant, isDark))
-    write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
+    values.set(key, `${css}\n  ${v2}`)
   }
+  values.set(STORAGE_KEYS.THEME_ID, themeId)
+  return values
 }
 
 export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
@@ -194,10 +211,27 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       previewThemeId: null as string | null,
       previewScheme: null as ColorScheme | null,
     })
+    const [persistence, setPersistence] = createStore({ failed: false, retrying: false })
+    const pending = new Map<string, string | null>()
+    let live = true
+    let selectionVersion = 0
+    let previewVersion = 0
+    onCleanup(() => { live = false })
+    const persist = (values: ReadonlyMap<string, string | null>) => {
+      if (!live) return false
+      for (const [key, value] of values) pending.set(key, value)
+      const saved = save(values)
+      if (saved) {
+        for (const [key, value] of values) if (pending.get(key) === value) pending.delete(key)
+      }
+      setPersistence("failed", pending.size > 0)
+      return saved
+    }
 
     const loads = new Map<string, Promise<DesktopTheme | undefined>>()
 
     const load = (id: string) => {
+      if (!live) return Promise.resolve(undefined)
       const next = normalize(id)
       if (!next) return Promise.resolve(undefined)
       const hit = store.themes[next]
@@ -208,6 +242,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       if (!file) return Promise.resolve(undefined)
       const task = file()
         .then((mod) => {
+          if (!live) return undefined
           const theme = mod.default
           setStore("themes", next, theme)
           return theme
@@ -220,6 +255,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
 
     const applyTheme = (theme: DesktopTheme, themeId: string, mode: "light" | "dark", scheme: ColorScheme) => {
+      if (!live) return
       applyThemeCss(theme, themeId, mode)
       props.onThemeApplied?.(theme, mode, scheme)
     }
@@ -236,22 +272,24 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const loadThemes = () => Promise.all(themeIDs().map(load)).then(() => store.themes)
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEYS.THEME_ID || e.key === null) {
+      if ((e.key === STORAGE_KEYS.THEME_ID || e.key === null) && !pending.has(STORAGE_KEYS.THEME_ID)) {
         const next = normalize(e.key === null ? read(STORAGE_KEYS.THEME_ID) : e.newValue) ?? "arforge-default"
         if (!next) return
         if (next !== "arforge-default" && !knownThemes().has(next) && !store.themes[next]) return
+        selectionVersion++
         setStore("themeId", next)
         if (next === "arforge-default") {
-          clear()
+          persist(themeStorageValues(arforgeDefaultTheme, next))
           return
         }
         void load(next).then((theme) => {
-          if (!theme || store.themeId !== next) return
-          cacheThemeVariants(theme, next)
+          if (!live || !theme || store.themeId !== next) return
+          persist(themeStorageValues(theme, next))
         })
       }
-      if (e.key === STORAGE_KEYS.COLOR_SCHEME || e.key === null) {
+      if ((e.key === STORAGE_KEYS.COLOR_SCHEME || e.key === null) && !pending.has(STORAGE_KEYS.COLOR_SCHEME)) {
         const scheme = normalizeColorScheme(e.key === null ? read(STORAGE_KEYS.COLOR_SCHEME) : e.newValue)
+        selectionVersion++
         setStore("colorScheme", scheme)
         setStore("mode", scheme === "system" ? getSystemMode() : scheme)
       }
@@ -271,15 +309,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       const savedTheme = normalize(rawTheme ?? props.defaultTheme) ?? "arforge-default"
       const savedScheme = normalizeColorScheme(read(STORAGE_KEYS.COLOR_SCHEME))
       if (rawTheme && rawTheme !== savedTheme) {
-        write(STORAGE_KEYS.THEME_ID, savedTheme)
-        clear()
+        persist(themeStorageValues(arforgeDefaultTheme, savedTheme))
       }
       if (savedTheme !== store.themeId) setStore("themeId", savedTheme)
       if (savedScheme !== store.colorScheme) setStore("colorScheme", savedScheme)
       setStore("mode", savedScheme === "system" ? getSystemMode() : savedScheme)
       void load(savedTheme).then((theme) => {
-        if (!theme || store.themeId !== savedTheme) return
-        cacheThemeVariants(theme, savedTheme)
+        if (!live || !theme || store.themeId !== savedTheme) return
+        persist(themeStorageValues(theme, savedTheme))
       })
     })
 
@@ -299,26 +336,50 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         console.warn(`Theme "${id}" not found`)
         return
       }
+      selectionVersion++
       setStore("themeId", next)
       if (next === "arforge-default") {
-        write(STORAGE_KEYS.THEME_ID, next)
-        clear()
+        persist(themeStorageValues(arforgeDefaultTheme, next))
         return
       }
       void load(next).then((theme) => {
-        if (!theme || store.themeId !== next) return
-        cacheThemeVariants(theme, next)
-        write(STORAGE_KEYS.THEME_ID, next)
+        if (!live || !theme || store.themeId !== next) return
+        persist(themeStorageValues(theme, next))
       })
     }
 
     const setColorScheme = (scheme: ColorScheme) => {
+      selectionVersion++
       setStore("colorScheme", scheme)
-      write(STORAGE_KEYS.COLOR_SCHEME, scheme)
+      persist(new Map([[STORAGE_KEYS.COLOR_SCHEME, scheme]]))
       setStore("mode", scheme === "system" ? getSystemMode() : scheme)
     }
 
     return {
+      persistence: {
+        failed: () => persistence.failed,
+        retrying: () => persistence.retrying,
+        async retry() {
+          if (!live || persistence.retrying) return false
+          const version = selectionVersion
+          const id = store.themeId
+          setPersistence("retrying", true)
+          try {
+            const theme = await load(id)
+            if (!live || !theme || version !== selectionVersion) return false
+            const values = new Map(pending)
+            if (values.has(STORAGE_KEYS.THEME_ID)) {
+              for (const [key, value] of themeStorageValues(theme, id)) values.set(key, value)
+            }
+            if (values.has(STORAGE_KEYS.COLOR_SCHEME)) values.set(STORAGE_KEYS.COLOR_SCHEME, store.colorScheme)
+            return persist(values)
+          } catch {
+            return false
+          } finally {
+            if (live) setPersistence("retrying", false)
+          }
+        },
+      },
       themeId: () => store.themeId,
       colorScheme: () => store.colorScheme,
       mode: () => store.mode,
@@ -330,12 +391,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
       setColorScheme,
       registerTheme: (theme: DesktopTheme) => setStore("themes", theme.id, theme),
       previewTheme: (id: string) => {
+        if (!live) return
         const next = normalize(id)
         if (!next) return
         if (next !== "arforge-default" && !knownThemes().has(next) && !store.themes[next]) return
+        const version = ++previewVersion
         setStore("previewThemeId", next)
         void load(next).then((theme) => {
-          if (!theme || store.previewThemeId !== next) return
+          if (!live || !theme || previewVersion !== version || store.previewThemeId !== next) return
           const mode = store.previewScheme
             ? store.previewScheme === "system"
               ? getSystemMode()
@@ -345,17 +408,21 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         })
       },
       previewColorScheme: (scheme: ColorScheme) => {
+        if (!live) return
+        const version = ++previewVersion
         setStore("previewScheme", scheme)
         const mode = scheme === "system" ? getSystemMode() : scheme
         const id = store.previewThemeId ?? store.themeId
         void load(id).then((theme) => {
-          if (!theme) return
+          if (!live || !theme || previewVersion !== version) return
           if ((store.previewThemeId ?? store.themeId) !== id) return
           if (store.previewScheme !== scheme) return
           applyTheme(theme, id, mode, scheme)
         })
       },
       commitPreview: () => {
+        if (!live) return
+        previewVersion++
         if (store.previewThemeId) {
           setTheme(store.previewThemeId)
         }
@@ -366,11 +433,15 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         setStore("previewScheme", null)
       },
       cancelPreview: () => {
+        if (!live) return
+        const version = ++previewVersion
+        const selection = selectionVersion
+        const id = store.themeId
         setStore("previewThemeId", null)
         setStore("previewScheme", null)
-        void load(store.themeId).then((theme) => {
-          if (!theme) return
-          applyTheme(theme, store.themeId, store.mode, store.colorScheme)
+        void load(id).then((theme) => {
+          if (!live || !theme || previewVersion !== version || selectionVersion !== selection || store.themeId !== id) return
+          applyTheme(theme, id, store.mode, store.colorScheme)
         })
       },
     }

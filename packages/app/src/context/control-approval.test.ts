@@ -51,12 +51,14 @@ function harness(
     bindings?: readonly ControlApprovalBinding[]
     serverKey?: ServerConnection.Key
     onReceipt?: (receipt: ControlApprovalReceipt) => void
+    operationStatus?: ControlApprovalTransport["operationStatus"]
   } = {},
 ) {
   let eventListener: ((event: ControlApprovalEnvelope) => void) | undefined
   const replies: Array<{ directory: string; requestID: string; reply: "once" | "reject" }> = []
   const listCalls: string[] = []
   const transport: ControlApprovalTransport = {
+    operationStatus: input.operationStatus,
     list: async (nextDirectory) => {
       listCalls.push(nextDirectory)
       return input.list?.(nextDirectory) ?? []
@@ -96,6 +98,27 @@ function harness(
 }
 
 describe("control approval state", () => {
+  test("startup retries do not poll a failed stale directory; explicit refresh can recover", async () => {
+    let fail = true
+    const test = harness({ list: async () => {
+      if (fail) throw new Error("500 Fixture originating directory is unavailable")
+      return [request()]
+    } })
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2150))
+      expect(test.listCalls).toEqual([directory])
+      expect(test.state.loading()).toBe(false)
+      expect(test.state.loadErrors()).toEqual(["500 Fixture originating directory is unavailable"])
+      expect(test.state.items()).toEqual([])
+      expect(test.replies).toEqual([])
+      fail = false
+      await test.state.refresh()
+      expect(test.listCalls).toEqual([directory, directory])
+      expect(test.state.loadErrors()).toEqual([])
+      expect(test.state.items()).toHaveLength(1)
+      expect(test.replies).toEqual([])
+    } finally { test.dispose() }
+  })
   test("derives only an absolute workspace directory from a desktop deep link", () => {
     const encoded = btoa(directory).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "")
     expect(controlApprovalRouteLocation(`/${encoded}/session/ses_1`)).toBe(directory)
@@ -386,6 +409,56 @@ function deferredApproval<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
+
+describe("source-bound execution receipt reads", () => {
+  test("an approval reply is separate from the original operation's current execution state", async () => {
+    const reads: unknown[] = []
+    const pending = request()
+    const h = harness({ list: async () => [pending], operationStatus: async target => {
+      reads.push(target)
+      return { ...target, runID: "run_origin", actionID: "action_origin", phase: "executing", recovery: "none", canApprove: false }
+    } })
+    await flush()
+    await h.state.reply(h.state.items()[0]!, "once")
+    const receipt = h.state.receipts()[0]!
+    expect(receipt.status).toBe("confirmed")
+    expect(reads).toEqual([])
+    expect(h.state.operationAvailable(receipt)).toBe(true)
+    expect((await h.state.operationStatus(receipt)).phase).toBe("executing")
+    expect(reads).toEqual([{ directory, requestID: pending.subject.requestID, operation: pending.action }])
+    expect(h.state.receipts()[0]!.status).toBe("confirmed")
+    h.dispose()
+  })
+
+  test("matching IDs from another source cannot read the original operation", async () => {
+    const pending = request()
+    let reads = 0
+    const original = harness({ list: async () => [pending], operationStatus: async () => { reads++; return {} } })
+    const replacement = harness({ list: async () => [pending], operationStatus: async () => { reads++; return {} } })
+    await flush()
+    await original.state.reply(original.state.items()[0]!, "once")
+    const receipt = original.state.receipts()[0]!
+    expect(replacement.state.operationAvailable(receipt)).toBe(false)
+    await expect(replacement.state.operationStatus(receipt)).rejects.toThrow("unavailable")
+    expect(original.state.operationAvailable({ ...receipt, location: secondDirectory })).toBe(false)
+    original.dispose()
+    await expect(original.state.operationStatus(receipt)).rejects.toThrow("unavailable")
+    expect(reads).toBe(0)
+    replacement.dispose()
+  })
+
+  test("a late execution response is discarded after its exact source is disposed", async () => {
+    let resolve!: (value: unknown) => void
+    const pending = request()
+    const h = harness({ list: async () => [pending], operationStatus: () => new Promise(done => { resolve = done }) })
+    await flush()
+    await h.state.reply(h.state.items()[0]!, "once")
+    const reading = h.state.operationStatus(h.state.receipts()[0]!)
+    h.dispose()
+    resolve({ requestID: pending.subject.requestID, operation: pending.action, runID: "run_origin", actionID: "action_origin", phase: "completed", recovery: "none", canApprove: false })
+    await expect(reading).rejects.toThrow("no longer active")
+  })
+})
 
 describe("control approval ordering and independent receipts", () => {
   test("an old list cannot resurrect a confirmed approval, even without a replied event", async () => {

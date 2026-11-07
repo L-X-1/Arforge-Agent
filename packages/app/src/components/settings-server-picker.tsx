@@ -24,7 +24,7 @@ export function SettingsServerScope(props: ParentProps) {
   )
 }
 
-function SettingsServerDataProviders(props: ParentProps<{ server: ServerConnection.Any }>) {
+export function SettingsServerDataProviders(props: ParentProps<{ server: ServerConnection.Any }>) {
   const global = useGlobal()
   const serverCtx = () => global.ensureServerCtx(props.server)
 

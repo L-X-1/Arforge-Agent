@@ -183,6 +183,17 @@
     white-space: nowrap;
   }
 
+  :is(
+    [data-slot="user-message-meta"],
+    [data-slot="user-message-meta-sep"],
+    [data-slot="user-message-meta-tail"],
+    [data-slot="message-action-status"]
+  ) {
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 20px;
+  }
+
   [data-slot="user-message-meta-wrap"] {
     flex: 1 1 auto;
     min-width: 0;
@@ -410,6 +421,7 @@
 
   [data-slot="bash-copy"] {
     position: absolute;
+    z-index: 1;
     top: 4px;
     right: 4px;
     opacity: 0;

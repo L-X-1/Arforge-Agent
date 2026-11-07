@@ -10,10 +10,10 @@ type Local = {
 type ModelSelection = {
   model: {
     current(): { id: string; provider: { id: string } } | undefined
-    set(model: { providerID: string; modelID: string }): void
+    set(model: { providerID: string; modelID: string }, options?: { restoring?: boolean }): void
     variant: {
       current(): string | undefined
-      set(variant: string | undefined): void
+      set(variant: string | undefined, options?: { restoring?: boolean }): void
     }
   }
 }
@@ -25,11 +25,20 @@ type PromptState = {
   }
 }
 
+type ActiveDraft = Pick<PromptState, "model"> & {
+  ready(): boolean
+  dirty(): boolean
+  context: { items(): readonly unknown[] }
+}
+
 export const resetSessionModel = (local: Local) => {
   local.session.reset()
 }
 
-export const syncSessionModel = (local: Local, msg: UserMessage) => {
+export const syncSessionModel = (local: Local, msg: UserMessage, draft?: ActiveDraft) => {
+  // Queued promotions can arrive while an unrelated draft is being edited.
+  // The history route must not become the draft's next-send model in that case.
+  if (draft?.ready() && (draft.dirty() || draft.context.items().length > 0) && draft.model.current()) return
   local.session.restore(msg)
 }
 
@@ -57,7 +66,8 @@ export const restorePromptModel = (local: ModelSelection, prompt: PromptState) =
     local.model.variant.current() === (model.variant ?? undefined)
   )
     return true
-  local.model.set({ providerID: model.providerID, modelID: model.modelID })
-  local.model.variant.set(model.variant ?? undefined)
+  if (current?.provider.id !== model.providerID || current.id !== model.modelID)
+    local.model.set({ providerID: model.providerID, modelID: model.modelID }, { restoring: true })
+  local.model.variant.set(model.variant ?? undefined, { restoring: true })
   return true
 }

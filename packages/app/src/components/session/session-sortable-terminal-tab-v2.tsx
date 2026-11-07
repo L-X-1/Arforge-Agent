@@ -17,6 +17,8 @@ export function SortableTerminalTabV2(props: {
   terminal: LocalPTY
   index: () => number
   newLayout: boolean
+  directory?: string
+  connection?: "connecting" | "connected" | "error"
   onClose?: () => void
 }): JSX.Element {
   const terminal = useTerminal()
@@ -40,7 +42,8 @@ export function SortableTerminalTabV2(props: {
   let blurFrame: number | undefined
   let editRequested = false
   let disposed = false
-  const busy = (action: TerminalPanelAction) => terminalPanelOperationPending(terminal.pending, action, props.terminal.id)
+  const busy = (action: TerminalPanelAction) =>
+    terminalPanelOperationPending(terminal.pending, action, props.terminal.id)
 
   const isDefaultTitle = () => {
     const number = props.terminal.titleNumber
@@ -56,6 +59,16 @@ export function SortableTerminalTabV2(props: {
     if (Number.isFinite(number) && number > 0) return language.t("terminal.title.numbered", { number })
     if (props.terminal.title) return props.terminal.title
     return language.t("terminal.title")
+  }
+
+  const connectionLabel = () => {
+    const chinese = language.locale().startsWith("zh")
+    if (terminal.pending("close", props.terminal.id)) return chinese ? "关闭中" : "Closing"
+    if (terminal.pending("clone", props.terminal.id)) return chinese ? "恢复中" : "Recovering"
+    if (props.connection === "connected") return chinese ? "已连接" : "Connected"
+    if (props.connection === "error") return chinese ? "连接失败" : "Connection failed"
+    if (props.connection === "connecting") return chinese ? "连接中" : "Connecting"
+    return undefined
   }
 
   const close = async () => {
@@ -82,6 +95,9 @@ export function SortableTerminalTabV2(props: {
     }
 
     if (busy("rename")) return
+    // Renaming is the newer focus intent. A terminal selected by the first
+    // click may still be mounting; it must not blur this editor when ready.
+    terminal.cancelFocus()
     setStore("blurEnabled", false)
     setStore("title", props.terminal.title)
     setStore("editing", true)
@@ -104,6 +120,7 @@ export function SortableTerminalTabV2(props: {
   }
 
   const keydown = (e: KeyboardEvent) => {
+    if (e.isComposing || e.keyCode === 229) return
     if (e.key === "Enter") {
       e.preventDefault()
       save()
@@ -142,7 +159,7 @@ export function SortableTerminalTabV2(props: {
   return (
     <div
       ref={sortable.ref}
-      class="outline-none focus:outline-none focus-visible:outline-none"
+      data-slot="terminal-sortable-tab"
       classList={{
         "h-full flex items-center": props.newLayout,
         "h-full": !props.newLayout,
@@ -257,11 +274,25 @@ export function SortableTerminalTabV2(props: {
               <span
                 class="truncate"
                 data-slot="terminal-tab-title"
+                title={[label(), props.directory, connectionLabel()].filter(Boolean).join(" · ")}
                 onDblClick={edit}
                 classList={{ invisible: store.editing }}
               >
                 {label()}
               </span>
+              <Show when={connectionLabel()}>
+                {(status) => (
+                  <span
+                    data-slot="terminal-tab-connection"
+                    data-state={props.connection}
+                    role="status"
+                    class="ml-1 shrink-0 text-[12px] text-v2-text-text-muted"
+                    title={props.directory}
+                  >
+                    {status()}
+                  </span>
+                )}
+              </Show>
             </Tabs.Trigger>
             <Show when={store.editing}>
               <div class="absolute inset-0 flex items-center bg-v2-background-bg-layer-01 z-10 pointer-events-auto rounded-[6px] shadow-[inset_0_0_0_0.5px_var(--v2-border-border-muted)] px-2">
@@ -289,8 +320,12 @@ export function SortableTerminalTabV2(props: {
                 requestAnimationFrame(() => edit())
               }}
             >
-              <MenuV2.Item disabled={busy("rename")} onSelect={() => (editRequested = true)}>{language.t("common.rename")}</MenuV2.Item>
-              <MenuV2.Item disabled={busy("close")} onSelect={close}>{language.t("common.close")}</MenuV2.Item>
+              <MenuV2.Item disabled={busy("rename")} onSelect={() => (editRequested = true)}>
+                {language.t("common.rename")}
+              </MenuV2.Item>
+              <MenuV2.Item disabled={busy("close")} onSelect={close}>
+                {language.t("common.close")}
+              </MenuV2.Item>
             </MenuV2.Context.Content>
           </MenuV2.Context.Portal>
         </MenuV2.Context>

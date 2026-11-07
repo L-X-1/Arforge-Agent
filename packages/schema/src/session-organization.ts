@@ -2,7 +2,7 @@ export * as SessionOrganization from "./session-organization"
 
 import { Schema } from "effect"
 import { descending } from "./identifier"
-import { DateTimeUtcFromMillis, NonNegativeInt, optional, statics } from "./schema"
+import { AbsolutePath, DateTimeUtcFromMillis, NonNegativeInt, optional, statics } from "./schema"
 import { SessionID } from "./session-id"
 import { SessionMessage } from "./session-message"
 
@@ -47,10 +47,21 @@ export const Checkpoint = Schema.Struct({
 }).annotate({ identifier: "SessionCheckpoint" })
 export interface Checkpoint extends Schema.Schema.Type<typeof Checkpoint> {}
 
+/** A message target is resolved by the server; callers never supply a boundary sequence. */
+const RewindTargetFields = { checkpointID: optional(CheckpointID), messageID: optional(SessionMessage.ID), expectedDirectory: optional(AbsolutePath) }
+export const RewindTarget = Schema.Struct(RewindTargetFields).annotate({ identifier: "SessionRewindTarget", description: "Provide exactly one checkpointID or messageID. Message targets require the captured expectedDirectory; the Session owner validates this combination." })
+export type RewindTarget = typeof RewindTarget.Type
+
+const RewindRevision = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
+export const RewindApplyInput = Schema.Struct({ ...RewindTargetFields, expectedLastSequence: NonNegativeInt, expectedRevision: optional(RewindRevision) })
+  .annotate({ identifier: "SessionRewindApplyInput", description: "Message targets require the source and expectedRevision returned by their read-only preview. No caller boundary sequence is accepted." })
+export type RewindApplyInput = typeof RewindApplyInput.Type
+
 export const RewindPreview = Schema.Struct({
   checkpoint: Checkpoint,
   affectedMessages: NonNegativeInt,
   expectedLastSequence: NonNegativeInt,
+  expectedRevision: RewindRevision,
   workspaceEffectsUnchanged: Schema.Literal(true),
 }).annotate({ identifier: "SessionRewindPreview" })
 export interface RewindPreview extends Schema.Schema.Type<typeof RewindPreview> {}

@@ -1,3 +1,4 @@
+import { useConfirmAction, confirmationSnapshot } from "@/components/confirm-action"
 import { afterManagementWrite, bindManagementApi, createManagementScope, loadManagementPartition, runManagementMutation } from "@/components/settings-v2/management-async"
 import { ManagementStatus } from "@/components/settings-v2/management-status"
 import "@/components/settings-v2/management-review.css"
@@ -51,6 +52,12 @@ const formatArtifactSize = (sizeBytes: number) => {
 
 export function SessionPersonalJobsControl(props: { sessionID: string; disabled?: boolean }) {
   const serverSDK = useServerSDK()
+  const confirmAction = useConfirmAction()
+  const confirmCurrent = (message: string) => {
+    const snapshot = confirmationSnapshot(jobs())
+    if (snapshot === undefined) return Promise.resolve(false)
+    return confirmAction(message, { isCurrent: () => !blocked() && confirmationSnapshot(jobs()) === snapshot })
+  }
   const language = useLanguage()
   const ui = (english: string, simplifiedChinese: string, traditionalChinese = simplifiedChinese) => {
     if (language.locale() === "zh") return simplifiedChinese
@@ -316,8 +323,8 @@ export function SessionPersonalJobsControl(props: { sessionID: string; disabled?
     setJobs((items) => items.map((item) => (item.id === next.id ? next : item)))
   }
 
-  const deleteJob = (job: PersonalJob) => {
-    if (!window.confirm(ui(`Delete “${job.title}” from the visible job list?`, `从可见任务列表删除“${job.title}”？`)))
+  const deleteJob = async (job: PersonalJob) => {
+    if (!await confirmCurrent(ui(`Delete “${job.title}” from the visible job list?`, `从可见任务列表删除“${job.title}”？`)))
       return
     void mutate(
       async () => {
@@ -360,8 +367,8 @@ export function SessionPersonalJobsControl(props: { sessionID: string; disabled?
   const approve = (job: PersonalJob) => void mutate(() => update(job, "approve"), ui("Job approved.", "任务已批准。"))
   const pause = (job: PersonalJob) => void mutate(() => update(job, "pause"), ui("Job paused.", "任务已暂停。"))
   const resume = (job: PersonalJob) => void mutate(() => update(job, "resume"), ui("Job resumed.", "任务已恢复。"))
-  const cancel = (job: PersonalJob) => {
-    if (!window.confirm(ui(`Cancel “${job.title}”?`, `取消“${job.title}”？`))) return
+  const cancel = async (job: PersonalJob) => {
+    if (!await confirmCurrent(ui(`Cancel “${job.title}”?`, `取消“${job.title}”？`))) return
     void mutate(() => update(job, "cancel"), ui("Job cancelled.", "任务已取消。"))
   }
 

@@ -4,20 +4,27 @@
 // range instead of collapsing the handle to min === max.
 export const SESSION_PANEL_WIDTH_MIN = 450
 export const SESSION_PANEL_WIDTH_MIN_COMPACT = 320
-export const REVIEW_PANE_WIDTH_MIN = 480
+export const REVIEW_PANE_WIDTH_MIN = 440
 export const REVIEW_PANE_WIDTH_MIN_COMPACT = 360
 export const REVIEW_PANE_WIDTH_MIN_SPLIT = 800
 export const SESSION_PANEL_RESIZE_RANGE_MIN = 240
+
+// Only use a full workbench when even the existing compact pane floors cannot
+// fit. `available` excludes the row gap and any reserved execution-dock width.
+export function sessionPanelNeedsFullWorkbench(input: { available: number | undefined; hasSession: boolean }) {
+  return (
+    input.hasSession &&
+    input.available !== undefined &&
+    input.available < SESSION_PANEL_WIDTH_MIN_COMPACT + REVIEW_PANE_WIDTH_MIN_COMPACT
+  )
+}
 
 export function sessionPanelWidthBounds(input: { available: number; split: boolean }) {
   const available = Math.max(0, input.available)
   const preferredPane = input.split ? REVIEW_PANE_WIDTH_MIN_SPLIT : REVIEW_PANE_WIDTH_MIN
   const paneReserve = Math.min(
     preferredPane,
-    Math.max(
-      REVIEW_PANE_WIDTH_MIN_COMPACT,
-      available - SESSION_PANEL_WIDTH_MIN - SESSION_PANEL_RESIZE_RANGE_MIN,
-    ),
+    Math.max(REVIEW_PANE_WIDTH_MIN_COMPACT, available - SESSION_PANEL_WIDTH_MIN - SESSION_PANEL_RESIZE_RANGE_MIN),
   )
   const max = Math.max(SESSION_PANEL_WIDTH_MIN_COMPACT, available - paneReserve)
   const min = Math.min(

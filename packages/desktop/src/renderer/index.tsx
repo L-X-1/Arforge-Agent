@@ -20,6 +20,7 @@ import { render } from "solid-js/web"
 import pkg from "../../package.json"
 import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
+import { LoadingSplash } from "./loading-splash"
 import { DesktopFirstLaunchOnboarding } from "./onboarding"
 import { createDesktopStorage } from "./storage-queue"
 import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
@@ -122,6 +123,10 @@ const createPlatform = (windowState: DesktopWindowState): Platform => {
 
   const storage = (() => {
     const cache = new Map<string, ReturnType<typeof createDesktopStorage>>()
+    const stop = window.api.onPrepareClose(async () => {
+      await Promise.all([...cache.values()].map((store) => store.flush()))
+    })
+    window.addEventListener("unload", stop, { once: true })
 
     return (name = "default.dat") => {
       const cached = cache.get(name)
@@ -284,10 +289,6 @@ window.api.onMenuCommand((id) => {
 })
 listenForDeepLinks()
 
-function LoadingSplash() {
-  return <div class="h-dvh w-screen bg-background-base" aria-label="Arforge 正在启动" />
-}
-
 function DesktopRoot(props: { windowState: DesktopWindowState }) {
   const platform = createPlatform(props.windowState)
   const loadLocale = async () => {
@@ -304,7 +305,7 @@ function DesktopRoot(props: { windowState: DesktopWindowState }) {
 
   const [windowCount] = createResource(() => window.api.getWindowCount())
 
-  // Fetch sidecar credentials (available immediately, before health check)
+  // The existing splash remains visible until actual backend health succeeds.
   const [sidecar] = createResource(() => window.api.awaitInitialization())
 
   const [defaultServer] = createResource(() => platform.getDefaultServer?.())

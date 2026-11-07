@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/arforge
+Working directory: %ARFORGE_REPO%/packages/arforge
 Command: bun test --timeout 60000 test/tool/core-bridge.test.ts test/tool/core-bridge-cold-postprocessing.test.ts test/mcp/gateway-adapter.test.ts test/tool/code-mode.test.ts test/tool/code-mode-integration.test.ts
 Exit code: 0
 Raw captured output:

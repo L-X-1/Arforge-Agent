@@ -552,8 +552,8 @@ def _eval_quality_workflow(root: Path) -> tuple[bool, str]:
     required = (
         "python -m ruff check arforge tests config.py main.py",
         "python -m pytest -q",
-        "arforge capability-eval --json",
-        "arforge doctor --json",
+        "node bin/arforge.js capabilities evaluate --json",
+        "node bin/arforge.js doctor --json",
         "bun run lint",
         "bun run typecheck",
         "bun run brand:check",

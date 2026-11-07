@@ -87,7 +87,7 @@ const runWithApproval = <A, R>(
       Deferred.await(asked),
       Effect.sleep("5 seconds").pipe(Effect.andThen(Effect.fail(new Error("timed out waiting for exposure approval")))),
     )
-    yield* authorizer.reply({ requestID: request.id, reply: "once" })
+    yield* Database.principalContext(identity, authorizer.reply({ requestID: request.id, reply: "once" }))
     return yield* Fiber.join(fiber)
   })
 

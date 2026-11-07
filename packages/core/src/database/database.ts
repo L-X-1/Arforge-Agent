@@ -5,6 +5,7 @@ import { PgClient } from "@effect/sql-pg"
 import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer, Redacted } from "effect"
 import * as PgDrizzle from "drizzle-orm/effect-postgres"
+import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import { existsSync } from "node:fs"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
@@ -14,6 +15,8 @@ import { InstallationChannel } from "../installation/version"
 import { makeGlobalNode } from "../effect/app-node"
 import { usesPostgres } from "./dialect"
 import { PostgresSchemaMigrations, PostgresSchemaVersion } from "./postgres-schema.gen"
+import * as TransactionEffects from "./transaction-effects"
+import { withPrincipalQueries } from "./principal-queries"
 
 const makeSqliteDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeSqliteDatabase>
@@ -64,12 +67,61 @@ export const CurrentPrincipal = Context.Reference<Principal | undefined>("@arfor
   defaultValue: () => undefined,
 })
 
+/** Request/long-execution identity; SQL operations establish their own short RLS scope. */
+export const principalContext = <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, CurrentPrincipal, principal)
+
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/storage/Database") {}
+
+/** Notify with the original caller's principal, after the outer SQL commit. */
+export const afterCommit = (database: Interface, effect: Effect.Effect<void>) =>
+  TransactionEffects.afterCommit(
+    database.db.$client,
+    Effect.gen(function* () {
+      const principal = yield* CurrentPrincipal
+      if (!principal) return yield* effect
+      // PostgreSQL SET LOCAL belongs to the completed transaction. Re-establish
+      // authorization on a fresh connection for any observer's database reads.
+      return yield* database.runAsPrincipal(principal, effect)
+    }),
+  )
+
+/** The shared SET LOCAL / outer-commit boundary for PostgreSQL request owners. */
+export const postgresPrincipalScope = (client: SqlClient) =>
+  <A, E, R>(principal: Principal, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => {
+    const scoped = Effect.provideService(effect, CurrentPrincipal, principal)
+    // Local/private work must not hold a connection for a multi-minute agent run.
+    if (isDefaultLocalPrincipal(principal)) return scoped
+    return TransactionEffects.withCommitEffects(
+      client,
+      client.withTransaction(
+        client
+          .unsafe(`SELECT set_config('arforge.tenant_id', $1, true), set_config('arforge.user_id', $2, true)`, [
+            principal.tenantID,
+            principal.userID,
+          ])
+          .pipe(Effect.andThen(scoped)),
+      ),
+    ) as Effect.Effect<A, E, R>
+  }
+
+/** Authorize one query or explicit transaction without enclosing a provider stream. */
+export const postgresOperationScope = (client: SqlClient) => {
+  const run = postgresPrincipalScope(client)
+  return <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.gen(function* () {
+      const principal = yield* CurrentPrincipal
+      if (!principal || isDefaultLocalPrincipal(principal)) return yield* effect
+      if ((yield* Effect.serviceOption(client.transactionService))._tag === "Some") return yield* effect
+      return yield* run(principal, effect)
+    })
+}
 
 const sqliteServiceLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const db = yield* makeSqliteDatabase
+    const native = yield* makeSqliteDatabase
+    const db = TransactionEffects.withTransactionEffects(native, native.$client)
 
     const readOnly = process.env.ARFORGE_DB_READ_ONLY === "1"
     if (!readOnly) {
@@ -149,7 +201,7 @@ export function currentAtPath(filename = path()) {
 
 const postgresProxyCache = new WeakMap<object, unknown>()
 
-function postgresCompat<T extends object>(target: T): T {
+export function postgresCompat<T extends object>(target: T): T {
   const cached = postgresProxyCache.get(target)
   if (cached) return cached as T
 
@@ -157,10 +209,12 @@ function postgresCompat<T extends object>(target: T): T {
     get(source, property, receiver) {
       const execute = Reflect.get(source, "execute", receiver)
       if ((property === "run" || property === "all") && typeof execute === "function") {
-        return () => execute.call(source)
+        // Database/transaction handles accept a raw query, while prepared
+        // builders execute without arguments. Preserve both call signatures.
+        return (...args: unknown[]) => execute.apply(source, args)
       }
       if (property === "get" && typeof execute === "function") {
-        return () => execute.call(source).pipe(Effect.map((rows: ReadonlyArray<unknown>) => rows[0]))
+        return (...args: unknown[]) => execute.apply(source, args).pipe(Effect.map((rows: ReadonlyArray<unknown>) => rows[0]))
       }
 
       const value = Reflect.get(source, property, receiver)
@@ -191,6 +245,9 @@ function postgresCompat<T extends object>(target: T): T {
  */
 export const POSTGRES_SCHEMA_MIGRATION_LOCK = "arforge.schema.migration.v1"
 
+export const POSTGRES_SCHEMA_RECOVERY_HINT =
+  'Packaged Desktop: close Arforge and run "Arforge.exe --migrate-postgres". Configure ARFORGE_DB_ADMIN_URL in the private Arforge environment file; never put a URL in the command. Source checkout only: run "bun --cwd packages/core run db:migrate:postgres". PostgreSQL must already be reachable.'
+
 /**
  * Derive the next migration set from the durable ledger without mutating it.
  * Keeping this projection pure makes restart/recovery reasoning independent of
@@ -219,14 +276,14 @@ const ensurePostgresSchema = Effect.gen(function* () {
 
       if (!databaseState.installed && !databaseState.can_create) {
         throw new Error(
-          "The Arforge PostgreSQL schema is not installed. Run migrations with an administrative database role before starting the application role.",
+          `The Arforge PostgreSQL schema is not installed. ${POSTGRES_SCHEMA_RECOVERY_HINT}`,
         )
       }
 
       if (!databaseState.migration_table) {
         if (!databaseState.can_create) {
           throw new Error(
-            "The Arforge PostgreSQL migration ledger is missing. Run migrations with an administrative database role before starting the application role.",
+            `The Arforge PostgreSQL migration ledger is missing. ${POSTGRES_SCHEMA_RECOVERY_HINT}`,
           )
         }
         yield* client.unsafe(`
@@ -256,7 +313,7 @@ const ensurePostgresSchema = Effect.gen(function* () {
       const pending = pendingPostgresMigrations(completed)
       if (pending.length > 0 && !databaseState.can_create) {
         throw new Error(
-          `The Arforge PostgreSQL schema is behind ${PostgresSchemaVersion}. Run "bun --cwd packages/core run db:migrate:postgres" with ARFORGE_DB_ADMIN_URL before starting the application role.`,
+          `The Arforge PostgreSQL schema is behind ${PostgresSchemaVersion}. ${POSTGRES_SCHEMA_RECOVERY_HINT}`,
         )
       }
 
@@ -287,29 +344,17 @@ const makePostgresDatabase = Effect.gen(function* () {
   if (process.env.ARFORGE_DB_READ_ONLY !== "1") yield* ensurePostgresSchema
 
   const client = yield* PgClient.PgClient
-  const db = yield* PgDrizzle.makeWithDefaults()
+  const native = yield* PgDrizzle.makeWithDefaults()
+  const db = withPrincipalQueries(
+    TransactionEffects.withTransactionEffects(postgresCompat(native), client),
+    postgresOperationScope(client),
+  )
+  const runAsPrincipal = postgresPrincipalScope(client)
   return {
     // Keep the established feature-facing API (.run/.all/.get) while the
     // underlying query builder and tables use PostgreSQL.
-    db: postgresCompat(db) as unknown as DatabaseShape,
-    runAsPrincipal: <A, E, R>(
-      principal: { readonly tenantID: string; readonly userID: string },
-      effect: Effect.Effect<A, E, R>,
-    ) => {
-      const scoped = Effect.provideService(effect, CurrentPrincipal, principal)
-      // Local/private mode is the schema's fail-safe default identity. It does
-      // not need SET LOCAL and must not hold one PostgreSQL connection for a
-      // multi-minute agent run whose child fibers perform concurrent work.
-      if (isDefaultLocalPrincipal(principal)) return scoped
-      return client.withTransaction(
-        client
-          .unsafe(`SELECT set_config('arforge.tenant_id', $1, true), set_config('arforge.user_id', $2, true)`, [
-            principal.tenantID,
-            principal.userID,
-          ])
-          .pipe(Effect.andThen(scoped)),
-      ) as Effect.Effect<A, E, R>
-    },
+    db: db as unknown as DatabaseShape,
+    runAsPrincipal,
     transactionAsPrincipal: <A, E, R>(
       principal: { readonly tenantID: string; readonly userID: string },
       callback: (transaction: Transaction) => Effect.Effect<A, E, R>,
@@ -322,18 +367,7 @@ const makePostgresDatabase = Effect.gen(function* () {
         // writers would see `.run is not a function` in production.
         Effect.provideService(callback(postgresCompat(handle) as unknown as Transaction), CurrentPrincipal, principal),
       )
-      // Keep the private/local principal on the normal database path. For a
-      // tenant-scoped request, the SET LOCAL statement and Drizzle callback
-      // share the same physical PostgreSQL transaction connection.
-      if (isDefaultLocalPrincipal(principal)) return scoped as Effect.Effect<A, E, R>
-      return client.withTransaction(
-        client
-          .unsafe(`SELECT set_config('arforge.tenant_id', $1, true), set_config('arforge.user_id', $2, true)`, [
-            principal.tenantID,
-            principal.userID,
-          ])
-          .pipe(Effect.andThen(scoped)),
-      ) as Effect.Effect<A, E, R>
+      return runAsPrincipal(principal, scoped) as Effect.Effect<A, E, R>
     },
   }
 }).pipe(Effect.orDie)

@@ -29,6 +29,8 @@ export function createAppPlugin(options = {}) {
           },
           define: {
             "import.meta.env.VITE_ARFORGE_CHANNEL": JSON.stringify(channel),
+            ARFORGE_VERSION: JSON.stringify(process.env.ARFORGE_VERSION || "1.0.0"),
+            ARFORGE_CHANNEL: JSON.stringify(channel),
           },
           worker: {
             format: "es",

@@ -154,9 +154,9 @@ export function TabNavItem(props: {
 
   createEffect(() => {
     if (editing()) return
-    if (!titleEl) return
+    // The Show may mount this span after the first effect; subscribe even then.
     const value = title()
-    if (value === undefined) return
+    if (!titleEl || value === undefined) return
     titleEl.textContent = value
   })
 
@@ -267,6 +267,8 @@ export function TabNavItem(props: {
               titleEl = el
               titleEl.textContent = title() ?? ""
             }}
+            role={editing() ? "textbox" : props.active ? "heading" : undefined}
+            aria-level={!editing() && props.active ? 1 : undefined}
             data-slot="tab-title"
             data-titlebar-tab-title
             class="min-w-0 flex-1 outline-none leading-4"

@@ -7,8 +7,6 @@ The current public source snapshot tracks test build `1.0.0-test.1`, displayed a
 `Arforge 测试 1.00.00 版`. This repository provides source code and development
 documentation; no official store release or public update service is offered yet.
 
-Current status: `1.0.0-test.1`. The test build is ready for controlled local project work; it is not yet published to public PyPI.
-
 License status: `UNLICENSED`. Public source visibility does not grant permission to copy,
 redistribute, or create derivative works unless the repository owner provides a license.
 
@@ -23,6 +21,7 @@ redistribute, or create derivative works unless the repository owner provides a 
 - `packages/core`: shared contracts, database, Session Runner and the native
   TypeScript capability surface.
 - `packages/arforge`: unified CLI, provider, server, tools and session runtime.
+- `packages/server`: HTTP transport and route handlers over Core.
 - `packages/app`: shared Solid application for Desktop and Web.
 - `packages/desktop`: current Electron desktop shell.
 - `arforge/`: Python compatibility and migration support plus test helpers. The
@@ -32,35 +31,26 @@ CLI, Server, App and Desktop use one provider, session, permission and
 PostgreSQL contract. Python capabilities no longer own a second desktop session
 state; the JSONL capability bridge and its sidecar were retired.
 
-## Verified state — 2026-07-27
+## Run from a fresh checkout
 
-- Real CLI → Core → DeepSeek request completed with `finish=stop`.
-- A second real request after switching to least-privilege PostgreSQL returned
-  `Arforge私有链路正常`.
-- Python full suite: `2967 passed, 7 skipped, 0 failed`.
-- Mature TypeScript runtime:
-  `3182 passed, 65 skipped, 1 todo, 0 failed`.
-- Shared Desktop/Web App: `678 passed, 0 failed`.
-- Root TypeScript type checking: `23/23` packages.
-- Strict brand audit: `0 hits in 0 finding files`; `6,392` files visited and
-  `5,786` text files scanned.
-- External source dependencies, junctions and running processes: 0.
-- PostgreSQL application-role write round-trip and backup/restore comparison
-  passed.
-
-Skipped cases are optional runtimes or platform capabilities absent from this
-Windows host. Missing Go/Ruby/PHP plus a stopped Docker engine is reported
-honestly and is never treated as a successful toolchain.
-
-## Setup
+From the checkout root, use Bun 1.3.14 (the version in `package.json`):
 
 ```powershell
-cd Arforge-Agent
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev,postgres]"
-bun install
+bun --version
+bun install --frozen-lockfile
+bun run cli --help
+bun run dev:desktop
 ```
+
+In Desktop, open a project, configure a provider in Settings, and select a model
+before sending a message. For Python compatibility tooling and development checks,
+see the [developer onboarding guide](docs/DEVELOPER_ONBOARDING.md).
+
+### Optional private launcher configuration
+
+On Windows, the `scripts/run_cli.ps1` and `scripts/run_desktop.ps1` launchers
+expect a local copy of Bun 1.3.14 at `.tools/bun-1.3.14/bun.exe`. Use the
+commands above when Bun is installed on PATH.
 
 Private environment:
 
@@ -98,9 +88,9 @@ The script generates a random `arforge_app` password, audits the allowed and
 denied privileges, and persists only the application connection in the private
 user `.env`.
 
-## Run
+## CLI and Desktop launcher examples
 
-CLI:
+With the optional Windows launcher configuration above:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 --help
@@ -477,8 +467,8 @@ explicitly fail-closed until they have their own typed owner and evidence.
   database with the same runtime role unless `ARFORGE_MULTIAGENT_DB_URL` is
   explicitly configured.
 - Administrative role: migrations, grants and restore administration only.
-- SQLite/in-memory: explicit isolated tests and not-yet-migrated compatibility
-  capabilities only.
+- SQLite: local runtime when no PostgreSQL URL is configured. In-memory storage
+  is available for isolated tests.
 - PostgreSQL backups:
   `%LOCALAPPDATA%\Arforge\backups\postgresql`.
 

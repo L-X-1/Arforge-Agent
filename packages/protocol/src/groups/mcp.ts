@@ -7,6 +7,14 @@ import { LocationQuery, locationQueryOpenApi } from "./location"
 
 const root = "/api/mcp"
 
+/** Cached metadata lookup; it never invokes a tool or opens a transport. */
+export const ToolDetailsQuery = Schema.Struct({
+  ...LocationQuery.fields,
+  server: Schema.String.check(Schema.isNonEmpty()),
+  capabilityID: Schema.String.check(Schema.isNonEmpty()),
+  generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+
 /** Exact identity required for a read-only MCP action reconciliation lookup. */
 export const ReconciliationQuery = Schema.Struct({
   ...LocationQuery.fields,
@@ -45,6 +53,22 @@ export const makeMcpGroup = <I extends HttpApiMiddleware.AnyId, S>(locationMiddl
       })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi),
+    )
+    .add(
+      HttpApiEndpoint.get("mcp.tool.describe", `${root}/tool`, {
+        query: ToolDetailsQuery,
+        success: Location.response(Mcp.ToolDetails),
+        error: InvalidRequestError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            summary: "Inspect one current MCP tool definition",
+            description:
+              "Returns the cached advertised definition for an exact server, capability and generation. Does not invoke a tool, refresh discovery or change authorization.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.get("mcp.action.reconciliation", `${root}/actions/:actionID/reconciliation`, {

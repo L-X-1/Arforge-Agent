@@ -2,6 +2,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
+import { expandWorkbench } from "../utils/workbench"
 
 const directory = "C:/Arforge/FileBrowserSidebar"
 const projectID = "proj_file_browser_sidebar"
@@ -21,6 +22,7 @@ test("keeps the file-browser sidebar mounted when switching file tabs", async ({
 
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
 
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file" }).click()

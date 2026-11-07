@@ -1,0 +1,52 @@
+[data-component="workbench-browser-panel"] [data-slot="workbench-browser-navigation"] {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--border-weak-base);
+  background: var(--workbench-surface, var(--background-base));
+}
+[data-slot="workbench-browser-navigation"] button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 4px;
+}
+[data-slot="workbench-browser-navigation"] input {
+  flex: 1 1 80px;
+  min-width: 80px;
+  width: 0;
+  height: 32px;
+  min-height: 32px;
+}
+[data-slot="workbench-browser-scope"] {
+  flex: none;
+  min-width: 0;
+  border-bottom: 1px solid var(--border-weak-base);
+  color: var(--text-weak);
+  font-size: 12px;
+}
+[data-slot="workbench-browser-scope"] summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+[data-slot="workbench-browser-scope"] summary::-webkit-details-marker { display: none; }
+[data-slot="workbench-browser-scope"] summary > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+[data-slot="workbench-browser-scope"] p { margin: 0; padding: 8px 12px; overflow-wrap: anywhere; }
+[data-slot="workbench-browser-loading"] { flex: none; padding: 4px 12px; }
+@media (pointer: coarse) {
+  [data-slot="workbench-browser-navigation"] :is(button, input),
+  [data-slot="workbench-browser-scope"] summary { min-width: 44px; min-height: 44px; }
+}

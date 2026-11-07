@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
 import { createPreviewResourceHost } from "../../../../server/src/preview-resource-host"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/HtmlElementSelection"
@@ -46,6 +47,7 @@ function json(route: Route, data: unknown) {
 async function openPreview(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).click()
@@ -112,6 +114,7 @@ test("HTML element selection clears stale locations after a source refresh", asy
   await frame.locator("#replacement").click()
   await expect(picker.locator('[data-slot="html-element-location"]')).toContainText("page.html:4:1")
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
 })
 
 test("HTML element selection reuses scoped resources and resets when resource access is disabled", async ({ page }) => {

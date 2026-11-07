@@ -70,6 +70,10 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...Project.Event.Definitions,
+  // Shared transitional: native clients observe pre-step Core drain failures
+  // through the existing session.error event, without an assistant message.
+  SessionV1.Event.Error,
 )
 
 export const Definitions = Event.inventory(

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { SOUND_OPTIONS, resolveSoundPreference, soundSrc } from "@/utils/sound"
 import {
   hasExistingWebState,
   isAppUpgrade,
@@ -11,7 +12,49 @@ import {
   shouldEnableNewLayout,
   sansFontFamily,
   sansUnsetDefault,
+  monoFontFamily,
+  monoUnsetDefault,
 } from "./settings"
+
+describe("notification sound preferences", () => {
+  test("offers all 12 bundled cues in palette order", async () => {
+    expect(SOUND_OPTIONS.map((option) => option.id)).toEqual([
+      "soft-glass-complete.wav",
+      "soft-glass-permission.wav",
+      "soft-glass-error.wav",
+      "warm-wood-complete.wav",
+      "warm-wood-permission.wav",
+      "warm-wood-error.wav",
+      "minimal-electronic-complete.wav",
+      "minimal-electronic-permission.wav",
+      "minimal-electronic-error.wav",
+      "soft-piano-complete.wav",
+      "soft-piano-permission.wav",
+      "soft-piano-error.wav",
+    ])
+    for (const { id } of SOUND_OPTIONS) {
+      const asset = Bun.file(new URL(`../../../ui/src/assets/audio/${id}`, import.meta.url))
+      expect(await asset.exists()).toBe(true)
+    }
+  })
+
+  test("maps legacy preferences to Soft Glass and preserves explicit choices across palettes", async () => {
+    for (const fallback of ["soft-glass-complete.wav", "soft-glass-permission.wav", "soft-glass-error.wav"] as const) {
+      for (const legacy of ["alert-10", "bip-bop-10", "staplebops-07", "nope-12", "yup-06"]) {
+        expect(resolveSoundPreference(legacy, fallback)).toBe(fallback)
+      }
+      expect(resolveSoundPreference(undefined, fallback)).toBe(fallback)
+      for (const { id } of SOUND_OPTIONS) {
+        expect(resolveSoundPreference(id, fallback)).toBe(id)
+      }
+      expect(resolveSoundPreference("none", fallback)).toBe("none")
+      expect(resolveSoundPreference("nope-13", fallback)).toBe("none")
+      expect(resolveSoundPreference(["alert-01"], fallback)).toBe("none")
+    }
+    expect(await soundSrc("none")).toBeUndefined()
+    expect(await soundSrc("constructor")).toBeUndefined()
+  })
+})
 
 describe("layout transition", () => {
   test("blank profiles default to the new layout", () => {
@@ -80,8 +123,14 @@ describe("layout transition", () => {
   })
 })
 
-
 describe("V2 font preference defaults", () => {
+  test("uses bundled code font only for absent preference and retains explicit system/custom fonts", () => {
+    expect(monoUnsetDefault).toBe("JetBrains Mono")
+    expect(monoFontFamily(undefined)).toStartWith('"JetBrains Mono", ')
+    expect(monoFontFamily("")).not.toContain("JetBrains Mono")
+    expect(monoFontFamily("   ")).not.toContain("JetBrains Mono")
+    expect(monoFontFamily("User Mono")).toStartWith('"User Mono", ')
+  })
   test("uses the bundled UI family only for an unset preference", () => {
     expect(sansUnsetDefault).toBe("Noto Sans SC")
     expect(sansFontFamily(undefined)).toStartWith('"Noto Sans SC", ')

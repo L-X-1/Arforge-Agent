@@ -204,3 +204,56 @@
 [data-component="button"].titlebar-icon[data-variant="ghost"][aria-current="page"]:hover:not(:disabled) {
   background-color: var(--surface-base-active);
 }
+
+/* Opt-in workspace presentation. Utilities and custom theme tokens keep precedence. */
+[data-component="button"][data-presentation="workspace"] {
+  border-radius: 8px;
+  height: auto;
+  min-height: 36px;
+  padding: 7px 12px;
+  white-space: normal;
+  gap: 8px;
+  box-shadow: none;
+  text-shadow: none;
+
+  &[data-size="small"] {
+    min-height: 32px;
+    padding: 5px 10px;
+  }
+  &[data-variant="secondary"] {
+    border: 1px solid transparent;
+    background: var(--v2-background-bg-layer-02);
+    color: var(--v2-text-text-base);
+    box-shadow: none;
+    &:is(:hover, :focus-visible):not(:disabled) {
+      background: var(--v2-overlay-simple-overlay-hover);
+      box-shadow: none;
+    }
+  }
+  &[data-variant="primary"] {
+    border: 1px solid transparent;
+    background: var(--v2-background-bg-contrast);
+    color: var(--v2-text-text-contrast);
+    box-shadow: none;
+    [data-slot="icon-svg"] {
+      color: inherit;
+    }
+    &:is(:hover, :focus-visible):not(:disabled) {
+      background: var(--v2-background-bg-contrast);
+      filter: brightness(0.94);
+      box-shadow: none;
+    }
+  }
+  &:active:not(:disabled) {
+    transform: none;
+  }
+  &:focus-visible {
+    outline: 2px solid var(--v2-border-border-focus);
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+  @media (pointer: coarse) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

@@ -1,4 +1,4 @@
-import { type Accessor, createMemo, For, type JSX, onCleanup, Show, splitProps } from "solid-js"
+import { type Accessor, createMemo, createUniqueId, For, type JSX, onCleanup, Show, splitProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { DragDropProvider, PointerSensor } from "@dnd-kit/solid"
 import { isSortable, useSortable } from "@dnd-kit/solid/sortable"
@@ -51,7 +51,6 @@ export type HomeProjectsViewProps = {
   onSetDefaultServer: (server: ServerConnection.Any | undefined) => void
   onRemoveServer: (server: ServerConnection.Any) => void
   onMoveProject: (server: ServerConnection.Any, worktree: string, index: number) => void
-  onSelectProject: (server: ServerConnection.Any, directory: string) => void
   onAddProjects: (server: ServerConnection.Any, directories: string[]) => void
   onOpenProjectNewSession: (server: ServerConnection.Any, directory: string) => void
   onEditProject: (server: ServerConnection.Any, project: LocalProject) => void
@@ -61,10 +60,19 @@ export type HomeProjectsViewProps = {
   onOpenArchive: () => void
   onOpenSettings: () => void
   onOpenHelp: () => void
-  renderProjectChildren?: (server: ServerConnection.Any, project: LocalProject) => JSX.Element
-}
+} & (
+  | { embedded?: false; onSelectProject: (server: ServerConnection.Any, directory: string) => void }
+  | {
+      embedded: true
+      projectTree: {
+        expanded: (server: ServerConnection.Any, directory: string) => boolean
+        toggle: (server: ServerConnection.Any, directory: string) => void
+        renderChildren: (server: ServerConnection.Any, project: LocalProject) => JSX.Element
+      }
+    }
+)
 
-export function HomeProjectsView(props: HomeProjectsViewProps & { embedded?: boolean }) {
+export function HomeProjectsView(props: HomeProjectsViewProps) {
   const [contextMenu, setContextMenu] = createStore({ open: undefined as string | undefined })
   const contextMenuProps = {
     contextMenuOpen: (id: string) => contextMenu.open === id,
@@ -72,11 +80,13 @@ export function HomeProjectsView(props: HomeProjectsViewProps & { embedded?: boo
   }
   return (
     <aside
-      class={props.embedded
-        ? "flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden"
-        : `mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden
+      class={
+        props.embedded
+          ? "flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden"
+          : `mt-6 flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden
         lg:sticky lg:top-14 lg:mt-14 lg:h-[calc(100cqh-56px)] lg:self-start lg:pt-10
-        lg:border-r lg:border-v2-border-border-muted`}
+        lg:border-r lg:border-v2-border-border-muted`
+      }
       aria-label={props.language.t("home.projects")}
       onWheel={(event) => {
         if (event.target === event.currentTarget) return
@@ -332,7 +342,8 @@ function HomeProjectList(props: HomeProjectListProps) {
             event.pointerType === "touch"
               ? [new PointerActivationConstraints.Delay({ value: 250, tolerance: 5 })]
               : [new PointerActivationConstraints.Distance({ value: 4 })],
-          preventActivation: (event) => event.target instanceof Element && !!event.target.closest("[data-action]"),
+          preventActivation: (event) =>
+            event.target instanceof Element && !!event.target.closest("[data-action], [data-project-children]"),
         }),
       ]}
       modifiers={[RestrictToVerticalAxis, RestrictToElement.configure({ element: () => listRef })]}
@@ -345,7 +356,7 @@ function HomeProjectList(props: HomeProjectListProps) {
         const source = event.operation.source
         if (event.canceled || !isSortable(source)) return
         if (source.initialIndex !== source.index) props.onMoveProject(props.server, source.id.toString(), source.index)
-        if (props.selection().server !== ServerConnection.key(props.server))
+        if (!props.embedded && props.selection().server !== ServerConnection.key(props.server))
           props.onSelectProject(props.server, source.id.toString())
       }}
     >
@@ -374,7 +385,6 @@ function HomeProjectSlot(
   return (
     <Show when={project()}>
       {(item) => (
-        <>
         <HomeProjectRow
           {...props}
           project={item()}
@@ -388,8 +398,6 @@ function HomeProjectSlot(
           }
           unseen={props.unseenCount(props.server, item())}
         />
-        {props.renderProjectChildren?.(props.server, item())}
-        </>
       )}
     </Show>
   )
@@ -476,30 +484,42 @@ function HomeProjectRow(
       return props.index()
     },
   })
+  const childrenID = createUniqueId()
+  const expanded = () => props.embedded && props.projectTree.expanded(props.server, props.project.worktree)
+  const selected = () => !props.embedded && props.selected
   let pointerDownSelected: boolean | undefined
-  const contextMenuID = () => projectContextMenuID(props.server, props.project.worktree)
+  // This identity belongs to the mounted worktree row, including cleanup and late menu callbacks.
+  const menuOwnerID = projectContextMenuID(props.server, props.project.worktree)
+  const contextMenuID = () => menuOwnerID
   onCleanup(() => {
     const id = contextMenuID()
     if (props.contextMenuOpen(id)) props.onSetContextMenuOpen(id, false)
   })
-  return (
+  const row = (ref?: typeof sortable.ref) => (
     <div
-      ref={sortable.ref}
-      class="group/project relative flex h-11 min-w-0 items-center rounded-[12px]"
+      ref={ref}
+      class={
+        props.embedded
+          ? "workspace-sidebar__project-header"
+          : "group/project relative flex h-11 min-w-0 items-center rounded-[12px]"
+      }
       classList={{ "z-10": sortable.isDragSource() }}
     >
       <HomeProjectNavButton
         type="button"
         data-component="home-project-row"
-        class="h-11 rounded-[12px] gap-3 px-2 pr-16 disabled:opacity-60"
+        class={props.embedded ? "disabled:opacity-60" : "h-11 rounded-[12px] gap-3 px-2 pr-16 disabled:opacity-60"}
         classList={{
           "bg-v2-background-bg-layer-01 text-v2-text-text-base": sortable.isDragSource(),
           "[box-shadow:inset_0_0_0_0.5px_var(--v2-border-border-muted)]": sortable.isDragSource(),
         }}
-        data-selected={props.selected ? "" : undefined}
-        aria-current={props.selected ? "page" : undefined}
+        data-selected={selected() ? "" : undefined}
+        aria-current={selected() ? "page" : undefined}
+        aria-expanded={props.embedded ? expanded() : undefined}
+        aria-controls={props.embedded ? childrenID : undefined}
         disabled={serverUnreachable()}
         onPointerDown={(event) => {
+          if (props.embedded) return
           // Same-server mouse selection happens on pointerdown (like tabs),
           // but only ever selects; selectProject toggles, and deselecting here
           // would fire on every drag before the threshold is met. Cross-server
@@ -516,6 +536,10 @@ function HomeProjectRow(
           // The drag sensor calls preventDefault on post-drag clicks; never
           // toggle selection as part of a reorder.
           if (event.defaultPrevented) return
+          if (props.embedded) {
+            props.projectTree.toggle(props.server, props.project.worktree)
+            return
+          }
           // Keyboard activation and touch taps keep the original toggle.
           if (event.detail === 0 || pointerDownSelected === undefined) {
             props.onSelectProject(props.server, props.project.worktree)
@@ -527,18 +551,24 @@ function HomeProjectRow(
           pointerDownSelected = undefined
         }}
       >
+        <IconV2
+          name="chevron-down"
+          size="small"
+          data-project-disclosure
+          style={{ transform: `rotate(${(props.embedded ? expanded() : selected()) ? 0 : -90}deg)` }}
+        />
         <HomeProjectAvatar project={props.project} />
         <span class={HOME_PROJECT_NAV_LABEL}>{displayName(props.project)}</span>
       </HomeProjectNavButton>
       <div
-        class={`
+        class={props.embedded ? "workspace-sidebar__project-actions" : `
           hover-reveal absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1
           group-hover/project:opacity-100 focus-within:opacity-100 data-[menu=true]:opacity-100
         `}
         data-menu={props.contextMenuOpen(contextMenuID())}
       >
         <MenuV2
-          gutter={6}
+          gutter={4}
           modal={false}
           placement="bottom-end"
           open={props.contextMenuOpen(contextMenuID())}
@@ -587,8 +617,18 @@ function HomeProjectRow(
           size="small"
           icon={<IconV2 name="edit" />}
           aria-label={props.language.t("command.session.new")}
+          title={props.embedded ? props.language.t("command.session.new") : undefined}
           onClick={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}
         />
+      </div>
+    </div>
+  )
+  if (!props.embedded) return row(sortable.ref)
+  return (
+    <div ref={sortable.ref} class="min-w-0">
+      {row()}
+      <div id={childrenID} hidden={!expanded()} data-project-children>
+        <Show when={expanded()}>{props.projectTree.renderChildren(props.server, props.project)}</Show>
       </div>
     </div>
   )
@@ -618,12 +658,17 @@ function HomeProjectNavButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>
 
 function HomeProjectAvatar(props: { project: LocalProject; outline?: boolean }) {
   const name = createMemo(() => displayName(props.project))
+  const src = createMemo(() =>
+    props.outline ? undefined : getProjectAvatarSource(props.project.id, props.project.icon),
+  )
   return (
-    <ProjectAvatar
-      class="!size-10"
-      fallback={name()}
-      src={props.outline ? undefined : getProjectAvatarSource(props.project.id, props.project.icon)}
-      variant={props.outline ? "outline" : getProjectAvatarVariant(props.project.icon?.color)}
-    />
+    <Show when={src()} fallback={<IconV2 name="folder" size="small" data-default-project-icon />}>
+      <ProjectAvatar
+        class="!size-5"
+        fallback={name()}
+        src={src()}
+        variant={props.outline ? "outline" : getProjectAvatarVariant(props.project.icon?.color)}
+      />
+    </Show>
   )
 }

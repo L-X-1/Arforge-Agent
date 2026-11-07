@@ -32,6 +32,8 @@ import { shouldResetCodeTokens, type RenderedCodeState } from "./markdown-code-s
 import { getCachedMarkdown, sanitizeMarkdown, touchCachedMarkdown, type MarkdownCacheEntry } from "./markdown-cache"
 import { inlineCodeKind } from "./markdown-inline-code-kind"
 import { decorateMarkdownLists } from "./markdown-presentation"
+import { projectMarkdownCodeSources, type MarkdownCodeSource } from "./markdown-code-source"
+import { markdownCodeText, toggleMarkdownCode, updateMarkdownCodeControls, type MarkdownCodeLabels } from "./markdown-code-controls"
 
 type RenderedBlock =
   | (MarkdownCacheEntry & { key: string; mode: Exclude<Block["mode"], "code"> })
@@ -83,7 +85,7 @@ async function code(text: string, language: string | undefined, key: string, com
   }
 }
 
-type CopyLabels = {
+type CopyLabels = MarkdownCodeLabels & {
   copy: string
   copied: string
 }
@@ -201,7 +203,7 @@ function applyCodeMetadata(wrapper: HTMLElement, language: string | undefined) {
   else delete wrapper.dataset.codeKind
 }
 
-function ensureCodeWrapper(block: HTMLPreElement, labels: CopyLabels) {
+function ensureCodeWrapper(block: HTMLPreElement, labels: CopyLabels, source?: MarkdownCodeSource) {
   const parent = block.parentElement
   if (!parent) return
   const wrapped = parent.getAttribute("data-component") === "markdown-code"
@@ -212,24 +214,25 @@ function ensureCodeWrapper(block: HTMLPreElement, labels: CopyLabels) {
     parent.replaceChild(wrapper, block)
     wrapper.appendChild(block)
     wrapper.appendChild(createCopyButton(labels))
+    updateMarkdownCodeControls(wrapper, source, codeLanguage(block), labels)
     return
   }
 
   applyCodeMetadata(parent, codeLanguage(block))
 
   const buttons = Array.from(parent.querySelectorAll('[data-slot="markdown-copy-button"]')).filter(
-    (el): el is HTMLButtonElement => el instanceof HTMLButtonElement,
+    (el): el is HTMLElement => el instanceof HTMLElement,
   )
 
   if (buttons.length === 0) {
     parent.appendChild(createCopyButton(labels))
-    return
   }
 
   for (const button of buttons.slice(1)) {
     disposeCopyButton(button)
     button.remove()
   }
+  updateMarkdownCodeControls(parent, source, codeLanguage(block), labels)
 }
 
 function markCodeLinks(root: HTMLDivElement) {
@@ -271,12 +274,20 @@ function markInlineCode(root: HTMLDivElement) {
   }
 }
 
-function decorate(root: HTMLDivElement, labels: CopyLabels) {
-  decorateMarkdownLists(root)
+function decorateCode(root: HTMLDivElement, labels: CopyLabels, sources: readonly MarkdownCodeSource[], cursor: { index: number }) {
   const blocks = Array.from(root.querySelectorAll("pre"))
   for (const block of blocks) {
-    ensureCodeWrapper(block, labels)
+    const source = sources[cursor.index]
+    const text = (block.querySelector("code")?.textContent ?? "").replace(/\r\n?/g, "\n")
+    const matches = source && (text === source.normalized || text === source.normalized + "\n")
+    if (matches) cursor.index++
+    ensureCodeWrapper(block, labels, matches ? source : undefined)
   }
+}
+
+function decorate(root: HTMLDivElement, labels: CopyLabels, sources: readonly MarkdownCodeSource[], cursor: { index: number }) {
+  decorateMarkdownLists(root)
+  decorateCode(root, labels, sources, cursor)
   if (!document.body.hasAttribute("data-new-layout")) return
   markInlineCode(root)
   markCodeLinks(root)
@@ -295,10 +306,18 @@ function setupCodeCopy(root: HTMLDivElement, getLabels: () => CopyLabels) {
     const target = event.target
     if (!(target instanceof Element)) return
 
+    const disclosure = target.closest('[data-action="markdown-code-expand"]')
+    const wrapper = target.closest('[data-component="markdown-code"]')
+    if (disclosure && wrapper instanceof HTMLElement) {
+      event.preventDefault()
+      toggleMarkdownCode(wrapper)
+      return
+    }
+
     const button = target.closest('[data-slot="markdown-copy-button"]')
     if (!(button instanceof HTMLElement)) return
-    const code = button.closest('[data-component="markdown-code"]')?.querySelector("code")
-    const content = code?.textContent ?? ""
+    if (!(wrapper instanceof HTMLElement)) return
+    const content = markdownCodeText(wrapper)
     if (!content) return
     const clipboard = navigator?.clipboard
     if (!clipboard) return
@@ -373,6 +392,14 @@ export function Markdown(
   const projection = createMemo((previous: Projection | undefined) =>
     project(previous, local.text, local.streaming ?? false),
   )
+  const sources = createMemo<ReturnType<typeof projectMarkdownCodeSources>>(previous => projectMarkdownCodeSources(previous, local.text, projection().blocks.at(-1)))
+  const copyLabels = (): CopyLabels => ({
+    copy: i18n.t("ui.message.copy"),
+    copied: i18n.t("ui.message.copied"),
+    expand: i18n.t("ui.common.showMore"),
+    collapse: i18n.t("ui.sessionTurn.diffs.showLess"),
+    range: (shown, total) => `${i18n.t("ui.sessionReview.selection.lines", { start: 1, end: shown })} / ${total}`,
+  })
   const [html] = createResource(
     () => {
       return {
@@ -470,17 +497,15 @@ export function Markdown(
       return
     }
 
-    const labels = {
-      copy: i18n.t("ui.message.copy"),
-      copied: i18n.t("ui.message.copied"),
-    }
+    const labels = copyLabels()
     const nextCodeKeys = new Set(content.filter((block) => block.mode === "code").map((block) => block.key))
     activeCodeKeys.forEach((key) => {
       if (!nextCodeKeys.has(key)) disposeCode(key)
     })
     activeCodeKeys.clear()
     nextCodeKeys.forEach((key) => activeCodeKeys.add(key))
-    content.forEach((block, index) => updateBlock(container, index, block, labels))
+    const sourceCursor = { index: 0 }
+    content.forEach((block, index) => updateBlock(container, index, block, labels, sources().sources, sourceCursor))
     while (container.children.length > content.length) {
       const child = container.lastElementChild
       if (!child) break
@@ -491,10 +516,7 @@ export function Markdown(
       .querySelectorAll<HTMLElement>('[data-slot="markdown-copy-button"]')
       .forEach((button) => setCopyState(button, labels, button.dataset.copied === "true"))
     if (!copyCleanup)
-      copyCleanup = setupCodeCopy(container, () => ({
-        copy: i18n.t("ui.message.copy"),
-        copied: i18n.t("ui.message.copied"),
-      }))
+      copyCleanup = setupCodeCopy(container, copyLabels)
   })
 
   onCleanup(() => {
@@ -549,18 +571,20 @@ function disposeCode(key: string) {
   disposeStreamingCode(key)
 }
 
-function updateBlock(container: HTMLDivElement, index: number, block: RenderedBlock, labels: CopyLabels) {
+function updateBlock(container: HTMLDivElement, index: number, block: RenderedBlock, labels: CopyLabels, sources: readonly MarkdownCodeSource[], cursor: { index: number }) {
   const current = container.children[index]
   if (block.mode === "code") {
-    updateCodeBlock(container, current, block, labels)
+    updateCodeBlock(container, current, block, labels, sources[cursor.index++])
     return
   }
   if (
     current instanceof HTMLDivElement &&
     current.dataset.markdownKey === block.key &&
     current.dataset.markdownHash === block.hash
-  )
+  ) {
+    decorateCode(current, labels, sources, cursor)
     return
+  }
 
   const next = document.createElement("div")
   next.dataset.markdownBlock = ""
@@ -568,7 +592,8 @@ function updateBlock(container: HTMLDivElement, index: number, block: RenderedBl
   next.dataset.markdownHash = block.hash
   next.style.display = "contents"
   next.innerHTML = block.html
-  decorate(next, labels)
+  const sourceIndex = cursor.index
+  decorate(next, labels, sources, cursor)
 
   if (!(current instanceof HTMLDivElement)) {
     container.appendChild(next)
@@ -583,6 +608,7 @@ function updateBlock(container: HTMLDivElement, index: number, block: RenderedBl
         fromEl.getAttribute("data-slot") === "markdown-copy-button" &&
         toEl.getAttribute("data-slot") === "markdown-copy-button"
       ) {
+        disposeCopyButton(toEl)
         return false
       }
       if (fromEl.isEqualNode(toEl)) return false
@@ -593,6 +619,7 @@ function updateBlock(container: HTMLDivElement, index: number, block: RenderedBl
       return true
     },
   })
+  decorateCode(current, labels, sources, { index: sourceIndex })
 }
 
 function updateCodeBlock(
@@ -600,6 +627,7 @@ function updateCodeBlock(
   current: Element | undefined,
   block: Extract<RenderedBlock, { mode: "code" }>,
   labels: CopyLabels,
+  source: MarkdownCodeSource | undefined,
 ) {
   const existing = current instanceof HTMLDivElement && current.dataset.markdownKey === block.key ? current : undefined
   const next = existing ?? document.createElement("div")
@@ -612,7 +640,10 @@ function updateCodeBlock(
   const code = existing?.querySelector("code")
   if (code instanceof HTMLElement) {
     const wrapper = code.closest('[data-component="markdown-code"]')
-    if (wrapper instanceof HTMLElement) applyCodeMetadata(wrapper, block.language)
+    if (wrapper instanceof HTMLElement) {
+      applyCodeMetadata(wrapper, block.language)
+      updateMarkdownCodeControls(wrapper, source, block.language, labels)
+    }
     code.className = `language-${block.language}`
     const previous = renderedCodeTokens.get(next)
     const reset = shouldResetCodeTokens(previous, {
@@ -652,6 +683,7 @@ function updateCodeBlock(
   pre.appendChild(codeElement)
   wrapper.appendChild(pre)
   wrapper.appendChild(createCopyButton(labels))
+  updateMarkdownCodeControls(wrapper, source, block.language, labels)
   next.appendChild(wrapper)
   renderedCodeTokens.set(next, {
     language: block.language,

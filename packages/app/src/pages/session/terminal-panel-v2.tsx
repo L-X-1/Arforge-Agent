@@ -1,5 +1,7 @@
-import { For, Show, createEffect, createMemo, on, onCleanup, onMount } from "solid-js"
+import { useConfirmAction } from "@/components/confirm-action"
+import { For, Show, createEffect, createMemo, createRoot, on, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
+import { useLocation } from "@solidjs/router"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createMediaQuery } from "@solid-primitives/media"
 import { DragDropProvider, PointerSensor } from "@dnd-kit/solid"
@@ -10,6 +12,7 @@ import { RestrictToElement } from "@dnd-kit/dom/modifiers"
 import { Tabs } from "@arforge-ai/ui/tabs"
 import { ResizeHandle } from "@arforge-ai/ui/resize-handle"
 import { IconButton } from "@arforge-ai/ui/icon-button"
+import { DropdownMenu } from "@arforge-ai/ui/dropdown-menu"
 import { TooltipKeybind } from "@arforge-ai/ui/tooltip"
 import { TooltipV2 } from "@arforge-ai/ui/v2/tooltip-v2"
 import { KeybindV2 } from "@arforge-ai/ui/v2/keybind-v2"
@@ -22,21 +25,31 @@ import { useLayout } from "@/context/layout"
 import { useSettings } from "@/context/settings"
 import { useTerminal } from "@/context/terminal"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
 import { terminalTabLabel } from "@/pages/session/terminal-label"
-import { terminalPanelOperationPending, terminalPanelOperationText, type TerminalPanelAction, type TerminalPanelOperation } from "./terminal-panel-operations"
+import {
+  terminalPanelOperationPending,
+  terminalPanelOperationText,
+  type TerminalPanelAction,
+  type TerminalPanelOperation,
+} from "./terminal-panel-operations"
 import { createSizing, focusTerminalById } from "@/pages/session/helpers"
 import { getTerminalHandoff, setTerminalHandoff } from "@/pages/session/handoff"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { createPanelFocusReturn } from "@/pages/session/panel-focus-return"
 import "@/components/preview/workbench-review.css"
 
-export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
+export function TerminalPanelV2(props: { stacked?: boolean; height?: number } = {}) {
+  const confirmAction = useConfirmAction()
   const layout = useLayout()
   const terminal = useTerminal()
   const sdk = useSDK()
+  const serverSDK = useServerSDK()
   const language = useLanguage()
   const command = useCommand()
   const settings = useSettings()
-  const { workspaceKey, view } = useSessionLayout()
+  const { sessionKey, workspaceKey, view } = useSessionLayout()
+  const location = useLocation()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const newLayout = createMemo(() => settings.general.newLayoutDesigns())
@@ -46,6 +59,21 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
   const close = () => view().terminal.close()
   let root: HTMLDivElement | undefined
   let tabList: HTMLDivElement | undefined
+  let menuFocus: { id: string; workspace: string; source: ReturnType<typeof serverSDK> } | undefined
+  createPanelFocusReturn({
+    opened,
+    readOpened: () =>
+      createRoot((dispose) => {
+        try {
+          return layout.view(sessionKey()).terminal.opened()
+        } finally {
+          dispose()
+        }
+      }),
+    source: serverSDK,
+    scope: () => JSON.stringify([sdk().directory, sessionKey(), location.pathname]),
+    region: () => root,
+  })
 
   onCleanup(() => terminal.cancelFocus())
 
@@ -54,22 +82,26 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
     recovered: {} as Record<string, boolean>,
     errors: {} as Record<string, string>,
     connections: {} as Record<string, number>,
+    connectionStates: {} as Record<string, "connecting" | "connected" | "error">,
+    menuOpen: false,
     view: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight),
   })
 
   const max = () => store.view * 0.6
-  const pane = () => Math.min(height(), max())
+  const pane = () => props.height ?? Math.min(height(), max())
   const stacked = createMemo(() => isDesktop() && props.stacked)
   const panelHeight = createMemo(() =>
     isDesktop() ? (stacked() ? `${pane()}px` : "100%") : opened() ? `${pane()}px` : "0px",
   )
   const contentHeight = createMemo(() => (isDesktop() ? (stacked() ? `${pane()}px` : "100%") : `${pane()}px`))
   const newTerminalKeybind = createMemo(() => command.keybindParts("terminal.new"))
-  const operationBusy = (action: TerminalPanelAction, id = terminal.active()) => terminalPanelOperationPending(terminal.pending, action, id)
+  const operationBusy = (action: TerminalPanelAction, id = terminal.active()) =>
+    terminalPanelOperationPending(terminal.pending, action, id)
   const activeOperation = createMemo(() => {
     const id = terminal.active()
     return (["create", "close", "clone", "update"] as const).find((operation) =>
-      operation === "create" ? terminal.pending(operation) : !!id && terminal.pending(operation, id))
+      operation === "create" ? terminal.pending(operation) : !!id && terminal.pending(operation, id),
+    )
   })
 
   onMount(() => {
@@ -149,6 +181,9 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
     return getTerminalHandoff(workspaceKey()) ?? []
   })
 
+  const tabConnection = (id: string) =>
+    id === terminal.active() ? (store.connectionStates[workspaceKey() + "\u0000" + id] ?? "connecting") : undefined
+
   const all = terminal.all
   const ids = createMemo(() => all().map((pty) => pty.id))
 
@@ -177,10 +212,49 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
     })
   }
 
+  const reconnect = () => {
+    const id = terminal.active()
+    if (!id || operationBusy("reconnect", id)) return
+    // Use the same guarded menu handoff as selecting a terminal tab, so the
+    // closing menu cannot steal focus back from the replacement terminal.
+    menuFocus = { id, workspace: workspaceKey(), source: serverSDK() }
+    setStore("connectionStates", workspaceKey() + "\u0000" + id, "connecting")
+    setStore("connections", id, (store.connections[id] ?? 0) + 1)
+    terminal.requestFocus(id)
+  }
+  const stopCurrent = async () => {
+    const id = terminal.active()
+    const origin = workspaceKey()
+    const source = serverSDK()
+    const boundTerminal = terminal.bind()
+    if (
+      !id ||
+      operationBusy("close", id) ||
+      !(await confirmAction(
+        language.locale().startsWith("zh")
+          ? "停止并关闭当前终端？此终端中运行的进程可能会结束，其他终端不受影响。"
+          : "Stop and close this terminal? Its running process may end. Other terminals are unaffected.",
+        {
+          danger: true,
+          isCurrent: () =>
+            serverSDK() === source &&
+            workspaceKey() === origin &&
+            terminal.active() === id &&
+            !operationBusy("close", id),
+        },
+      ))
+    )
+      return
+    if (serverSDK() !== source || workspaceKey() !== origin || terminal.active() !== id) return
+    void boundTerminal.close(id)
+  }
+  createEffect(on(workspaceKey, () => setStore("menuOpen", false), { defer: true }))
+
   return (
     <aside
       ref={root}
       id="terminal-panel"
+      data-terminal-workbench=""
       role="region"
       aria-label={language.t("terminal.title")}
       aria-hidden={!opened()}
@@ -190,8 +264,7 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
         "w-full": !isDesktop() || stacked(),
         "min-w-0 h-full flex-1": isDesktop() && opened() && !stacked(),
         "w-0 h-full pointer-events-none": isDesktop() && !opened(),
-        "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
-          !isDesktop() && !size.active(),
+        "transition-[height] duration-[140ms] ease-out motion-reduce:transition-none": !isDesktop() && !size.active(),
       }}
       style={{ height: panelHeight() }}
     >
@@ -252,7 +325,9 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                 activationConstraints: [new PointerActivationConstraints.Distance({ value: 4 })],
                 preventActivation: (event) =>
                   event.target instanceof Element &&
-                  !!event.target.closest('[data-slot="tabs-trigger-close-button"], input, [contenteditable="true"]'),
+                  !!event.target.closest(
+                    '[data-slot="tabs-trigger-close-button"], [data-slot="terminal-workbench-actions"], input, [contenteditable="true"]',
+                  ),
               }),
             ]}
             modifiers={[RestrictToHorizontalAxis, RestrictToElement.configure({ element: () => tabList ?? null })]}
@@ -274,29 +349,66 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                 variant={newLayout() ? "normal" : "alt"}
                 value={terminal.active()}
                 onChange={(id) => terminal.open(id)}
-                class={newLayout() ? "!h-12 !flex-none" : "!h-auto !flex-none"}
+                class="!h-auto !flex-none"
               >
-                <Tabs.List
-                  ref={tabList}
-                  class={newLayout() ? "border-b border-v2-border-border-muted" : "h-10 border-b border-border-weaker-base"}
-                  onPointerDown={(event: PointerEvent & { currentTarget: HTMLDivElement }) => {
-                    const active = document.activeElement
-                    if (event.target === active) return
-                    if (active instanceof HTMLInputElement && event.currentTarget.contains(active)) active.blur()
-                  }}
-                >
-                  <For each={all()}>
-                    {(pty, index) => (
-                      <SortableTerminalTabV2 terminal={pty} index={index} newLayout={newLayout()} onClose={close} />
-                    )}
-                  </For>
-                  <div class="h-full flex items-center justify-center">
-                    <Show
-                      when={newLayout()}
-                      fallback={
-                        <TooltipKeybind
-                          title={language.t("command.terminal.new")}
-                          keybind={command.keybind("terminal.new")}
+                <div data-slot="terminal-tabs-bar">
+                  <Tabs.List
+                    ref={tabList}
+                    class={
+                      newLayout() ? "border-b border-v2-border-border-muted" : "h-10 border-b border-border-weaker-base"
+                    }
+                    onPointerDown={(event: PointerEvent & { currentTarget: HTMLDivElement }) => {
+                      const active = document.activeElement
+                      if (event.target === active) return
+                      if (active instanceof HTMLInputElement && event.currentTarget.contains(active)) active.blur()
+                    }}
+                  >
+                    <For each={all()}>
+                      {(pty, index) => (
+                        <SortableTerminalTabV2
+                          terminal={pty}
+                          index={index}
+                          newLayout={newLayout()}
+                          onClose={close}
+                          directory={sdk().directory}
+                          connection={tabConnection(pty.id)}
+                        />
+                      )}
+                    </For>
+                  </Tabs.List>
+                  <div data-slot="terminal-workbench-actions">
+                    <div class="h-full flex items-center justify-center">
+                      <Show
+                        when={newLayout()}
+                        fallback={
+                          <TooltipKeybind
+                            title={language.t("command.terminal.new")}
+                            keybind={command.keybind("terminal.new")}
+                            class="flex items-center"
+                          >
+                            <IconButton
+                              icon="plus-small"
+                              variant="ghost"
+                              iconSize="large"
+                              disabled={operationBusy("create")}
+                              onClick={() => {
+                                if (!operationBusy("create")) void terminal.new({ focus: true })
+                              }}
+                              aria-label={language.t("command.terminal.new")}
+                            />
+                          </TooltipKeybind>
+                        }
+                      >
+                        <TooltipV2
+                          value={
+                            <>
+                              {language.t("command.terminal.new")}
+                              <Show when={newTerminalKeybind().length > 0}>
+                                <KeybindV2 keys={newTerminalKeybind()} variant="neutral" />
+                              </Show>
+                            </>
+                          }
+                          placement="bottom"
                           class="flex items-center"
                         >
                           <IconButton
@@ -304,68 +416,152 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                             variant="ghost"
                             iconSize="large"
                             disabled={operationBusy("create")}
-                            onClick={() => { if (!operationBusy("create")) void terminal.new({ focus: true }) }}
+                            onClick={() => {
+                              if (!operationBusy("create")) void terminal.new({ focus: true })
+                            }}
                             aria-label={language.t("command.terminal.new")}
                           />
-                        </TooltipKeybind>
-                      }
+                        </TooltipV2>
+                      </Show>
+                    </div>
+                    <DropdownMenu
+                      open={store.menuOpen}
+                      onOpenChange={(open) => setStore("menuOpen", open)}
+                      gutter={4}
+                      placement="bottom-end"
                     >
-                      <TooltipV2
-                        value={
-                          <>
-                            {language.t("command.terminal.new")}
-                            <Show when={newTerminalKeybind().length > 0}>
-                              <KeybindV2 keys={newTerminalKeybind()} variant="neutral" />
-                            </Show>
-                          </>
+                      <DropdownMenu.Trigger
+                        as={IconButton}
+                        icon="dot-grid"
+                        variant="ghost"
+                        aria-label={
+                          language.locale().startsWith("zh")
+                            ? "终端更多操作与全部标签"
+                            : "Terminal actions and all tabs"
                         }
-                        placement="bottom"
-                        class="flex items-center"
-                      >
-                        <IconButton
-                          icon="plus-small"
-                          variant="ghost"
-                          iconSize="large"
-                          disabled={operationBusy("create")}
-                            onClick={() => { if (!operationBusy("create")) void terminal.new({ focus: true }) }}
-                          aria-label={language.t("command.terminal.new")}
-                        />
-                      </TooltipV2>
-                    </Show>
+                        title={sdk().directory}
+                      />
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          data-terminal-workbench-menu=""
+                          onCloseAutoFocus={(event) => {
+                            const target = menuFocus
+                            menuFocus = undefined
+                            if (!target) return
+                            event.preventDefault()
+                            requestAnimationFrame(() => {
+                              if (
+                                !root?.isConnected ||
+                                workspaceKey() !== target.workspace ||
+                                serverSDK() !== target.source ||
+                                terminal.active() !== target.id
+                              )
+                                return
+                              focusTerminalById(target.id)
+                            })
+                          }}
+                        >
+                          <DropdownMenu.Group>
+                            <DropdownMenu.GroupLabel>
+                              {language.locale().startsWith("zh") ? "全部终端" : "All terminals"}
+                            </DropdownMenu.GroupLabel>
+                            <For each={all()}>
+                              {(pty) => (
+                                <DropdownMenu.Item
+                                  aria-current={terminal.active() === pty.id ? "page" : undefined}
+                                  onSelect={() => {
+                                    menuFocus = { id: pty.id, workspace: workspaceKey(), source: serverSDK() }
+                                    terminal.open(pty.id)
+                                    terminal.requestFocus(pty.id)
+                                  }}
+                                >
+                                  <DropdownMenu.ItemLabel>
+                                    {terminalTabLabel({
+                                      title: pty.title,
+                                      titleNumber: pty.titleNumber,
+                                      t: language.t,
+                                    })}
+                                  </DropdownMenu.ItemLabel>
+                                </DropdownMenu.Item>
+                              )}
+                            </For>
+                          </DropdownMenu.Group>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            disabled={!terminal.active() || operationBusy("reconnect")}
+                            onSelect={reconnect}
+                          >
+                            {language.locale().startsWith("zh") ? "重新连接" : "Reconnect"}
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            disabled={!terminal.active() || operationBusy("close")}
+                            onSelect={() => void stopCurrent()}
+                          >
+                            {language.locale().startsWith("zh") ? "停止当前终端…" : "Stop current terminal..."}
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <div data-slot="terminal-workbench-directory">{sdk().directory}</div>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu>
+                    <TooltipV2
+                      value={language.locale().startsWith("zh") ? "收起终端" : "Collapse terminal"}
+                      placement="top"
+                      contentStyle={{ "max-width": "280px" }}
+                    >
+                      <IconButton
+                        icon="dash"
+                        variant="ghost"
+                        onClick={close}
+                        aria-label={language.locale().startsWith("zh") ? "收起终端" : "Collapse terminal"}
+                      />
+                    </TooltipV2>
                   </div>
-                </Tabs.List>
+                </div>
               </Tabs>
               <Show when={terminal.operationError()}>
                 {(error) => (
-                  <div role="alert" data-slot="terminal-operation-error" class="flex shrink-0 items-center gap-2 border-b border-border-weaker-base px-3 py-2 text-12-regular text-text-strong">
-                    <span class="min-w-0 flex-1">{terminalPanelOperationText(error().operation, language.locale().startsWith("zh"))}</span>
-                    <button type="button" onClick={() => terminal.dismissOperationError()}>{language.t("common.close")}</button>
+                  <div
+                    role="alert"
+                    data-slot="terminal-operation-error"
+                    class="flex shrink-0 items-center gap-2 border-b border-border-weaker-base px-3 py-2 text-12-regular text-text-strong"
+                  >
+                    <span class="min-w-0 flex-1">
+                      {terminalPanelOperationText(error().operation, language.locale().startsWith("zh"))}
+                    </span>
+                    <button type="button" onClick={() => terminal.dismissOperationError()}>
+                      {language.t("common.close")}
+                    </button>
                   </div>
                 )}
               </Show>
               <Show when={activeOperation()}>
-                {(operation) => <div role="status" aria-live="polite" class="shrink-0 px-3 py-1 text-12-regular text-text-weak">{terminalPanelOperationText(operation() as TerminalPanelOperation, language.locale().startsWith("zh"), false)}</div>}
+                {(operation) => (
+                  <div role="status" aria-live="polite" class="shrink-0 px-3 py-1 text-12-regular text-text-weak">
+                    {terminalPanelOperationText(
+                      operation() as TerminalPanelOperation,
+                      language.locale().startsWith("zh"),
+                      false,
+                    )}
+                  </div>
+                )}
               </Show>
-              <div data-slot="terminal-workbench-actions">
-                <span class="min-w-0 flex-1 truncate text-12-regular text-text-weak" title={sdk().directory}>{sdk().directory}</span>
-                <button type="button" disabled={operationBusy("reconnect")} onClick={() => {
-                  const id = terminal.active()
-                  if (!id || operationBusy("reconnect", id)) return
-                  setStore("connections", id, (store.connections[id] ?? 0) + 1)
-                  terminal.requestFocus(id)
-                }}>{language.locale().startsWith("zh") ? "重新连接" : "Reconnect"}</button>
-                <button type="button" disabled={operationBusy("close")} onClick={() => {
-                  const id = terminal.active()
-                  if (!id || operationBusy("close", id) || !window.confirm(language.locale().startsWith("zh") ? "停止并关闭当前终端？此终端中运行的进程可能会结束，其他终端不受影响。" : "Stop and close this terminal? Its running process may end. Other terminals are unaffected.")) return
-                  void terminal.bind().close(id)
-                }}>{language.locale().startsWith("zh") ? "停止当前终端" : "Stop current terminal"}</button>
-              </div>
-              <Show when={all().find((pty) => pty.id === terminal.active())}>{(pty) =>
-                <Show when={store.errors[terminalRecoveryKey(pty())]}>{(error) => <p role="alert" class="px-3 py-2 text-12-regular text-text-weak">{error()}</p>}</Show>
-              }</Show>
+              <Show when={all().find((pty) => pty.id === terminal.active())}>
+                {(pty) => (
+                  <Show when={store.errors[terminalRecoveryKey(pty())]}>
+                    {(error) => (
+                      <p role="alert" class="px-3 py-2 text-12-regular text-text-weak">
+                        {error()}
+                      </p>
+                    )}
+                  </Show>
+                )}
+              </Show>
               <Show when={all().length === 0}>
                 <div role="status" class="p-4 text-13-regular text-text-weak">
-                  {language.locale().startsWith("zh") ? "尚无可用终端。可使用新建终端按钮重试；连接和权限由当前服务器处理。" : "No terminal is available yet. Use New terminal to retry; connection and permissions are handled by the current server."}
+                  {language.locale().startsWith("zh")
+                    ? "尚无可用终端。可使用新建终端按钮重试；连接和权限由当前服务器处理。"
+                    : "No terminal is available yet. Use New terminal to retry; connection and permissions are handled by the current server."}
                 </div>
               </Show>
               <div class="flex-1 min-h-0 relative">
@@ -377,26 +573,36 @@ export function TerminalPanelV2(props: { stacked?: boolean } = {}) {
                       <Show when={all().find((pty) => pty.id === id)}>
                         {(pty) => (
                           <div id={`terminal-wrapper-${id}`} class="absolute inset-0">
-                            <Show when={(store.connections[id] ?? 0) + 1} keyed>{(_connection) =>
-                            <Terminal
-                              pty={pty()}
-                              autoFocus={terminal.focusRequested(id)}
-                              onAutoFocus={() => terminal.consumeFocus(id)}
-                              class="!px-[14px]"
-                              onConnect={() => {
-                                if (workspaceKey() !== connectionWorkspace) return
-                                markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)
-                              }}
-                              onCleanup={ops.update}
-                              onConnectError={() => {
-                                if (workspaceKey() !== connectionWorkspace) return
-                                setStore("errors", terminalRecoveryKey(pty()), language.locale().startsWith("zh")
-                                  ? "终端连接失败。请检查连接和权限后重连。"
-                                  : "Terminal connection failed. Check the connection and permissions before reconnecting.")
-                                recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)
-                              }}
-                            />
-                            }</Show>
+                            <Show when={(store.connections[id] ?? 0) + 1} keyed>
+                              {(_connection) => (
+                                <Terminal
+                                  pty={pty()}
+                                  autoFocus={terminal.focusRequested(id)}
+                                  onAutoFocus={() => terminal.consumeFocus(id)}
+                                  class="!px-[14px]"
+                                  onConnect={() => {
+                                    if (workspaceKey() !== connectionWorkspace) return
+                                    if ((store.connections[id] ?? 0) + 1 === _connection)
+                                      setStore("connectionStates", connectionWorkspace + "\u0000" + id, "connected")
+                                    markTerminalConnected(terminalRecoveryKey(pty()), id, ops.trim)
+                                  }}
+                                  onCleanup={ops.update}
+                                  onConnectError={() => {
+                                    if (workspaceKey() !== connectionWorkspace) return
+                                    if ((store.connections[id] ?? 0) + 1 === _connection)
+                                      setStore("connectionStates", connectionWorkspace + "\u0000" + id, "error")
+                                    setStore(
+                                      "errors",
+                                      terminalRecoveryKey(pty()),
+                                      language.locale().startsWith("zh")
+                                        ? "终端连接失败。请检查连接和权限后重连。"
+                                        : "Terminal connection failed. Check the connection and permissions before reconnecting.",
+                                    )
+                                    recoverTerminal(terminalRecoveryKey(pty()), id, ops.clone)
+                                  }}
+                                />
+                              )}
+                            </Show>
                           </div>
                         )}
                       </Show>

@@ -14,5 +14,17 @@ const localPlugin = path.resolve(moduleDirectory, "../../../plugin").replaceAll(
  */
 export const ConfigPluginDependency = {
   name: "@arforge-ai/plugin",
-  version: InstallationLocal ? `file:${localPlugin}` : InstallationVersion,
+  version: pluginDependencyVersion({
+    bundled: process.env.ARFORGE_BUNDLED_PLUGIN_SDK,
+    local: InstallationLocal,
+    version: InstallationVersion,
+  }),
 } as const
+
+export function pluginDependencyVersion(input: { bundled?: string; local: boolean; version: string }) {
+  if (input.bundled) {
+    if (!path.isAbsolute(input.bundled)) throw new Error("Bundled plugin SDK path must be absolute")
+    return `file:${input.bundled.replaceAll("\\", "/")}`
+  }
+  return input.local ? `file:${localPlugin}` : input.version
+}

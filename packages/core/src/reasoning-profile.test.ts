@@ -11,10 +11,10 @@ describe("reasoning profile", () => {
     expect(reasoningLevel("provider-specific")).toBe("default")
   })
 
-  test("maps the three thinking modes to mascot forms without count quotas", () => {
-    expect(reasoningProfile().mascotForm).toBe(1)
-    expect(reasoningProfile("high").mascotForm).toBe(2)
-    expect(reasoningProfile("max").mascotForm).toBe(3)
+  test("retains the three orchestration profiles without count quotas", () => {
+    expect(reasoningProfile().level).toBe("default")
+    expect(reasoningProfile("high").level).toBe("high")
+    expect(reasoningProfile("max").level).toBe("max")
     expect(reasoningProfile("max")).not.toHaveProperty("maxParallelSubagents")
     expect(reasoningProfile("max")).not.toHaveProperty("preferredSubagents")
   })

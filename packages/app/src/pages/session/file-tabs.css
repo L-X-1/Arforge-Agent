@@ -1,0 +1,67 @@
+/* File tab presentation only. The original Tabs and DnD own keyboard/reorder behavior. */
+.arforge-review-workbench :is(.session-file-tabs-bar, .session-review-v2-tabs-bar) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  min-width: 0;
+  flex: none;
+}
+.arforge-review-workbench :is(.session-file-tabs-bar, .session-review-v2-tabs-bar) > [data-slot="tabs-list"] {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.arforge-review-workbench :is(.session-file-tabs-bar, .session-review-v2-tabs-bar) > [data-slot="tabs-list"] > * {
+  flex-shrink: 0;
+}
+.session-file-tabs-overflow-slot { display: flex; align-items: center; flex: none; padding: 4px; }
+.session-file-tabs-overflow-slot button {
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+}
+:is(.arforge-review-workbench, [data-workbench-file-tabs-menu]) [data-slot="file-tab-dirty"] {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-inline: 4px;
+}
+[data-workbench-file-tabs-menu] {
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: min(480px, 80dvh);
+  overflow: auto;
+}
+[data-workbench-file-tabs-menu] [data-slot="dropdown-menu-item-label"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+[data-slot="file-tabs-menu-label"] {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+[data-slot="file-tabs-menu-meta"] { flex: none; font-size: 12px; color: var(--text-weak); }
+[data-workbench-file-tabs-menu] [aria-current="page"] {
+  background: var(--surface-base-hover, var(--background-stronger));
+}
+:is(.session-file-tabs-overflow-slot, [data-workbench-file-tabs-menu]) :focus-visible {
+  outline: 2px solid var(--border-focus, currentColor);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .session-file-tabs-overflow-slot button { min-width: 44px; min-height: 44px; }
+  [data-workbench-file-tabs-menu] [role="menuitem"] { min-height: 44px; }
+}

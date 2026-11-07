@@ -6,13 +6,14 @@ import { tmpdirScoped } from "../fixture/fixture"
 import { GlobalBus } from "../../src/bus/global"
 import { Database } from "@arforge-ai/core/database/database"
 import { ProjectTable } from "@arforge-ai/core/project/sql"
+import { ProjectDirectories } from "@arforge-ai/core/project/directories"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { WorkspaceTable } from "@arforge-ai/core/control-plane/workspace.sql"
 import { eq } from "drizzle-orm"
 import { Hash } from "@arforge-ai/core/util/hash"
 import { SessionID } from "@/session/schema"
 import { WorkspaceV2 } from "@arforge-ai/core/workspace"
-import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ProjectV2 } from "@arforge-ai/core/project"
 import { CrossSpawnSpawner } from "@arforge-ai/core/cross-spawn-spawner"
@@ -25,6 +26,7 @@ const encoder = new TextEncoder()
 
 const projectTestNode = LayerNode.group([Project.node, Database.node, CrossSpawnSpawner.node])
 const it = testEffect(AppNodeBuilder.build(projectTestNode))
+const isolated = testEffect(Layer.empty)
 
 function remoteProjectID(remote: string) {
   return ProjectV2.ID.make(Hash.fast(`git-remote:${remote}`))
@@ -468,6 +470,7 @@ describe("Project.discover", () => {
       yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), pngData))
 
       yield* project.discover(updatedProject)
+      yield* project.discover(result.project)
 
       const updated = yield* project.get(result.project.id)
       expect(updated).toBeDefined()
@@ -595,12 +598,72 @@ describe("Project.update", () => {
       GlobalBus.on("event", on)
       yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", on)))
 
-      yield* project.update({ projectID: result.project.id, name: "Updated Name" })
+      const { db } = yield* Database.Service
+      const rolledBack = yield* db
+        .transaction(() =>
+          Effect.gen(function* () {
+            yield* project.update({ projectID: result.project.id, name: "Rolled back" })
+            expect(eventPayload).toBeNull()
+            return yield* Effect.fail("roll back")
+          }),
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(rolledBack)).toBe(true)
+      expect(eventPayload).toBeNull()
+      expect((yield* project.get(result.project.id))?.name).toBeUndefined()
+
+      yield* db.transaction(() =>
+        Effect.gen(function* () {
+          yield* project.update({ projectID: result.project.id, name: "Updated Name" })
+          expect(eventPayload).toBeNull()
+        }),
+      )
 
       expect(eventPayload).not.toBeNull()
       expect(eventPayload.payload.type).toBe("project.updated")
       expect(eventPayload.payload.properties.name).toBe("Updated Name")
     }),
+  )
+
+  isolated.live("publishes committed metadata when discovery finishes after an update", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let holdDirectorySave = false
+      const projectLayer = AppNodeBuilder.build(projectTestNode, [
+        [ProjectV2.node, Layer.mock(ProjectV2.Service, {
+          resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.make("project-discovery-race"), directory }),
+        })],
+        [ProjectDirectories.node, Layer.mock(ProjectDirectories.Service, {
+          create: () =>
+            holdDirectorySave
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(true))
+              : Effect.succeed(true),
+        })],
+      ])
+      yield* Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const project = yield* Project.Service
+        const { project: initial } = yield* project.fromDirectory(tmp)
+        const names: string[] = []
+        const on = (event: { project?: string; payload: { type: string; properties: Project.Info } }) => {
+          if (event.project === initial.id && event.payload.type === Project.Event.Updated.type)
+            names.push(event.payload.properties.name ?? "")
+        }
+        GlobalBus.on("event", on)
+        yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", on)))
+
+        holdDirectorySave = true
+        const discovery = yield* project.fromDirectory(tmp).pipe(Effect.forkChild)
+        yield* Deferred.await(entered).pipe(Effect.timeout("10 seconds"))
+        yield* project.update({ projectID: initial.id, name: "Committed rename" })
+        expect(names).toEqual(["Committed rename"])
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(discovery)
+        expect(names).toEqual(["Committed rename", "Committed rename"])
+      }).pipe(Effect.provide(projectLayer))
+    }),
+    30_000,
   )
 
   it.live("should update multiple fields at once", () =>

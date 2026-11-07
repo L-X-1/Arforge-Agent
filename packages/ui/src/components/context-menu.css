@@ -137,3 +137,37 @@
     transform: scaleY(0.95);
   }
 }
+:is(
+  [data-component="context-menu-content"],
+  [data-component="context-menu-sub-content"]
+)[data-presentation="workspace"] {
+  padding: 8px;
+  min-width: min(256px, calc(100vw - 16px));
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 16px;
+  background: var(--v2-background-bg-base);
+  box-shadow: 0 10px 28px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 24%));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  :is(
+    [data-slot="context-menu-item"],
+    [data-slot="context-menu-radio-item"],
+    [data-slot="context-menu-checkbox-item"],
+    [data-slot="context-menu-sub-trigger"]
+  ) {
+    height: auto;
+    min-height: 32px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    &:focus-visible {
+      outline: 2px solid var(--v2-border-border-focus);
+      outline-offset: 2px;
+    }
+    @media (pointer: coarse) {
+      min-height: 44px;
+    }
+  }
+}

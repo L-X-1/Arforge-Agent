@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from arforge.core import capability_eval
 from arforge.cli import main
 from arforge.core.capability_eval import (
     builtin_capability_eval_tasks,
@@ -10,6 +13,38 @@ from arforge.core.capability_eval import (
     run_capability_eval,
     self_correct_eval_tasks,
 )
+
+
+QUALITY_COMMANDS = (
+    "python -m ruff check arforge tests config.py main.py",
+    "python -m pytest -q",
+    "node bin/arforge.js capabilities evaluate --json",
+    "node bin/arforge.js doctor --json",
+    "bun run lint",
+    "bun run typecheck",
+    "bun run brand:check",
+)
+
+
+def quality_workflow_task(monkeypatch, tmp_path, commands):
+    workflow = tmp_path / ".github" / "workflows" / "ci.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("\n".join(f"- run: {command}" for command in commands), encoding="utf-8")
+    monkeypatch.setattr(capability_eval, "__file__", str(tmp_path / "arforge" / "core" / "capability_eval.py"))
+    task = next(task for task in builtin_capability_eval_tasks() if task.id == "ci1-quality-workflow")
+    return task.run(tmp_path / "evaluation")
+
+
+def test_quality_workflow_accepts_current_ts_launcher_contract(monkeypatch, tmp_path):
+    passed, detail = quality_workflow_task(monkeypatch, tmp_path, QUALITY_COMMANDS)
+    assert passed, detail
+
+
+@pytest.mark.parametrize("missing", QUALITY_COMMANDS)
+def test_quality_workflow_rejects_each_missing_quality_command(monkeypatch, tmp_path, missing):
+    passed, detail = quality_workflow_task(monkeypatch, tmp_path, [command for command in QUALITY_COMMANDS if command != missing])
+    assert not passed
+    assert missing in detail
 
 
 def test_capability_eval_covers_required_agent_contracts():

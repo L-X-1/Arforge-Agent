@@ -1,5 +1,5 @@
 .arforge-control-center-panel {
-  user-select: none;
+  user-select: text;
 }
 
 .arforge-control-center-header {
@@ -62,4 +62,320 @@
   .arforge-control-center-panel * {
     scroll-behavior: auto;
   }
+}
+
+/* R07/R08/R09: real management toolbar, selection inspector and list density. */
+.arforge-control-center-context {
+  min-height: 44px;
+  border: 1px solid var(--management-border, var(--v2-border-border-base));
+  border-radius: 8px;
+  background: var(--management-subtle, var(--v2-background-bg-layer-01));
+  box-shadow: none;
+}
+.arforge-control-center-path {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  user-select: text;
+}
+.arforge-control-center-header {
+  position: sticky;
+  background: var(--management-surface, var(--v2-background-bg-base));
+}
+.arforge-management-master-detail {
+  --arforge-management-details-single-pane: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+  gap: 16px;
+}
+.arforge-management-master-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 16px;
+}
+.arforge-management-detail {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border: 1px solid var(--management-border, var(--v2-border-border-base));
+  border-radius: 16px;
+  background: var(--management-surface, var(--v2-background-bg-base));
+}
+.arforge-management-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.6;
+  list-style: none;
+}
+.arforge-management-detail-heading::-webkit-details-marker {
+  display: none;
+}
+.arforge-management-detail-heading:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+.arforge-management-detail-toggle {
+  flex-shrink: 0;
+  max-width: 50%;
+  color: var(--management-muted, var(--v2-text-text-muted));
+  font-size: 12px;
+  font-weight: 400;
+}
+.arforge-management-detail[open] .arforge-management-detail-heading {
+  border-bottom: 1px solid var(--management-border, var(--v2-border-border-base));
+}
+.arforge-management-detail-body {
+  max-height: calc(100dvh - 220px);
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+}
+.arforge-management-detail-body > article {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.arforge-management-detail-body :where([class*="sm:grid-cols"], [class*="md:grid-cols"], [class*="lg:grid-cols"]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+.arforge-management-master-detail:has(> .arforge-management-detail[open]) > .arforge-management-master-content {
+  display: none;
+}
+@container arforge-control-content (min-width: 880px) {
+  .arforge-management-master-detail {
+    --arforge-management-details-single-pane: 0;
+  }
+  .arforge-management-master-detail:has(> .arforge-management-detail[open]) {
+    grid-template-columns: minmax(0, 1fr) 440px;
+  }
+  .arforge-management-master-detail:has(> .arforge-management-detail[open]) > .arforge-management-master-content {
+    display: flex;
+  }
+  .arforge-management-master-detail:has(> .arforge-management-detail[open]) > .arforge-management-detail {
+    grid-column: 2;
+    align-self: start;
+    position: sticky;
+    top: 16px;
+  }
+}
+@container arforge-control-content (width < 880px) {
+  .arforge-management-detail-body {
+    max-height: none;
+  }
+}
+@media (pointer: coarse) {
+  .arforge-management-detail-heading {
+    min-height: 44px;
+  }
+}
+
+/* R23/R24/R25/C17/C19: existing actions, public source and disclosure. */
+.arforge-management-danger-zone {
+  flex-basis: 100%;
+  min-width: 0;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--management-border, var(--v2-border-border-base));
+}
+.arforge-management-danger-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--management-muted, var(--v2-text-text-muted));
+  overflow-wrap: anywhere;
+}
+.arforge-management-danger-scope strong {
+  color: var(--v2-state-fg-danger);
+  font-weight: 500;
+}
+.arforge-management-danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.arforge-management-danger-actions > button {
+  min-width: 88px;
+}
+.arforge-control-center-body .arforge-management-search-scope {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--management-muted, var(--v2-text-text-muted));
+  overflow-wrap: anywhere;
+}
+.arforge-control-center-body .arforge-management-raw-details {
+  min-width: 0;
+  border: 1px solid var(--management-border, var(--v2-border-border-base));
+  border-radius: 8px;
+  padding: 12px;
+}
+.arforge-control-center-body .arforge-management-raw-details > summary {
+  min-height: 36px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--management-muted, var(--v2-text-text-muted));
+}
+.arforge-control-center-body .arforge-management-raw-details > summary:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+.arforge-control-center-body .arforge-management-raw-details pre {
+  max-height: 240px;
+  overflow: auto;
+  user-select: text;
+}
+@media (pointer: coarse) {
+  .arforge-control-center-body .arforge-management-raw-details > summary {
+    min-height: 44px;
+  }
+}
+
+/* F23: real entity rows own selection; complete content stays in the inspector. */
+.arforge-management-entity-list {
+  min-width: 0;
+  border: 1px solid var(--management-border, var(--v2-border-border-base));
+  border-radius: 16px;
+}
+.arforge-management-entity-row {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px;
+}
+.arforge-management-entity-row[data-density="double"] {
+  min-height: 64px;
+  padding-block: 8px;
+}
+.arforge-management-entity-row + .arforge-management-entity-row {
+  border-top: 1px solid var(--management-border, var(--v2-border-border-base));
+}
+.arforge-management-entity-select {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 44px;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--management-text, var(--v2-text-text-base));
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.arforge-management-entity-select:hover {
+  color: var(--management-text, var(--v2-text-text-base));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.arforge-management-entity-preview {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.arforge-management-entity-meta {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--management-muted, var(--v2-text-text-muted));
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.arforge-management-entity-meta code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.arforge-management-list-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--management-muted, var(--v2-text-text-muted));
+  font-size: 12px;
+}
+.arforge-management-list-pagination > span:first-child {
+  margin-inline-end: auto;
+}
+.arforge-management-memory-inspector {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 16px;
+}
+.arforge-management-memory-inspector dl {
+  min-width: 0;
+  margin: 0;
+}
+.arforge-management-memory-inspector dt {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--management-muted, var(--v2-text-text-muted));
+}
+.arforge-management-memory-inspector dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.arforge-management-entity-select:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.arforge-management-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.arforge-management-metrics > div {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.arforge-management-freshness {
+  font-size: 12px;
+  color: var(--management-muted, var(--v2-text-text-muted));
+}
+.arforge-management-freshness summary {
+  min-height: 36px;
+  cursor: pointer;
+}
+.arforge-management-freshness dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+.arforge-management-freshness :is(dt, dd) {
+  margin: 0;
 }

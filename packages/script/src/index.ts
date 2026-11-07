@@ -23,7 +23,7 @@ const env = {
   ARFORGE_VERSION: process.env["ARFORGE_VERSION"],
   ARFORGE_RELEASE: process.env["ARFORGE_RELEASE"],
 }
-const PRIVATE_VERSION = "1.0.0-test.1"
+const PRIVATE_VERSION = "1.0.0"
 const CHANNEL = await (async () => {
   if (env.ARFORGE_CHANNEL) return env.ARFORGE_CHANNEL
   if (env.ARFORGE_BUMP) return "latest"

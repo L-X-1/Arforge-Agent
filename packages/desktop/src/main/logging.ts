@@ -1,12 +1,12 @@
 import { MainLogger } from "electron-log"
 import log from "electron-log/main.js"
 import { app, crashReporter, netLog, shell, webContents } from "electron"
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { ZipWriter, BlobWriter, BlobReader } from "@zip.js/zip.js"
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 import { configureConsoleTransport } from "./logging-console"
 import { captureRendererConsole } from "./logging-renderer"
+import { writeDiagnosticZip, type LogExportEntry } from "./log-export"
 
 const MAX_LOG_AGE_DAYS = 7
 const TAIL_LINES = 1000
@@ -71,7 +71,7 @@ export async function exportDebugLogs() {
   const output = join(app.getPath("downloads"), `arforge-debug-${stamp()}.zip`)
   try {
     write("main", "exporting debug logs", { output })
-    await writeZip(output, [
+    await writeDiagnosticZip(output, [
       { name: "manifest.json", data: Buffer.from(JSON.stringify(manifest(), null, 2)) },
       ...collect(root, "desktop"),
       ...serverLogRoots().flatMap((dir, i) => collect(dir, `server-${i + 1}`)),
@@ -168,7 +168,7 @@ function serverLogRoots() {
   return [...new Set([join(xdgData, "arforge", "log"), join(app.getPath("userData"), "arforge", "log")])]
 }
 
-type Entry = { name: string; path?: string; data?: Buffer }
+type Entry = LogExportEntry
 
 function collect(dir: string, prefix: string): Entry[] {
   if (!existsSync(dir)) return []
@@ -190,14 +190,4 @@ function collect(dir: string, prefix: string): Entry[] {
   }
   walk(dir)
   return result
-}
-
-async function writeZip(output: string, entries: Entry[]) {
-  const writer = new ZipWriter(new BlobWriter("application/zip"))
-  for (const entry of entries) {
-    const data = entry.data ?? readFileSync(entry.path!)
-    await writer.add(entry.name, new BlobReader(new Blob([new Uint8Array(data)])))
-  }
-  const zip = await writer.close()
-  writeFileSync(output, Buffer.from(await zip.arrayBuffer()))
 }

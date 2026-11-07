@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import {
   ActionRecoveryRecord,
+  AuditVerify,
   ChildSettlementRecoverySweepRecord,
   ChildSettlementRecoverySweepRequest,
   DurableActionRecord,
@@ -220,5 +221,17 @@ describe("runtime insight mutation recovery contract", () => {
         approval: "execute_rollback",
       }),
     ).toThrow()
+  })
+})
+
+describe("runtime insight audit scope compatibility", () => {
+  test("keeps the legacy four fields and roundtrips an optional typed scope", () => {
+    const legacy = { valid: true, count: 2, headHash: "head", issue: null }
+    const decode = Schema.decodeUnknownSync(AuditVerify)
+    const encode = Schema.encodeUnknownSync(AuditVerify)
+    expect(encode(decode(legacy))).toEqual(legacy)
+    for (const scope of ["profile-chain", "principal-records"] as const)
+      expect(encode(decode({ ...legacy, scope }))).toEqual({ ...legacy, scope })
+    expect(() => decode({ ...legacy, scope: "whole-tenant" })).toThrow()
   })
 })

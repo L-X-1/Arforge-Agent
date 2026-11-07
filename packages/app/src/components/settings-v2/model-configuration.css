@@ -1,0 +1,100 @@
+/* Configuration layout uses the approved theme tokens and existing controls. */
+/* Keep shared detail/focus queries and out-rank the generic management review rule. */
+.settings-v2-models,
+.settings-v2-surface .settings-v2-tab-body.settings-v2-models { container: arforge-control-content arforge-model-config / inline-size; }
+.settings-v2-model-configuration { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; border: 1px solid var(--management-border, var(--v2-border-border-base)); border-radius: 12px; background: var(--management-surface, var(--v2-background-bg-base)); }
+.settings-v2-model-provider-nav { display: flex; flex-wrap: wrap; align-content: start; gap: 4px; min-width: 0; padding: 12px; border-bottom: 1px solid var(--management-border, var(--v2-border-border-base)); }
+.settings-v2-model-provider-nav h3 { width: 100%; margin: 0 0 4px; padding: 4px 8px; font-size: 12px; font-weight: 500; color: var(--management-muted, var(--v2-text-text-muted)); }
+.settings-v2-model-provider-nav button { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 40px; max-width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--management-text, var(--v2-text-text-base)); text-align: start; font-size: 13px; cursor: pointer; }
+.settings-v2-model-provider-nav button > span:first-of-type { min-width: 0; overflow-wrap: anywhere; }
+.settings-v2-model-provider-nav button:hover { background: var(--management-subtle, var(--v2-background-bg-layer-01)); }
+.settings-v2-model-provider-nav button[aria-current="page"] { border-color: var(--management-border, var(--v2-border-border-base)); background: var(--arforge-review-selected, var(--v2-background-bg-layer-02)); }
+.settings-v2-model-provider-nav button:focus-visible { outline: 2px solid var(--v2-border-border-selected); outline-offset: 2px; }
+.settings-v2-provider-model-count { margin-inline-start: auto; color: var(--management-muted, var(--v2-text-text-muted)); font-size: 12px; font-variant-numeric: tabular-nums; }
+.settings-v2-model-config-detail { padding: 16px; }
+.settings-v2-model-config-detail .settings-v2-model-inspector > div { width: 100%; max-width: 100%; }
+.settings-v2-model-config-detail .settings-v2-models-group-header { min-height: 36px; }
+.settings-v2-model-config-detail .settings-v2-models-group-header .settings-v2-section-title { font-size: 14px; color: var(--management-text, var(--v2-text-text-base)); }
+.settings-v2-model-select { min-height: 32px; max-width: 100%; text-align: start; overflow-wrap: anywhere; cursor: pointer; }
+.settings-v2-provider-detail-placeholder { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; min-height: 200px; padding: 24px; border: 1px solid var(--management-border, var(--v2-border-border-base)); border-radius: 12px; color: var(--management-muted, var(--v2-text-text-muted)); }
+.settings-v2-provider-detail-placeholder h3 { margin: 0; font-size: 16px; font-weight: 500; color: var(--management-text, var(--v2-text-text-base)); }
+.settings-v2-provider-detail-placeholder p { margin: 0; font-size: 13px; line-height: 1.7; }
+.settings-v2-providers,
+.settings-v2-surface .settings-v2-tab-body.settings-v2-providers { container: arforge-control-content arforge-provider-config / inline-size; }
+.settings-v2-providers .settings-v2-connection-detail { padding: 4px; }
+.settings-v2-providers .settings-v2-detail-models { display: flex; flex-direction: column; gap: 0; margin: 0; padding: 0; list-style: none; }
+.settings-v2-providers .settings-v2-detail-models li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--management-border, var(--v2-border-border-base)); }
+.settings-v2-providers .settings-v2-detail-models code { margin-inline-start: auto; color: var(--management-muted, var(--v2-text-text-muted)); overflow-wrap: anywhere; }
+
+.arforge-provider-config-form { display: flex; flex-direction: column; gap: 20px; min-width: 0; max-height: min(70dvh, 720px); overflow-y: auto; padding: 0 12px 12px; }
+.arforge-provider-config-heading { display: flex; align-items: center; gap: 12px; padding: 0 4px; }
+.arforge-provider-config-fields { display: flex; flex-direction: column; gap: 24px; min-width: 0; padding: 0 4px 16px; }
+.arforge-provider-config-connection { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.arforge-provider-config-models { min-width: 0; padding-top: 20px; border-top: 1px solid var(--border-base); }
+.arforge-provider-config-fields [data-row] { flex-wrap: wrap; min-width: 0; }
+.arforge-provider-config-fields [data-row] > .flex-1 { min-width: min(100%, 180px); }
+.arforge-provider-config-advanced { min-width: 0; padding-block: 4px; border-top: 1px solid var(--border-base); }
+.arforge-provider-config-advanced > summary { min-height: 44px; padding-block: 12px; color: var(--text-weak); font-size: 13px; cursor: pointer; }
+.arforge-provider-config-advanced > div { padding-top: 8px; }
+.arforge-provider-config-fields > button[type="submit"] { align-self: flex-end; min-width: 96px; }
+
+.arforge-provider-model-parameters { display: flex; flex: 0 0 100%; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 0 20px; }
+.arforge-provider-model-preset { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--text-base); font-size: 12px; }
+.arforge-provider-model-preset select { width: 100%; min-width: 0; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border-base); border-radius: 8px; background: var(--background-base); color: var(--text-base); }
+.arforge-provider-model-preset select:focus-visible { outline: 2px solid var(--border-selected); outline-offset: 2px; }
+.arforge-provider-model-match, .arforge-provider-model-metadata-hint { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-weak); }
+.arforge-provider-model-limits { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 16px; min-width: 0; }
+.arforge-provider-model-limit { min-width: 0; }
+.arforge-provider-model-override { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--text-weak); }
+@media (pointer: coarse) { .arforge-provider-model-preset select { min-height: 44px; } }
+
+@container arforge-model-config (min-width: 680px) {
+  .settings-v2-model-configuration:has(> .settings-v2-model-provider-nav) { grid-template-columns: 207px minmax(0, 1fr); }
+  .settings-v2-model-provider-nav { flex-direction: column; flex-wrap: nowrap; align-self: stretch; border-bottom: 0; border-inline-end: 1px solid var(--management-border, var(--v2-border-border-base)); }
+  .settings-v2-model-provider-nav button { width: 100%; }
+  .settings-v2-model-config-detail { --arforge-management-details-single-pane: 0; }
+  .settings-v2-model-config-detail:has(> .arforge-management-detail[open]) { grid-template-columns: minmax(0, 1fr); }
+  .settings-v2-model-config-detail:has(> .arforge-management-detail[open]) > .arforge-management-master-content { display: flex; }
+  .settings-v2-model-config-detail:has(> .arforge-management-detail[open]) > .arforge-management-detail { grid-column: auto; position: static; }
+}
+@container arforge-provider-config (min-width: 720px) {
+  .settings-v2-providers .settings-v2-connection-layout { --arforge-management-details-single-pane: 0; grid-template-columns: 207px minmax(0, 1fr); gap: 24px; }
+  .settings-v2-providers .settings-v2-connection-layout:has(> .arforge-management-detail[open]) { grid-template-columns: 207px minmax(0, 1fr); }
+  .settings-v2-providers .settings-v2-connection-layout:has(> .arforge-management-detail[open]) > .arforge-management-master-content { display: flex; }
+  .settings-v2-providers .settings-v2-provider-row { padding: 12px; gap: 8px; }
+  .settings-v2-providers .settings-v2-provider-row > [data-component="button-v2"] { margin-inline-start: 26px; min-height: 32px; }
+}
+@media (pointer: coarse) { .settings-v2-model-provider-nav button, .settings-v2-model-select { min-height: 44px; } }
+
+.arforge-provider-workspace { min-width:0; margin-bottom:24px; border:1px solid var(--border-base); border-radius:12px; background:var(--background-base); }
+.arforge-provider-workspace > header, .arforge-provider-editor > header { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:16px; }
+.arforge-provider-workspace header h3, .arforge-provider-editor header h4 { flex:1; margin:0; min-width:0; overflow-wrap:anywhere; }
+.arforge-provider-workspace-columns { display:grid; grid-template-columns:minmax(160px, 26%) minmax(0, 1fr); min-width:0; }
+.arforge-provider-workspace nav { display:flex; flex-direction:column; gap:4px; padding:12px; border-inline-end:1px solid var(--border-base); }
+.arforge-provider-workspace nav button { display:flex; gap:8px; flex-wrap:wrap; text-align:start; padding:12px; border:1px solid transparent; border-radius:8px; min-height:44px; overflow-wrap:anywhere; }
+.arforge-provider-workspace nav button[aria-current=page] { border-color:var(--border-base); background:var(--background-stronger); }
+.arforge-provider-workspace button:focus-visible, .arforge-provider-workspace select:focus-visible { outline:2px solid var(--border-selected); outline-offset:2px; }
+.arforge-provider-workspace-detail { min-width:0; padding:12px; }
+.arforge-provider-connection-editor, .arforge-model-editor { display:flex; flex-direction:column; gap:16px; min-width:0; padding:16px; }
+.arforge-provider-workspace select { display:block; width:100%; min-height:44px; padding:8px; border:1px solid var(--border-base); border-radius:8px; color:var(--text-base); background:var(--background-base); }
+.arforge-provider-model-list { margin:0; padding:0 16px; list-style:none; }
+.arforge-provider-model-list > li { display:flex; flex-direction:column; gap:8px; padding:14px 0; border-top:1px solid var(--border-base); }
+.arforge-provider-model-list li > div { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
+.arforge-provider-model-list code { overflow-wrap:anywhere; color:var(--text-weak); }
+.arforge-provider-model-badge { padding:2px 6px; border:1px solid var(--border-base); border-radius:6px; font-size:12px; }
+.arforge-provider-model-actions, .arforge-provider-editor-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.arforge-model-editor { border:1px solid var(--border-base); border-radius:8px; margin:16px; }
+.arforge-model-editor summary { min-height:44px; padding:12px 0; cursor:pointer; }
+.arforge-model-editor details > * + * { margin-top:12px; }
+@media(max-width:720px) { .arforge-provider-workspace-columns { grid-template-columns:minmax(0,1fr); } .arforge-provider-workspace nav { border-inline-end:0; border-bottom:1px solid var(--border-base); flex-direction:row; flex-wrap:wrap; } .arforge-provider-workspace nav button { flex:1 1 160px; } }
+@media(pointer:coarse) { .arforge-provider-model-actions button { min-height:44px; } }
+.arforge-provider-legacy-actions > summary { min-height:44px; cursor:pointer; padding:16px 8px; color:var(--text-base); font-weight:500; }
+.arforge-provider-legacy-actions[open] > summary { border-bottom:1px solid var(--border-base); margin-bottom:16px; }
+.arforge-model-capability { display:inline-flex; align-items:center; gap:8px; margin:4px 16px 4px 0; min-height:36px; }
+.arforge-model-metadata-sources p { overflow-wrap:anywhere; font-size:12px; color:var(--text-weak); }
+.arforge-provider-model-list > li { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px 12px; }
+.arforge-provider-model-list > li > [role=status] { grid-column:1 / -1; margin:0; }
+.arforge-provider-model-actions { justify-content:flex-end; }
+.arforge-provider-model-actions > [data-component=icon-button] { min-width:44px; min-height:44px; }
+.arforge-provider-model-actions > [data-component=switch] { min-height:44px; display:flex; align-items:center; }
+@media(max-width:600px) { .arforge-provider-model-list > li { grid-template-columns:minmax(0,1fr); } .arforge-provider-model-actions { justify-self:end; } }

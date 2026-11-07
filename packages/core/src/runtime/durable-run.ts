@@ -772,6 +772,8 @@ export interface Interface {
     readonly limit?: number
     /** Startup recovery may quarantine one corrupt aggregate and continue. */
     readonly skipCorrupt?: boolean
+    /** Internal visibility resolved by the caller against canonical Session rows. */
+    readonly allowedSessionIDs?: ReadonlySet<string>
   }) => Effect.Effect<ReadonlyArray<Snapshot>, CorruptHistoryError>
 }
 
@@ -2123,15 +2125,22 @@ const layer = Layer.effect(
 
     const list: Interface["list"] = Effect.fn("DurableRun.list")(function* (input) {
       if (input?.sessionID !== undefined && input.subject !== undefined) return []
+      if (input?.allowedSessionIDs?.size === 0) return []
+      const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+      const scoped = input?.allowedSessionIDs !== undefined || !Database.isDefaultLocalPrincipal(principal)
       const rows = yield* db
         .select({ aggregateID: EventTable.aggregate_id, data: EventTable.data, type: EventTable.type })
         .from(EventTable)
         .where(
-          inArray(EventTable.type, [
-            EventV2.versionedType(AgentRuntime.Event.RunCreated.type, 1),
-            EventV2.versionedType(AgentRuntime.Event.ChildRunCreated.type, 1),
-            EventV2.versionedType(AgentRuntime.Event.ControlRunCreated.type, 2),
-          ]),
+          and(
+            inArray(EventTable.type, [
+              EventV2.versionedType(AgentRuntime.Event.RunCreated.type, 1),
+              EventV2.versionedType(AgentRuntime.Event.ChildRunCreated.type, 1),
+              EventV2.versionedType(AgentRuntime.Event.ControlRunCreated.type, 2),
+            ]),
+            scoped ? eq(EventTable.tenant_id, principal.tenantID) : undefined,
+            scoped ? eq(EventTable.owner_user_id, principal.userID) : undefined,
+          ),
         )
         .orderBy(desc(EventTable.id))
         .all()
@@ -2139,6 +2148,10 @@ const layer = Layer.effect(
       const seen = new Set<AgentRuntime.RunID>()
       const result: Snapshot[] = []
       for (const row of rows) {
+        if (input?.allowedSessionIDs !== undefined) {
+          const sessionID = row.data && typeof row.data === "object" ? row.data.sessionID : undefined
+          if (typeof sessionID !== "string" || !input.allowedSessionIDs.has(sessionID)) continue
+        }
         let created:
           | typeof AgentRuntime.Event.RunCreated.data.Type
           | typeof AgentRuntime.Event.ChildRunCreated.data.Type

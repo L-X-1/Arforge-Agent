@@ -1,9 +1,87 @@
 import { describe, expect, test } from "bun:test"
-import type { SessionMessageInfo } from "@arforge-ai/client/promise"
+import type { SessionMessageInfo, SessionMessageToolStateCompleted } from "@arforge-ai/client/promise"
 import { StructuredOutput } from "@arforge-ai/core/tool/structured-output"
 import { normalizeSessionMessages } from "./session-message"
 
 describe("normalizeSessionMessages", () => {
+  test("preserves structured native read output through history hydration", () => {
+    const output = Array.from({ length: 41 }, (_, i) => `source line ${i + 1}`).join("\n")
+    const metadata = { type: "text-page", content: output, mime: "text/plain", offset: 1, truncated: false }
+    const source = [
+      { id: "msg_user", type: "user", text: "inspect", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        time: { created: 2, completed: 3 },
+        content: [
+          {
+            type: "tool",
+            id: "call_read",
+            name: "read",
+            time: { created: 2, completed: 3 },
+            state: {
+              status: "completed",
+              input: { path: "source.txt" },
+              content: [],
+              structured: metadata,
+            },
+          },
+        ],
+      },
+    ] satisfies SessionMessageInfo[]
+    for (const messages of [source, JSON.parse(JSON.stringify(source)) as SessionMessageInfo[]]) {
+      expect(normalizeSessionMessages("ses_1", messages).parts.get("msg_assistant")?.[0]).toMatchObject({
+        id: "call_read",
+        state: { status: "completed", output, metadata },
+      })
+    }
+  })
+
+  test("retains structured-only results without duplicating text or printing binary payloads", () => {
+    const tool = (
+      id: string,
+      structured: SessionMessageToolStateCompleted["structured"],
+      content: { type: "text"; text: string }[] = [],
+    ) => ({
+      type: "tool" as const,
+      id,
+      name: "read",
+      time: { created: 2, completed: 3 },
+      state: { status: "completed" as const, input: {}, content, structured },
+    })
+    const source = [
+      { id: "msg_user", type: "user", text: "inspect", time: { created: 1 } },
+      {
+        id: "msg_assistant",
+        type: "assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+        content: [
+          tool("json", { entries: [{ path: "file.txt" }], truncated: false }),
+          tool("text", { content: "metadata" }, [{ type: "text", text: "existing text" }]),
+          tool("image", { encoding: "base64", mime: "image/png", content: "synthetic-binary" }),
+          tool("empty", {}),
+          tool("utf8", { encoding: "utf8", mime: "text/plain", content: "plain content" }),
+          { ...tool("shell", { exit: 0, output: "actual stdout", truncated: false }, [{ type: "text", text: "Command exited with code 0." }]), name: "bash" },
+        ],
+        time: { created: 2, completed: 3 },
+      },
+    ] satisfies SessionMessageInfo[]
+    const outputs = normalizeSessionMessages("ses_1", source)
+      .parts.get("msg_assistant")
+      ?.map((part) => (part.type === "tool" && part.state.status === "completed" ? part.state.output : undefined))
+    expect(outputs).toEqual([
+      JSON.stringify({ entries: [{ path: "file.txt" }], truncated: false }, null, 2),
+      "existing text",
+      "",
+      "",
+      "plain content",
+      "actual stdout\n\nCommand exited with code 0.",
+    ])
+  })
+
   test("projects current turns into stable legacy rendering records", () => {
     const source = [
       { id: "msg_1", type: "agent-switched", agent: "build", time: { created: 1 } },

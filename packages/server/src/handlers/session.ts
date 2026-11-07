@@ -1,4 +1,5 @@
 import { SessionV2 } from "@arforge-ai/core/session"
+import { SessionExecution } from "@arforge-ai/core/session/execution"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -19,6 +20,16 @@ import * as ProfileMaintenanceLifecycle from "@arforge-ai/core/runtime/profile-m
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
+
+const operationError = (error: SessionExecution.OperationError) =>
+  error.reason === "invalid"
+    ? new InvalidRequestError({ message: error.message, kind: `session.${error.operation}` })
+    : error.reason === "conflict" || error.reason === "busy"
+      ? new ConflictError({ message: error.message, resource: `session.${error.operation}` })
+      : new ServiceUnavailableError({ message: error.message, service: `session.${error.operation}` })
+
+const sessionError = (error: SessionV2.NotFoundError) =>
+  new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` })
 
 const controlledRestoreUnavailable = (operation: "revert.stage" | "revert.clear" | "revert.commit") =>
   new ServiceUnavailableError({
@@ -172,6 +183,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.rename",
+        Effect.fn(function* (ctx) {
+          yield* session.rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title }).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.RenameConflictError", (error) =>
+              Effect.fail(
+                new ConflictError({
+                  message: "Session source changed. Reload the session before renaming it.",
+                  resource: error.sessionID,
+                }),
+              ),
+            ),
+          )
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "session.tagsUpdate",
         Effect.fn(function* (ctx) {
           return {
@@ -246,7 +281,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.rewindPreview",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.rewind.preview({ ...ctx.params, checkpointID: ctx.payload.checkpointID }).pipe(
+            data: yield* session.rewind.preview({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.RewindMessageNotFoundError", error => new MessageNotFoundError({ sessionID: error.sessionID, messageID: error.messageID, message: "The original prompt is no longer available in this conversation." })),
+              Effect.catchTag("Session.RewindConflictError", error => new ConflictError({ message: error.message, resource: error.sessionID })),
+              Effect.catchTag("Session.BusyError", error => new ConflictError({ message: `Session is active and cannot ${error.operation}.`, resource: error.sessionID })),
               Effect.catchTag(
                 "Session.NotFoundError",
                 (error) =>
@@ -273,6 +311,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           return {
             data: yield* session.rewind.apply({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.RewindMessageNotFoundError", error => new MessageNotFoundError({ sessionID: error.sessionID, messageID: error.messageID, message: "The original prompt is no longer available in this conversation." })),
+              Effect.catchTag("Session.RewindConflictError", error => new ConflictError({ message: error.message, resource: error.sessionID })),
               Effect.catchTag(
                 "Session.NotFoundError",
                 (error) =>
@@ -357,6 +397,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   resume: ctx.payload.resume,
                 })
                 .pipe(
+                  Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(operationError(error))),
                   Effect.catchTag("Session.NotFoundError", (error) =>
                     Effect.fail(
                       new SessionNotFoundError({
@@ -376,6 +417,38 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 ),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.shell",
+        Effect.fn(function* (ctx) {
+          yield* lifecycleCall("resume", session.shell({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(sessionError(error))),
+            Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(operationError(error))),
+            Effect.catchTag("Session.OperationUnavailableError", (error) => Effect.fail(new ServiceUnavailableError({ message: "Direct Shell execution is unavailable", service: `session.${error.operation}` }))),
+          ))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.command",
+        Effect.fn(function* (ctx) {
+          return { data: yield* lifecycleCall(ctx.payload.resume === false ? "open" : "resume", session.prompt({
+            sessionID: ctx.params.sessionID,
+            id: ctx.payload.id,
+            delivery: ctx.payload.delivery,
+            resume: ctx.payload.resume,
+            prompt: {
+              text: `/${ctx.payload.command} ${ctx.payload.arguments ?? ""}`.trim(),
+              command: { name: ctx.payload.command, arguments: ctx.payload.arguments ?? "" },
+              route: { agent: ctx.payload.agent, model: ctx.payload.model },
+              files: ctx.payload.files,
+            },
+          }).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(sessionError(error))),
+            Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(operationError(error))),
+            Effect.catchTag("Session.PromptConflictError", (error) => Effect.fail(new ConflictError({ message: "Command message ID conflicts with an existing durable record", resource: error.messageID }))),
+          )) }
         }),
       )
       .handle(
@@ -400,6 +473,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           return {
             data: yield* session.promptQueue.update({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(operationError(error))),
               Effect.catchTag("Session.NotFoundError", (error) =>
                 Effect.fail(
                   new SessionNotFoundError({
@@ -449,7 +523,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
-          yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
+          yield* lifecycleCall("resume", session.compact({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(operationError(error))),
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
@@ -466,7 +541,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-          )
+          ))
           return HttpApiSchema.NoContent.make()
         }),
       )

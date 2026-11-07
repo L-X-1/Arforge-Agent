@@ -3,7 +3,15 @@ import { Database } from "@arforge-ai/core/database/database"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventSequenceTable } from "@arforge-ai/core/event/sql"
 import { Global } from "@arforge-ai/core/global"
-import { MessageTable, PartTable, SessionTable } from "@arforge-ai/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionTable,
+  SessionMessageTable,
+  SessionInputTable,
+} from "@arforge-ai/core/session/sql"
+import { SessionMessage } from "@arforge-ai/core/session/message"
+import { Prompt } from "@arforge-ai/core/session/prompt"
 import { Hash } from "@arforge-ai/core/util/hash"
 import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
@@ -16,6 +24,7 @@ import { createHash } from "node:crypto"
 import path from "node:path"
 import { InstanceState } from "@/effect/instance-state"
 import { Session } from "./session"
+import { MessageID } from "./schema"
 import {
   CaptureError,
   type CaptureInput,
@@ -54,6 +63,8 @@ type SessionTransaction = {
   readonly session: SessionRow | undefined
   readonly messages: ReadonlyArray<MessageRow>
   readonly parts: ReadonlyArray<PartRow>
+  readonly canonical: ReadonlyArray<typeof SessionMessageTable.$inferSelect>
+  readonly inputs: ReadonlyArray<typeof SessionInputTable.$inferSelect>
 }
 
 type GitBoundary = {
@@ -141,7 +152,7 @@ function guardedPromise<A>(
 
 function decodeProjection(input: SessionTransaction) {
   if (!input.session) throw fail("session_not_found", "the requested Session does not exist")
-  if (input.messages.length + input.parts.length > MAX_DATABASE_ROWS)
+  if (input.messages.length + input.parts.length + input.canonical.length + input.inputs.length > MAX_DATABASE_ROWS)
     throw fail("resource_limit", `the Session projection exceeds ${MAX_DATABASE_ROWS} message and part rows`)
 
   const decodeSession = Schema.decodeUnknownSync(Session.Info)
@@ -150,8 +161,29 @@ function decodeProjection(input: SessionTransaction) {
   // fromRow intentionally materializes absent optionals as `undefined`, while
   // the strict schema decoder expects those keys to be omitted.
   const session = decodeSession(JSON.parse(JSON.stringify(Session.fromRow(input.session))))
+  const owned = (row: { session_id: string; tenant_id: string; owner_user_id: string }) => {
+    if (
+      row.session_id !== input.session!.id ||
+      row.tenant_id !== input.session!.tenant_id ||
+      row.owner_user_id !== input.session!.owner_user_id
+    )
+      throw fail("session_scope_mismatch", "the Session projection includes a row from a different source or owner")
+  }
+  const decodeCanonical = Schema.decodeUnknownSync(SessionMessage.Message)
+  const canonical = input.canonical
+    .map((row) => {
+      owned(row)
+      return { row, message: decodeCanonical({ ...row.data, id: row.id, type: row.type }) }
+    })
+    .filter(({ row }) => row.time_rewound === null)
+    .map(({ message }) => message)
+  for (const row of input.inputs) {
+    owned(row)
+    Schema.decodeUnknownSync(Prompt)(row.prompt)
+  }
   const parts = new Map<string, Array<typeof SessionV1.Part.Type>>()
   for (const row of input.parts) {
+    owned(row)
     if (row.session_id !== input.session.id)
       throw fail("session_projection_invalid", `part ${row.id} is attached to a different Session`)
     const value = decodePart({ ...row.data, id: row.id, sessionID: row.session_id, messageID: row.message_id })
@@ -160,6 +192,7 @@ function decodeProjection(input: SessionTransaction) {
     else parts.set(row.message_id, [value])
   }
   const messages = input.messages.map((row) => {
+    owned(row)
     const value = decodeMessage({ ...row.data, id: row.id, sessionID: row.session_id })
     return { info: value, parts: parts.get(row.id) ?? [] }
   })
@@ -168,7 +201,12 @@ function decodeProjection(input: SessionTransaction) {
     if (!known.has(row.message_id))
       throw fail("session_projection_invalid", `part ${row.id} refers to a missing message ${row.message_id}`)
   }
-  return { session, messages }
+  return {
+    session,
+    messages,
+    canonical: input.canonical.length ? canonical : undefined,
+    rewound: new Set<string>(input.canonical.filter((row) => row.time_rewound !== null).map((row) => row.id)),
+  }
 }
 
 function canonicalPlanPath(projectRoot: string, location: string, input: string) {
@@ -194,6 +232,19 @@ function deriveRevertPlan(
   projectID: string,
   preimageReceipt?: SessionRevertSnapshot.PreimageReceipt,
 ) {
+  const requestedID = input.kind === "unrevert" ? projection.session.revert?.messageID : input.messageID
+  if (requestedID && projection.rewound.has(requestedID))
+    throw fail("target_not_found", `message ${requestedID} is rewound in this Session`)
+  const legacyTarget = projection.messages.some((message) => message.info.id === requestedID)
+  const canonicalTarget = projection.canonical?.some((message) => message.id === String(requestedID))
+  // Existing V1 part boundaries remain V1 boundaries in dual-projected
+  // Sessions. A canonical-only target must never be fabricated in those tables.
+  if (
+    projection.canonical !== undefined &&
+    (!legacyTarget ||
+      (canonicalTarget && input.partID === undefined && projection.session.revert?.partID === undefined))
+  )
+    return deriveCanonicalRevertPlan(input, projection, projectRoot, location, projectID, preimageReceipt)
   if (input.kind === "unrevert") {
     const stored = projection.session.revert
     if (!stored?.snapshot || !preimageReceipt)
@@ -333,6 +384,88 @@ function deriveRevertPlan(
   }
 }
 
+function deriveCanonicalRevertPlan(
+  input: CaptureInput,
+  projection: ReturnType<typeof decodeProjection>,
+  projectRoot: string,
+  location: string,
+  projectID: string,
+  preimageReceipt?: SessionRevertSnapshot.PreimageReceipt,
+) {
+  const messages = projection.canonical!
+  const stored = projection.session.revert
+  const messageID = input.kind === "unrevert" ? stored?.messageID : input.messageID
+  const index = messages.findIndex((message) => message.id === String(messageID))
+  if (index < 0) throw fail("target_not_found", `message ${messageID} is not in this Session`)
+  const target = messages[index]!
+  if (target.type !== "user" && target.type !== "assistant")
+    throw fail("unsupported_operation", `message ${messageID} is not a conversation boundary`)
+  // Canonical messages own their content identities. Do not interpret a V1
+  // rendered part ID as a canonical truncation boundary or silently widen it.
+  if (input.partID !== undefined || (input.kind === "unrevert" && stored?.partID !== undefined))
+    throw fail("unsupported_operation", "canonical revert requires a complete message boundary")
+  const boundary = { messageID: MessageID.make(target.id), messageSequence: index }
+  if (input.kind === "unrevert") {
+    if (
+      !stored?.snapshot ||
+      !preimageReceipt ||
+      preimageReceipt.sessionID !== input.sessionID ||
+      preimageReceipt.projectID !== projectID ||
+      preimageReceipt.digest !== stored.snapshot ||
+      preimageReceipt.projectRoot !== projectRoot ||
+      preimageReceipt.location !== location
+    )
+      throw fail("source_revision_unavailable", "the immutable preimage receipt does not match this Session scope")
+    return {
+      target: boundary,
+      files: preimageReceipt.files.map((file) => ({
+        gitPath: file.relativePath,
+        relativePath: file.relativePath,
+        path: file.path,
+        targetRevision: { kind: "commit" as const, id: preimageReceipt.headCommit },
+      })),
+      targetRevisions: preimageReceipt.files.length
+        ? [{ kind: "commit" as const, id: preimageReceipt.headCommit }]
+        : [],
+    }
+  }
+  if (stored)
+    throw fail("source_revision_unavailable", "restore the existing revert boundary before requesting another revert")
+  const files: PlannedFile[] = []
+  const seen = new Set<string>()
+  for (const message of messages.slice(index)) {
+    if (message.type !== "assistant") continue
+    const snapshot = message.snapshot
+    if (snapshot?.start && snapshot.end && snapshot.start !== snapshot.end && snapshot.files === undefined)
+      throw fail("source_revision_unavailable", `message ${message.id} has no complete snapshot file list`)
+    if (!snapshot?.files?.length) continue
+    const revision = snapshot.start?.toLowerCase()
+    if (!revision || !GIT_OBJECT.test(revision))
+      throw fail("source_revision_unavailable", `message ${message.id} has no immutable start snapshot`)
+    for (const file of snapshot.files) {
+      if (
+        path.isAbsolute(file) ||
+        file.split(/[\\/]/).some((segment) => !segment || segment === "." || segment === "..")
+      )
+        throw fail("session_scope_mismatch", `snapshot path is not project-relative: ${file}`)
+      const planned = canonicalPlanPath(projectRoot, location, path.resolve(projectRoot, file))
+      if (seen.has(planned.absolute)) continue
+      seen.add(planned.absolute)
+      if (files.length >= SessionRevertSnapshot.MAX_RESTORE_FILES)
+        throw fail("resource_limit", `restore plan exceeds ${SessionRevertSnapshot.MAX_RESTORE_FILES} files`)
+      files.push({
+        gitPath: planned.gitPath,
+        relativePath: planned.relativePath,
+        path: planned.absolute,
+        targetRevision: { kind: "snapshot", id: revision },
+      })
+    }
+  }
+  files.sort((left, right) => left.path.localeCompare(right.path))
+  const revisions = [...new Set(files.map((file) => file.targetRevision.id))].sort()
+  return { target: boundary, files, targetRevisions: revisions.map((id) => ({ kind: "snapshot" as const, id })) }
+}
+
 function deriveSessionObservation(
   input: CaptureInput,
   raw: SessionTransaction,
@@ -354,7 +487,13 @@ function deriveSessionObservation(
   if (!isWithin(projectRoot, location))
     throw fail("session_scope_mismatch", "the active Session location is outside the project root")
 
-  const revision = canonicalHash({ session: projection.session, messages: projection.messages })
+  const revision = canonicalHash({
+    session: raw.session,
+    messages: raw.messages,
+    parts: raw.parts,
+    canonical: raw.canonical,
+    inputs: raw.inputs,
+  })
   if (!revision) throw fail("session_projection_invalid", "the complete Session projection is not canonical JSON")
   const plan = deriveRevertPlan(input, projection, projectRoot, location, context.projectID, preimageReceipt)
   return {
@@ -570,6 +709,111 @@ function filesystemEvidence(input: RepositoryObservation["files"][number]) {
     current: input.current,
   }
 }
+
+export const readSession = (db: Database.Interface["db"] | Database.Transaction, input: CaptureInput) =>
+  Effect.gen(function* () {
+    const context = yield* InstanceState.context.pipe(
+      Effect.catchCause((cause) =>
+        Effect.fail(fail("session_scope_mismatch", `active project context is unavailable: ${Cause.pretty(cause)}`)),
+      ),
+    )
+    const raw = yield* db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const eventBefore =
+            (yield* tx
+              .select({ seq: EventSequenceTable.seq })
+              .from(EventSequenceTable)
+              .where(eq(EventSequenceTable.aggregate_id, input.sessionID))
+              .get())?.seq ?? -1
+          const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get()
+          const canonical = yield* tx
+            .select()
+            .from(SessionMessageTable)
+            .where(eq(SessionMessageTable.session_id, input.sessionID))
+            .orderBy(asc(SessionMessageTable.seq))
+            .limit(MAX_DATABASE_ROWS + 1)
+            .all()
+          const inputs = yield* tx
+            .select()
+            .from(SessionInputTable)
+            .where(eq(SessionInputTable.session_id, input.sessionID))
+            .orderBy(asc(SessionInputTable.admitted_seq))
+            .limit(MAX_DATABASE_ROWS + 1)
+            .all()
+          const messages = yield* tx
+            .select()
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, input.sessionID))
+            .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
+            .limit(MAX_DATABASE_ROWS + 1)
+            .all()
+          const parts = yield* tx
+            .select()
+            .from(PartTable)
+            .where(eq(PartTable.session_id, input.sessionID))
+            .orderBy(asc(PartTable.message_id), asc(PartTable.id))
+            .limit(MAX_DATABASE_ROWS + 1)
+            .all()
+          const eventAfter =
+            (yield* tx
+              .select({ seq: EventSequenceTable.seq })
+              .from(EventSequenceTable)
+              .where(eq(EventSequenceTable.aggregate_id, input.sessionID))
+              .get())?.seq ?? -1
+          return { eventBefore, eventAfter, session, messages, parts, canonical, inputs } satisfies SessionTransaction
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.fail(fail("database_unavailable", `read-only Session transaction failed: ${Cause.pretty(cause)}`)),
+        ),
+      )
+    const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+    if (raw.session && (raw.session.tenant_id !== principal.tenantID || raw.session.owner_user_id !== principal.userID))
+      return yield* fail("session_scope_mismatch", "the Session belongs to a different principal")
+    const projection = yield* guarded(
+      () => decodeProjection(raw),
+      "session_projection_invalid",
+      "cannot decode the Session projection",
+    )
+    const preimageReceipt =
+      input.kind === "unrevert"
+        ? yield* guardedPromise(
+            async () => {
+              const digest = projection.session.revert?.snapshot
+              if (!digest || !/^[0-9a-f]{64}$/.test(digest))
+                throw fail("source_revision_unavailable", "the stored revert receipt reference is invalid")
+              const receiptPath = path.join(
+                Global.Path.data,
+                "revert-receipts",
+                context.project.id,
+                String(input.sessionID),
+                `${digest}.json`,
+              )
+              const rawReceipt = JSON.parse(await fsp.readFile(receiptPath, "utf8")) as unknown
+              return SessionRevertSnapshot.decodePreimageReceipt(rawReceipt)
+            },
+            "source_revision_unavailable",
+            "cannot load the first revert's immutable preimage receipt",
+          )
+        : undefined
+    return yield* guarded(
+      () =>
+        deriveSessionObservation(
+          input,
+          raw,
+          {
+            directory: context.directory,
+            worktree: context.worktree,
+            projectID: context.project.id,
+          },
+          preimageReceipt,
+        ),
+      "session_projection_invalid",
+      "cannot derive the Session revert plan",
+    )
+  })
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/SessionRevertReadonlyInspector") {}
 
@@ -897,97 +1141,7 @@ const layer = Layer.effect(
         } satisfies RepositoryObservation
       })
 
-    const readSession: Reader["readSession"] = (input) =>
-      Effect.gen(function* () {
-        const context = yield* InstanceState.context.pipe(
-          Effect.catchCause((cause) =>
-            Effect.fail(
-              fail("session_scope_mismatch", `active project context is unavailable: ${Cause.pretty(cause)}`),
-            ),
-          ),
-        )
-        const raw = yield* db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              const eventBefore =
-                (yield* tx
-                  .select({ seq: EventSequenceTable.seq })
-                  .from(EventSequenceTable)
-                  .where(eq(EventSequenceTable.aggregate_id, input.sessionID))
-                  .get())?.seq ?? -1
-              const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get()
-              const messages = yield* tx
-                .select()
-                .from(MessageTable)
-                .where(eq(MessageTable.session_id, input.sessionID))
-                .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
-                .limit(MAX_DATABASE_ROWS + 1)
-                .all()
-              const parts = yield* tx
-                .select()
-                .from(PartTable)
-                .where(eq(PartTable.session_id, input.sessionID))
-                .orderBy(asc(PartTable.message_id), asc(PartTable.id))
-                .limit(MAX_DATABASE_ROWS + 1)
-                .all()
-              const eventAfter =
-                (yield* tx
-                  .select({ seq: EventSequenceTable.seq })
-                  .from(EventSequenceTable)
-                  .where(eq(EventSequenceTable.aggregate_id, input.sessionID))
-                  .get())?.seq ?? -1
-              return { eventBefore, eventAfter, session, messages, parts } satisfies SessionTransaction
-            }),
-          )
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.fail(fail("database_unavailable", `read-only Session transaction failed: ${Cause.pretty(cause)}`)),
-            ),
-          )
-        const projection = yield* guarded(
-          () => decodeProjection(raw),
-          "session_projection_invalid",
-          "cannot decode the Session projection",
-        )
-        const preimageReceipt =
-          input.kind === "unrevert"
-            ? yield* guardedPromise(
-                async () => {
-                  const digest = projection.session.revert?.snapshot
-                  if (!digest || !/^[0-9a-f]{64}$/.test(digest))
-                    throw fail("source_revision_unavailable", "the stored revert receipt reference is invalid")
-                  const receiptPath = path.join(
-                    Global.Path.data,
-                    "revert-receipts",
-                    context.project.id,
-                    String(input.sessionID),
-                    `${digest}.json`,
-                  )
-                  const rawReceipt = JSON.parse(await fsp.readFile(receiptPath, "utf8")) as unknown
-                  return SessionRevertSnapshot.decodePreimageReceipt(rawReceipt)
-                },
-                "source_revision_unavailable",
-                "cannot load the first revert's immutable preimage receipt",
-              )
-            : undefined
-        return yield* guarded(
-          () =>
-            deriveSessionObservation(
-              input,
-              raw,
-              {
-                directory: context.directory,
-                worktree: context.worktree,
-                projectID: context.project.id,
-              },
-              preimageReceipt,
-            ),
-          "session_projection_invalid",
-          "cannot derive the Session revert plan",
-        )
-      })
-
-    return Service.of(make({ readSession, readRepository }))
+    return Service.of(make({ readSession: (input) => readSession(db, input), readRepository }))
   }),
 )
 

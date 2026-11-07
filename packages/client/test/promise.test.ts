@@ -67,7 +67,7 @@ test("exposes every standard HTTP API group", () => {
     "attemptCancel",
   ])
   expect(Object.keys(client.files)).toEqual(["open", "close", "read", "save", "list", "find"])
-  expect(Object.keys(client.ptys)).toEqual(["list", "create", "get", "update", "remove"])
+  expect(Object.keys(client.ptys)).toEqual(["shells", "list", "create", "get", "update", "remove"])
   expect(Object.keys(client.goals)).toEqual([
     "list",
     "create",
@@ -82,6 +82,31 @@ test("exposes every standard HTTP API group", () => {
     "deleteQueued",
     "reorder",
   ])
+})
+
+test("ptys.shells calls the existing public GET path without creating a PTY", async () => {
+  const requests: Request[] = []
+  const response = {
+    location: { directory: "C:/owned", project: { id: "global", directory: "C:/owned" } },
+    data: [{ path: "C:/owned/shell.exe", name: "Owned shell", acceptable: true }],
+  }
+  const client = Arforge.make({
+    baseUrl: "http://fixture.invalid",
+    fetch: async (url, init) => {
+      requests.push(new Request(url, init))
+      return Response.json(response)
+    },
+  })
+  expect(typeof client.ptys.shells).toBe("function")
+  const result = await client.ptys.shells({ location: { directory: "C:/owned" } })
+  expect(requests).toHaveLength(1)
+  const request = requests[0]
+  if (!request) throw new Error("Shell discovery did not call its public transport")
+  expect(request.method).toBe("GET")
+  expect(new URL(request.url).pathname).toBe("/api/pty/shells")
+  expect(new URL(request.url).searchParams.get("location[directory]")).toBe("C:/owned")
+  expect(request.body).toBeNull()
+  expect(result).toEqual(response)
 })
 
 test("diagnostics client forwards the fused mode and cancellation signal", async () => {

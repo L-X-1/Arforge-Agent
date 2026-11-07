@@ -3,6 +3,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/HtmlReferences"
@@ -36,6 +37,7 @@ async function setup(page: Page, read: () => string) {
 async function openSelection(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).click()
@@ -43,6 +45,8 @@ async function openSelection(page: Page) {
   await preview.getByRole("button", { name: "Preview", exact: true }).click()
   await preview.getByRole("button", { name: "Select elements", exact: true }).click()
   const picker = preview.locator('[data-component="html-element-preview"]')
+  await panel.getByRole("button", { name: "Back to conversation", exact: true }).click()
+  await expect(panel.locator('[data-component="review-file-workbench"]')).toHaveAttribute("data-compact", "true")
   await expect(picker.getByRole("combobox", { name: "HTML element", exact: true })).toBeEnabled()
   await picker.frameLocator("iframe").locator("#heading").click()
   return { preview, picker }
@@ -102,8 +106,10 @@ test("HTML selection reference stays in its conversation after navigation and re
   await expect(page.getByText(/^HTML source snapshot \/ [a-f0-9]{12}$/)).toHaveCount(1)
   await page.goto(`/server/${base64Encode(server)}/session/${otherID}`)
   await expectSessionTitle(page, "Another conversation")
+  await expandWorkbench(page)
   await expect(page.getByText(/^HTML source snapshot \/ [a-f0-9]{12}$/)).toHaveCount(0)
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   await expect(page.getByText(/^HTML source snapshot \/ [a-f0-9]{12}$/)).toHaveCount(1)
 })

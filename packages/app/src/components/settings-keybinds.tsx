@@ -1,3 +1,4 @@
+import { useConfirmAction } from "@/components/confirm-action"
 import { Component, For, Show, createMemo, lazy, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -13,9 +14,9 @@ import fuzzysort from "fuzzysort"
 import { DEFAULT_PALETTE_KEYBIND, formatKeybind, parseKeybind, useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
-import { SettingsList } from "./settings-list"
-import { SettingsListV2 } from "./settings-v2/parts/list"
 import { managementCopy } from "./settings-v2/management-state"
+import "./settings-v2/settings-v2.css"
+import { SettingsPersistenceStatus } from "./settings-persistence-status"
 
 const IconV2 = lazy(() => import("@arforge-ai/ui/v2/icon").then((module) => ({ default: module.Icon })))
 
@@ -211,6 +212,7 @@ function useKeyCapture(input: {
     const handle = (event: KeyboardEvent) => {
       const id = input.active()
       if (!id) return
+      if (event.isComposing || event.keyCode === 229) return
 
       event.preventDefault()
       event.stopPropagation()
@@ -267,10 +269,13 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
   const command = useCommand()
   const language = useLanguage()
   const settings = useSettings()
+  const confirmAction = useConfirmAction()
+  let live = true
 
   const [store, setStore] = createStore({
     active: null as string | null,
     filter: "",
+    resetting: false,
   })
 
   const stop = () => {
@@ -280,6 +285,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
   }
 
   const start = (id: string) => {
+    if (store.resetting) return
     if (store.active === id) {
       stop()
       return
@@ -295,14 +301,25 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
 
   const hasOverrides = createMemo(() => Object.values(map()).some((x) => typeof x === "string"))
 
-  const resetAll = () => {
-    if (!window.confirm(managementCopy(language.locale()).resetShortcuts)) return
-    stop()
-    settings.keybinds.resetAll()
-    showToast({
-      title: language.t("settings.shortcuts.reset.toast.title"),
-      description: language.t("settings.shortcuts.reset.toast.description"),
-    })
+  const resetAll = async () => {
+    if (!live || store.resetting || !hasOverrides()) return
+    const snapshot = () => JSON.stringify(Object.entries(map()).sort(([a], [b]) => a.localeCompare(b)))
+    const original = snapshot()
+    const active = store.active
+    const isCurrent = () => live && snapshot() === original && store.active === active && hasOverrides()
+    setStore("resetting", true)
+    try {
+      if (!(await confirmAction(managementCopy(language.locale()).resetShortcuts, { isCurrent, danger: true }))) return
+      if (!isCurrent()) return
+      stop()
+      settings.keybinds.resetAll()
+      showToast({
+        title: language.t("settings.shortcuts.reset.toast.title"),
+        description: language.t("settings.shortcuts.reset.toast.description"),
+      })
+    } finally {
+      if (live) setStore("resetting", false)
+    }
   }
 
   const list = createMemo(() => {
@@ -367,7 +384,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
   const setKeybind = (id: string, keybind: string) => settings.keybinds.set(id, keybind)
 
   useKeyCapture({
-    active: () => store.active,
+    active: () => store.resetting ? null : store.active,
     stop,
     set: setKeybind,
     used,
@@ -375,6 +392,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
   })
 
   onCleanup(() => {
+    live = false
     if (store.active) command.keybinds(true)
   })
 
@@ -407,7 +425,20 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
     </Show>
   )
 
-  const List = props.v2 ? SettingsListV2 : SettingsList
+  const columns = () => {
+    if (language.locale() === "zh") return {
+      command: "命令", binding: "快捷键", scope: "作用域", action: "操作", edit: "修改", cancel: "取消",
+      hint: "范围按命令分组显示；可用性仍取决于当前页面和对象。录入时按 Esc 取消。",
+    }
+    if (language.locale() === "zht") return {
+      command: "命令", binding: "快速鍵", scope: "作用域", action: "操作", edit: "修改", cancel: "取消",
+      hint: "範圍依命令分組顯示；可用性仍取決於目前頁面與物件。輸入時按 Esc 取消。",
+    }
+    return {
+      command: "Command", binding: "Binding", scope: "Scope", action: "Action", edit: "Edit", cancel: "Cancel",
+      hint: "Scope follows the command group; availability still depends on the current page and object. Press Esc to cancel recording.",
+    }
+  }
 
   const groups = (
     <div
@@ -433,49 +464,70 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
               >
                 {language.t(groupKey[group])}
               </h3>
-              <List>
-                <For each={filtered().get(group) ?? []}>
-                  {(id) => (
-                    <div class="flex items-center justify-between gap-4 py-3 border-b border-border-weak-base last:border-none">
-                      <span
-                        classList={{
-                          "text-14-regular text-text-strong": !props.v2,
-                        }}
-                      >
-                        {title(id)}
-                      </span>
-                      <button
-                        type="button"
-                        data-keybind-id={id}
-                        aria-label={`${title(id)}: ${command.keybind(id) || language.t("settings.shortcuts.unassigned")}`}
-                        aria-pressed={store.active === id}
-                        classList={{
-                          "settings-v2-keybind-button": props.v2,
-                          "settings-v2-keybind-button--active": props.v2 && store.active === id,
-                          "h-8 px-3 rounded-md text-12-regular": !props.v2,
-                          "bg-surface-base text-text-subtle hover:bg-surface-raised-base-hover active:bg-surface-raised-base-active":
-                            !props.v2 && store.active !== id,
-                          "border border-border-weak-base bg-surface-inset-base text-text-weak":
-                            !props.v2 && store.active === id,
-                        }}
-                        onClick={() => start(id)}
-                      >
-                        <Show
-                          when={store.active === id}
-                          fallback={command.keybind(id) || language.t("settings.shortcuts.unassigned")}
-                        >
-                          {language.t("settings.shortcuts.pressKeys")}
-                        </Show>
-                      </button>
-                    </div>
-                  )}
-                </For>
-              </List>
+              <div class="settings-v2-shortcut-table-wrap">
+                <table class="settings-v2-shortcut-table" aria-label={language.t(groupKey[group])}>
+                  <colgroup>
+                    <col />
+                    <col data-column="binding" />
+                    <col data-column="scope" />
+                    <col data-column="action" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th scope="col">{columns().command}</th>
+                      <th scope="col">{columns().binding}</th>
+                      <th scope="col">{columns().scope}</th>
+                      <th scope="col">{columns().action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For each={filtered().get(group) ?? []}>
+                      {(id) => (
+                        <tr data-shortcut-id={id} classList={{ "settings-v2-shortcut-row--active": store.active === id }}>
+                          <th scope="row" class="settings-v2-shortcut-command">{title(id)}</th>
+                          <td class="settings-v2-shortcut-binding">
+                            <button
+                              type="button"
+                              data-keybind-id={id}
+                              aria-label={title(id) + ": " + (command.keybind(id) || language.t("settings.shortcuts.unassigned"))}
+                              aria-pressed={store.active === id}
+                              class="settings-v2-keybind-button"
+                              classList={{ "settings-v2-keybind-button--active": store.active === id }}
+                              onClick={() => start(id)}
+                            >
+                              <Show
+                                when={store.active === id}
+                                fallback={command.keybind(id) || language.t("settings.shortcuts.unassigned")}
+                              >
+                                {language.t("settings.shortcuts.pressKeys")}
+                              </Show>
+                            </button>
+                          </td>
+                          <td class="settings-v2-shortcut-scope">
+                            {language.t(groupKey[list().get(id)?.group ?? group])}
+                          </td>
+                          <td class="settings-v2-shortcut-actions">
+                            <ButtonV2
+                              variant="ghost"
+                              class="settings-v2-shortcut-action"
+                              aria-label={(store.active === id ? columns().cancel : columns().edit) + ": " + title(id)}
+                              onClick={() => start(id)}
+                            >
+                              {store.active === id ? columns().cancel : columns().edit}
+                            </ButtonV2>
+                          </td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </Show>
         )}
       </For>
       {emptyResults}
+      <p class="settings-v2-shortcut-help">{columns().hint}</p>
     </div>
   )
 
@@ -488,7 +540,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
             <div class="flex flex-col gap-4 pt-6 pb-6 max-w-[720px]">
               <div class="flex items-center justify-between gap-4">
                 <h2 class="text-16-medium text-text-strong">{language.t("settings.shortcuts.title")}</h2>
-                <Button size="small" variant="secondary" onClick={resetAll} disabled={!hasOverrides()}>
+                <Button size="small" variant="secondary" onClick={() => void resetAll()} disabled={store.resetting || !hasOverrides()}>
                   {language.t("settings.shortcuts.reset.button")}
                 </Button>
               </div>
@@ -521,7 +573,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
         <div class="settings-v2-tab-header settings-v2-tab-header--stacked">
           <div class="settings-v2-tab-header-row">
             <h2 class="settings-v2-tab-title">{language.t("settings.shortcuts.title")}</h2>
-            <ButtonV2 variant="ghost" onClick={resetAll} disabled={!hasOverrides()}>
+            <ButtonV2 variant="ghost" onClick={() => void resetAll()} disabled={store.resetting || !hasOverrides()}>
               {language.t("settings.shortcuts.reset.button")}
             </ButtonV2>
           </div>
@@ -551,7 +603,7 @@ export const SettingsKeybinds: Component<{ v2?: boolean }> = (props) => {
             </Show>
           </div>
         </div>
-        <div class="settings-v2-tab-body">{groups}</div>
+        <div class="settings-v2-tab-body"><SettingsPersistenceStatus />{groups}</div>
       </>
     </Show>
   )

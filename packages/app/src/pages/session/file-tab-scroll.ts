@@ -37,6 +37,16 @@ export const createFileTabListSync = (input: { el: HTMLDivElement; contextOpen: 
       })
     }
 
+    if (left === undefined) {
+      const active = input.el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      if (active) {
+        const viewport = input.el.getBoundingClientRect()
+        const rect = active.getBoundingClientRect()
+        if (rect.left < viewport.left) input.el.scrollLeft += rect.left - viewport.left
+        else if (rect.right > viewport.right) input.el.scrollLeft += rect.right - viewport.right
+      }
+    }
+
     prevScrollWidth = scrollWidth
     prevContextOpen = contextOpen
   }
@@ -56,12 +66,18 @@ export const createFileTabListSync = (input: { el: HTMLDivElement; contextOpen: 
   }
 
   input.el.addEventListener("wheel", onWheel, { passive: false })
-  const observer = new MutationObserver(schedule)
-  observer.observe(input.el, { childList: true })
+  const observer = new MutationObserver((records) => {
+    // Dirty indicators change nested children, not the actual set of tabs.
+    if (records.some((record) => record.type === "attributes" || record.target === input.el)) schedule()
+  })
+  observer.observe(input.el, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] })
+  const resize = new ResizeObserver(schedule)
+  resize.observe(input.el)
 
   return () => {
     input.el.removeEventListener("wheel", onWheel)
     observer.disconnect()
+    resize.disconnect()
     if (frame !== undefined) cancelAnimationFrame(frame)
   }
 }

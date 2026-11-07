@@ -7,6 +7,7 @@ import { ServerConnection } from "./server"
 import type { ServerSDK } from "./server-sdk"
 import { ServerScope } from "@/utils/server-scope"
 import { decode64 } from "@/utils/base64"
+import { receiptOperationStatus, receiptOperationTarget, type ReceiptOperationTarget } from "@/components/control-approval/receipt-operation"
 
 export type ControlApprovalReply = "once" | "reject"
 export type ControlApprovalKey = string
@@ -71,6 +72,7 @@ export type ControlApprovalTransport = {
   list(directory: string): Promise<readonly AgentRuntimeControlRequest[]>
   reply(directory: string, requestID: string, reply: ControlApprovalReply): Promise<void>
   subscribe(listener: (event: ControlApprovalEnvelope) => void): () => void
+  operationStatus?: (target: ReceiptOperationTarget) => Promise<unknown>
 }
 
 export const SAFE_CONTROL_ACTIONS = [
@@ -345,6 +347,8 @@ export function createControlApprovalState(input: {
   const revisions = new Map<string, number>()
   const settled = new Set<ControlApprovalKey>()
   const loaded = new Set<string>()
+  // The source SDK/subject stay private, outside the display receipt sink.
+  const operationTargets = new Map<string, PendingControlApproval>()
   const startupRetryTimers = new Set<ReturnType<typeof setTimeout>>()
   let disposed = false
   const recordReceipt = (receipt: ControlApprovalReceipt) => {
@@ -358,6 +362,13 @@ export function createControlApprovalState(input: {
     return (
       bindings.find((binding) => binding.project === subject.project) ?? bindings.find((binding) => !binding.project)
     )
+  }
+  const operationTarget = (receipt: ControlApprovalReceipt) => {
+    if (disposed || receipt.sourceID !== sourceID || !input.transport.operationStatus) return
+    const item = operationTargets.get(receipt.id)
+    if (!item || !knownBinding(item.subject) || item.subject.requestID !== receipt.controlRequestID ||
+        item.id !== receipt.requestID || item.subject.location !== receipt.location || item.subject.project !== receipt.project) return
+    return receiptOperationTarget(item)
   }
   const requestKey = (request: Pick<AgentRuntimeControlRequest, "id" | "subject">) => {
     const canonical = controlApprovalKey(request)
@@ -479,7 +490,12 @@ export function createControlApprovalState(input: {
       startupRetryTimers.delete(timer)
       if (disposed) return
       reconcileBindings()
-      void refresh()
+      // Startup recovery is for a successfully read, temporarily empty list.
+      // Failed/stale directories keep their error and require an explicit
+      // refresh or a relevant server event; never replay their failed read.
+      void Promise.all(validBindings(input.bindings())
+        .filter(binding => !store.loadErrors[revisionKey(binding)] && !store.loading[revisionKey(binding)])
+        .map(binding => refreshBinding(binding)))
     }, delay)
     startupRetryTimers.add(timer)
   }
@@ -493,6 +509,14 @@ export function createControlApprovalState(input: {
 
   return {
     sourceID,
+    operationAvailable: (receipt: ControlApprovalReceipt) => !!operationTarget(receipt),
+    async operationStatus(receipt: ControlApprovalReceipt) {
+      const target = operationTarget(receipt)
+      if (!target) throw new Error("The originating operation is unavailable. No other connection was used.")
+      const result = await input.transport.operationStatus!(target)
+      if (!operationTarget(receipt)) throw new Error("The originating operation scope is no longer active.")
+      return receiptOperationStatus(result, target)
+    },
     receipts: () => Object.values(store.receipts),
     items: () => Object.values(store.requests).sort((left, right) => left.approvalKey.localeCompare(right.approvalKey)),
     loading: () => Object.values(store.loading).some(Boolean),
@@ -509,6 +533,7 @@ export function createControlApprovalState(input: {
         requestKey(item) !== item.approvalKey || !knownBinding(item.subject) ||
         !store.requests[item.approvalKey] || settled.has(item.approvalKey) || store.busy[item.approvalKey]) return false
       const receipt = operationReceipt(item, reply)
+      operationTargets.set(receipt.id, item)
       setStore("busy", item.approvalKey, true)
       setStore("errors", item.approvalKey, undefined)
       recordReceipt(receipt)
@@ -558,6 +583,13 @@ function createServerControlApprovalState(input: {
       const client = input.sdk.createClient({ directory, throwOnError: true })
       const response = await client.experimental.controlApproval.reply({ requestID, reply })
       if (response.data !== true) throw new Error("The server did not confirm the approval reply.")
+    },
+    async operationStatus(target) {
+      const client = input.sdk.createClient({ directory: target.directory, throwOnError: true })
+      const response = await client.experimental.controlOperation.status({
+        requestID: target.requestID, directory: target.directory, operation: target.operation,
+      })
+      return response.data
     },
     subscribe(listener) {
       return input.sdk.event.listen((event) => listener({ name: event.name, details: event.details }))
@@ -642,9 +674,17 @@ export const { use: useControlApproval, provider: ControlApprovalProvider } = cr
       const state = conn ? ensure(ServerConnection.key(conn)) : undefined
       return state?.sourceID === item.sourceID ? state : undefined
     }
+    const operationStateFor = (receipt: ControlApprovalReceipt) =>
+      global.servers.list().map(conn => ensure(ServerConnection.key(conn))).find(state => state.sourceID === receipt.sourceID)
 
     return {
       receipts: () => Object.values(receipts).reverse(),
+      operationAvailable: (receipt: ControlApprovalReceipt) => operationStateFor(receipt)?.operationAvailable(receipt) ?? false,
+      operationStatus: (receipt: ControlApprovalReceipt) => {
+        const source = operationStateFor(receipt)
+        if (!source) return Promise.reject(new Error("The originating connection is unavailable. No replacement connection was used."))
+        return source.operationStatus(receipt)
+      },
       items: () => all().sort((left, right) => left.approvalKey.localeCompare(right.approvalKey)),
       count: () => all().length,
       loading: () => global.servers.list().some((conn) => ensure(ServerConnection.key(conn)).loading()),
@@ -662,9 +702,8 @@ export const { use: useControlApproval, provider: ControlApprovalProvider } = cr
       registerLocation(location: string | undefined) {
         if (!isSafeControlLocation(location) || !/^(?:[A-Za-z]:[\\/]|\/)/.test(location)) return
         setRouteLocations((current) => (current.includes(location) ? current : [...current.slice(-15), location]))
-        queueMicrotask(() => {
-          states.forEach((entry) => void entry.state.refresh())
-        })
+        // Each state's binding reconciliation loads only newly registered
+        // locations. Re-registering a route must not retry unrelated failures.
       },
     }
   },

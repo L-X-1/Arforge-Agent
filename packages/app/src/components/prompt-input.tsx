@@ -26,6 +26,7 @@ import {
   FileAttachmentPart,
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
+import { hasPromptContent, hasPromptResources } from "@/context/prompt-state"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useComments } from "@/context/comments"
@@ -51,7 +52,14 @@ import { usePermission } from "@/context/permission"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { createSessionTabs } from "@/pages/session/helpers"
-import { createTextFragment, getCursorPosition, setCursorPosition, setRangeEdge } from "./prompt-input/editor-dom"
+import {
+  createPromptPill,
+  createTextFragment,
+  getCursorPosition,
+  readFilePill,
+  setCursorPosition,
+  setRangeEdge,
+} from "./prompt-input/editor-dom"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES, pickAttachmentFiles } from "./prompt-input/files"
 import {
@@ -73,6 +81,7 @@ import {
   type PromptInputSubmission,
 } from "./prompt-input/contracts"
 import { createPromptSubmit } from "./prompt-input/submit"
+import { guardDraftSubmission } from "@/pages/home-compose/home-draft-state"
 import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
@@ -277,13 +286,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (store.mode === "shell") return 0
     return prompt.context.items().filter((item) => !!item.comment?.trim()).length
   })
-  const blank = createMemo(() => {
-    const text = prompt
-      .current()
-      .map((part) => ("content" in part ? part.content : ""))
-      .join("")
-    return text.trim().length === 0 && imageAttachments().length === 0 && commentCount() === 0
-  })
+  const blank = createMemo(() => !hasPromptContent(prompt.current()) && commentCount() === 0)
   const stopping = createMemo(() => working() && blank())
   const tip = () => {
     if (stopping()) {
@@ -761,25 +764,14 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   })
 
   const createPill = (part: FileAttachmentPart | AgentPart) => {
-    const pill = document.createElement("span")
-    pill.textContent = part.content
-    pill.setAttribute("data-type", part.type)
-    if (part.type === "file") {
-      pill.setAttribute("data-path", part.path)
-      if (part.mime) pill.setAttribute("data-mime", part.mime)
-      if (part.filename) pill.setAttribute("data-filename", part.filename)
-      if (part.url) pill.setAttribute("data-url", part.url)
-      if (part.source?.type === "resource") {
-        pill.setAttribute("data-source-type", part.source.type)
-        pill.setAttribute("data-source-client-name", part.source.clientName)
-        pill.setAttribute("data-source-uri", part.source.uri)
-      }
-    }
-    if (part.type === "agent") pill.setAttribute("data-name", part.name)
-    pill.setAttribute("contenteditable", "false")
-    pill.style.userSelect = "text"
-    pill.style.cursor = "default"
-    return pill
+    return createPromptPill(part, {
+      removeLabel: language.t("prompt.attachment.remove"),
+      onRemove: (pill) => {
+        pill.remove()
+        handleInput()
+        editorRef.focus()
+      },
+    })
   }
 
   const isNormalizedEditor = () =>
@@ -888,32 +880,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
 
     const pushFile = (file: HTMLElement) => {
-      const content = file.textContent ?? ""
-      const source =
-        file.dataset.sourceType === "resource" && file.dataset.sourceClientName && file.dataset.sourceUri
-          ? {
-              type: "resource" as const,
-              text: {
-                value: content,
-                start: position,
-                end: position + content.length,
-              },
-              clientName: file.dataset.sourceClientName,
-              uri: file.dataset.sourceUri,
-            }
-          : undefined
-      parts.push({
-        type: "file",
-        path: file.dataset.path!,
-        content,
-        start: position,
-        end: position + content.length,
-        ...(file.dataset.mime ? { mime: file.dataset.mime } : {}),
-        ...(file.dataset.filename ? { filename: file.dataset.filename } : {}),
-        ...(file.dataset.url ? { url: file.dataset.url } : {}),
-        ...(source ? { source } : {}),
-      })
-      position += content.length
+      const part = readFilePill(file, position)
+      parts.push(part)
+      position += part.content.length
     }
 
     const pushAgent = (agent: HTMLElement) => {
@@ -1200,37 +1169,40 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return permission.isAutoAccepting(id, sdk().directory)
   })
 
-  const { abort, handleSubmit } =
+  const { abort, handleSubmit } = guardDraftSubmission(
     props.submission ??
-    createPromptSubmit({
-      prompt,
-      info,
-      imageAttachments,
-      commentCount,
-      autoAccept: () => accepting(),
-      mode: () => store.mode,
-      working,
-      editor: () => editorRef,
-      queueScroll,
-      promptLength,
-      addToHistory,
-      resetHistoryNavigation: () => {
-        resetHistoryNavigation(true)
-      },
-      setMode: (mode) => setStore("mode", mode),
-      setPopover: (popover) => {
-        if (!popover) return closePopover()
-        setStore({ popover, slashMenu: false, slashMenuQuery: "" })
-      },
-      newSessionWorktree: () => props.newSessionWorktree,
-      onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
-      shouldQueue: props.shouldQueue,
-      onQueue: props.onQueue,
-      onAbort: props.onAbort,
-      onSubmit: props.onSubmit,
-      model: props.controls.model.selection,
-      goal: props.goal,
-    })
+      createPromptSubmit({
+        prompt,
+        info,
+        imageAttachments,
+        commentCount,
+        autoAccept: () => accepting(),
+        mode: () => store.mode,
+        working,
+        editor: () => editorRef,
+        queueScroll,
+        promptLength,
+        addToHistory,
+        resetHistoryNavigation: () => {
+          resetHistoryNavigation(true)
+        },
+        setMode: (mode) => setStore("mode", mode),
+        setPopover: (popover) => {
+          if (!popover) return closePopover()
+          setStore({ popover, slashMenu: false, slashMenuQuery: "" })
+        },
+        newSessionWorktree: () => props.newSessionWorktree,
+        onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
+        shouldQueue: props.shouldQueue,
+        onQueue: props.onQueue,
+        captureQueue: props.captureQueue,
+        onAbort: props.onAbort,
+        onSubmit: props.onSubmit,
+        model: props.controls.model.selection,
+        goal: props.goal,
+      }),
+    () => props.controls.session.canSubmit?.() !== false,
+  )
 
   const handleKeyDown = (event: KeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "u") {
@@ -1300,7 +1272,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     if (store.mode === "shell") {
       const { collapsed, cursorPosition, textLength } = getCaretState()
-      if (event.key === "Backspace" && collapsed && cursorPosition === 0 && textLength === 0) {
+      if (
+        event.key === "Backspace" &&
+        collapsed &&
+        cursorPosition === 0 &&
+        textLength === 0 &&
+        !hasPromptResources(prompt.current())
+      ) {
         setStore("mode", "normal")
         event.preventDefault()
         return
@@ -1370,7 +1348,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         .map((part) => ("content" in part ? part.content : ""))
         .join("")
       const direction = event.key === "ArrowUp" ? "up" : "down"
-      if (!canNavigateHistoryAtCursor(direction, textContent, cursorPosition, store.historyIndex >= 0)) return
+      if (
+        !canNavigateHistoryAtCursor(
+          direction,
+          textContent,
+          cursorPosition,
+          store.historyIndex >= 0,
+          hasPromptResources(prompt.current()),
+        )
+      )
+        return
       if (navigateHistory(direction)) {
         event.preventDefault()
       }
@@ -1381,16 +1368,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
       if (event.repeat) return
-      if (
-        working() &&
-        prompt
-          .current()
-          .map((part) => ("content" in part ? part.content : ""))
-          .join("")
-          .trim().length === 0 &&
-        imageAttachments().length === 0 &&
-        commentCount() === 0
-      ) {
+      if (working() && blank()) {
         return
       }
       void handleSubmit(event)
@@ -1581,7 +1559,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={!working() && blank()}
+                  disabled={(!working() && blank()) || (!stopping() && props.controls.session.canSubmit?.() === false)}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"

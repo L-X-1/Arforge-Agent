@@ -21,6 +21,10 @@ export interface UnknownError extends Schema.Schema.Type<typeof UnknownError> {}
 export const UnknownError = Schema.Struct({
   type: Schema.Literal("unknown"),
   message: Schema.String,
+  /** Public provider facts only; raw HTTP diagnostics stay on the execution cause. */
+  reason: Schema.Literals(["Authentication", "QuotaExceeded", "RateLimit"]).pipe(optional),
+  statusCode: Schema.Int.check(Schema.isBetween({ minimum: 400, maximum: 599 })).pipe(optional),
+  retryable: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Session.Error.Unknown" })
 
 const Base = {

@@ -1,4 +1,4 @@
-import { Context, Effect, Exit, Layer, LayerMap, Option, Scope } from "effect"
+import { Cause, Context, Data, Effect, Exit, Layer, LayerMap, Option, Scope } from "effect"
 import { AgentV2 } from "./agent"
 import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
@@ -31,6 +31,7 @@ import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import * as SessionManualCompaction from "./session/manual-compaction"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
@@ -141,6 +142,7 @@ export const locationServices = LayerNode.group([
   ReadToolFileSystem.node,
   BuiltInTools.node,
   SessionRunnerModel.node,
+  SessionManualCompaction.node,
   Snapshot.node,
   SessionRunnerLLM.node,
 ])
@@ -172,8 +174,25 @@ const makeLocationServiceMap = (replacements: LayerNode.Replacements, database?:
       Option.fromUndefinedOr(database),
     )
     const mapScope = yield* Scope.make("sequential")
+    const generations = new Map<string, number>()
+    class CacheKey extends Data.Class<{
+      directory: Location.Ref["directory"]
+      workspaceID?: Location.Ref["workspaceID"]
+      id: string
+      generation: number
+    }> {}
+    const cacheKey = (ref: Location.Ref) => {
+      const normalized = normalizeRef(ref)
+      const id = JSON.stringify([normalized.directory, normalized.workspaceID ?? null])
+      return new CacheKey({ ...normalized, id, generation: generations.get(id) ?? 0 })
+    }
+    // Lookup factories start only after the map is returned. Evict from the
+    // failed build itself, once, so late failed readers cannot evict a retry
+    // which has already constructed a successful context for the same key.
+    let evictFailed: (key: Location.Ref) => Effect.Effect<void> = () => Effect.void
     const map = yield* LayerMap.make(
-      (ref: Location.Ref) => {
+      (key: Location.Ref) => {
+        const ref = normalizeRef(key)
         const hasDatabaseReplacement = replacements.some(([source]) => source.name === Database.node.name)
         const durableReplacements: LayerNode.Replacements =
           database && !hasDatabaseReplacement ? [[Database.node, Layer.succeed(Database.Service, database)]] : []
@@ -201,10 +220,23 @@ const makeLocationServiceMap = (replacements: LayerNode.Replacements, database?:
         // owns one durable database handle; provide it explicitly while
         // building every location so InstanceState captures it for later
         // invalidation/finalization as well.
-        return database ? compiled.pipe(Layer.provideMerge(Layer.succeed(Database.Service, database))) : compiled
+        const shared = database ? compiled.pipe(Layer.provideMerge(Layer.succeed(Database.Service, database))) : compiled
+        return shared.pipe(
+          Layer.tapCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.void : evictFailed(key)),
+        )
       },
       { idleTimeToLive: "60 minutes" },
     ).pipe(Effect.provideService(Scope.Scope, mapScope))
+    const invalidateKey = (key: Location.Ref) => Effect.suspend(() => {
+      if (key instanceof CacheKey) {
+        if ((generations.get(key.id) ?? 0) !== key.generation) return Effect.void
+        // Retired leases must keep a different RcMap key from the replacement:
+        // even their delayed idle finalizers must not remove a ready generation.
+        generations.set(key.id, key.generation + 1)
+      }
+      return map.invalidate(key)
+    })
+    evictFailed = invalidateKey
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
@@ -219,7 +251,7 @@ const makeLocationServiceMap = (replacements: LayerNode.Replacements, database?:
     // boundary so async state/finalizers cannot inherit a pruned route context.
     const augmentedContexts = new WeakMap<object, Context.Context<LocationServices>>()
     const contextEffect = (ref: Location.Ref) =>
-      map.contextEffect(normalizeRef(ref)).pipe(
+      Effect.suspend(() => map.contextEffect(cacheKey(ref))).pipe(
         Effect.map((context) => {
           if (!database) return context
           const cached = augmentedContexts.get(context)
@@ -227,7 +259,7 @@ const makeLocationServiceMap = (replacements: LayerNode.Replacements, database?:
           const augmented = Context.merge(
             context,
             Context.make(Database.Service, database),
-          ) as unknown as Context.Context<LocationServices>
+          )
           augmentedContexts.set(context, augmented)
           return augmented
         }),
@@ -237,8 +269,8 @@ const makeLocationServiceMap = (replacements: LayerNode.Replacements, database?:
       ...map,
       contextEffect,
       get: (ref: Location.Ref) => Layer.effectContext(contextEffect(ref)),
-      invalidate: (ref: Location.Ref) => map.invalidate(normalizeRef(ref)),
-    } as LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>
+      invalidate: (ref: Location.Ref) => Effect.suspend(() => invalidateKey(cacheKey(ref))),
+    } satisfies LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>
   })
 
 export function buildLocationServiceMap(

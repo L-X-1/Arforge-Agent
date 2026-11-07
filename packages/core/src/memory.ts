@@ -1,8 +1,14 @@
 export * as MemoryV2 from "./memory"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
+import * as MemoryRunEvidence from "./memory-run-evidence"
+import { evaluatePromotion } from "./memory-promotion"
+import { evaluateWrite } from "./memory-policy"
+import { redact } from "./redact"
+import { extractCandidates } from "./memory-extraction"
 
 import { Memory } from "@arforge-ai/schema/memory"
 import type { EffectDrizzleSqlite } from "@arforge-ai/effect-drizzle-sqlite"
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { Database } from "./database/database"
@@ -272,6 +278,8 @@ export interface Interface {
   readonly prepareContext: (query: string) => Effect.Effect<ContextPreparation>
   readonly context: (query: string) => Effect.Effect<string>
   readonly extract: (text: string) => Effect.Effect<ReadonlyArray<Info>>
+  /** Internal terminal-Run producer. Text and receipts are loaded from committed owners. */
+  readonly extractRun: (runID: AgentRuntime.RunID) => Effect.Effect<void, never, MemoryRunEvidence.Service>
   readonly governancePreview: (input?: {
     readonly scanLimit?: number
     readonly sampleLimit?: number
@@ -425,7 +433,8 @@ const layer = Layer.effect(
 
     const list: Interface["list"] = Effect.fn("Memory.list")(function* (input = {}) {
       const conditions = [visibility(input.includeGlobal)]
-      if (input.query) conditions.push(like(MemoryTable.content, `%${escapeLike(input.query)}%`))
+      if (input.query)
+        conditions.push(sql`${MemoryTable.content} like ${`%${escapeLike(input.query)}%`} escape ${"\\"}`)
       if (input.type) conditions.push(eq(MemoryTable.type, input.type))
       if (input.source) conditions.push(eq(MemoryTable.source, input.source))
       if (input.minimumImportance !== undefined)
@@ -1027,30 +1036,55 @@ const layer = Layer.effect(
       prepareContext(query).pipe(Effect.map((prepared) => prepared.text)),
     )
 
-    const extract: Interface["extract"] = Effect.fn("Memory.extract")(function* (text) {
+    const extractCandidatesFrom = Effect.fn("Memory.extractCandidatesFrom")(function* (
+      text: string, settlement?: { readonly facts: MemoryRunEvidence.Settlement; readonly messageID: string },
+    ) {
       const candidates = extractCandidates(text)
       for (const candidate of candidates) {
+        const proposedClass = memoryClassForType(candidate.type)
+        const policy = evaluateWrite({ proposedClass, source: "auto", scope: candidate.scope ?? "workspace",
+          sensitivity: "internal", credentialLike: redact(candidate.content) !== candidate.content,
+          shortTermState: false, crossWorkspace: false, explicitUserAuthority: false })
+        const facts = settlement?.facts
+        const prompt = facts?.prompts.find(value => value.messageID === settlement?.messageID)
+        const evidence = facts?.evidence.filter(value => prompt?.evidenceIDs.includes(value.id)) ?? []
+        const decision = facts && evidence.length ? evaluatePromotion({
+          runID: facts.runID, runStatus: facts.runStatus, verifierPassed: evidence.every(value => value.verificationStatus === "verified" && value.trust === "verified"),
+          evidence, observationIDs: evidence.flatMap(value => value.observationIDs ?? []), targetClass: proposedClass,
+          policyAllows: policy.action === "candidate", dedupStatus: "unknown", sensitiveContent: false, userConfirmed: false,
+        }) : undefined
         yield* kernel
           .propose({
+            ...(settlement ? { settlement } : {}),
             content: candidate.content,
-            proposedClass: memoryClassForType(candidate.type),
-            sourceEvidenceIDs: [],
+            proposedClass,
+            sourceEvidenceIDs: decision?.action === "candidate" ? decision.evidenceIDs : [],
             scope: candidate.scope ?? "workspace",
             sensitivity: "internal",
             confidence: 0.5,
             dedup: { status: "unknown", comparedMemoryIDs: [] },
             retention: { mode: "indefinite", reason: "Automatic extraction requires explicit approval." },
-            proposer: { kind: "agent" },
+            proposer: { kind: "agent", ...(facts ? { runID: facts.runID } : {}) },
             policy: {
               status: "review",
               policyVersion: MemoryKernel.POLICY_VERSION,
               reason: "Automatic extraction is candidate-only until user approval.",
             },
-            reason: "MemoryV2 automatic extraction",
+            reason: decision?.action === "candidate"
+              ? "Verified file outcome supports provenance only; proposed Memory content still requires user review."
+              : "MemoryV2 automatic extraction",
           })
           .pipe(Effect.mapError(gateError), Effect.ignore)
       }
       return []
+    })
+    const extract: Interface["extract"] = text => extractCandidatesFrom(text)
+    const extractRun: Interface["extractRun"] = Effect.fn("Memory.extractRun")(function* (runID) {
+      const runEvidence = yield* MemoryRunEvidence.Service
+      const facts = yield* runEvidence.collect(runID)
+      if (!facts) return
+      for (const prompt of facts.prompts)
+        yield* extractCandidatesFrom(prompt.text, { facts, messageID: prompt.messageID })
     })
 
     const governancePreview: Interface["governancePreview"] = Effect.fn("Memory.governancePreview")(function* (
@@ -1205,6 +1239,7 @@ const layer = Layer.effect(
       prepareContext,
       context,
       extract,
+      extractRun,
       governancePreview,
       governanceApply,
     })
@@ -1344,7 +1379,7 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 function escapeLike(value: string) {
-  return value.replaceAll("%", "\\%").replaceAll("_", "\\_")
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")
 }
 
 function sequenceSimilarity(left: string, right: string) {
@@ -1490,33 +1525,6 @@ function memoryClassForType(type: Type | undefined): "episodic" | "semantic" | "
   if (type === "identity" || type === "preference" || type === "constraint") return "user"
   if (type === "workflow" || type === "convention") return "project"
   return "semantic"
-}
-
-function extractCandidates(text: string): CreateInput[] {
-  const value = sanitize(text).slice(0, 800)
-  if (!value || /\b(?:for now|temporarily|just this time|today only)\b/i.test(value)) return []
-  const candidates: CreateInput[] = []
-  const add = (content: string, type: string) => {
-    const normalized = sanitize(content)
-    if (!normalized) return
-    candidates.push({
-      content: Content.make(normalized),
-      type: Type.make(type),
-      tags: Tags.make([Tag.make("governed-auto")]),
-      importance: Importance.make(type === "identity" ? 3 : 2),
-      source: "auto",
-      scope: "workspace",
-    })
-  }
-  const remember = value.match(/\b(?:remember|please remember|from now on)\b(?:\s+that)?[:\s]+(.+)/i)
-  if (remember?.[1]) add(remember[1], "constraint")
-  const prefer = value.match(/\bI\s+(?:strongly\s+)?prefer\s+(.+)/i)
-  if (prefer?.[1]) add(`User prefers ${prefer[1]}`, "preference")
-  const always = value.match(/\b(?:always|never)\s+(.+)/i)
-  if (always?.[0]) add(always[0], "convention")
-  const identity = value.match(/\b(?:my name is|call me)\s+([^.!?\n]{1,80})/i)
-  if (identity?.[1]) add(`User's preferred name is ${identity[1].trim()}`, "identity")
-  return candidates.slice(0, 3)
 }
 
 const PersistentAutoTypes = new Set(["preference", "identity", "convention", "workflow", "constraint"])

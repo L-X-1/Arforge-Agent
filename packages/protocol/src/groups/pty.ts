@@ -10,6 +10,12 @@ export const PTY_CONNECT_TICKET_QUERY = "ticket"
 export const PTY_CONNECT_TOKEN_HEADER = "x-arforge-ticket"
 export const PTY_CONNECT_TOKEN_HEADER_VALUE = "1"
 
+export const ShellItem = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  acceptable: Schema.Boolean,
+})
+
 const PTY_CONNECT_PATH = /^\/api\/pty\/[^/]+\/connect$/
 
 // Authorization middleware skips credential checks when this matches; the PTY connect handler
@@ -19,6 +25,20 @@ export function hasPtyConnectTicketURL(url: URL) {
 }
 
 export const PtyGroup = HttpApiGroup.make("server.pty")
+  .add(
+    HttpApiEndpoint.get("pty.shells", "/api/pty/shells", {
+      query: LocationQuery,
+      success: Location.response(Schema.Array(ShellItem)),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.pty.shells",
+          summary: "List available shells",
+          description: "List installed shell choices without creating a PTY session.",
+        }),
+      ),
+  )
   .add(
     HttpApiEndpoint.get("pty.list", "/api/pty", {
       query: LocationQuery,

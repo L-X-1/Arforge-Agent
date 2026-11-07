@@ -1,5 +1,6 @@
 import { Show, type JSX } from "solid-js"
 import { DropdownMenu } from "@arforge-ai/ui/dropdown-menu"
+import { Mark } from "@arforge-ai/ui/logo"
 import { Icon } from "@arforge-ai/ui/icon"
 import { IconButton } from "@arforge-ai/ui/icon-button"
 import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
@@ -12,7 +13,7 @@ import { usePlatform } from "@/context/platform"
 export function WindowsAppMenu(props: {
   command: ReturnType<typeof useCommand>
   platform: ReturnType<typeof usePlatform>
-  variant?: "legacy" | "v2"
+  variant?: "legacy" | "v2" | "brand"
 }) {
   let lastFocused: HTMLElement | undefined
 
@@ -48,7 +49,16 @@ export function WindowsAppMenu(props: {
 
   return (
     <DropdownMenu gutter={4} modal={false} placement="bottom-start">
-      {props.variant === "v2" ? (
+      {props.variant === "brand" ? (
+        <DropdownMenu.Trigger
+          class="workspace-brand-menu"
+          aria-label="Arforge menu"
+          onPointerDown={rememberFocus}
+          onKeyDown={rememberFocus}
+        >
+          <Mark class="size-5" />
+        </DropdownMenu.Trigger>
+      ) : props.variant === "v2" ? (
         <div
           data-component="desktop-icon-button"
           class="flex h-7 w-9 shrink-0 items-center justify-center rounded-[6px] px-1"
@@ -77,7 +87,19 @@ export function WindowsAppMenu(props: {
       <DropdownMenu.Portal>
         <DropdownMenu.Content class="desktop-app-menu">
           <DropdownMenu.Group>
-            <DropdownMenu.GroupLabel class="desktop-app-menu-heading">Arforge</DropdownMenu.GroupLabel>
+            <DropdownMenu.GroupLabel class="desktop-app-menu-heading">
+              Arforge
+              <Show when={import.meta.env.VITE_ARFORGE_CHANNEL && import.meta.env.VITE_ARFORGE_CHANNEL !== "prod"}>
+                <span class="ml-auto text-11-regular text-v2-text-text-muted">
+                  {import.meta.env.VITE_ARFORGE_CHANNEL === "dev"
+                    ? "TEST"
+                    : import.meta.env.VITE_ARFORGE_CHANNEL?.toUpperCase()}
+                </span>
+              </Show>
+            </DropdownMenu.GroupLabel>
+            <Show when={props.command.options.some((option) => option.id === "debug.tools.toggle")}>
+              <DesktopMenuItem label="切换性能诊断" onSelect={() => runCommand("debug.tools.toggle")} />
+            </Show>
             {DESKTOP_MENU.filter((menu) => desktopMenuVisible(menu, "windows")).map((menu) => (
               <DesktopMenuSubmenu label={menu.label}>
                 {menu.items

@@ -1,6 +1,11 @@
 import { describe, expect } from "bun:test"
 import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
-import { join } from "node:path"
+import * as SkillContract from "@arforge-ai/schema/skill-v1"
+import { eq } from "drizzle-orm"
+import { basename, isAbsolute, join } from "node:path"
+import { realpath } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { AgentV2 } from "@arforge-ai/core/agent"
 import { ActionGateway } from "@arforge-ai/core/action-gateway"
 import { Database } from "@arforge-ai/core/database/database"
@@ -21,6 +26,9 @@ import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionMessage } from "@arforge-ai/core/session/message"
 import { SessionSchema } from "@arforge-ai/core/session/schema"
 import { SkillStoreV1 } from "@arforge-ai/core/skill-store"
+import {
+  SkillAuditTable, SkillCanaryObservationTable, SkillDeploymentTable, SkillEvaluationTable, SkillVersionTable,
+} from "@arforge-ai/core/skill-store/sql"
 import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { testEffect } from "./lib/effect"
@@ -56,23 +64,6 @@ const layer = AppNodeBuilder.build(
   ],
 )
 const it = testEffect(layer)
-
-const reopenedExperienceLayer = (databasePath: string) =>
-  AppNodeBuilder.build(
-    LayerNode.group([
-      Database.node,
-      EventV2.node,
-      DurableAction.globalNode,
-      DurableRun.globalNode,
-      RuntimeEvaluation.node,
-      LearningV2.node,
-      ExperienceStoreV1.node,
-    ]),
-    [
-      [Database.node, Database.layerFromPath(databasePath)],
-      [Location.node, current],
-    ],
-  )
 
 const budget = AgentRuntime.Budget.make({
   maxAttempts: 1,
@@ -283,6 +274,15 @@ const promoteSkill = Effect.fn("Stage7E2E.promoteSkill")(function* (
 ) {
   const experience = yield* ExperienceStoreV1.Service
   const skills = yield* SkillStoreV1.Service
+  const { db } = yield* Database.Service
+  // This layer owns an isolated in-memory SQLite database; snapshot every Skill table.
+  const skillSnapshot = () => Effect.all([
+    db.select().from(SkillVersionTable).all(),
+    db.select().from(SkillEvaluationTable).all(),
+    db.select().from(SkillAuditTable).all(),
+    db.select().from(SkillCanaryObservationTable).all(),
+    db.select().from(SkillDeploymentTable).all(),
+  ])
   const evaluation = yield* skills.recordEvaluation({
     identity,
     candidateID: candidate.candidateID,
@@ -323,6 +323,48 @@ const promoteSkill = Effect.fn("Stage7E2E.promoteSkill")(function* (
     minimumSuccessRate: SkillStoreV1.Policy.minimumCanarySuccessRate,
     promotionReady: false,
   })
+  if (suffix === "v1") {
+    const originalRow = yield* db.select().from(SkillVersionTable).where(eq(SkillVersionTable.id, candidate.candidateID)).get()
+    const originalEvaluation = yield* db.select().from(SkillEvaluationTable).where(eq(SkillEvaluationTable.candidate_id, candidate.candidateID)).get()
+    if (!originalRow || !originalEvaluation) return yield* Effect.die(new Error("Skill policy fixture is missing"))
+    const { recordDigest, createdAt, updatedAt, ...material } = evaluation.candidate
+    const encodedMaterial = { ...material, skill: Schema.encodeUnknownSync(SkillContract.Skill)(evaluation.candidate.skill) }
+    expect(canonicalHash(encodedMaterial)).toBe(recordDigest)
+    // Explicit historical/corruption fixtures, not normal producer or execution proof.
+    const fixtures = [
+      { label: "legacy passed report with new failures", report: { ...evaluation.report, newFailureCount: 2 }, canonical: true, error: "current safety policy" },
+      { label: "legacy success regression hidden by flags", report: { ...evaluation.report, regressionCases: ["release-check-a"] }, canonical: true, error: "current safety policy" },
+      { label: "failed safety check with passed flag", report: { ...evaluation.report, checks: { ...evaluation.report.checks, noNewSecret: false } }, canonical: true, error: "current safety policy" },
+      { label: "nonzero safety counters hidden by flags", report: { ...evaluation.report, newSecretFindings: 1, newEgressAttempts: 1 }, canonical: true, error: "current safety policy" },
+      { label: "tampered content with unchanged digest pointers", report: { ...evaluation.report, utilityDelta: 123 }, canonical: false, error: "integrity verification" },
+      { label: "canonical report for a different candidate", report: { ...evaluation.report, candidateDigest: "f".repeat(64) }, canonical: true, error: "integrity verification" },
+      { label: "canonical report for a different baseline", report: { ...evaluation.report, baselineDigest: "e".repeat(64) }, canonical: true, error: "integrity verification" },
+    ]
+    for (const fixture of fixtures) {
+      const reportDigest = fixture.canonical ? canonicalHash(fixture.report)! : originalEvaluation.report_digest
+      yield* db.update(SkillEvaluationTable).set({ report: fixture.report, report_digest: reportDigest }).where(eq(SkillEvaluationTable.id, originalEvaluation.id)).run()
+      yield* db.update(SkillVersionTable).set({
+        evaluation_digest: reportDigest,
+        record_digest: canonicalHash({ ...encodedMaterial, evaluationDigest: reportDigest })!,
+      }).where(eq(SkillVersionTable.id, originalRow.id)).run()
+      const before = yield* skillSnapshot()
+      const rejected = yield* skills.startCanary({
+        identity, candidateID: candidate.candidateID, expectedRevision: evaluation.candidate.revision,
+        trafficPercent: 100, reason: `reject ${fixture.label}`,
+      }).pipe(Effect.match({
+        onSuccess: () => ({ rejected: false, tag: "success", reason: "" }),
+        onFailure: (error) => ({ rejected: true, tag: error._tag, reason: error._tag === "SkillStore.Error" ? error.reason : "" }),
+      }))
+      expect(rejected.rejected).toBe(true)
+      expect(rejected.tag).toBe("SkillStore.Error")
+      expect(rejected.reason).toContain(fixture.error)
+      expect(yield* skillSnapshot()).toEqual(before)
+    }
+    // Only test setup restores the exact original rows; the Product rejection writes nothing.
+    yield* db.update(SkillEvaluationTable).set(originalEvaluation).where(eq(SkillEvaluationTable.id, originalEvaluation.id)).run()
+    yield* db.update(SkillVersionTable).set(originalRow).where(eq(SkillVersionTable.id, originalRow.id)).run()
+  }
+  const auditBefore = yield* skills.verifyAudit(identity, candidate.candidateID)
   let current = yield* skills.startCanary({
     identity,
     candidateID: candidate.candidateID,
@@ -330,6 +372,16 @@ const promoteSkill = Effect.fn("Stage7E2E.promoteSkill")(function* (
     trafficPercent: 100,
     reason: `approve bounded canary ${suffix}`,
   })
+  const afterStart = yield* skillSnapshot()
+  const canaryReplay = yield* skills.startCanary({
+    identity, candidateID: candidate.candidateID, expectedRevision: evaluation.candidate.revision,
+    trafficPercent: 100, reason: `approve bounded canary ${suffix}`,
+  })
+  expect(canaryReplay).toEqual(current)
+  expect(yield* skillSnapshot()).toEqual(afterStart)
+  const auditAfter = yield* skills.verifyAudit(identity, candidate.candidateID)
+  expect(auditAfter.valid).toBe(true)
+  expect(auditAfter.events).toBe(auditBefore.events + 1)
   const canaryDigest = current.canaryDigest
   if (!canaryDigest) return yield* Effect.die(new Error("started Skill canary has no immutable binding"))
   for (let index = 0; index < 3; index++) {
@@ -576,7 +628,8 @@ describe("Stage 7 durable Experience and Skill lifecycle", () => {
 
   it.effect("keeps owner-scoped EvidenceID existence after a SQLite owner restart", Effect.promise(async () => {
     const temporary = await tmpdir()
-    const databasePath = join(temporary.path, "evidence-resolver.sqlite")
+    const ownedRoot = await realpath(temporary.path)
+    const databasePath = join(ownedRoot, "evidence-resolver.sqlite")
     const evidence = EvidenceV2.create({
       evidenceID: AgentRuntime.EvidenceID.make("evd_stage7_restart"),
       sourceID: "verifier:stage7-restart",
@@ -597,109 +650,62 @@ describe("Stage 7 durable Experience and Skill lifecycle", () => {
     if (!recordDigest) throw new Error("restart Evidence fixture is not canonicalizable")
     const corruptEvidenceID = AgentRuntime.EvidenceID.make("evd_stage7_corrupt")
     try {
-      const seedLayer = AppNodeBuilder.build(LayerNode.group([Database.node]), [
-        [Database.node, Database.layerFromPath(databasePath)],
-      ])
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const database = yield* Database.Service
-            yield* database.db
-              .insert(ExperienceEvidenceTable)
-              .values({
-                tenant_id: identity.tenantID,
-                owner_user_id: identity.userID,
-                id: evidence.id,
-                run_id: evidence.runID!,
-                action_id: evidence.actionID!,
-                observation_id: evidence.observationIDs![0]!,
-                record_digest: recordDigest,
-                record,
-                time_created: 1_725_000_000_000,
-                time_updated: 1_725_000_000_000,
-              })
-              .run()
-              .pipe(Effect.orDie)
-            yield* database.db
-              .insert(ExperienceEvidenceTable)
-              .values({
-                tenant_id: identity.tenantID,
-                owner_user_id: identity.userID,
-                id: corruptEvidenceID,
-                run_id: evidence.runID!,
-                action_id: evidence.actionID!,
-                observation_id: evidence.observationIDs![0]!,
-                // The row deliberately points at a valid payload while its
-                // digest and primary ID disagree. Resolution must fail closed
-                // instead of treating this as an existing reference.
-                record_digest: "0".repeat(64),
-                record,
-                time_created: 1_725_000_000_001,
-                time_updated: 1_725_000_000_001,
-              })
-              .run()
-              .pipe(Effect.orDie)
-          }).pipe(Effect.provide(seedLayer)),
-        ),
-      )
-
-      const firstRead = await yieldResolver(databasePath, identity, evidence.id)
+      const input = { identity, record, recordDigest, corruptEvidenceID }
+      const first = await restartEvidenceOwner(databasePath, "seed", input)
+      const firstRead = first.read
       expect(firstRead.valid).toBe(true)
       expect(firstRead.present).toEqual([evidence.id])
-      const firstFacts = await yieldResolverFacts(databasePath, identity, evidence.id)
+      const firstFacts = first.facts
       expect(firstFacts.resolution).toEqual(firstRead)
       expect(firstFacts.recordDigests).toEqual([{ evidenceID: evidence.id, recordDigest }])
 
-      const secondRead = await yieldResolver(databasePath, identity, evidence.id)
+      // Each call awaits natural exit before the next process opens the same file.
+      const second = await restartEvidenceOwner(databasePath, "read", input)
+      expect(second.pid).not.toBe(first.pid)
+      const secondRead = second.read
       expect(secondRead).toEqual(firstRead)
-      const secondFacts = await yieldResolverFacts(databasePath, identity, evidence.id)
+      const secondFacts = second.facts
       expect(secondFacts).toEqual(firstFacts)
-      const foreignRead = await yieldResolver(databasePath, { ...identity, userID: "usr_stage7_other" }, evidence.id)
+      const foreignRead = second.foreign
       expect(foreignRead.valid).toBe(false)
       expect(foreignRead.present).toEqual([])
       expect(foreignRead.missing).toEqual([evidence.id])
-
-      const corruption = await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const experience = yield* ExperienceStoreV1.Service
-            return yield* experience.resolveEvidenceIDs(identity, [corruptEvidenceID]).pipe(Effect.flip)
-          }).pipe(Effect.provide(reopenedExperienceLayer(databasePath))),
-        ),
-      )
-      expect(corruption._tag).toBe("ExperienceStore.Error")
+      expect(second.corruptionTag).toBe("ExperienceStore.Error")
     } finally {
+      // Verify this exact resolved owned root before the existing native helper deletes it.
+      expect(isAbsolute(ownedRoot)).toBe(true)
+      expect(basename(ownedRoot)).toMatch(/^arforge-core-test-[A-Za-z0-9]+$/)
+      expect(await realpath(temporary.path)).toBe(ownedRoot)
       await temporary[Symbol.asyncDispose]()
     }
+    expect(existsSync(ownedRoot)).toBe(false)
   }))
 })
 
-function yieldResolver(
+async function restartEvidenceOwner(
   databasePath: string,
-  owner: typeof identity,
-  evidenceID: AgentRuntime.EvidenceID,
-): Promise<EvidenceV2.ReferenceResolution> {
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const experience = yield* ExperienceStoreV1.Service
-        return yield* experience.resolveEvidenceIDs(owner, [evidenceID])
-      }).pipe(Effect.provide(reopenedExperienceLayer(databasePath))),
-    ),
-  )
-}
-
-function yieldResolverFacts(
-  databasePath: string,
-  owner: typeof identity,
-  evidenceID: AgentRuntime.EvidenceID,
-): Promise<EvidenceV2.ReferenceResolutionFacts> {
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const experience = yield* ExperienceStoreV1.Service
-        return yield* experience.resolveEvidenceFacts(owner, [evidenceID])
-      }).pipe(Effect.provide(reopenedExperienceLayer(databasePath))),
-    ),
-  )
+  mode: "seed" | "read",
+  input: { identity: typeof identity; record: unknown; recordDigest: string; corruptEvidenceID: AgentRuntime.EvidenceID },
+): Promise<{
+  pid: number
+  read: EvidenceV2.ReferenceResolution
+  facts: EvidenceV2.ReferenceResolutionFacts
+  foreign: EvidenceV2.ReferenceResolution
+  corruptionTag: string
+}> {
+  const worker = Bun.spawn([
+    process.execPath, fileURLToPath(new URL("./fixture/stage7-experience-restart-worker.ts", import.meta.url)),
+    databasePath, mode,
+  ], { stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+  worker.stdin.write(JSON.stringify(input))
+  worker.stdin.end()
+  const [code, output, error] = await Promise.all([
+    worker.exited, new Response(worker.stdout).text(), new Response(worker.stderr).text(),
+  ])
+  expect(code).toBe(0)
+  expect(error).toBe("")
+  const result = JSON.parse(output.trim())
+  expect(result.pid).toBe(worker.pid)
+  expect(result.pid).not.toBe(process.pid)
+  return result
 }

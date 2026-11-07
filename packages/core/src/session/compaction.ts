@@ -115,6 +115,7 @@ type Dependencies = {
   readonly config: readonly Config.Entry[]
   readonly invariants?: RuntimeInvariants.RuntimeInvariantRegistry
   readonly checkpoints?: CheckpointStore
+  readonly commit?: (settle: Effect.Effect<void>) => Effect.Effect<void>
 }
 
 type CompactionTransactionInvariantContext = Readonly<{
@@ -192,7 +193,7 @@ export type ExecuteProvider = (input: {
 
 type Input = {
   readonly sessionID: SessionSchema.ID
-  readonly runID: AgentRuntime.RunID
+  readonly runID?: AgentRuntime.RunID
   /** Durable provider-attempt identity owned by the enclosing SessionRunner. */
   readonly turnStep?: number
   readonly attempt?: number
@@ -202,6 +203,9 @@ type Input = {
   readonly executeProvider: ExecuteProvider
   /** Binds the rebuildable Surface to the currently durable ContextEpoch. */
   readonly surfaceEpoch?: number
+  readonly reason?: "auto" | "manual"
+  /** Recheck durable source across the provider Promise boundary before commit. */
+  readonly sourceCurrent?: () => Effect.Effect<boolean>
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
@@ -393,6 +397,8 @@ export type TransactionDependencies = Readonly<{
   readonly events: EventV2.Interface
   readonly invariants?: RuntimeInvariants.RuntimeInvariantRegistry
   readonly checkpoints?: CheckpointStore
+  /** Optional owning transaction revalidates durable source atomically with settlement. */
+  readonly commit?: (settle: Effect.Effect<void>) => Effect.Effect<void>
 }>
 
 export type TransactionInput = Readonly<{
@@ -499,7 +505,7 @@ export const runTransactional = Effect.fn("SessionCompaction.runTransactional")(
                   const candidateDigest = checkpoint.candidateDigest
                   if (!text || !candidateDigest)
                     return yield* Effect.die("Committed compaction is missing settlement evidence")
-                  yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
+                  const settle = dependencies.events.publish(SessionEvent.Compaction.Ended, {
                     sessionID: input.sessionID,
                     messageID: input.messageID,
                     timestamp: yield* DateTime.now,
@@ -509,7 +515,8 @@ export const runTransactional = Effect.fn("SessionCompaction.runTransactional")(
                     usage: input.usage?.(),
                     operationID: checkpoint.operationID,
                     candidateDigest,
-                  })
+                  }).pipe(Effect.asVoid)
+                  yield* dependencies.commit ? dependencies.commit(settle) : settle
                   settlementPublished = true
                 }
                 yield* dependencies.checkpoints!.append(input.sessionID, checkpoint)
@@ -553,7 +560,8 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     const tokenizer = input.model.tokenizer
-    const selected = select(input.entries, config.tokens, tokenizer)
+    const keepTokens = input.reason === "manual" ? 0 : config.tokens
+    const selected = select(input.entries, keepTokens, tokenizer)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
     const summaryPrompt = buildPrompt({
@@ -587,6 +595,7 @@ export const make = (dependencies: Dependencies) => {
         events: dependencies.events,
         invariants: dependencies.invariants,
         checkpoints: dependencies.checkpoints,
+        commit: dependencies.commit,
       },
       {
         sessionID: input.sessionID,
@@ -594,13 +603,13 @@ export const make = (dependencies: Dependencies) => {
         turnStep: input.turnStep,
         attempt: input.attempt,
         messageID,
-        reason: "auto",
+        reason: input.reason ?? "auto",
         store,
         // When an existing summary is being refreshed and the remaining
         // verbatim tail already fits the budget, force a transaction head so
         // the provider still gets a replaceable surface. The durable event
         // keeps `selected.recent` verbatim, so this does not discard the tail.
-        recentTokenBudget: selected.head.length === 0 ? 0 : config.tokens,
+        recentTokenBudget: selected.head.length === 0 ? 0 : keepTokens,
         recent: selected.recent,
         anchors: {
           objective: "Preserve user intent and exact continuation state.",
@@ -705,6 +714,9 @@ export const make = (dependencies: Dependencies) => {
               ),
             )
             const summarized = await summaryPending
+            if (input.sourceCurrent && !(await Effect.runPromise(input.sourceCurrent().pipe(Effect.provide(requestContext))))) {
+              store.append([{ id: `stale:${messageID}`, sourceSeq: (store.snapshot().sourceLog.at(-1)?.sourceSeq ?? 0) + 1, role: "context", text: "[durable source changed during compaction]" }])
+            }
             const summary = chunks.join("")
             return summarized && finished && !failed && summary.trim() ? summary.trim() : undefined
           },
@@ -720,7 +732,7 @@ export const make = (dependencies: Dependencies) => {
       ),
     )
     if (compacted?.status !== "committed") return false
-    yield* dependencies.events.publish(SessionEvent.Synthetic, {
+    if (input.reason !== "manual") yield* dependencies.events.publish(SessionEvent.Synthetic, {
       sessionID: input.sessionID,
       messageID: SessionMessage.ID.create(),
       timestamp: yield* DateTime.now,
@@ -765,6 +777,7 @@ export const make = (dependencies: Dependencies) => {
     return yield* compactAfterOverflowImpl(input)
   })
   return {
+    compactManual: (input: Input) => compactAfterOverflow({ ...input, reason: "manual" }),
     compactIfNeeded,
     compactAfterOverflow,
     pruneToolResultsIfNeeded,

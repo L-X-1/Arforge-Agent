@@ -1,10 +1,33 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Model } from "../src/model"
-import { Prompt, RequestSystem } from "../src/prompt"
+import { FileAttachment, Prompt, RequestSystem } from "../src/prompt"
+import { PromptInput } from "../src/prompt-input"
 import { Provider } from "../src/provider"
 
 describe("Prompt request-scoped system contract", () => {
+  test("structurally preserves both resource targets while Core owns semantic equality", () => {
+    const input = {
+      text: "@manual",
+      files: [
+        { uri: "evidence://displayed/manual", resource: { server: "server-B", uri: "evidence://other/private" } },
+      ],
+    }
+    expect(Schema.decodeUnknownSync(PromptInput.Prompt)(input)).toEqual(input)
+  })
+  test("resource references survive input, constructors and history-compatible JSON without changing media", () => {
+    const uri = "evidence://shared/manual"
+    const files = ["server-A", "server-B"].map((server) =>
+      FileAttachment.create({ uri, mime: "text/plain", resource: { server, uri } }),
+    )
+    files.push(FileAttachment.create({ uri: "data:image/png;base64,AAAA", mime: "image/png", name: "image.png" }))
+    const prompt = Prompt.make({ text: "review", files, system: RequestSystem.create("Keep this turn instruction.") })
+    const encoded = Schema.encodeSync(Prompt)(prompt)
+    expect(Schema.decodeUnknownSync(PromptInput.Prompt)(encoded).files).toEqual(files)
+    expect(Schema.decodeUnknownSync(Prompt)(JSON.parse(JSON.stringify(encoded))).files).toEqual(files)
+    expect(Prompt.fromUserMessage(prompt)).toEqual(prompt)
+    expect(encoded.files?.[2]).not.toHaveProperty("resource")
+  })
   test("round-trips one explicit request/turn instruction", () => {
     const prompt = Prompt.make({
       text: "inspect the workspace",

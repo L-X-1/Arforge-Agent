@@ -186,11 +186,13 @@ export interface Interface {
     readonly runID?: AgentRuntime.RunID
     readonly limit?: number
     readonly cursor?: string
+    readonly allowedSessionIDs?: ReadonlySet<string>
   }) => Effect.Effect<ListPage, CorruptHistoryError | InvalidListCursorError>
   readonly list: (input?: {
     readonly sessionID?: AgentRuntime.SessionAction["sessionID"]
     readonly runID?: AgentRuntime.RunID
     readonly limit?: number
+    readonly allowedSessionIDs?: ReadonlySet<string>
   }) => Effect.Effect<ReadonlyArray<Snapshot>, CorruptHistoryError>
   /**
    * Append a read-only external-state observation to the same Action
@@ -1041,6 +1043,9 @@ const layer = Layer.effect(
     const listPage: Interface["listPage"] = Effect.fn("DurableAction.listPage")(function* (input) {
       const cursor = input?.cursor
       if (cursor !== undefined && !cursor.startsWith("evt_")) return yield* new InvalidListCursorError({ cursor })
+      if (input?.allowedSessionIDs?.size === 0) return { items: [], nextCursor: undefined }
+      const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+      const scoped = input?.allowedSessionIDs !== undefined || !Database.isDefaultLocalPrincipal(principal)
       const rows = yield* db
         .select({ id: EventTable.id, data: EventTable.data })
         .from(EventTable)
@@ -1048,6 +1053,8 @@ const layer = Layer.effect(
           and(
             eq(EventTable.type, EventV2.versionedType(AgentRuntime.Event.ActionProposed.type, 1)),
             cursor === undefined ? undefined : lt(EventTable.id, EventV2.ID.make(cursor)),
+            scoped ? eq(EventTable.tenant_id, principal.tenantID) : undefined,
+            scoped ? eq(EventTable.owner_user_id, principal.userID) : undefined,
           ),
         )
         .orderBy(desc(EventTable.id))
@@ -1059,6 +1066,10 @@ const layer = Layer.effect(
       const limit = input?.limit ?? 100
       for (const row of rows) {
         lastExaminedID = row.id
+        if (input?.allowedSessionIDs !== undefined) {
+          const sessionID = row.data && typeof row.data === "object" ? row.data.sessionID : undefined
+          if (typeof sessionID !== "string" || !input.allowedSessionIDs.has(sessionID)) continue
+        }
         const proposed = Schema.decodeUnknownSync(AgentRuntime.Event.ActionProposed.data)(row.data)
         if (seen.has(proposed.actionID)) continue
         seen.add(proposed.actionID)

@@ -152,7 +152,7 @@ export function SessionNavigationMenu(props: Target & { onArchive: () => Promise
     navigation.openAction(mode, target)
   }
   return (
-    <MenuV2 placement="bottom-end" gutter={6} modal={false}>
+    <MenuV2 placement="bottom-end" gutter={4} modal={false}>
       <MenuV2.Trigger
         as={IconButtonV2}
         type="button"

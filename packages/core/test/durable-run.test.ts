@@ -582,6 +582,26 @@ describe("DurableRun", () => {
     }),
   )
 
+  it.effect("rejects queueing a recovering run and retains the legal resume transition", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableRun.Service
+      const created = yield* create(runtime)
+      const runID = created.run.id
+      for (const to of ["preflight", "queued", "running", "failed", "recovering"] as const)
+        yield* runtime.transition({ runID, to, reason: `Recovery guard fixture: ${to}` })
+      const before = yield* runtime.load(runID)
+      const rejected = yield* runtime.transition({ runID, to: "queued", reason: "Illegal recovery shortcut" }).pipe(Effect.exit)
+      expect(String(rejected)).toContain("DurableRun.InvalidTransitionError")
+      const after = yield* runtime.load(runID)
+      expect(after.run.status).toBe("recovering")
+      expect(after.lastSequence).toBe(before.lastSequence)
+      expect(after.lastTransition).toEqual(before.lastTransition)
+      const resumed = yield* runtime.transition({ runID, to: "running", reason: "Legal explicit recovery" })
+      expect(resumed.run.status).toBe("running")
+      expect(resumed.lastTransition).toMatchObject({ from: "recovering", to: "running" })
+    }),
+  )
+
   it.effect("lists only resumable runs for the requested session", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableRun.Service
@@ -1742,3 +1762,43 @@ describe("DurableRun", () => {
     }),
   )
 })
+
+it.effect("filters nonlocal run event ownership and allowed Sessions before foreign replay", () => Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  const runtime = yield* DurableRun.Service
+  const owned = yield* create(runtime)
+  const peer = yield* create(runtime)
+  const tenant = yield* create(runtime)
+  const unknown = yield* create(runtime)
+  const identity = { tenantID: "ten_scope_a", userID: "usr_scope_a" }
+  for (const [snapshot, tenantID, userID] of [
+    [owned, identity.tenantID, identity.userID],
+    [peer, identity.tenantID, "usr_scope_b"],
+    [tenant, "ten_scope_b", identity.userID],
+    [unknown, identity.tenantID, identity.userID],
+  ] as const) {
+    yield* db.update(EventTable).set({ tenant_id: tenantID, owner_user_id: userID }).where(eq(EventTable.aggregate_id, snapshot.run.id)).run().pipe(Effect.orDie)
+    yield* db.update(EventSequenceTable).set({ tenant_id: tenantID, owner_user_id: userID }).where(eq(EventSequenceTable.aggregate_id, snapshot.run.id)).run().pipe(Effect.orDie)
+  }
+  for (const snapshot of [peer, tenant])
+    yield* db.update(EventTable).set({ data: { sessionID: owned.run.sessionID } }).where(eq(EventTable.aggregate_id, snapshot.run.id)).run().pipe(Effect.orDie)
+  yield* db.update(EventTable).set({ data: { sessionID: "ses_scope_unknown" } }).where(eq(EventTable.aggregate_id, unknown.run.id)).run().pipe(Effect.orDie)
+  const result = yield* Database.principalContext(identity, runtime.list({ allowedSessionIDs: new Set([owned.run.sessionID]), limit: 1 }))
+  expect(result.map((snapshot) => snapshot.run.id)).toEqual([owned.run.id])
+  expect(yield* Database.principalContext(identity, runtime.list({ allowedSessionIDs: new Set(), limit: 1 }))).toEqual([])
+  expect((yield* runtime.list({ limit: 100 }).pipe(Effect.exit))._tag).toBe("Failure")
+}))
+
+it.effect("preserves private default run history across stored owners", () => Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  const runtime = yield* DurableRun.Service
+  const owned = yield* create(runtime)
+  const other = yield* create(runtime)
+  yield* db.update(EventTable).set({ tenant_id: "ten_other", owner_user_id: "usr_other" }).where(eq(EventTable.aggregate_id, other.run.id)).run().pipe(Effect.orDie)
+  const ids = (yield* runtime.list({ limit: 100 })).map((snapshot) => snapshot.run.id)
+  expect(ids).toContain(owned.run.id)
+  expect(ids).toContain(other.run.id)
+  yield* db.update(EventTable).set({ data: { sessionID: owned.run.sessionID } }).where(eq(EventTable.aggregate_id, other.run.id)).run().pipe(Effect.orDie)
+  const scoped = yield* Database.principalContext(Database.DefaultLocalPrincipal, runtime.list({ allowedSessionIDs: new Set([owned.run.sessionID]), limit: 1 }))
+  expect(scoped.map((snapshot) => snapshot.run.id)).toEqual([owned.run.id])
+}))

@@ -1,3 +1,5 @@
+import { ManagementCollection } from "../control-center/management-collection"
+import { ManagementStatus } from "../settings-v2/management-status"
 import { useControlCenterText } from "@/components/control-center/control-center-text"
 import { useLanguage } from "@/context/language"
 import { Button } from "@arforge-ai/ui/button"
@@ -96,28 +98,35 @@ export function SessionRunHistory(props: {
     }
   }
   createEffect(
-    on([() => props.api(), () => props.location().location.directory, () => props.location().location.workspace], () => {
-      request++
-      setState({ items: [], report: undefined, error: "", loading: false })
-      if (hasOperationDirectory(props.location())) void refresh()
-    }),
+    on(
+      [() => props.api(), () => props.location().location.directory, () => props.location().location.workspace],
+      () => {
+        request++
+        setState({ items: [], report: undefined, error: "", loading: false })
+        if (hasOperationDirectory(props.location())) void refresh()
+      },
+    ),
   )
   return (
-    <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3" data-testid="run-history" aria-busy={state.loading}>
+    <div
+      class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3"
+      data-testid="run-history"
+      aria-busy={state.loading}
+    >
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 class="text-12-medium text-text-strong">{t("Persistent run history")}</h3>
-          <p class="text-12-regular text-text-weak">
+          <h3 class="arforge-management-section-title text-text-strong">{t("Persistent run history")}</h3>
+          <p class="arforge-management-copy text-text-weak">
             {t(
               "Read the Arforge Core transaction, trace, and message artifacts through the shared typed Server API. Reports are read-only and remain owned by one persistence source.",
             )}
           </p>
         </div>
         <div class="flex items-end gap-2">
-          <label class="flex flex-col gap-1 text-11-medium text-text-strong">
+          <label class="flex flex-col gap-1 arforge-management-section-title text-text-strong">
             {t("Limit")}
             <select
-              class="h-8 rounded-md border border-border-weak-base bg-background-base px-2 text-12-regular text-text-strong"
+              class="h-8 rounded-md border border-border-weak-base bg-background-base px-2 arforge-management-copy text-text-strong"
               value={state.limit}
               onChange={(event) => {
                 setState("limit", Number(event.currentTarget.value))
@@ -140,89 +149,101 @@ export function SessionRunHistory(props: {
       </div>
 
       <Show when={state.error}>
-        <p role="alert" class="rounded-md border border-border-warning p-3 text-12-regular text-text-warning">{state.error}</p>
+        <p role="alert" class="rounded-md border border-border-warning p-3 arforge-management-copy text-text-warning">
+          {state.error}
+        </p>
       </Show>
-      <Show when={state.loading}><p role="status" class="text-12-regular text-text-weak">{language.t("common.loading")}</p></Show>
+      <ManagementStatus
+        loading={state.loading}
+        initialLoading={state.items.length === 0}
+        scope={props.location().location.directory}
+      />
 
-      <div class="flex flex-col gap-2">
-        <For each={state.items}>
-          {(item) => (
-            <button
-              type="button"
-              class="flex w-full flex-col gap-1 rounded-md border border-border-weak-base bg-background-base p-3 text-left hover:bg-background-weak disabled:opacity-50"
-              disabled={props.disabled || state.loading}
-              onClick={() => void open(item.run_id)}
-            >
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="text-12-medium text-text-strong">{item.run_id}</span>
-                <span class="text-10-regular text-text-weak">{formatTime(item.created, t("Time unknown"))}</span>
+      <ManagementCollection
+        label={t("Persistent run history")}
+        scope={JSON.stringify(props.location().location)}
+        scopeLabel={props.location().location.directory}
+        items={state.items}
+        identity={(item) => item.run_id}
+        title={(item) => item.run_id}
+        description={(item) =>
+          formatTime(item.created, t("Time unknown")) + " · " + item.changed_files + " " + t("Changed files")
+        }
+        searchText={(item) => item.answer_preview ?? ""}
+        selectedIdentity={state.report?.run_id}
+        loading={state.loading}
+        selectionDisabled={props.disabled || state.loading}
+        onSelect={(item) => void open(item.run_id)}
+        emptyText={t("No persisted runs are available in this Arforge profile.")}
+      >
+        {(item) => (
+          <div class="arforge-management-task-form">
+            <dl class="arforge-management-definition">
+              <div>
+                <dt>Run ID</dt>
+                <dd>
+                  <code>{item.run_id}</code>
+                </dd>
               </div>
-              <span class="text-11-regular text-text-weak">
-                {item.changed_files}
-                {t("files \u00B7")}
-                {item.trace_events}
-                {t("events \u00B7")}
-                {item.messages_count}
-                {t("messages")}
-              </span>
-              <Show when={item.answer_preview}>
-                <span class="line-clamp-2 text-11-regular text-text-weak">{item.answer_preview}</span>
-              </Show>
-            </button>
-          )}
-        </For>
-        <Show when={!state.loading && state.items.length === 0}>
-          <p class="text-12-regular text-text-weak">{t("No persisted runs are available in this Arforge profile.")}</p>
-        </Show>
-      </div>
-
-      <Show when={state.report}>
-        {(report) => (
-          <div class="flex flex-col gap-3 rounded-md bg-background-weak p-3" data-testid="run-report">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <h4 class="text-12-medium text-text-strong">{report().run_id}</h4>
-              <Button size="small" variant="ghost" onClick={() => setState("report", undefined)}>
-                {t("Close report")}
-              </Button>
-            </div>
-            <div data-slot="run-report-metrics" class="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <Metric label={t("Changed files")} value={report().changed_files.length} />
-              <Metric label={t("Commands")} value={report().commands_run.length} />
-              <Metric label={t("Trace events")} value={report().trace_events} />
-              <Metric label={t("Messages")} value={report().messages_count} />
-            </div>
-            <Show when={report().trace_truncated}>
-              <p class="text-11-regular text-text-warning">
-                {t("The displayed trace is bounded; the persisted trace is larger.")}
-              </p>
-            </Show>
-            <Show when={report().answer}>
-              <p class="max-h-40 overflow-auto whitespace-pre-wrap break-words text-12-regular text-text-weak">
-                {report().answer}
-              </p>
-            </Show>
-            <Show when={report().changed_files.length > 0}>
-              <ul class="max-h-32 overflow-auto">
-                <For each={report().changed_files}>
-                  {(file) => <li class="break-all text-11-regular text-text-weak">{file}</li>}
-                </For>
-              </ul>
-            </Show>
-            <Show when={report().commands_run.length > 0}>
-              <ul class="max-h-32 overflow-auto">
-                <For each={report().commands_run}>
-                  {(command) => (
-                    <li class="break-all text-11-regular text-text-weak">
-                      {command.success ? "✓" : "✕"} {command.command}
-                      {command.returncode === null ? "" : ` · exit ${command.returncode}`}
-                    </li>
-                  )}
-                </For>
-              </ul>
+              <div>
+                <dt>{t("Trace events")}</dt>
+                <dd>{item.trace_events}</dd>
+              </div>
+              <div>
+                <dt>{t("Messages")}</dt>
+                <dd>{item.messages_count}</dd>
+              </div>
+            </dl>
+            <Show when={state.report?.run_id === item.run_id ? state.report : undefined}>
+              {(report) => (
+                <div class="flex flex-col gap-3 rounded-md bg-background-weak p-3" data-testid="run-report">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h4 class="arforge-management-section-title text-text-strong">{report().run_id}</h4>
+                    <Button size="small" variant="ghost" onClick={() => setState("report", undefined)}>
+                      {t("Close report")}
+                    </Button>
+                  </div>
+                  <div data-slot="run-report-metrics" class="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <Metric label={t("Changed files")} value={report().changed_files.length} />
+                    <Metric label={t("Commands")} value={report().commands_run.length} />
+                    <Metric label={t("Trace events")} value={report().trace_events} />
+                    <Metric label={t("Messages")} value={report().messages_count} />
+                  </div>
+                  <Show when={report().trace_truncated}>
+                    <p class="arforge-management-copy text-text-warning">
+                      {t("The displayed trace is bounded; the persisted trace is larger.")}
+                    </p>
+                  </Show>
+                  <Show when={report().answer}>
+                    <p class="max-h-40 overflow-auto whitespace-pre-wrap break-words arforge-management-copy text-text-weak">
+                      {report().answer}
+                    </p>
+                  </Show>
+                  <Show when={report().changed_files.length > 0}>
+                    <ul class="max-h-32 overflow-auto">
+                      <For each={report().changed_files}>
+                        {(file) => <li class="break-all arforge-management-copy text-text-weak">{file}</li>}
+                      </For>
+                    </ul>
+                  </Show>
+                  <Show when={report().commands_run.length > 0}>
+                    <ul class="max-h-32 overflow-auto">
+                      <For each={report().commands_run}>
+                        {(command) => (
+                          <li class="break-all arforge-management-copy text-text-weak">
+                            {command.success ? "✓" : "✕"} {command.command}
+                            {command.returncode === null ? "" : ` · exit ${command.returncode}`}
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                </div>
+              )}
             </Show>
           </div>
         )}
-      </Show>
+      </ManagementCollection>
     </div>
   )
 }
@@ -231,7 +252,7 @@ function Metric(props: { label: string; value: string | number }) {
   return (
     <div class="rounded-md border border-border-weak-base p-2">
       <div class="text-14-medium text-text-strong">{props.value}</div>
-      <div class="text-10-regular text-text-weak">{props.label}</div>
+      <div class="arforge-management-copy text-text-weak">{props.label}</div>
     </div>
   )
 }

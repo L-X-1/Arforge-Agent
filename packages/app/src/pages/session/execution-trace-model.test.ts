@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part, SessionStatus } from "@arforge-ai/sdk/v2"
-import { buildExecutionTrace, executionMascotForm, executionStepText } from "./execution-trace-model"
+import { buildExecutionTrace, executionStepText } from "./execution-trace-model"
 
 const sessionID = "ses_1"
 const user = {
@@ -52,18 +52,33 @@ describe("execution trace model", () => {
     expect(step.sections?.filter((section) => section.kind === "error").map((section) => section.source)).toEqual(["one", "two"])
     expect(executionStepText(step)).toContain("two failed")
   })
-  test("maps reasoning depth rather than tool kind onto the three mascot forms", () => {
-    expect(executionMascotForm()).toBe(1)
-    expect(executionMascotForm("medium")).toBe(1)
-    expect(executionMascotForm("high")).toBe(2)
-    expect(executionMascotForm("max")).toBe(3)
-    expect(executionMascotForm("ultra")).toBe(3)
-  })
-
   test("shows a live thinking step before the first event arrives", () => {
     expect(trace([], { type: "busy" }).steps).toEqual([
       { id: "thinking:msg_user", kind: "reasoning", status: "running", count: 1 },
     ])
+  })
+
+  test("projects the public failure of an assistant with no parts", () => {
+    const message = "Provider authentication failed. Check the current provider credentials before retrying."
+    const failed = { ...assistant, time: { created: 2, completed: 8 }, error: {
+      name: "APIError", data: { message, isRetryable: false, responseBody: "private provider response" },
+    } } as Message
+    const result = buildExecutionTrace({ messages: [user, failed], parts: () => [], status: { type: "idle" } })
+
+    expect(result.failed).toBe(1)
+    expect(result.completed).toBe(0)
+    expect(result.steps).toMatchObject([{
+      id: `${assistant.id}:error`, status: "error", detail: message, startedAt: 2, endedAt: 8,
+      sections: [{ kind: "error", source: assistant.id, content: message }],
+    }])
+    expect(executionStepText(result.steps[0]!)).not.toContain("private provider response")
+  })
+
+  test("keeps a deliberate interruption separate from a failed answer", () => {
+    const aborted = { ...assistant, error: { name: "MessageAbortedError", data: { message: "Interrupted" } } } as Message
+    const result = buildExecutionTrace({ messages: [user, aborted], parts: () => [], status: { type: "idle" } })
+    expect(result.failed).toBe(0)
+    expect(result.steps).toEqual([])
   })
 
   test("groups consecutive context tools and carries their running state", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readPartText } from "./message-part-text"
+import { readPartSource, readPartText } from "./message-part-text"
 import { REASONING_SUMMARY_DEFAULT_OPEN } from "./reasoning-summary"
 
 describe("reasoning summary", () => {
@@ -31,5 +31,18 @@ describe("readPartText", () => {
 
   test("trims leading and trailing whitespace", () => {
     expect(readPartText(undefined, { id: "part_1", text: "\n  body  \n" })).toBe("body")
+  })
+})
+
+describe("raw Markdown part source", () => {
+  test("retains open code-fence CRLF and trailing spaces while the existing visibility helper remains trimmed", () => {
+    const text = "```ts\r\nconst original = '😀'  \r\n"
+    expect(readPartSource(undefined, { id: "part_raw", text })).toBe(text)
+    expect(readPartText(undefined, { id: "part_raw", text })).toBe(text.trim())
+  })
+  test("prefers accumulated original source including an empty replacement", () => {
+    const text = "```ts\r\nfirst\r\nsecond\r\n"
+    expect(readPartSource({ part_raw: text }, { id: "part_raw", text: "old" })).toBe(text)
+    expect(readPartSource({ part_raw: "" }, { id: "part_raw", text: "old" })).toBe("")
   })
 })

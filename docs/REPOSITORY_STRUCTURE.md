@@ -15,6 +15,7 @@ curated evidence, local state, and rebuildable output.
 | `scripts/` | Arforge operational entry points, Python tooling, and PowerShell runbooks |
 | `tests/` | Python and cross-stack test suites |
 | `specs/` | Machine-readable contracts and acceptance specifications |
+| `openspec/` | Behavior proposals and specifications |
 | `docs/` | Architecture, operations, release, and user documentation |
 | `deploy/` | Deployment definitions owned by this repository |
 | `.github/` | CI and repository automation |
@@ -32,14 +33,20 @@ reference.
 | `packages/arforge/` | Bun/TypeScript CLI, providers, tools, and application runtime |
 | `packages/server/` | HTTP service and API routes over shared Core owners |
 | `packages/app/`, `packages/desktop/` | Shared Solid app and Electron host |
-| `packages/schema/`, `protocol/`, `identity/` | Data, wire-protocol, and identity boundaries |
-| `packages/client/`, `sdk/`, `sdk-next/` | Programmatic client and SDK surfaces |
-| `packages/session-ui/`, `ui/`, `tui/` | Shared interface components and terminal UI |
+| `packages/schema/`, `packages/protocol/` | Shared data shapes and wire contracts |
+| `packages/client/`, `packages/sdk/`, `packages/sdk-next/` | Programmatic client and SDK surfaces |
+| `packages/session-ui/`, `packages/ui/`, `packages/tui/` | Session UI, shared components, and terminal UI |
+| `packages/identity/` | Brand assets |
 | Provider, plugin, and integration packages | Optional model, plugin, and external-service adapters |
 
 The root `arforge/` tree remains for Python compatibility, migration-retained
 capabilities, and test support. Product CLI, session execution, and business
 state writes belong to the TypeScript packages.
+
+Desktop hosts the shared App renderer and manages its local backend lifecycle.
+The App and generated clients use the typed HTTP API. Core owns session
+execution, persistence, and capability authorization. Use the CLI entry point
+in `packages/arforge/src/index.ts` for terminal or scripted use.
 
 ## Evidence
 
@@ -47,9 +54,17 @@ state writes belong to the TypeScript packages.
 an explicit release gate. Raw browser profiles, unpacked ASAR trees, temporary
 bundles, and repeatable UI build output do not belong there and are ignored.
 
-An evidence producer should write to a dedicated subdirectory, redact secrets,
-and document whether its output is intended to be committed. Generated output is
-not source merely because it was produced by an acceptance run.
+Keep raw acceptance runs local. This includes screenshots, recordings,
+automation traces, staged profiles, fixture workspaces, and build directories,
+including run output created beneath `docs/ui-redesign/`. Share a curated
+report only after removing account identifiers, provider endpoints, machine
+paths, and other personal data. Keep the source for reusable fixtures beside
+the tests that use them.
+
+Before publishing a fixture derived from a local run, replace account data,
+machine paths, request context, and provider error text with synthetic values.
+Preserve the relationships and record shapes that the test asserts. Keep
+local Trellis task records and journals with the original acceptance outputs.
 
 ## Local persistent state
 

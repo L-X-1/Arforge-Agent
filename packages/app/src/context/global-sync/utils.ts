@@ -8,14 +8,15 @@ import type {
 import type { Agent, PermissionRequest, Project, Provider, ProviderListResponse } from "@arforge-ai/sdk/v2/client"
 import type { Project as CurrentProject } from "@arforge-ai/client/promise"
 import type { Agent as RuntimeAgent } from "@arforge-ai/schema/agent"
+import type { Model as RuntimeModel } from "@arforge-ai/schema/model"
+import type { Provider as RuntimeProvider } from "@arforge-ai/schema/provider"
+import { chooserReasoningVariant } from "@/components/dialog-select-model-presentation"
 import { NormalizedProviderListResponse } from "@arforge-ai/session-ui/context"
 export { pathKey as directoryKey, type PathKey as DirectoryKey } from "@/utils/path-key"
 
 export const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
-export function normalizeAgentList(
-  input: Array<AgentListOutput["data"][number] | RuntimeAgent.Info | Agent>,
-): Agent[] {
+export function normalizeAgentList(input: Array<AgentListOutput["data"][number] | RuntimeAgent.Info | Agent>): Agent[] {
   if (input.every((agent) => !("request" in agent))) return input as Agent[]
   return input.map((agent) => {
     if (!("request" in agent)) return agent
@@ -74,9 +75,9 @@ function modelReleaseDate(released: number): string {
 }
 
 export function normalizeProviderList(
-  providers: ProviderListOutput["data"] | ProviderListResponse,
-  models?: ModelListOutput["data"],
-  defaultModel?: ModelDefaultOutput["data"],
+  providers: Array<ProviderListOutput["data"][number] | RuntimeProvider.Info> | ProviderListResponse,
+  models?: ReadonlyArray<ModelListOutput["data"][number] | RuntimeModel.Info>,
+  defaultModel?: ModelDefaultOutput["data"] | RuntimeModel.Info | null,
 ): NormalizedProviderListResponse {
   if (!Array.isArray(providers)) {
     return {
@@ -102,7 +103,7 @@ export function normalizeProviderList(
       name: provider.name,
       source: "custom",
       env: [],
-      options: provider.settings ?? {},
+      options: "api" in provider ? (provider.api.settings ?? {}) : (provider.settings ?? {}),
       models: {},
     })
   }
@@ -111,19 +112,38 @@ export function normalizeProviderList(
     const provider = all.get(model.providerID)
     if (!provider || model.status === "deprecated") continue
     const cost = model.cost.find((item) => item.tier === undefined) ?? model.cost[0]
+    // Canonical Model.Info carries Provider.Request in body; the vendored DTO
+    // also has legacy settings. Project actual parameters, never headers, into
+    // the legacy App options/variant records. Body wins on overlapping keys.
+    const options = "request" in model ? model.request.body : { ...model.settings, ...model.body }
+    const variants = Object.fromEntries(
+      model.variants.map((variant) => [
+        variant.id,
+        { ...("settings" in variant ? variant.settings : undefined), ...variant.body },
+      ]),
+    )
+    const profileReasoning = "profile" in model ? model.profile?.capabilities.reasoning : undefined
     provider.models[model.id] = {
       id: model.id,
       providerID: model.providerID,
       api: {
-        id: model.modelID,
-        url: "",
-        npm: model.package ?? provider.id,
+        id: "api" in model ? model.api.id : model.modelID,
+        url: "api" in model ? (model.api.url ?? "") : "",
+        npm:
+          "api" in model
+            ? model.api.type === "aisdk"
+              ? model.api.package
+              : provider.id
+            : (model.package ?? provider.id),
       },
       name: model.name,
       family: model.family,
       capabilities: {
         temperature: false,
-        reasoning: false,
+        reasoning:
+          (profileReasoning !== undefined && profileReasoning !== "none" && profileReasoning !== "unknown") ||
+          chooserReasoningVariant(options) ||
+          Object.values(variants).some((variant) => chooserReasoningVariant(variant)),
         attachment: model.capabilities.input.some((item) => item !== "text"),
         toolcall: model.capabilities.tools,
         input: {
@@ -152,10 +172,10 @@ export function normalizeProviderList(
       },
       limit: model.limit,
       status: model.status,
-      options: model.settings ?? {},
-      headers: model.headers ?? {},
+      options,
+      headers: "request" in model ? model.request.headers : (model.headers ?? {}),
       release_date: modelReleaseDate(model.time.released),
-      variants: Object.fromEntries(model.variants.map((variant) => [variant.id, variant.settings ?? {}])),
+      variants,
     }
   }
 

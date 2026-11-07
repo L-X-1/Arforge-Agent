@@ -38,6 +38,13 @@ const mcpCatalogError = (_error: unknown) =>
       "MCP catalog could not be read from the current generation-scoped transport; retry after checking connection and authorization.",
   })
 
+const toolDetailsUnavailable = () =>
+  new InvalidRequestError({
+    kind: "mcp-tool-details-unavailable",
+    field: "query",
+    message: "The advertised MCP tool definition is unavailable for the current connection and capability generation.",
+  })
+
 function inLocation<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     const location = yield* Location.Service
@@ -188,6 +195,26 @@ export const mcpV2Handlers = HttpApiBuilder.group(Api, "server.mcp", (handlers) 
             ).pipe(
               Effect.mapError(mcpCatalogError),
               Effect.map((snapshot) => snapshot.capabilities),
+            ),
+          )
+        }),
+      )
+      .handle(
+        "mcp.tool.describe",
+        Effect.fn("McpV2.describeTool")(function* ({ query }) {
+          return yield* response(
+            inLocation(
+              Effect.gen(function* () {
+                const details = mcp.describeTool
+                  ? yield* mcp.describeTool({
+                      server: query.server,
+                      capabilityID: query.capabilityID,
+                      generation: query.generation,
+                    })
+                  : undefined
+                if (!details) return yield* toolDetailsUnavailable()
+                return details
+              }),
             ),
           )
         }),

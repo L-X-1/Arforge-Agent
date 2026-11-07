@@ -1,0 +1,5 @@
+{
+  "extends": "../../../../tsconfig.json",
+  "compilerOptions": { "composite": false, "noEmit": true, "emitDeclarationOnly": false, "incremental": false, "types": ["node", "bun", "vite/client"] },
+  "include": ["suites.ts", "vite.config.ts", "playwright.config.ts", "network-fixture.ts", "../../../../src/**/*.d.ts"]
+}

@@ -1,0 +1,61 @@
+/* Owned detail layouts; shared controls, menus, fonts and user theme remain authoritative. */
+[data-workbench-detail] {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+[data-workbench-detail] :where(article, section, header, form, details, [data-component="text-field"]) {
+  min-inline-size: 0;
+}
+[data-workbench-detail] :where(p, code, summary, [role="alert"], [role="status"]) {
+  overflow-wrap: anywhere;
+}
+[data-workbench-detail] :where(pre, textarea) {
+  max-inline-size: 100%;
+}
+.workbench-detail-busy {
+  display: inline-flex;
+  flex: 0 0 16px;
+  inline-size: 16px;
+  block-size: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-inline-end: 6px;
+}
+.workbench-detail-busy > * {
+  inline-size: 16px;
+  block-size: 16px;
+}
+.workbench-detail-disabled-reason {
+  margin: 0;
+  color: var(--text-weak);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.workbench-detail-disabled-reason:empty {
+  display: none;
+}
+@media (max-width: 760px) {
+  [data-workbench-detail] > header {
+    flex-wrap: wrap;
+  }
+  [data-workbench-detail] :where(form, article) > :where(input, textarea, [data-component="text-field"]) {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+  [data-workbench-detail] article > .flex.items-start,
+  [data-workbench-detail] article > .flex.items-start > .flex.items-start {
+    flex-wrap: wrap;
+  }
+  [data-workbench-detail] .management-action-toolbar {
+    max-inline-size: 100%;
+    flex-shrink: 1;
+  }
+  [data-workbench-detail] :where(button, input:not([type="checkbox"]):not([type="radio"]), select) {
+    min-block-size: 36px;
+  }
+}
+@media (pointer: coarse) {
+  [data-workbench-detail] :where(button, input:not([type="checkbox"]):not([type="radio"]), select) {
+    min-block-size: 44px;
+  }
+}

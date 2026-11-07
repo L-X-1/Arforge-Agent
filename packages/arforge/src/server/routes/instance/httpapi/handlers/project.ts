@@ -1,13 +1,32 @@
 import * as InstanceState from "@/effect/instance-state"
 import { Project } from "@/project/project"
+import { Database } from "@arforge-ai/core/database/database"
+import { FSUtil } from "@arforge-ai/core/fs-util"
 import { ProjectV2 } from "@arforge-ai/core/project"
-import { Effect } from "effect"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { Effect, Layer } from "effect"
+import { HttpServerRequest } from "effect/unstable/http"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ProjectNotFoundError } from "../errors"
 import { markInstanceForReload } from "../lifecycle"
+import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 
-export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", (handlers) =>
+const updateMetadata = Effect.fn("ProjectHttpApi.update")(function* (
+  svc: Project.Interface,
+  ctx: { params: { projectID: ProjectV2.ID }; payload: Project.UpdatePayload },
+  worktree?: string,
+) {
+  const principal = yield* Database.CurrentPrincipal
+  if (!principal) return yield* new HttpApiError.Unauthorized({})
+  const projectID = ctx.params.projectID
+  return yield* svc.update({ ...ctx.payload, projectID }, { principal, worktree }).pipe(
+    Effect.catchTag("Project.NotFoundError", () =>
+      Effect.fail(new ProjectNotFoundError({ projectID, message: `Project not found: ${projectID}` })),
+    ),
+  )
+})
+
+const legacyProjectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", (handlers) =>
   Effect.gen(function* () {
     const svc = yield* Project.Service
     const project = yield* ProjectV2.Service
@@ -33,22 +52,6 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
       return next
     })
 
-    const update = Effect.fn("ProjectHttpApi.update")(function* (ctx: {
-      params: { projectID: ProjectV2.ID }
-      payload: Project.UpdatePayload
-    }) {
-      return yield* svc.update({ ...ctx.payload, projectID: ctx.params.projectID }).pipe(
-        Effect.catchTag("Project.NotFoundError", (error) =>
-          Effect.fail(
-            new ProjectNotFoundError({
-              projectID: error.projectID,
-              message: `Project not found: ${error.projectID}`,
-            }),
-          ),
-        ),
-      )
-    })
-
     const directories = Effect.fn("ProjectHttpApi.directories")((ctx: { params: { projectID: ProjectV2.ID } }) =>
       project.directories({ projectID: ctx.params.projectID }),
     )
@@ -57,7 +60,30 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
       .handle("list", list)
       .handle("current", current)
       .handle("initGit", initGit)
-      .handle("update", update)
+      .handle("update", (ctx) => updateMetadata(svc, ctx))
       .handle("directories", directories)
   }),
 )
+
+const metadataHandlers = HttpApiBuilder.group(InstanceHttpApi, "projectMetadata", (handlers) =>
+  Effect.gen(function* () {
+    const svc = yield* Project.Service
+    return handlers.handle("update", (ctx) =>
+      Effect.gen(function* () {
+        // Resolve the scope without bootstrapping a project from the supplied path.
+        const route = yield* WorkspaceRouteContext
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const query = new URL(request.url, "http://localhost").searchParams
+        const encodedHeader = !route.workspaceID && !query.has("location[directory]") && !query.has("directory")
+          && request.headers["x-arforge-directory"]
+        const worktree = yield* Effect.try({
+          try: () => FSUtil.resolve(encodedHeader ? decodeURIComponent(route.directory) : route.directory),
+          catch: () => new HttpApiError.BadRequest({}),
+        })
+        return yield* updateMetadata(svc, ctx, worktree)
+      }),
+    )
+  }),
+)
+
+export const projectHandlers = Layer.merge(legacyProjectHandlers, metadataHandlers)

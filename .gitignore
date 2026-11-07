@@ -62,6 +62,7 @@ Thumbs.db
 /.codex-tmp/
 /.codex-analysis/
 /tmp/
+/.tmp/
 /.err
 /.out
 *.log
@@ -69,6 +70,17 @@ Thumbs.db
 *.stderr
 /packages/app/e2e/.playwright-temp/
 /packages/app/test-results/
+/packages/desktop/test-results/
+/packages/app/e2e/reproduction/**/results/
+/packages/app/.tmp-*.ts
+# Raw UI acceptance runs can contain profiles, recordings, and machine paths.
+/docs/ui-redesign/formal-acceptance-v4-20261029/
+/docs/ui-redesign/implementation-20261029/
+/docs/ui-redesign/implementation-v3-20261029/
+/docs/ui-redesign/interaction-audit-v3-20261029/
+/docs/ui-redesign/runtime-smoke-v3-20261029/
+/docs/ui-redesign/ui-completion-v5-20261030/
+/docs/ui-redesign/implementation-20261029-*.json
 # Generated screenshots, diagnostics, browser profiles, and acceptance evidence.
 /artifacts/
 /memory-vault/wiki/log.md

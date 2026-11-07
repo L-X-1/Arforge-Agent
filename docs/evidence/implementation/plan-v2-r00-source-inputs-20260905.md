@@ -14,7 +14,7 @@
 
 ## 使用
 
-在 E:/Arforge-Agent 根目录执行：
+在 %ARFORGE_REPO% 根目录执行：
 
 ```powershell
 # 只读验证当前输入

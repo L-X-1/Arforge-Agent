@@ -9,6 +9,7 @@ import type { Transport, TransportRuntime } from "./transport"
 import { WebSocketExecutor } from "./transport"
 import type { Protocol } from "./protocol"
 import { applyCachePolicy } from "../cache-policy"
+import { OutputBudget } from "./output-budget"
 import * as ProviderShared from "../protocols/shared"
 import type {
   LLMError,
@@ -138,7 +139,7 @@ const mergeRouteDefaults = (base: RouteDefaults | undefined, patch: RouteDefault
   }
 }
 
-const endpointBaseURL = <Body>(endpoint: Endpoint<Body>) =>
+const endpointBaseURL = <Body,>(endpoint: Endpoint<Body>) =>
   typeof endpoint.baseURL === "string" ? endpoint.baseURL : undefined
 
 const mergeHeaders = (...items: ReadonlyArray<Record<string, string> | undefined>) => {
@@ -387,7 +388,8 @@ export function make<Body, Prepared, Frame, Event, State>(
 // validated provider body plus transport-private prepared data, but does not
 // execute transport.
 const compile = Effect.fn("LLM.compile")(function* (request: LLMRequest) {
-  const resolved = applyCachePolicy(resolveRequestOptions(request))
+  const textContext = yield* ProviderShared.lowerTextFiles(request)
+  const resolved = OutputBudget.clampRequest(applyCachePolicy(resolveRequestOptions(textContext)))
   const route = resolved.model.route
 
   const body = yield* route.body
@@ -474,7 +476,7 @@ const generateWith = (stream: Interface["stream"]) =>
     )
   })
 
-export const prepare = <Body = unknown>(request: LLMRequest) =>
+export const prepare = <Body = unknown,>(request: LLMRequest) =>
   prepareWith(request) as Effect.Effect<PreparedRequestOf<Body>, LLMError>
 
 export const streamPrepared = (request: PreparedRequest): Stream.Stream<LLMEvent, LLMError, Service> =>

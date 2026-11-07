@@ -12,7 +12,14 @@ type PersistedWithReady<T> = [
   SetStoreFunction<T>,
   InitType,
   Accessor<boolean> & { promise: undefined | Promise<any> },
+  { retry: () => Promise<boolean> }?,
 ]
+
+type PersistFeedback = {
+  onWrite?: (saved: boolean) => void
+  /** Preference writes must not remove the previous value or evict user drafts. */
+  preserveOnFailure?: boolean
+}
 
 type PersistTarget = {
   storage?: string
@@ -140,7 +147,7 @@ function evict(storage: Storage, keep: string, value: string) {
   return false
 }
 
-function write(storage: Storage, key: string, value: string) {
+function write(storage: Storage, key: string, value: string, preserveOnFailure = false) {
   try {
     storage.setItem(key, value)
     cacheSet(key, value)
@@ -148,6 +155,7 @@ function write(storage: Storage, key: string, value: string) {
   } catch (error) {
     if (!quota(error)) throw error
   }
+  if (preserveOnFailure) return false
 
   try {
     storage.removeItem(key)
@@ -376,7 +384,7 @@ function serverWorkspaceTarget(scope: ServerScopeValue, dir: string, key: string
   return { storage: workspaceStorage(pathKey(dir)), legacyStorageNames: legacyWorkspaceStorage(dir), key, legacy }
 }
 
-function localStorageWithPrefix(prefix: string): SyncStorage {
+function localStorageWithPrefix(prefix: string, feedback?: PersistFeedback): SyncStorage {
   const base = `${prefix}:`
   const scope = `prefix:${prefix}`
   const item = (key: string) => base + key
@@ -400,14 +408,16 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
     },
     setItem: (key, value) => {
       const name = item(key)
-      if (fallbackDisabled(scope)) return
+      if (fallbackDisabled(scope)) { feedback?.onWrite?.(false); return }
       try {
-        if (write(localStorage, name, value)) return
+        if (write(localStorage, name, value, feedback?.preserveOnFailure)) { feedback?.onWrite?.(true); return }
       } catch {
         fallbackSet(scope)
+        feedback?.onWrite?.(false)
         return
       }
       fallbackSet(scope)
+      feedback?.onWrite?.(false)
     },
     removeItem: (key) => {
       const name = item(key)
@@ -422,7 +432,7 @@ function localStorageWithPrefix(prefix: string): SyncStorage {
   }
 }
 
-function localStorageDirect(): SyncStorage {
+function localStorageDirect(feedback?: PersistFeedback): SyncStorage {
   const scope = "direct"
   return {
     getItem: (key) => {
@@ -442,14 +452,16 @@ function localStorageDirect(): SyncStorage {
       return stored
     },
     setItem: (key, value) => {
-      if (fallbackDisabled(scope)) return
+      if (fallbackDisabled(scope)) { feedback?.onWrite?.(false); return }
       try {
-        if (write(localStorage, key, value)) return
+        if (write(localStorage, key, value, feedback?.preserveOnFailure)) { feedback?.onWrite?.(true); return }
       } catch {
         fallbackSet(scope)
+        feedback?.onWrite?.(false)
         return
       }
       fallbackSet(scope)
+      feedback?.onWrite?.(false)
     },
     removeItem: (key) => {
       cacheDelete(key)
@@ -553,6 +565,7 @@ export function removePersisted(
 export function persisted<T>(
   target: string | PersistTarget,
   store: [Store<T>, SetStoreFunction<T>],
+  feedback?: PersistFeedback,
 ): PersistedWithReady<T> {
   const platform = usePlatform()
   const config = resolveTarget(typeof target === "string" ? { key: target } : target, platform)
@@ -564,8 +577,8 @@ export function persisted<T>(
 
   const currentStorage = (() => {
     if (isDesktop) return platform.storage?.(config.storage)
-    if (!config.storage) return localStorageDirect()
-    return localStorageWithPrefix(config.storage)
+    if (!config.storage) return localStorageDirect(feedback)
+    return localStorageWithPrefix(config.storage, feedback)
   })()
 
   const legacyStorage = (() => {
@@ -576,11 +589,12 @@ export function persisted<T>(
 
   const legacyStorageNames = config.legacyStorageNames ?? []
 
+  let writeVersion = 0
   const storage = (() => {
     if (!isDesktop) {
       const current = currentStorage as SyncStorage
       const legacyStore = legacyStorage as SyncStorage
-      const legacyStores = legacyStorageNames.map(localStorageWithPrefix)
+      const legacyStores = legacyStorageNames.map((name) => localStorageWithPrefix(name))
 
       const api: SyncStorage = {
         getItem: (key) => {
@@ -628,7 +642,16 @@ export function persisted<T>(
         })
       },
       setItem: async (key, value) => {
-        await current.setItem(key, value)
+        const version = ++writeVersion
+        try {
+          await current.setItem(key, value)
+          if (version === writeVersion) feedback?.onWrite?.(true)
+        } catch (error) {
+          if (version === writeVersion) feedback?.onWrite?.(false)
+          // makePersisted does not await automatic store writes. An explicit
+          // observer owns recovery; unobserved callers retain rejection semantics.
+          if (!feedback?.onWrite) throw error
+        }
       },
       removeItem: async (key) => {
         await current.removeItem(key)
@@ -639,6 +662,27 @@ export function persisted<T>(
   })()
 
   const [state, setState, init] = makePersisted(store, { name: config.key, storage })
+
+  const retry = async () => {
+    const version = ++writeVersion
+    try {
+      const value = JSON.stringify(state)
+      if (isDesktop) await (currentStorage as AsyncStorage).setItem(config.key, value)
+      else {
+        const key = config.storage ? `${config.storage}:${config.key}` : config.key
+        if (!write(localStorage, key, value, feedback?.preserveOnFailure)) {
+          if (version === writeVersion) feedback?.onWrite?.(false)
+          return false
+        }
+        fallback.delete(config.storage ? `prefix:${config.storage}` : "direct")
+      }
+      if (version === writeVersion) feedback?.onWrite?.(true)
+      return true
+    } catch {
+      if (version === writeVersion) feedback?.onWrite?.(false)
+      return false
+    }
+  }
 
   const isAsync = init instanceof Promise
   const [ready] = createResource(
@@ -657,5 +701,6 @@ export function persisted<T>(
     Object.assign(() => (ready.loading ? false : ready.latest === true), {
       promise: init instanceof Promise ? init : undefined,
     }),
+    { retry },
   ]
 }

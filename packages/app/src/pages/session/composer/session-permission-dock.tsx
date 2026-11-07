@@ -1,9 +1,14 @@
-import { For, Show } from "solid-js"
+import { For, Show, createMemo, on } from "solid-js"
 import type { PermissionRequest } from "@arforge-ai/sdk/v2"
 import { Button } from "@arforge-ai/ui/button"
 import { DockPrompt } from "@arforge-ai/session-ui/dock-prompt"
 import { Icon } from "@arforge-ai/ui/icon"
 import { useLanguage } from "@/context/language"
+import { useServerSDK } from "@/context/server-sdk"
+import { ServerConnection } from "@/context/server"
+import { useSDK } from "@/context/sdk"
+import { safeControlServerLabel } from "@/context/control-approval"
+import { requestFeedbackCopy, SessionRequestFeedback, SessionRequestOrigin } from "./session-request-feedback"
 
 type TrustedConfirmationRequest = PermissionRequest & { readonly requiresHumanConfirmation?: boolean }
 type DelegatedTaskCapability = {
@@ -42,8 +47,7 @@ export function delegatedTaskDetails(request: PermissionRequest) {
   for (const item of raw) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return
     const candidate = item as Record<string, unknown>
-    if (typeof candidate.action !== "string" || candidate.action.length === 0 || candidate.action.length > 256)
-      return
+    if (typeof candidate.action !== "string" || candidate.action.length === 0 || candidate.action.length > 256) return
     if (candidate.access !== "read" && candidate.access !== "write") return
     if (!Array.isArray(candidate.resources) || candidate.resources.length === 0 || candidate.resources.length > 128)
       return
@@ -97,9 +101,24 @@ const taskBudgetSummary = (budget: DelegatedTaskBudget) => ({
 export function SessionPermissionDock(props: {
   request: PermissionRequest
   responding: boolean
+  error?: string
+  onRetry?: () => void
   onDecide: (response: "once" | "always" | "reject") => void
 }) {
   const language = useLanguage()
+  const serverSDK = useServerSDK()
+  const sdk = useSDK()
+  const origin = createMemo(
+    on(
+      () => props.request.id,
+      () => ({
+        server: safeControlServerLabel(ServerConnection.key(serverSDK().server)),
+        directory: sdk().directory,
+        sessionID: props.request.sessionID,
+        requestID: props.request.id,
+      }),
+    ),
+  )
   const humanConfirmation = () => requiresHumanConfirmation(props.request)
   const directShell = () => opaqueDirectShellDetails(props.request)
   const taskDelegation = () => delegatedTaskDetails(props.request)
@@ -114,6 +133,7 @@ export function SessionPermissionDock(props: {
   return (
     <DockPrompt
       kind="permission"
+      busy={props.responding}
       header={
         <div data-slot="permission-row" data-variant="header">
           <span data-slot="permission-icon">
@@ -146,6 +166,14 @@ export function SessionPermissionDock(props: {
         </>
       }
     >
+      <div data-slot="permission-origin">
+        <SessionRequestOrigin origin={origin()} />
+      </div>
+      <SessionRequestFeedback
+        busy={props.responding ? requestFeedbackCopy(language.locale()).decision : undefined}
+        error={props.error}
+        onRetry={props.onRetry}
+      />
       <Show when={toolDescription()}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />

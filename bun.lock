@@ -32,6 +32,7 @@
       "dependencies": {
         "@arforge-ai/client": "file:vendor/arforge-ai-client-1.17.13.tgz",
         "@arforge-ai/core": "workspace:*",
+        "@arforge-ai/protocol": "workspace:*",
         "@arforge-ai/schema": "workspace:*",
         "@arforge-ai/sdk": "workspace:*",
         "@arforge-ai/sdk-next": "workspace:*",

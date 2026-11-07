@@ -4,6 +4,7 @@ import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
 import {
   batch,
+  lazy,
   ErrorBoundary,
   onCleanup,
   Show,
@@ -24,7 +25,7 @@ import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { debounce } from "@solid-primitives/scheduled"
 import { useLocal } from "@/context/local"
 import { FileProvider, selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
-import { createStore } from "solid-js/store"
+import { createStore, unwrap } from "solid-js/store"
 import type { SessionReviewLineComment } from "@arforge-ai/session-ui/session-review"
 import { ResizeHandle } from "@arforge-ai/ui/resize-handle"
 import { Select } from "@arforge-ai/ui/select"
@@ -59,14 +60,15 @@ import { useServerSDK } from "@/context/server-sdk"
 import { ServerConnection, serverName, useServer } from "@/context/server"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
-import { useTabs, type Tab } from "@/context/tabs"
+import { DraftTabsScopeProvider, useTabs, type Tab } from "@/context/tabs"
+import { activeDraftID, captureDraftForSource, sameDraftSource } from "@/pages/home-compose/home-draft-state"
 import { TerminalProvider, useTerminal } from "@/context/terminal"
 import { PromptInput } from "@/components/prompt-input"
 import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
-import { durableFollowupPrompt, type FollowupDraft } from "@/components/prompt-input/submit"
+import { durableFollowupPrompt, promptQueueSubmitting, type FollowupDraft } from "@/components/prompt-input/submit"
 import type { OperationsApi } from "@/utils/server"
 import {
   createPromptInputController,
@@ -74,9 +76,17 @@ import {
   createSessionComposerRegionController,
   SessionComposerRegion,
 } from "@/pages/session/composer"
-import { createOpenReviewFile, createSessionTabs, createSizing, shouldShowFileTree } from "@/pages/session/helpers"
+import {
+  SESSION_OPEN_FILE_TAB,
+  createOpenReviewFile,
+  createSessionTabs,
+  queuedPromptParts,
+  createSizing,
+  shouldShowFileTree,
+} from "@/pages/session/helpers"
 import { MessageTimeline } from "@/pages/session/timeline/message-timeline"
 import { createTimelineModel } from "@/pages/session/timeline/model"
+import { createHistoryLoadGuard } from "@/pages/session/timeline/history-load"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { restorePromptModel, syncPromptModel, syncSessionModel } from "@/pages/session/session-model-helpers"
@@ -85,12 +95,13 @@ import {
   SESSION_PANEL_WIDTH_MIN,
   sessionPanelWidthMin,
   sessionPanelWidthMax,
+  sessionPanelNeedsFullWorkbench,
 } from "@/pages/session/session-panel-width"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { SessionExecutionDock } from "@/pages/session/session-execution-dock"
+import { SessionExecutionOverlay } from "@/pages/session/session-execution-overlay"
 import { SessionExecutionStatusBar } from "@/pages/session/session-execution-status-bar"
 import { buildExecutionTrace, type ExecutionTraceStep } from "@/pages/session/execution-trace-model"
-import { sessionPanelLayout } from "@/pages/session/session-panel-layout"
 import { SessionReviewEmptyChangesV2 } from "@arforge-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@arforge-ai/session-ui/v2/session-review-empty-no-git-v2"
 import { SessionReviewV2SidebarToggle } from "@arforge-ai/session-ui/v2/session-review-v2"
@@ -134,10 +145,74 @@ function isCurrentSessionNotFoundError(error: unknown, sessionID: string | undef
   return isSessionNotFoundError(error, sessionID) || isLocalSessionNotFoundError(error, sessionID)
 }
 
+const CompatibilityNewSessionPage = lazy(() => import("./new-session"))
+
 export function SessionPage() {
+  const params = useParams()
+  const [search] = useSearchParams<{ draftId?: string }>()
+  const location = useLocation()
+  const settings = useSettings()
+  const tabs = useTabs()
+  const sdk = useSDK()
+  const server = useServerSDK()
+  const compatibilityDraft = () => settings.general.newLayoutDesigns() && !params.id && !!search.draftId
+  const draft = createMemo(
+    () => {
+      if (!compatibilityDraft() || !tabs.ready()) return
+      // Removal during atomic promotion/close retires this owner while the
+      // existing Tabs action navigates; do not resurrect the removed draft.
+      if (!tabs.store.some((tab) => tab.type === "draft" && tab.draftID === search.draftId)) return
+      return {
+        tab: captureDraftForSource(tabs.store, search.draftId!, {
+          server: ServerConnection.key(server().server),
+          directory: sdk().directory,
+        }),
+        source: server(),
+        directorySource: sdk(),
+      }
+    },
+    undefined,
+    {
+      equals: (left, right) =>
+        !!left &&
+        !!right &&
+        left.tab.draftID === right.tab.draftID &&
+        sameDraftSource(left.tab, right.tab) &&
+        left.source === right.source &&
+        left.directorySource === right.directorySource,
+    },
+  )
   return (
     <SessionProviders>
-      <Page />
+      <Show
+        when={compatibilityDraft()}
+        fallback={
+          <SessionPromptProviders>
+            <Page />
+          </SessionPromptProviders>
+        }
+      >
+        <Show when={draft()} keyed>
+          {(owner) => {
+            const lifetime = createSessionOwnership(() => owner.tab.draftID).capture()
+            return (
+              <DraftTabsScopeProvider
+                draft={owner.tab}
+                active={() =>
+                  lifetime.current() &&
+                  activeDraftID(location.pathname, location.search) === owner.tab.draftID &&
+                  server() === owner.source &&
+                  sdk() === owner.directorySource
+                }
+              >
+                <SessionPromptProviders>
+                  <CompatibilityNewSessionPage />
+                </SessionPromptProviders>
+              </DraftTabsScopeProvider>
+            )
+          }}
+        </Show>
+      </Show>
     </SessionProviders>
   )
 }
@@ -308,12 +383,16 @@ function MarkSessionNotificationsViewed(props: { sessionID?: () => string | unde
 function SessionProviders(props: ParentProps) {
   return (
     <TerminalProvider>
-      <FileProvider>
-        <PromptProvider>
-          <CommentsProvider>{props.children}</CommentsProvider>
-        </PromptProvider>
-      </FileProvider>
+      <FileProvider>{props.children}</FileProvider>
     </TerminalProvider>
+  )
+}
+
+function SessionPromptProviders(props: ParentProps) {
+  return (
+    <PromptProvider>
+      <CommentsProvider>{props.children}</CommentsProvider>
+    </PromptProvider>
   )
 }
 
@@ -323,7 +402,6 @@ function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
     <div
       class="relative size-full overflow-hidden flex flex-col"
       classList={{
-        "rounded-tl-[16px] rounded-bl-[16px]": props.padded && settings.general.newLayoutDesigns(),
         "p-2": props.padded && !settings.general.newLayoutDesigns(),
       }}
     >
@@ -401,6 +479,8 @@ export default function Page() {
   const [ui, setUi] = createStore({
     pendingMessage: undefined as string | undefined,
     reviewSnap: false,
+    workbenchFull: false,
+    viewportHeight: typeof window === "undefined" ? 1000 : (window.visualViewport?.height ?? window.innerHeight),
     scrollGesture: 0,
     scroll: {
       overflow: false,
@@ -408,6 +488,9 @@ export default function Page() {
       jump: false,
     },
   })
+
+  const terminalHeightMax = () => ui.viewportHeight * 0.6
+  const terminalEffectiveHeight = () => Math.min(layout.terminal.height(), terminalHeightMax())
 
   const composer = createSessionComposerController()
   const sessionGoal = createSessionGoalController({ sessionID: () => params.id })
@@ -459,8 +542,32 @@ export default function Page() {
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const size = createSizing()
-  const [executionDock, setExecutionDock] = createStore({ opened: false })
-  const executionDockVisible = createMemo(() => newSessionDesign() && isDesktop() && !!params.id)
+  const [executionDock, setExecutionDock] = createStore<{
+    opened: boolean
+    origin?: HTMLElement
+    current?: () => boolean
+  }>({ opened: false })
+  const executionDockVisible = createMemo(() => newSessionDesign() && !!params.id)
+  const setExecutionOpened = (opened: boolean) => {
+    if (!opened) {
+      setExecutionDock("opened", false)
+      return
+    }
+    const owner = sessionOwnership.capture()
+    const source = serverSDK()
+    const active = document.activeElement
+    const origin =
+      active instanceof HTMLElement && active.closest('[role="menu"]')
+        ? (document.querySelector<HTMLElement>('[data-component="session-titlebar-actions"] .session-titlebar-menu') ??
+          undefined)
+        : active instanceof HTMLElement && active !== document.body
+          ? active
+          : undefined
+    setExecutionDock({ opened: true, origin, current: () => owner.current() && source === serverSDK() })
+  }
+  createEffect(() => {
+    if (executionDock.opened && !executionDock.current?.()) setExecutionDock("opened", false)
+  })
   const executionTrace = createMemo(() => {
     const sessionID = params.id
     if (!sessionID) {
@@ -516,7 +623,7 @@ export default function Page() {
       }),
   )
   const desktopSessionResizeOpen = createMemo(() =>
-    newSessionDesign() ? desktopV2ReviewOpen() || desktopTerminalOpen() : desktopReviewOpen(),
+    newSessionDesign() ? desktopV2ReviewOpen() || desktopFileTreeOpen() : desktopReviewOpen(),
   )
   const desktopSidePanelOpen = createMemo(() => desktopSessionResizeOpen() || desktopFileTreeOpen())
   let panelRow: HTMLDivElement | undefined
@@ -525,18 +632,34 @@ export default function Page() {
     () => panelRow,
     ({ width }) => setPanelRowWidth(width),
   )
+  createEffect(
+    on(
+      () => [serverSDK(), sessionKey()] as const,
+      () => setUi("workbenchFull", false),
+      { defer: true },
+    ),
+  )
   const splitReview = createMemo(
-    () => (newSessionDesign() ? desktopV2ReviewOpen() : desktopReviewOpen()) && layout.review.diffStyle() === "split",
+    () =>
+      (newSessionDesign() ? desktopV2ReviewOpen() : desktopReviewOpen()) &&
+      layout.review.diffStylePreference() === "split",
   )
   // The observer reports the content-box width, which already excludes the row
   // padding; only the flex gap between the panels remains to subtract.
   const sessionPanelAvailable = createMemo(() => {
     const width = panelRowWidth()
     if (width === undefined) return undefined
-    const dockOpen = executionDockVisible() && executionDock.opened
+    const dockOpen = isDesktop() && executionDockVisible() && executionDock.opened
     const dock = dockOpen ? Math.min(380, width * 0.36) : 0
     return width - (settings.general.newLayoutDesigns() && !dockOpen ? 12 : 0) - dock
   })
+  const compactWorkbench = createMemo(
+    () =>
+      newSessionDesign() &&
+      isDesktop() &&
+      desktopSidePanelOpen() &&
+      sessionPanelNeedsFullWorkbench({ available: sessionPanelAvailable(), hasSession: !!params.id }),
+  )
   const sessionPanelMax = createMemo(() => {
     const available = sessionPanelAvailable()
     if (available === undefined) return 1000
@@ -551,15 +674,16 @@ export default function Page() {
   // instead of the review pane, without overwriting the persisted width.
   const sessionPanelResizedWidth = createMemo(() =>
     clampSessionPanelWidth({
-      width: layout.session.width(),
+      width: layout.session.widthPreference() ?? Math.max(320, (sessionPanelAvailable() ?? 1200) - 440),
       available: sessionPanelAvailable(),
       split: splitReview(),
     }),
   )
   const sessionPanelWidth = createMemo(() => {
+    if (newSessionDesign() && (ui.workbenchFull || compactWorkbench()) && desktopSidePanelOpen()) return "0px"
     const row = panelRowWidth()
     const dockWidth =
-      executionDockVisible() && executionDock.opened
+      isDesktop() && executionDockVisible() && executionDock.opened
         ? Math.min(380, (row ?? (typeof window === "undefined" ? 1200 : window.innerWidth)) * 0.36)
         : 0
     const dockOffset = dockWidth ? dockWidth : 0
@@ -568,13 +692,6 @@ export default function Page() {
     return `calc(100% - ${layout.fileTree.width() + dockOffset}px)`
   })
   const centered = createMemo(() => isDesktop() && (newSessionDesign() || !desktopReviewOpen()))
-  const desktopV2PanelLayout = createMemo(() =>
-    sessionPanelLayout({
-      review: desktopV2ReviewOpen(),
-      terminal: desktopTerminalOpen(),
-      files: desktopFileTreeOpen(),
-    }),
-  )
 
   function normalizeTab(tab: string) {
     if (!tab.startsWith("file://")) return tab
@@ -607,9 +724,19 @@ export default function Page() {
     normalizeTab,
     review: reviewTab,
     hasReview: canReview,
+    fileBrowser: () => newSessionDesign() && !!params.id,
   })
   const activeTab = tabState.activeTab
   const activeFileTab = tabState.activeFileTab
+  const narrowWorkbenchOpen = createMemo(
+    () =>
+      newSessionDesign() &&
+      !isDesktop() &&
+      !!params.id &&
+      view().reviewPanel.opened() &&
+      (!!activeFileTab() || activeTab() === SESSION_OPEN_FILE_TAB || activeTab() === "context"),
+  )
+  const fullWorkbench = createMemo(() => ui.workbenchFull || compactWorkbench() || narrowWorkbenchOpen())
   const revertMessageID = createMemo(() => info()?.revert?.messageID)
   const timeline = createTimelineModel({ sessionID: () => params.id, revertMessageID })
   const historyLoading = timeline.history.loading
@@ -635,7 +762,7 @@ export default function Page() {
       () => {
         const msg = lastUserMessage()
         if (!msg) return
-        syncSessionModel(local, msg)
+        syncSessionModel(local, msg, prompt)
       },
     ),
   )
@@ -679,7 +806,17 @@ export default function Page() {
       failed: Record<string, string | undefined>
       paused: Record<string, boolean | undefined>
       edit: Record<string, FollowupEdit | undefined>
-      editTarget: Record<string, { id: string; admittedSeq: number } | undefined>
+      editTarget: Record<
+        string,
+        | {
+            id: string
+            admittedSeq: number
+            generation?: string
+            useDefaultVariant?: boolean
+            prompt?: DurableFollowupItem["prompt"]
+          }
+        | undefined
+      >
     }>({
       items: {},
       drafts: {},
@@ -1236,7 +1373,7 @@ export default function Page() {
     setActiveMessage,
     focusInput,
     review: reviewTab,
-    fileBrowser: () => newSessionDesign() && isDesktop() && !!params.id,
+    fileBrowser: () => newSessionDesign() && !!params.id,
   })
   command.register("session-palette", () => [
     {
@@ -1410,6 +1547,9 @@ export default function Page() {
     onSelectFile: focusReviewDiff,
     get diffStyle() {
       return layout.review.diffStyle()
+    },
+    get diffStylePreference() {
+      return layout.review.diffStylePreference()
     },
     onDiffStyleChange: layout.review.setDiffStyle,
     state: reviewV2State,
@@ -1608,11 +1748,13 @@ export default function Page() {
         const owner = sessionOwnership.capture()
         // The keyed timeline installs its new scroll handlers during this render.
         // Reset after that handoff, not against the previous session's viewport.
-        queueMicrotask(() => owner.run(() => {
-          if (location.hash || store.messageId || ui.pendingMessage || hasScrollGesture()) return
-          autoScroll.resume()
-          scrollToEnd()
-        }))
+        queueMicrotask(() =>
+          owner.run(() => {
+            if (location.hash || store.messageId || ui.pendingMessage || hasScrollGesture()) return
+            autoScroll.resume()
+            scrollToEnd()
+          }),
+        )
       },
     ),
   )
@@ -1697,21 +1839,32 @@ export default function Page() {
 
   let captureHistoryAnchor = () => {}
   let restoreHistoryAnchor = (_done: boolean) => {}
-  const historyRequests = new Set<string>()
+  const historyRequests = createHistoryLoadGuard()
   let historyContinuationFrame: number | undefined
-  const loadOlder = async () => {
+  const loadOlder = async (automatic = false) => {
     const owner = sessionOwnership.capture()
     if (historyLoading() || historyRequests.has(owner.key)) return
-    historyRequests.add(owner.key)
     const before = timeline.messages().length
-    try {
-      await timeline.history.loadOlder({
-        before: () => owner.run(captureHistoryAnchor),
-        after: (done) => owner.run(() => restoreHistoryAnchor(done)),
-      })
-    } finally {
-      historyRequests.delete(owner.key)
-    }
+    const loaded = await historyRequests.run({
+      key: owner.key,
+      current: owner.current,
+      automatic,
+      load: () =>
+        timeline.history.loadOlder({
+          before: () => owner.run(captureHistoryAnchor),
+          after: (done) => owner.run(() => restoreHistoryAnchor(done)),
+        }),
+      onError: (error) =>
+        showToast({
+          variant: "error",
+          title: language.t("common.loadMoreFailedRetry"),
+          description: formatServerError(error, language.t),
+          actions: [
+            { label: language.t("session.messages.loadEarlier"), onClick: () => owner.run(() => void loadOlder()) },
+          ],
+        }),
+    })
+    if (!loaded) return
     if (!owner.current() || timeline.messages().length <= before) return
     if (!autoScroll.userScrolled() || !scroller || scroller.scrollTop >= 200 || !historyMore()) return
     if (historyContinuationFrame !== undefined) cancelAnimationFrame(historyContinuationFrame)
@@ -1729,7 +1882,7 @@ export default function Page() {
       scroller.scrollTop >= 200
     )
       return
-    void loadOlder()
+    void loadOlder(true)
   }
 
   onCleanup(() => {
@@ -1750,7 +1903,7 @@ export default function Page() {
       if (el.scrollHeight > el.clientHeight + 1) return
       if (!historyMore()) return
 
-      void loadOlder()
+      void loadOlder(true)
     })
   }
 
@@ -1830,40 +1983,7 @@ export default function Page() {
     if (cached) return cached
     const route = item.prompt.route
     const previous = lastUserMessage()
-    const promptParts: FollowupDraft["prompt"] = [
-      { type: "text", content: item.prompt.text, start: 0, end: item.prompt.text.length },
-    ]
-    for (const file of item.prompt.files ?? []) {
-      if (file.mime.startsWith("image/") && file.uri.startsWith("data:")) {
-        promptParts.push({
-          type: "image",
-          id: item.id + ":" + promptParts.length,
-          filename: file.name ?? "image",
-          mime: file.mime,
-          dataUrl: file.uri,
-        })
-        continue
-      }
-      promptParts.push({
-        type: "file",
-        path: file.name ?? file.uri,
-        filename: file.name,
-        mime: file.mime,
-        url: file.uri,
-        content: file.source?.text ?? "",
-        start: file.source?.start ?? 0,
-        end: file.source?.end ?? 0,
-      })
-    }
-    for (const agent of item.prompt.agents ?? []) {
-      promptParts.push({
-        type: "agent",
-        name: agent.name,
-        content: agent.source?.text ?? `@${agent.name}`,
-        start: agent.source?.start ?? 0,
-        end: agent.source?.end ?? agent.name.length + 1,
-      })
-    }
+    const promptParts = queuedPromptParts(item)
     return {
       sessionID: item.sessionID,
       sessionDirectory: sdk().directory,
@@ -1924,7 +2044,8 @@ export default function Page() {
   const queueEnabled = createMemo(() => {
     const id = params.id
     if (!id) return false
-    return settings.general.followup() === "queue" && busy(id) && !composer.blocked() && !isChildSession()
+    if (composer.blocked() || isChildSession()) return false
+    return !!followup.editTarget[id] || (settings.general.followup() === "queue" && busy(id))
   })
 
   const followupText = (item: FollowupDraft) => {
@@ -1944,34 +2065,60 @@ export default function Page() {
     return `[${language.t("common.attachment")}]`
   }
 
-  const queueFollowup = (draft: FollowupDraft) => {
-    const target = followup.editTarget[draft.sessionID]
-    const id = target?.id ?? Identifier.ascending("message")
-    setFollowup("drafts", id, draft)
-    setFollowup("failed", draft.sessionID, undefined)
-    setFollowup("paused", draft.sessionID, undefined)
-    setFollowup("editTarget", draft.sessionID, undefined)
-    const request = durableFollowupPrompt(draft, id, commandNames())
-    const operation = target
-      ? serverSDK().operationsApi.sessions.promptQueueUpdate({
-          sessionID: draft.sessionID,
-          messageID: id,
-          expectedAdmittedSeq: target.admittedSeq,
-          prompt: request,
-        })
-      : serverSDK().operationsApi.sessions.prompt({
-          sessionID: draft.sessionID,
-          id,
-          prompt: request,
-          delivery: "queue",
-        })
-    void operation
-      .then(() => queryClient.invalidateQueries({ queryKey: followupQueueKey() }))
-      .catch((error) => {
-        setFollowup("drafts", id, undefined)
-        setFollowup("failed", draft.sessionID, id)
-        fail(error)
+  const captureQueueFollowup = () => {
+    const owner = sessionOwnership.capture()
+    const source = serverSDK()
+    const queryKey = followupQueueKey()
+    const sessionID = params.id
+    if (!sessionID) return
+    const editing = followup.editTarget[sessionID]
+    const target = editing ? structuredClone(unwrap(editing)) : undefined
+    const queuedModel = target?.prompt?.route?.model
+    const preset =
+      queuedModel?.variant &&
+      !target?.useDefaultVariant &&
+      local.session.queueVariant({
+        providerID: queuedModel.providerID,
+        modelID: queuedModel.id,
+        variant: queuedModel.variant,
       })
+    const id = target?.id ?? Identifier.ascending("message")
+    const admittedSeq = target?.admittedSeq
+    const names = new Set(commandNames())
+    return async (draft: FollowupDraft) => {
+      if (draft.sessionID !== sessionID) throw new Error("Queued message source changed")
+      const sameModel = draft.model.providerID === queuedModel?.providerID && draft.model.modelID === queuedModel.id
+      const editedDraft =
+        sameModel && preset && preset.status !== "unchanged" && draft.variant === undefined
+          ? { ...draft, variant: preset.variant }
+          : draft
+      try {
+        const request = durableFollowupPrompt(editedDraft, id, names, target?.prompt)
+        if (target) {
+          await source.operationsApi.sessions.promptQueueUpdate({
+            sessionID,
+            messageID: id,
+            expectedAdmittedSeq: target.admittedSeq,
+            ...(target.useDefaultVariant && sameModel && queuedModel.variant && draft.variant === undefined
+              ? { expectedModel: queuedModel }
+              : {}),
+            prompt: request,
+          })
+        } else {
+          await source.operationsApi.sessions.prompt({ sessionID, id, prompt: request, delivery: "queue" })
+        }
+      } catch (error) {
+        setFollowup("failed", sessionID, id)
+        throw error
+      }
+      setFollowup("drafts", id, editedDraft)
+      setFollowup("failed", sessionID, undefined)
+      setFollowup("paused", sessionID, undefined)
+      const current = followup.editTarget[sessionID]
+      if (current?.id === id && current.admittedSeq === admittedSeq && current.generation === target?.generation)
+        setFollowup("editTarget", sessionID, undefined)
+      void queryClient.invalidateQueries({ queryKey }).catch((error) => owner.run(() => fail(error)))
+    }
   }
 
   const migratingFollowups = new Set<string>()
@@ -2022,14 +2169,66 @@ export default function Page() {
     const stored = followupQueueQuery.data?.find((entry) => entry.id === id)
     if (!stored) return
     const item = { id, ...durableDraft(stored) }
+    const queuedModel = stored.prompt.route?.model
+    local.session.restoreQueueVariant(
+      queuedModel && { providerID: queuedModel.providerID, modelID: queuedModel.id, variant: queuedModel.variant },
+    )
+    const generation = crypto.randomUUID()
 
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
-    setFollowup("editTarget", sessionID, { id, admittedSeq: stored.admittedSeq })
+    setFollowup("editTarget", sessionID, {
+      id,
+      admittedSeq: stored.admittedSeq,
+      generation,
+      useDefaultVariant: false,
+      prompt: stored.prompt,
+    })
     setFollowup("edit", sessionID, {
       id: item.id,
       prompt: item.prompt,
       context: item.context,
     })
+  }
+
+  const unavailableQueuePreset = () => {
+    const sessionID = params.id
+    const target = sessionID ? followup.editTarget[sessionID] : undefined
+    const queued = target?.prompt?.route?.model
+    if (!sessionID || !target?.generation || target.useDefaultVariant || !queued?.variant) return
+    const preset = local.session.queueVariant({
+      providerID: queued.providerID,
+      modelID: queued.id,
+      variant: queued.variant,
+    })
+    if (preset.status !== "retain") return
+    const latest = followupQueueQuery.data?.find((entry) => entry.id === target.id)
+    const latestModel = latest?.prompt.route?.model
+    if (
+      latest?.admittedSeq !== target.admittedSeq ||
+      latestModel?.providerID !== queued.providerID ||
+      latestModel.id !== queued.id ||
+      latestModel.variant !== queued.variant
+    )
+      return
+    const model = local.model.current()
+    return {
+      sessionID,
+      generation: target.generation,
+      available: model?.provider.id === queued.providerID && model.id === queued.id,
+    }
+  }
+
+  const useDefaultQueuePreset = (notice: NonNullable<ReturnType<typeof unavailableQueuePreset>>) => {
+    const current = unavailableQueuePreset()
+    if (
+      !current?.available ||
+      current.sessionID !== notice.sessionID ||
+      current.generation !== notice.generation ||
+      promptQueueSubmitting(prompt.capture())
+    )
+      return
+    setFollowup("editTarget", current.sessionID, "useDefaultVariant", true)
+    inputRef?.focus()
   }
 
   const clearFollowupEdit = () => {
@@ -2191,6 +2390,10 @@ export default function Page() {
 
   onMount(() => {
     makeEventListener(document, "keydown", handleKeyDown)
+    const syncViewport = () => setUi("viewportHeight", window.visualViewport?.height ?? window.innerHeight)
+    syncViewport()
+    makeEventListener(window, "resize", syncViewport)
+    if (window.visualViewport) makeEventListener(window.visualViewport, "resize", syncViewport)
   })
 
   onCleanup(() => {
@@ -2255,25 +2458,6 @@ export default function Page() {
           background session refreshes. `latest` keeps the rendered
           conversation mounted while a refresh completes. */}
       {sessionSync.latest ?? ""}
-      <Show when={newSessionDesign() && (!params.id || mobileChanges() || !messagesReady())}>
-        <div
-          id="arforge-session-header"
-          class="relative z-10 flex h-11 shrink-0 items-center border-b border-v2-border-border-muted"
-        >
-          <div class="flex-1" />
-          <TooltipV2 placement="bottom" value={language.t("command.tab.close")}>
-            <IconButtonV2
-              type="button"
-              variant="ghost-muted"
-              size="small"
-              class="mr-2 shrink-0"
-              icon={<IconV2 name="xmark-small" />}
-              onClick={closeTab}
-              aria-label={language.t("command.tab.close")}
-            />
-          </TooltipV2>
-        </div>
-      </Show>
       <div
         data-arforge-session-content
         class="flex-1 min-h-0 w-full max-h-full overflow-hidden flex flex-col md:grid md:grid-rows-[minmax(0,1fr)_auto]"
@@ -2302,6 +2486,7 @@ export default function Page() {
                 {(_id) => (
                   <MessageTimeline
                     actions={actions}
+                    captureReplyOwnership={() => sessionOwnership.capture()}
                     onCloseTab={closeTab}
                     scroll={ui.scroll}
                     onResumeScroll={resumeScroll}
@@ -2407,70 +2592,96 @@ export default function Page() {
                 controller={controller}
                 goalDock={<SessionGoalDock controller={sessionGoal} />}
                 promptInput={
-                  <Show
-                    when={newSessionDesign()}
-                    fallback={
-                      <PromptInput
-                        controls={inputController()}
-                        goal={sessionGoal.goal}
-                        ref={(el) => {
-                          inputRef = el
-                        }}
-                        newSessionWorktree={newSessionWorktree()}
-                        onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
-                        onSubmit={() => {
-                          discardEditedQueueOnDirectSubmit()
-                          comments.clear()
-                          resumeScroll()
-                        }}
-                        edit={editingFollowup()}
-                        onEditLoaded={clearFollowupEdit}
-                        shouldQueue={queueEnabled}
-                        onQueue={queueFollowup}
-                        onAbort={() => {
-                          const id = params.id
-                          if (!id) return
-                          setFollowup("paused", id, true)
-                        }}
-                      />
-                    }
-                  >
-                    {(_) => {
-                      const controller = usePromptInputV2Controller({
-                        get controls() {
-                          return inputController()
-                        },
-                        ref: (el) => {
-                          inputRef = el
-                        },
-                        get newSessionWorktree() {
-                          return newSessionWorktree()
-                        },
-                        onNewSessionWorktreeReset: () => setStore("newSessionWorktree", "main"),
-                        onSubmit: () => {
-                          discardEditedQueueOnDirectSubmit()
-                          comments.clear()
-                          resumeScroll()
-                        },
-                        shouldQueue: queueEnabled,
-                        onQueue: queueFollowup,
-                        onAbort: () => {
-                          const id = params.id
-                          if (!id) return
-                          setFollowup("paused", id, true)
-                        },
-                        goal: sessionGoal.goal,
-                      })
-                      return (
-                        <PromptInputV2Composer
-                          controller={controller}
-                          borderUnderlay
+                  <>
+                    <Show when={unavailableQueuePreset()} keyed>
+                      {(notice) => (
+                        <div
+                          class="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border-weak-base bg-background-base px-3 py-2 text-13-regular text-text-weak"
+                          data-slot="queue-preset-notice"
+                        >
+                          <span role="status">
+                            {language.locale().startsWith("zh")
+                              ? "原思考档位暂不可用。编辑后保存会保留原档位。"
+                              : "The original reasoning preset is unavailable. Saving the edit retains it."}
+                          </span>
+                          <Show when={notice.available}>
+                            <Button
+                              size="small"
+                              variant="secondary"
+                              disabled={promptQueueSubmitting(prompt.capture())}
+                              onClick={() => useDefaultQueuePreset(notice)}
+                            >
+                              {language.locale().startsWith("zh") ? "仅此编辑使用默认档" : "Use default for this edit"}
+                            </Button>
+                          </Show>
+                        </div>
+                      )}
+                    </Show>
+                    <Show
+                      when={newSessionDesign()}
+                      fallback={
+                        <PromptInput
+                          controls={inputController()}
+                          goal={sessionGoal.goal}
+                          ref={(el) => {
+                            inputRef = el
+                          }}
+                          newSessionWorktree={newSessionWorktree()}
+                          onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
+                          onSubmit={() => {
+                            discardEditedQueueOnDirectSubmit()
+                            comments.clear()
+                            resumeScroll()
+                          }}
                           edit={editingFollowup()}
                           onEditLoaded={clearFollowupEdit}
+                          shouldQueue={queueEnabled}
+                          captureQueue={captureQueueFollowup}
+                          onAbort={() => {
+                            const id = params.id
+                            if (!id) return
+                            setFollowup("paused", id, true)
+                          }}
                         />
-                      )
-                    }}
-                  </Show>
+                      }
+                    >
+                      {(_) => {
+                        const controller = usePromptInputV2Controller({
+                          get controls() {
+                            return inputController()
+                          },
+                          ref: (el) => {
+                            inputRef = el
+                          },
+                          get newSessionWorktree() {
+                            return newSessionWorktree()
+                          },
+                          onNewSessionWorktreeReset: () => setStore("newSessionWorktree", "main"),
+                          onSubmit: () => {
+                            discardEditedQueueOnDirectSubmit()
+                            comments.clear()
+                            resumeScroll()
+                          },
+                          shouldQueue: queueEnabled,
+                          captureQueue: captureQueueFollowup,
+                          onAbort: () => {
+                            const id = params.id
+                            if (!id) return
+                            setFollowup("paused", id, true)
+                          },
+                          goal: sessionGoal.goal,
+                        })
+                        return (
+                          <PromptInputV2Composer
+                            controller={controller}
+                            borderUnderlay
+                            edit={editingFollowup()}
+                            onEditLoaded={clearFollowupEdit}
+                          />
+                        )
+                      }}
+                    </Show>
+                  </>
                 }
               />
             )
@@ -2486,22 +2697,25 @@ export default function Page() {
       <SessionHeader
         executionRunning={executionRunning()}
         executionStepCount={executionTrace().steps.length}
-        onOpenExecution={() => setExecutionDock("opened", !executionDock.opened)}
+        onOpenExecution={() => setExecutionOpened(!executionDock.opened)}
       />
-      <Show when={executionDockVisible()}>
+      <Show when={executionDockVisible() && (executionRunning() || executionTrace().steps.length > 0)}>
         <SessionExecutionStatusBar
+          steps={executionTrace().steps}
           running={executionRunning()}
           stepCount={executionTrace().steps.length}
           label={executionStatusLabel()}
           countLabel={executionStepCountLabel()}
-          onOpen={() => setExecutionDock("opened", !executionDock.opened)}
+          onOpen={() => setExecutionOpened(!executionDock.opened)}
         />
       </Show>
       <div
         ref={panelRow}
-        class="flex-1 min-h-0 flex flex-col md:flex-row"
+        class="relative flex-1 min-h-0 flex flex-col md:flex-row"
         classList={{
-          "gap-3": settings.general.newLayoutDesigns() && !executionDock.opened,
+          // Match the 12 CSS px deducted by sessionPanelAvailable, including
+          // when the interface's root font makes rem-based spacing smaller.
+          "gap-[12px]": settings.general.newLayoutDesigns() && !(isDesktop() && executionDock.opened),
         }}
       >
         <Show when={!isDesktop() && !!params.id && !settings.general.newLayoutDesigns()}>{mobileTabs()}</Show>
@@ -2509,9 +2723,11 @@ export default function Page() {
         <div
           classList={{
             "@container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none transition-[width]": true,
-            "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
+            "duration-[140ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
               !size.active() && !ui.reviewSnap && !desktopInlineTerminalOnlyOpen(),
           }}
+          inert={(fullWorkbench() && desktopSidePanelOpen()) || narrowWorkbenchOpen() ? true : undefined}
+          aria-hidden={(fullWorkbench() && desktopSidePanelOpen()) || narrowWorkbenchOpen() ? true : undefined}
           style={{
             width: sessionPanelWidth(),
           }}
@@ -2566,9 +2782,18 @@ export default function Page() {
           />
         </Show>
         <Show when={newSessionDesign()}>
-          <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
-            <div class="min-w-0 h-full flex flex-1 flex-col">
-              <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
+          <Show when={(isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())) || narrowWorkbenchOpen()}>
+            <div
+              data-component="session-workbench-host"
+              class="min-w-0 h-full flex flex-1 flex-col"
+              classList={{
+                "absolute inset-0 z-20": fullWorkbench(),
+              }}
+              style={{
+                width: fullWorkbench() ? "100%" : undefined,
+              }}
+            >
+              <Show when={(isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())) || narrowWorkbenchOpen()}>
                 <div class="min-h-0 flex-1">
                   <SessionSidePanel
                     canReview={canReview}
@@ -2591,50 +2816,66 @@ export default function Page() {
                     focusReviewDiff={focusReviewDiff}
                     reviewSnap={ui.reviewSnap}
                     size={size}
-                    stacked={desktopV2PanelLayout().stacked}
-                  />
-                </div>
-              </Show>
-              <Show when={desktopV2PanelLayout().stacked}>
-                <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
-                  <ResizeHandle
-                    class="!relative !inset-auto !h-full !w-full !transform-none"
-                    direction="vertical"
-                    size={layout.terminal.height()}
-                    min={100}
-                    max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
-                    collapseThreshold={50}
-                    onResize={(height) => {
-                      size.touch()
-                      layout.terminal.resize(height)
+                    stacked={false}
+                    narrow={narrowWorkbenchOpen() || compactWorkbench()}
+                    fullWorkbench={fullWorkbench()}
+                    onFullWorkbenchChange={(expanded) => {
+                      if (!isDesktop() || compactWorkbench()) {
+                        if (!expanded) {
+                          view().reviewPanel.close()
+                          layout.fileTree.close()
+                          setUi("workbenchFull", false)
+                          const owner = sessionOwnership.capture()
+                          const source = serverSDK()
+                          queueMicrotask(() => {
+                            if (owner.current() && serverSDK() === source && !fullWorkbench()) focusInput()
+                          })
+                        }
+                        return
+                      }
+                      setUi("workbenchFull", expanded)
                     }}
-                    onCollapse={() => view().terminal.close()}
                   />
-                </div>
-              </Show>
-              <Show when={terminalOpen()}>
-                <div
-                  classList={{
-                    "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
-                    "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
-                  }}
-                >
-                  <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
                 </div>
               </Show>
             </div>
           </Show>
         </Show>
-        <Show when={executionDockVisible() && executionDock.opened}>
-          <div
-            class="absolute inset-y-0 right-0 z-30 w-[min(380px,36vw)] shadow-[var(--v2-elevation-floating)]"
-            style={{ animation: "session-side-panel-enter 260ms ease-out" }}
-          >
-            <SessionExecutionDock opened onOpenChange={(opened) => setExecutionDock("opened", opened)} />
-          </div>
+        <Show when={executionDockVisible() && executionDock.opened && executionDock.current} keyed>
+          {(current) => (
+            <SessionExecutionOverlay
+              narrow={!isDesktop()}
+              origin={executionDock.origin}
+              current={() => executionDock.current === current && current()}
+              onClose={() => setExecutionOpened(false)}
+            >
+              <SessionExecutionDock opened onOpenChange={setExecutionOpened} />
+            </SessionExecutionOverlay>
+          )}
         </Show>
       </div>
 
+      <Show when={newSessionDesign() && terminalOpen()}>
+        <section
+          data-component="session-bottom-terminal"
+          class="relative min-h-0 shrink-0 border-t border-v2-border-border-muted"
+          style={{ height: `${terminalEffectiveHeight()}px` }}
+        >
+          <ResizeHandle
+            direction="vertical"
+            size={terminalEffectiveHeight()}
+            min={Math.min(100, terminalHeightMax())}
+            max={terminalHeightMax()}
+            collapseThreshold={50}
+            onResize={(height) => {
+              size.touch()
+              layout.terminal.resize(height)
+            }}
+            onCollapse={() => view().terminal.close()}
+          />
+          <TerminalPanelV2 stacked height={terminalEffectiveHeight()} />
+        </section>
+      </Show>
       <Show when={!newSessionDesign()}>
         <TerminalPanel />
       </Show>

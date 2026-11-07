@@ -30,6 +30,15 @@ export const getHoveredLinkText = (value: unknown) => {
   return link.text
 }
 
+/** Ghostty's mouse selection focuses its container; keep input on the textarea. */
+export const bindTerminalContainerFocus = (container: HTMLElement, focusInput: () => void) => {
+  const handleFocus = (event: FocusEvent) => {
+    if (event.target === container) focusInput()
+  }
+  container.addEventListener("focus", handleFocus)
+  return () => container.removeEventListener("focus", handleFocus)
+}
+
 export const getSpeechRecognitionCtor = <T>(value: unknown): (new () => T) | undefined => {
   if (!isRecord(value)) return
   const ctor =

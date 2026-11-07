@@ -5,7 +5,7 @@ import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { WorkspaceV2 } from "@arforge-ai/core/workspace"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
@@ -43,10 +43,11 @@ export const sessionLocationLayer = Layer.effect(
               }),
           ),
         )
+        const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
         const row = yield* db
           .select({ directory: SessionTable.directory, workspaceID: SessionTable.workspace_id })
           .from(SessionTable)
-          .where(eq(SessionTable.id, sessionID))
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.tenant_id, principal.tenantID), eq(SessionTable.owner_user_id, principal.userID)))
           .get()
           .pipe(Effect.orDie)
         if (!row)

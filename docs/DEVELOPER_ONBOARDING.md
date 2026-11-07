@@ -5,30 +5,35 @@
 
 ## 1. 环境准备
 
-```bash
-git clone <repository-url>
-cd Arforge-Agent
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,postgres]"
-bun install
+在已检出的源码根目录使用 Bun 1.3.14 安装工作区依赖：
+
+```powershell
+bun install --frozen-lockfile
+bun run cli --help
+bun run dev:desktop
 ```
 
-CI 和发布环境使用仓库中的带哈希锁文件。修改依赖后，按 README 的 uv universal 命令同时更新 `requirements-release.lock` 与 `requirements-dev.lock`，并在 Python 3.10–3.12 矩阵审阅安装结果。
+如需开发或检查 Python 兼容层，在 Windows 上建立独立虚拟环境：
 
-复制 `.env.example` 到 `~/.arforge/.env`。本地测试优先使用专用数据库和密钥；不要复用生产凭据。
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,postgres]"
+```
 
-## 2. 五分钟验证
+CI 和发布环境使用仓库中的带哈希锁文件。修改 Python 依赖后同步维护
+`requirements-release.lock` 和 `requirements-dev.lock`。私有环境文件只需填写
+当前使用的配置项，参照 [用户指南](USER_GUIDE.md)。
 
-```bash
-powershell -ExecutionPolicy Bypass -File .\scripts\run_cli.ps1 --version
-python -m pytest -q
-python -m ruff check arforge tests config.py main.py
-python -m compileall -q arforge config.py
-bun run turbo typecheck
-bun --cwd packages/arforge test
+## 2. 开发检查
+
+按改动范围选择受影响包的测试与类型检查，再扩大验证范围。
+
+```powershell
+bun run cli --version
+bun run --cwd packages/app typecheck
+bun run --cwd packages/app test:unit
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check arforge tests config.py main.py
 ```
 
 完整产品验收还包括：
@@ -44,9 +49,10 @@ python -m build
 
 | 路径                               | 职责                                                | 修改时重点验证                                                                                                    |
 | ---------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `packages/core/`                   | 共享契约、数据库、Session Runner、capability bridge | SQLite/PostgreSQL 双路径、Effect 边界                                                                             |
+| `packages/core/`                   | 共享运行时、数据库、Session Runner 与能力执行       | SQLite/PostgreSQL 双路径、Effect 边界                                                                             |
 | `packages/arforge/`                | CLI、Provider、Server、工具与会话                   | CLI/HTTP/会话行为一致                                                                                             |
 | `packages/app/`                    | Desktop/Web 共用 Solid 应用                         | 状态同步、交互和可访问性                                                                                          |
+| `packages/server/`                 | HTTP 路由和处理器                                   | 请求校验、身份和权限边界                                                                                          |
 | `packages/desktop/`                | Electron 主进程、preload 和打包                     | 启动、sidecar、窗口和私有环境                                                                                     |
 | `arforge/core/`                    | 保留的 Python Agent 能力                            | 兼容桥、自纠错、取消、错误传播；dogfood 默认 runner 通过统一 TS `arforge run` 执行                                |
 | `arforge/models/`                  | 模型适配、速率限制、令牌统计                        | 所有调用入口均经过适配器策略                                                                                      |
@@ -63,9 +69,9 @@ python -m build
 | `scripts/cli_compat_inventory.py`  | Python 兼容治理入口                               | 仅无状态转发到上面的 TS 实现，保留旧自动化命令合同；不得添加第二套解析、策略或状态写入 |
 | `tests/`                           | 自动回归和产品契约                                  | 新行为必须有失败路径测试                                                                                          |
 
-主调用方向是 Electron/CLI → TypeScript Server/Session Runner →
-Provider/Tools；Python Agent 特性通过 capability bridge 接入。数据库和安全能力
-作为横切层。不要绕过 Provider、Session 或 Permission 层建立第二套产品状态。
+Desktop 的渲染层和 Web App 通过 HTTP 使用 TypeScript 后端。CLI 和服务端共享
+Core 的会话、权限与持久化契约，Python 层保留兼容和迁移用途。完整目录索引见
+[仓库结构](REPOSITORY_STRUCTURE.md)。
 
 ## 4. 常见开发任务
 
@@ -92,7 +98,9 @@ Provider/Tools；Python Agent 特性通过 capability bridge 接入。数据库�
 
 ### 修改数据库结构
 
-只通过 `arforge/database/migrations/` 的版本化 revision 变更。分别测试 main 与 multiagent 的 offline SQL、upgrade、current 和必要的 downgrade；不要在 import 时建表或改表。
+TypeScript 产品数据库的迁移在 `packages/core/src/database/`，分别维护 SQLite
+与 PostgreSQL 路径。Python 兼容数据库的迁移在 `arforge/database/migrations/`。
+先确认迁移归属，再按照 [数据库迁移手册](DATABASE_MIGRATION_RUNBOOK.md) 验证。
 
 ### 新增模型提供商
 
@@ -117,6 +125,5 @@ Provider/Tools；Python Agent 特性通过 capability bridge 接入。数据库�
 
 ## 7. 已知交接事项
 
-当前源码、CLI、Electron 构建、PostgreSQL 双库和隔离恢复均已有最终验收证据。
-依赖目录、私人备份和本地状态仍必须按所有者与保留价值管理，禁止批量删除。
-安装包、签名、公共远端发布和公网部署明确留到后续独立阶段。
+源码提交、Windows 安装包、签名和公网部署各自有验收范围。保留私有备份、
+工作区数据和原始验收输出。发布证据的存放和脱敏规则见 [仓库结构](REPOSITORY_STRUCTURE.md)。

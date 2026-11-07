@@ -1,10 +1,13 @@
 export * as SessionOrganization from "./organization"
 
-import { and, asc, desc, eq, gt, isNull, or } from "drizzle-orm"
-import { DateTime, Effect, Schema } from "effect"
+import { and, asc, desc, eq, gt, isNull, isNotNull, or } from "drizzle-orm"
+import { DateTime, Effect, Option, Schema } from "effect"
+import path from "node:path"
 import { SessionOrganization as Contract } from "@arforge-ai/schema/session-organization"
 import { Database } from "../database/database"
 import { NonNegativeInt } from "../schema"
+import { Location } from "../location"
+import { canonicalHash } from "../util/canonical-hash"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import {
@@ -47,6 +50,16 @@ export class StaleRewindError extends Schema.TaggedErrorClass<StaleRewindError>(
   checkpointID: CheckpointID,
   expectedLastSequence: NonNegativeInt,
   actualLastSequence: NonNegativeInt,
+}) {}
+
+export class RewindMessageNotFoundError extends Schema.TaggedErrorClass<RewindMessageNotFoundError>()("Session.RewindMessageNotFoundError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+}) {}
+
+export class RewindConflictError extends Schema.TaggedErrorClass<RewindConflictError>()("Session.RewindConflictError", {
+  sessionID: SessionSchema.ID,
+  message: Schema.String,
 }) {}
 
 const normalizeTag = (tag: Tag) => tag.normalize("NFKC").toLocaleLowerCase("en-US")
@@ -168,51 +181,86 @@ const findCheckpoint = Effect.fn("SessionOrganization.findCheckpoint")(function*
   return row
 })
 
-export const previewRewind = Effect.fn("SessionOrganization.previewRewind")(function* (input: {
-  readonly sessionID: SessionSchema.ID
-  readonly checkpointID: CheckpointID
-}) {
-  const { db } = yield* Database.Service
-  const checkpoint = yield* findCheckpoint(db, input)
-  const later = yield* db
-    .select({ id: SessionMessageTable.id })
-    .from(SessionMessageTable)
-    .where(
-      and(
-        eq(SessionMessageTable.session_id, input.sessionID),
-        isNull(SessionMessageTable.time_rewound),
-        gt(SessionMessageTable.seq, checkpoint.sequence),
-      ),
-    )
-    .all()
-    .pipe(Effect.orDie)
-  const latest = yield* latestVisible(db, input.sessionID).pipe(Effect.orDie)
-  return Contract.RewindPreview.make({
-    checkpoint: checkpointFromRow(checkpoint),
-    affectedMessages: later.length,
-    expectedLastSequence: latest?.sequence ?? 0,
-    workspaceEffectsUnchanged: true,
-  })
+type RewindRequest = { readonly sessionID: SessionSchema.ID } & Contract.RewindTarget
+const conflict = (sessionID: SessionSchema.ID) => new RewindConflictError({ sessionID, message: "The conversation or its source changed. Preview the rewind again before retrying." })
+
+/** All preview reads and apply validation use the same owned database snapshot. */
+const rewindState = Effect.fn("SessionOrganization.rewindState")(function* (db: QueryDatabase, input: RewindRequest) {
+  if ((input.messageID !== undefined) === (input.checkpointID !== undefined) || (input.messageID !== undefined && input.expectedDirectory === undefined)) return yield* conflict(input.sessionID)
+  const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+  const session = yield* db.select().from(SessionTable).where(and(
+    eq(SessionTable.id, input.sessionID), eq(SessionTable.tenant_id, principal.tenantID), eq(SessionTable.owner_user_id, principal.userID),
+  )).get().pipe(Effect.orDie)
+  if (!session) return yield* conflict(input.sessionID)
+  const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+  if ((location && (path.resolve(location.directory) !== path.resolve(session.directory) || (location.workspaceID ?? null) !== session.workspace_id)) ||
+    (input.expectedDirectory !== undefined && path.resolve(input.expectedDirectory) !== path.resolve(session.directory))) return yield* conflict(input.sessionID)
+  const messages = yield* db.select().from(SessionMessageTable).where(and(
+    eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.tenant_id, principal.tenantID), eq(SessionMessageTable.owner_user_id, principal.userID),
+  )).orderBy(asc(SessionMessageTable.seq)).all().pipe(Effect.orDie)
+  const inputs = yield* db.select().from(SessionInputTable).where(and(
+    eq(SessionInputTable.session_id, input.sessionID), eq(SessionInputTable.tenant_id, principal.tenantID), eq(SessionInputTable.owner_user_id, principal.userID),
+  )).orderBy(asc(SessionInputTable.admitted_seq)).all().pipe(Effect.orDie)
+  const visible = messages.filter(row => row.time_rewound === null)
+  let checkpoint: typeof SessionCheckpointTable.$inferSelect
+  if (input.messageID !== undefined) {
+    const target = visible.find(row => row.id === input.messageID && row.type === "user")
+    const original = inputs.find(row => row.id === input.messageID)
+    if (!target || !original || original.promoted_seq !== target.seq) return yield* new RewindMessageNotFoundError({ sessionID: input.sessionID, messageID: input.messageID })
+    const previous = visible.filter(row => row.seq < target.seq).at(-1)
+    const sequence = previous?.seq ?? 0
+    // A planned checkpoint is deterministic but is not persisted by preview/cancel.
+    checkpoint = {
+      tenant_id: principal.tenantID, owner_user_id: principal.userID,
+      id: Contract.CheckpointID.make(`chk_${canonicalHash({ sessionID: input.sessionID, messageID: input.messageID, sequence, directory: session.directory, workspaceID: session.workspace_id, principal })}`),
+      session_id: input.sessionID, label: Contract.CheckpointLabel.make("Before regenerated prompt"),
+      sequence, message_id: previous?.id ?? null, time_created: Date.now(),
+    }
+  } else {
+    checkpoint = yield* findCheckpoint(db, { sessionID: input.sessionID, checkpointID: input.checkpointID! })
+    if (checkpoint.tenant_id !== principal.tenantID || checkpoint.owner_user_id !== principal.userID) return yield* conflict(input.sessionID)
+  }
+  const revision = canonicalHash({
+    session: { id: session.id, directory: session.directory, workspaceID: session.workspace_id, projectID: session.project_id, tenantID: session.tenant_id, ownerID: session.owner_user_id, updated: session.time_updated },
+    checkpoint: { id: checkpoint.id, sequence: checkpoint.sequence, messageID: checkpoint.message_id }, messages, inputs,
+  })!
+  return { checkpoint, visible, revision, session }
 })
 
-export const applyRewind = Effect.fn("SessionOrganization.applyRewind")(function* (input: {
-  readonly sessionID: SessionSchema.ID
-  readonly checkpointID: CheckpointID
-  readonly expectedLastSequence: number
-}) {
+export const previewRewind = Effect.fn("SessionOrganization.previewRewind")(function* (input: RewindRequest) {
   const { db } = yield* Database.Service
+  return yield* db.transaction(tx => Effect.gen(function* () {
+    const state = yield* rewindState(tx, input)
+    return Contract.RewindPreview.make({
+      checkpoint: checkpointFromRow(state.checkpoint),
+      affectedMessages: state.visible.filter(row => row.seq > state.checkpoint.sequence).length,
+      expectedLastSequence: state.visible.at(-1)?.seq ?? 0,
+      expectedRevision: state.revision,
+      workspaceEffectsUnchanged: true,
+    })
+  })).pipe(databaseOrDie)
+})
+
+export const applyRewind = Effect.fn("SessionOrganization.applyRewind")(function* (input: { readonly sessionID: SessionSchema.ID } & Contract.RewindApplyInput) {
+  const { db } = yield* Database.Service
+  if (input.messageID !== undefined && input.expectedRevision === undefined) return yield* conflict(input.sessionID)
   return yield* db
     .transaction((tx) =>
       Effect.gen(function* () {
-        const checkpoint = yield* findCheckpoint(tx, input)
-        const latest = yield* latestVisible(tx, input.sessionID).pipe(Effect.orDie)
-        const actual = latest?.sequence ?? 0
+        const state = yield* rewindState(tx, input)
+        const checkpoint = state.checkpoint
+        const actual = state.visible.at(-1)?.seq ?? 0
         if (actual !== input.expectedLastSequence)
           return yield* new StaleRewindError({
-            checkpointID: input.checkpointID,
+            checkpointID: checkpoint.id,
             expectedLastSequence: input.expectedLastSequence,
             actualLastSequence: actual,
           })
+        if (input.expectedRevision !== undefined && input.expectedRevision !== state.revision) return yield* conflict(input.sessionID)
+        if (input.messageID !== undefined) {
+          const created = yield* tx.insert(SessionCheckpointTable).values(checkpoint).onConflictDoNothing().returning().get()
+          if (!created) return yield* conflict(input.sessionID)
+        }
         const later = yield* tx
           .select({ id: SessionMessageTable.id })
           .from(SessionMessageTable)
@@ -241,18 +289,24 @@ export const applyRewind = Effect.fn("SessionOrganization.applyRewind")(function
           .where(
             and(
               eq(SessionInputTable.session_id, input.sessionID),
-              or(
+              input.messageID !== undefined ? and(isNotNull(SessionInputTable.promoted_seq), gt(SessionInputTable.promoted_seq, checkpoint.sequence)) : or(
                 gt(SessionInputTable.admitted_seq, checkpoint.sequence),
                 gt(SessionInputTable.promoted_seq, checkpoint.sequence),
               ),
             ),
           )
           .run()
-        yield* tx
+        const settled = yield* tx
           .update(SessionTable)
           .set({ revert: null, time_updated: Date.now() })
-          .where(eq(SessionTable.id, input.sessionID))
-          .run()
+          .where(and(
+            eq(SessionTable.id, input.sessionID), eq(SessionTable.tenant_id, state.session.tenant_id), eq(SessionTable.owner_user_id, state.session.owner_user_id),
+            eq(SessionTable.directory, state.session.directory), eq(SessionTable.project_id, state.session.project_id),
+            state.session.workspace_id === null ? isNull(SessionTable.workspace_id) : eq(SessionTable.workspace_id, state.session.workspace_id),
+            eq(SessionTable.time_updated, state.session.time_updated),
+          ))
+          .returning({ id: SessionTable.id }).get()
+        if (!settled) return yield* conflict(input.sessionID)
         yield* tx
           .delete(SessionContextEpochTable)
           .where(eq(SessionContextEpochTable.session_id, input.sessionID))
@@ -268,7 +322,7 @@ export const applyRewind = Effect.fn("SessionOrganization.applyRewind")(function
     .pipe(databaseOrDie)
 })
 
-type DomainError = CheckpointNotFoundError | StaleRewindError
+type DomainError = CheckpointNotFoundError | StaleRewindError | RewindMessageNotFoundError | RewindConflictError
 
 function databaseOrDie<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, Extract<E, DomainError>, R> {
   return effect.pipe(
@@ -278,5 +332,5 @@ function databaseOrDie<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A
 
 function isDomainError(error: unknown): error is DomainError {
   if (typeof error !== "object" || error === null || !("_tag" in error)) return false
-  return error._tag === "Session.CheckpointNotFoundError" || error._tag === "Session.StaleRewindError"
+  return error._tag === "Session.CheckpointNotFoundError" || error._tag === "Session.StaleRewindError" || error._tag === "Session.RewindMessageNotFoundError" || error._tag === "Session.RewindConflictError"
 }

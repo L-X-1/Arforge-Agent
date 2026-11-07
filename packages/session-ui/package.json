@@ -10,6 +10,7 @@
     "./reasoning-heading": "./src/components/reasoning-heading.ts",
     "./message-file": "./src/components/message-file.ts",
     "./message-part-text": "./src/components/message-part-text.ts",
+    "./message-reply-action-run": "./src/components/message-reply-action-run.ts",
     "./markdown-stream": "./src/components/markdown-stream.ts",
     "./markdown-cache": "./src/components/markdown-cache.tsx",
     "./line-comment-styles": "./src/components/line-comment-styles.ts",

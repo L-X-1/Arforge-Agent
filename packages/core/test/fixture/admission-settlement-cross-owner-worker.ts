@@ -260,20 +260,16 @@ const program = Effect.gen(function* () {
   }
 
   if (phase === "after-owners-before-ack" || phase === "after-outbox-commit") {
-    yield* Effect.provideService(
-      runs.recordChildResult({
-        runID: childRunID,
-        admissionEvidence: {
-          evidenceID: evidencePlan.evidenceID,
-          recordDigest: materialized.recordDigest,
-          actionID,
-          observationID: action.observation.id,
-        },
-        result: resultInput,
-      }),
-      Database.CurrentPrincipal,
-      { tenantID: identity.tenantID, userID: identity.userID },
-    )
+    yield* runs.recordChildResult({
+      runID: childRunID,
+      admissionEvidence: {
+        evidenceID: evidencePlan.evidenceID,
+        recordDigest: materialized.recordDigest,
+        actionID,
+        observationID: action.observation.id,
+      },
+      result: resultInput,
+    })
     const written = yield* experience.recordAdmissionEvidence({
       identity,
       parentRunID,
@@ -342,4 +338,12 @@ const program = Effect.gen(function* () {
   yield* Effect.never
 })
 
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(layer)))
+// Seed and settle under one captured owner, matching both restart phases.
+// Binding only recordChildResult changes the owner after aggregate creation.
+await Effect.runPromise(
+  program.pipe(
+    Effect.scoped,
+    Effect.provide(layer),
+    Effect.provideService(Database.CurrentPrincipal, identity),
+  ),
+)

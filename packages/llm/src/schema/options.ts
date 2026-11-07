@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { JsonSchema, ModelID, ProviderID } from "./ids"
+import { JsonSchema, ModelID, ProviderID, ReasoningEffort } from "./ids"
 import type { AnyRoute } from "../route/client"
 import { isRecord } from "../utils/record"
 
@@ -71,6 +71,15 @@ export const mergeHttpOptions = (...items: ReadonlyArray<HttpOptions | undefined
   return new HttpOptions({ body, headers, query })
 }
 
+/** Typed request controls; provider serializers own their wire representation. */
+export class ReasoningOptions extends Schema.Class<ReasoningOptions>("LLM.ReasoningOptions")({
+  effort: Schema.optional(ReasoningEffort),
+  mode: Schema.optional(Schema.Literals(["enabled", "disabled", "adaptive"])),
+  budgetTokens: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)),
+  ),
+}) {}
+
 export class GenerationOptions extends Schema.Class<GenerationOptions>("LLM.GenerationOptions")({
   maxTokens: Schema.optional(Schema.Number),
   temperature: Schema.optional(Schema.Number),
@@ -80,6 +89,7 @@ export class GenerationOptions extends Schema.Class<GenerationOptions>("LLM.Gene
   presencePenalty: Schema.optional(Schema.Number),
   seed: Schema.optional(Schema.Number),
   stop: Schema.optional(Schema.Array(Schema.String)),
+  reasoning: Schema.optional(ReasoningOptions),
 }) {}
 
 export namespace GenerationOptions {
@@ -98,6 +108,7 @@ export type GenerationOptionsFields = {
   readonly presencePenalty?: number
   readonly seed?: number
   readonly stop?: ReadonlyArray<string>
+  readonly reasoning?: ReasoningOptions
 }
 
 export type GenerationOptionsInput = GenerationOptions | GenerationOptionsFields
@@ -117,6 +128,7 @@ export const mergeGenerationOptions = (...items: ReadonlyArray<GenerationOptions
     presencePenalty: latestGeneration(items, "presencePenalty"),
     seed: latestGeneration(items, "seed"),
     stop: latestGeneration(items, "stop"),
+    reasoning: latestGeneration(items, "reasoning"),
   })
   return Object.values(result).some((value) => value !== undefined) ? result : undefined
 }

@@ -1,7 +1,7 @@
 import { GoalV2 } from "@arforge-ai/core/goal"
 import { SessionV2 } from "@arforge-ai/core/session"
 import { SessionMessage } from "@arforge-ai/core/session/message"
-import { ConflictError, GoalNotFoundError, SessionNotFoundError } from "@arforge-ai/protocol/errors"
+import { ConflictError, GoalNotFoundError, InvalidRequestError, SessionNotFoundError } from "@arforge-ai/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -66,6 +66,7 @@ export const GoalHandler = HttpApiBuilder.group(Api, "server.goal", (handlers) =
               delivery: "queue",
             })
             .pipe(
+              Effect.catchTag("SessionExecution.OperationError", (error) => Effect.fail(new InvalidRequestError({ message: error.message }))),
               Effect.tapError((error) =>
                 goals
                   .block({

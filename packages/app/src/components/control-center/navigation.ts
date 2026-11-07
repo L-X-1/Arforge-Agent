@@ -78,6 +78,14 @@ export const ARFORGE_SETTINGS_TABS = [
 export type ArforgeSettingsTab = (typeof ARFORGE_SETTINGS_TABS)[number]
 export type ArforgeSettingsValue = ArforgeSettingsTab["value"]
 
+/** Presentation groups only. The eleven existing values still own their panels. */
+export const ARFORGE_SETTINGS_GROUPS = [
+  { id: "connections", values: ["arforge-integrations"] },
+  { id: "agent", values: ["arforge-evolution", "arforge-runtime", "arforge-extensions"] },
+  { id: "security", values: ["arforge-permissions"] },
+  { id: "data", values: ["arforge-workspace", "arforge-overview", "arforge-memory", "arforge-diagnostics", "arforge-operations", "arforge-coverage"] },
+] as const satisfies ReadonlyArray<{ id: string; values: readonly ArforgeSettingsValue[] }>
+
 export function isArforgeSettingsValue(value: string): value is ArforgeSettingsValue {
   return ARFORGE_SETTINGS_TABS.some((item) => item.value === value)
 }

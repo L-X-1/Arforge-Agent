@@ -20,15 +20,31 @@ import {
   projectContainsDirectory,
   runNavigationRequest,
   workspaceSidebarWidth,
+  workspaceSidebarSize,
 } from "./workspace-shell-state"
 
 describe("workspace shell navigation", () => {
   test("uses the approved default only when a usable width is absent", () => {
-    expect(workspaceSidebarWidth(undefined)).toBe(216)
-    expect(workspaceSidebarWidth(Number.NaN)).toBe(216)
-    expect(workspaceSidebarWidth(0)).toBe(216)
+    expect(workspaceSidebarWidth(undefined)).toBe(264)
+    expect(workspaceSidebarWidth(Number.NaN)).toBe(264)
+    expect(workspaceSidebarWidth(0)).toBe(264)
     expect(workspaceSidebarWidth(260)).toBe(260)
     expect(workspaceSidebarWidth(720)).toBe(720)
+  })
+
+  test("projects explicit widths into shell space while leaving room for content and retaining the legacy maximum", () => {
+    expect(workspaceSidebarSize(undefined, 1358)).toEqual({ width: 264, max: 1000 })
+    expect(workspaceSidebarSize(720, 1358)).toEqual({ width: 720, max: 1000 })
+    expect(workspaceSidebarSize(720, 958)).toEqual({ width: 638, max: 638 })
+    expect(workspaceSidebarSize(1000, 1598)).toEqual({ width: 1000, max: 1000 })
+    expect(workspaceSidebarSize(2000, 2400)).toEqual({ width: 1000, max: 1000 })
+    expect(workspaceSidebarSize(720, 1358).width).toBe(720)
+  })
+
+  test("keeps resize bounds usable before measurement and in temporarily narrow hosts", () => {
+    expect(workspaceSidebarSize(720)).toEqual({ width: 720, max: 1000 })
+    expect(workspaceSidebarSize(720, 351)).toEqual({ width: 180, max: 180 })
+    expect(workspaceSidebarSize(720, Number.NaN)).toEqual({ width: 720, max: 1000 })
   })
 
   test("pins cannot cross servers or workspaces with identical session IDs", () => {

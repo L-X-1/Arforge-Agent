@@ -6,6 +6,7 @@ import { HttpTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
   LLMEvent,
+  ReasoningEffort,
   Usage,
   type FinishReason,
   type JsonSchema,
@@ -96,7 +97,13 @@ export const bodyFields = {
   stream: Schema.Literal(true),
   stream_options: Schema.optional(Schema.Struct({ include_usage: Schema.Boolean })),
   store: Schema.optional(Schema.Boolean),
-  reasoning_effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
+  reasoning_effort: Schema.optional(ReasoningEffort),
+  thinking: Schema.optional(
+    Schema.Struct({
+      type: Schema.Literals(["enabled", "disabled", "adaptive"]),
+      budget_tokens: Schema.optional(Schema.Number),
+    }),
+  ),
   max_tokens: Schema.optional(Schema.Number),
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
@@ -332,12 +339,25 @@ const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: 
 
 const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LLMRequest) {
   const store = OpenAIOptions.store(request)
-  const reasoningEffort = OpenAIOptions.reasoningEffort(request)
-  if (reasoningEffort && !OpenAIOptions.isReasoningEffort(reasoningEffort))
+  const reasoning = request.generation?.reasoning
+  const compatible = request.model.route.id === "openai-compatible-chat"
+  if (reasoning?.mode !== undefined && !compatible)
+    return yield* invalid("Thinking mode requires a compatible Chat route.")
+  const reasoningEffort =
+    reasoning?.mode === "disabled" ? undefined : (reasoning?.effort ?? OpenAIOptions.reasoningEffort(request))
+  if (reasoningEffort && !compatible && !OpenAIOptions.isReasoningEffort(reasoningEffort))
     return yield* invalid(`OpenAI Chat does not support reasoning effort ${reasoningEffort}`)
   return {
     ...(store !== undefined ? { store } : {}),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(reasoning?.mode
+      ? {
+          thinking: {
+            type: reasoning.mode,
+            ...(reasoning.budgetTokens === undefined ? {} : { budget_tokens: reasoning.budgetTokens }),
+          },
+        }
+      : {}),
   }
 })
 

@@ -1,6 +1,6 @@
 export * as Credential from "./credential"
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, or } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Credential } from "@arforge-ai/schema/credential"
 import { Integration } from "@arforge-ai/schema/integration"
@@ -9,6 +9,7 @@ import { makeGlobalNode } from "./effect/app-node"
 import { CredentialTable } from "./credential/sql"
 import { IdentityTenantMemberTable } from "./identity/sql"
 import * as TenantPlatform from "./tenant-platform"
+import { KeyedMutex } from "./effect/keyed-mutex"
 
 export const ID = Credential.ID
 export type ID = Credential.ID
@@ -39,11 +40,14 @@ export interface Interface {
   /** Returns one stored credential by ID. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
   /** Replaces any credential for an integration and returns the new record. */
-  readonly create: (input: {
-    readonly integrationID: Integration.ID
-    readonly value: Value
-    readonly label?: string
-  }) => Effect.Effect<Info>
+  readonly create: (
+    input: {
+      readonly integrationID: Integration.ID
+      readonly value: Value
+      readonly label?: string
+    },
+    options?: { readonly expectedCredentials: readonly Pick<Info, "id" | "version">[] },
+  ) => Effect.Effect<Info>
   /** Updates the label or secret value of a stored credential. */
   readonly update: (
     id: ID,
@@ -51,7 +55,7 @@ export interface Interface {
     options?: { readonly expectedVersion: string },
   ) => Effect.Effect<void>
   /** Removes a stored credential. */
-  readonly remove: (id: ID) => Effect.Effect<void>
+  readonly remove: (id: ID, options?: { readonly expectedVersion: string }) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/Credential") {}
@@ -62,6 +66,7 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const db = database.db
     const tenantPlatform = yield* TenantPlatform.Service
+    const replacements = KeyedMutex.makeUnsafe<string>()
     const decode = Schema.decodeUnknownSync(Value)
     const encoder = new TextEncoder()
     const decoder = new TextDecoder()
@@ -215,42 +220,85 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return row ? yield* stored(principal, row) : undefined
       }),
-      create: Effect.fn("Credential.create")(function* (input) {
+      create: Effect.fn("Credential.create")(function* (input, options) {
         const principal = yield* currentPrincipal()
-        const id = ID.create()
-        const sealed = yield* seal(principal, id, input.value)
-        const credential = new Info({
-          id,
-          integrationID: input.integrationID,
-          label: input.label ?? "default",
-          version: sealed.fingerprint,
-          value: input.value,
-        })
-        yield* db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              yield* tx
-                .delete(CredentialTable)
-                .where(and(ownership(principal), eq(CredentialTable.integration_id, credential.integrationID)))
-                .run()
-              yield* tx
-                .insert(CredentialTable)
-                .values({
-                  id: credential.id,
-                  tenant_id: principal.tenantID,
-                  owner_user_id: principal.userID,
-                  integration_id: credential.integrationID,
-                  label: credential.label,
-                  value: redactedStoredValue,
-                  encrypted_value: sealed.ciphertext,
-                  value_key_version: sealed.keyVersion,
-                  value_fingerprint: sealed.fingerprint,
-                })
-                .run()
-            }),
-          )
-          .pipe(Effect.orDie)
-        return credential
+        return yield* replacements.withLock(
+          JSON.stringify([principal.tenantID, principal.userID, input.integrationID]),
+        )(
+          Effect.gen(function* () {
+            const id = ID.create()
+            const sealed = yield* seal(principal, id, input.value)
+            const credential = new Info({
+              id,
+              integrationID: input.integrationID,
+              label: input.label ?? "default",
+              version: sealed.fingerprint,
+              value: input.value,
+            })
+            yield* db
+              .transaction((tx) =>
+                Effect.gen(function* () {
+                  if (options) {
+                    const current = yield* tx
+                      .select({ id: CredentialTable.id, version: CredentialTable.value_fingerprint })
+                      .from(CredentialTable)
+                      .where(and(ownership(principal), eq(CredentialTable.integration_id, credential.integrationID)))
+                      .all()
+                    if (
+                      current.length !== options.expectedCredentials.length ||
+                      current.some(
+                        (row) =>
+                          !options.expectedCredentials.some(
+                            (expected) => expected.id === row.id && expected.version === row.version,
+                          ),
+                      )
+                    )
+                      return yield* Effect.die(new Error("Credential changed before replacement"))
+                  }
+                  if (!options || options.expectedCredentials.length) {
+                    const removed = yield* tx
+                      .delete(CredentialTable)
+                      .where(
+                        and(
+                          ownership(principal),
+                          eq(CredentialTable.integration_id, credential.integrationID),
+                          options
+                            ? or(
+                                ...options.expectedCredentials.map((expected) =>
+                                  and(
+                                    eq(CredentialTable.id, expected.id),
+                                    eq(CredentialTable.value_fingerprint, expected.version),
+                                  ),
+                                ),
+                              )
+                            : undefined,
+                        ),
+                      )
+                      .returning({ id: CredentialTable.id })
+                      .all()
+                    if (options && removed.length !== options.expectedCredentials.length)
+                      return yield* Effect.die(new Error("Credential changed before replacement"))
+                  }
+                  yield* tx
+                    .insert(CredentialTable)
+                    .values({
+                      id: credential.id,
+                      tenant_id: principal.tenantID,
+                      owner_user_id: principal.userID,
+                      integration_id: credential.integrationID,
+                      label: credential.label,
+                      value: redactedStoredValue,
+                      encrypted_value: sealed.ciphertext,
+                      value_key_version: sealed.keyVersion,
+                      value_fingerprint: sealed.fingerprint,
+                    })
+                    .run()
+                }),
+              )
+              .pipe(Effect.orDie)
+            return credential
+          }),
+        )
       }),
       update: Effect.fn("Credential.update")(function* (id, updates, options) {
         if (updates.label === undefined && updates.value === undefined) return
@@ -282,11 +330,17 @@ const layer = Layer.effect(
         if (options !== undefined && changed.length !== 1)
           return yield* Effect.die(new Error("Credential changed or was removed during update"))
       }),
-      remove: Effect.fn("Credential.remove")(function* (id) {
+      remove: Effect.fn("Credential.remove")(function* (id, options) {
         const principal = yield* currentPrincipal()
         yield* db
           .delete(CredentialTable)
-          .where(and(ownership(principal), eq(CredentialTable.id, id)))
+          .where(
+            and(
+              ownership(principal),
+              eq(CredentialTable.id, id),
+              options ? eq(CredentialTable.value_fingerprint, options.expectedVersion) : undefined,
+            ),
+          )
           .run()
           .pipe(Effect.orDie)
       }),

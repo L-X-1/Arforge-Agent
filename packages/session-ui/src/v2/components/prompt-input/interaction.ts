@@ -25,6 +25,8 @@ export type PromptInputV2SelectControl = {
   current: Accessor<string>
   onSelect: (id: string) => void
   keybind?: Accessor<string[]>
+  scope?: Accessor<string>
+  configure?: { label: Accessor<string>; run: () => void }
 }
 
 export type PromptInputV2ViewConfig = {
@@ -93,11 +95,7 @@ export function createPromptInputV2Controller(input: {
   const attachments = input.attachments
     ? createPromptInputV2Attachments({
         ...input.attachments,
-        capture: () => ({
-          current: () => draft.state.prompt,
-          cursor: () => draft.state.cursor,
-          set: draft.setPrompt,
-        }),
+        capture: draft.capture,
         editor: () => editor,
         focusEditor: () => editor?.focus(),
         addPart,
@@ -340,7 +338,12 @@ export function createPromptInputV2Controller(input: {
     },
     canSubmit() {
       const persisted = draft.state
-      if (persisted.prompt.some((part) => part.type === "image")) return true
+      if (
+        persisted.prompt.some(
+          (part) => part.type === "image" || (part.type === "file" && part.source?.type === "resource"),
+        )
+      )
+        return true
       if (persisted.context.items.some((item) => !!item.comment?.trim())) return true
       return persisted.prompt.some((part) => "content" in part && !!part.content.trim())
     },
@@ -438,7 +441,10 @@ export function createPromptInputV2Controller(input: {
       fileInput = element
     },
     addAttachments(files: File[]) {
-      if (attachments) void attachments.addAttachments(files)
+      return attachments?.addPickedAttachments(files).catch(input.attachments!.onError)
+    },
+    cancelAttachmentPicker() {
+      attachments?.cancelPicker()
     },
     setQuery(value: string) {
       dispatch({ type: "popover.query", value })

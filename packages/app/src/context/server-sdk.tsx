@@ -19,19 +19,30 @@ import { useGlobal } from "./global"
 import { ServerScope } from "@/utils/server-scope"
 import { detectServerProtocol, type ServerProtocol } from "@/utils/server-protocol"
 import { createCompatibleApi, type CompatibleApi } from "@/utils/server-compat"
+import type { CurrentServerEvent } from "./server-session-native-reducer"
 
 const isAbortError = (error: unknown) =>
   error !== null && typeof error === "object" && "name" in error && error.name === "AbortError"
 
 const isStreamClosed = (error: unknown, signal?: AbortSignal) => isAbortError(error) || signal?.aborted === true
-export type ServerEvent = Event & { current?: ArforgeEvent }
+export type ServerEvent = Event & { current?: CurrentServerEvent }
 type QueuedServerEvent = { directory: string; payload: ServerEvent }
 type CurrentDelta = Extract<
-  ArforgeEvent,
-  { type: "session.text.delta" | "session.reasoning.delta" | "session.tool.input.delta" | "session.compaction.delta" }
+  CurrentServerEvent,
+  {
+    type:
+      | "session.text.delta"
+      | "session.reasoning.delta"
+      | "session.tool.input.delta"
+      | "session.compaction.delta"
+      | "session.next.text.delta"
+      | "session.next.reasoning.delta"
+      | "session.next.tool.input.delta"
+      | "session.next.compaction.delta"
+  }
 >
 
-export function adaptServerEvent(event: ArforgeEvent): ServerEvent {
+export function adaptServerEvent(event: CurrentServerEvent): ServerEvent {
   if (event.type === "permission.v2.asked") {
     const data = event.data as typeof event.data & { readonly requiresHumanConfirmation?: unknown }
     return {
@@ -71,6 +82,8 @@ export function adaptServerEvent(event: ArforgeEvent): ServerEvent {
  */
 export function adaptLegacyServerEvent(event: Event): ServerEvent {
   const raw = event as Event & { id: string; type: string; properties: unknown }
+  if (raw.type.startsWith("session.next.") || raw.type === "agent.run.state-changed")
+    return adaptServerEvent({ id: raw.id, type: raw.type, data: raw.properties } as CurrentServerEvent)
   if (
     raw.type !== "permission.v2.asked" &&
     raw.type !== "permission.v2.replied" &&
@@ -117,7 +130,7 @@ export function coalesceServerEvents(events: QueuedServerEvent[]) {
       ) {
         const fragment = currentDeltaFragment(prior) + currentDeltaFragment(current)
         const data =
-          current.type === "session.compaction.delta"
+          current.type === "session.compaction.delta" || current.type === "session.next.compaction.delta"
             ? { ...current.data, text: fragment }
             : { ...current.data, delta: fragment }
         output[output.length - 1] = {
@@ -164,8 +177,12 @@ export function coalesceServerEvents(events: QueuedServerEvent[]) {
   return output
 }
 
-function currentDelta(event: ArforgeEvent | undefined): CurrentDelta | undefined {
+function currentDelta(event: CurrentServerEvent | undefined): CurrentDelta | undefined {
   if (
+    event?.type === "session.next.text.delta" ||
+    event?.type === "session.next.reasoning.delta" ||
+    event?.type === "session.next.tool.input.delta" ||
+    event?.type === "session.next.compaction.delta" ||
     event?.type === "session.text.delta" ||
     event?.type === "session.reasoning.delta" ||
     event?.type === "session.tool.input.delta" ||
@@ -175,14 +192,22 @@ function currentDelta(event: ArforgeEvent | undefined): CurrentDelta | undefined
 }
 
 function currentDeltaKey(event: CurrentDelta) {
-  if (event.type === "session.tool.input.delta")
+  if (event.type === "session.next.text.delta")
+    return `${event.type}:${event.data.sessionID}:${event.data.assistantMessageID}:${event.data.textID}`
+  if (event.type === "session.next.reasoning.delta")
+    return `${event.type}:${event.data.sessionID}:${event.data.assistantMessageID}:${event.data.reasoningID}`
+  if (event.type === "session.next.compaction.delta")
+    return `${event.type}:${event.data.sessionID}:${event.data.messageID}`
+  if (event.type === "session.tool.input.delta" || event.type === "session.next.tool.input.delta")
     return `${event.type}:${event.data.sessionID}:${event.data.assistantMessageID}:${event.data.callID}`
   if (event.type === "session.compaction.delta") return `${event.type}:${event.data.sessionID}`
   return `${event.type}:${event.data.sessionID}:${event.data.assistantMessageID}:${event.data.ordinal}`
 }
 
 function currentDeltaFragment(event: CurrentDelta) {
-  return event.type === "session.compaction.delta" ? event.data.text : event.data.delta
+  return event.type === "session.compaction.delta" || event.type === "session.next.compaction.delta"
+    ? event.data.text
+    : event.data.delta
 }
 
 export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () => unknown) {
@@ -421,11 +446,14 @@ export const { use: useServerSDK, provider: ServerSDKProvider } = createSimpleCo
     const language = useLanguage()
     const server = useServer()
 
-    return createMemo<ServerSDK>(() => {
+    let alive = true
+    onCleanup(() => { alive = false })
+    const accessor = createMemo<ServerSDK>(() => {
       const conn = props.server?.() ?? server.current
       if (!conn) throw new Error(language.t("error.serverSDK.noServerAvailable"))
       return global.ensureServerCtx(conn).sdk
     })
+    return Object.assign(accessor, { isAlive: () => alive })
   },
 })
 

@@ -1,8 +1,49 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron"
-import type { ElectronAPI, WslServersEvent } from "./types"
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron"
+import type { ElectronAPI, TitlebarTheme, WslServersEvent } from "./types"
+import { observeBrowserAppearance } from "./browser-appearance"
+import { createDesktopStoreWriter } from "./store-write"
+import { createPersistenceDrain } from "../shared/persistence-drain"
+import { captureBrowserLayout, readBrowserViewport } from "./browser-layout"
 import type { UpdaterState } from "@arforge-ai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
+const closePreparations = new Set<() => Promise<void>>()
+const preparingClose = new Set<string>()
+const storeDrain = createPersistenceDrain()
+const storeNamespace = (name: string) => JSON.stringify(name) + ":"
+const storeKey = (name: string, key: string) => storeNamespace(name) + JSON.stringify(["key", key])
+const writeStore = createDesktopStoreWriter({
+  set: (name, key, value) => ipcRenderer.invoke("store-set", name, key, value),
+  begin: (name, key, length) => ipcRenderer.invoke("store-write-begin", name, key, length),
+  chunk: (id, index, value) => ipcRenderer.invoke("store-write-chunk", id, index, value),
+  commit: (id) => ipcRenderer.invoke("store-write-commit", id),
+  abort: (id) => ipcRenderer.invoke("store-write-abort", id),
+})
+ipcRenderer.on("prepare-window-close", (_event: unknown, requestID: unknown) => {
+  if (
+    typeof requestID !== "string" ||
+    requestID.length === 0 ||
+    requestID.length > 128 ||
+    preparingClose.has(requestID)
+  )
+    return
+  preparingClose.add(requestID)
+  void Promise.resolve()
+    .then(async () => {
+      await Promise.all([...closePreparations].map((prepare) => prepare()))
+      await storeDrain.flush()
+      ipcRenderer.send("window-close-prepared", { requestID, ok: true })
+    })
+    .catch(() =>
+      ipcRenderer.send("window-close-prepared", {
+        requestID,
+        ok: false,
+        error: "Unable to finish saving window state",
+      }),
+    )
+    .finally(() => preparingClose.delete(requestID))
+})
+let lastTitlebarTheme: TitlebarTheme | undefined
 let browserLayoutSequence = 0
 let updaterState: UpdaterState | undefined
 let updaterSubscription: Promise<void> | undefined
@@ -16,9 +57,13 @@ const api: ElectronAPI = {
     open: (scope) => ipcRenderer.invoke("workbench-browser", { action: "open", scope }),
     command: (scope, pageID, command) => ipcRenderer.invoke("workbench-browser", { ...command, scope, pageID }),
     close: (scope, pageID) => ipcRenderer.invoke("workbench-browser", { action: "close", scope, pageID }),
-    layout: (scope, pageID, bounds) => ipcRenderer.invoke("workbench-browser-layout", {
-      scope, pageID, bounds, sequence: ++browserLayoutSequence,
-    }),
+    layout: (scope, pageID, bounds) =>
+      ipcRenderer.invoke(
+        "workbench-browser-layout",
+        captureBrowserLayout(scope, pageID, bounds, ++browserLayoutSequence, () =>
+          readBrowserViewport(window.visualViewport, webFrame.getZoomFactor()),
+        ),
+      ),
     subscribe: (callback) => {
       const handler = (_event: unknown, state: Parameters<typeof callback>[0]) => callback(state)
       ipcRenderer.on("workbench-browser-state", handler)
@@ -84,11 +129,20 @@ const api: ElectronAPI = {
   checkAppExists: (appName) => ipcRenderer.invoke("check-app-exists", appName),
   resolveAppPath: (appName) => ipcRenderer.invoke("resolve-app-path", appName),
   storeGet: (name, key) => ipcRenderer.invoke("store-get", name, key),
-  storeSet: (name, key, value) => ipcRenderer.invoke("store-set", name, key, value),
-  storeDelete: (name, key) => ipcRenderer.invoke("store-delete", name, key),
-  storeClear: (name) => ipcRenderer.invoke("store-clear", name),
+  storeSet: (name, key, value) => storeDrain.track(storeKey(name, key), writeStore(name, key, value)),
+  storeDelete: (name, key) => storeDrain.track(storeKey(name, key), ipcRenderer.invoke("store-delete", name, key)),
+  storeClear: (name) =>
+    storeDrain.track(storeNamespace(name) + "clear", ipcRenderer.invoke("store-clear", name), {
+      clearsPrefix: storeNamespace(name),
+    }),
   storeKeys: (name) => ipcRenderer.invoke("store-keys", name),
   storeLength: (name) => ipcRenderer.invoke("store-length", name),
+  onPrepareClose: (callback) => {
+    closePreparations.add(callback)
+    return () => {
+      closePreparations.delete(callback)
+    }
+  },
 
   getWindowCount: () => ipcRenderer.invoke("get-window-count"),
   getWindowID: () => ipcRenderer.invoke("get-window-id"),
@@ -137,7 +191,13 @@ const api: ElectronAPI = {
     ipcRenderer.on("zoom-factor-changed", handler)
     return () => ipcRenderer.removeListener("zoom-factor-changed", handler)
   },
-  setTitlebar: (theme) => ipcRenderer.invoke("set-titlebar", theme),
+  setTitlebar: (theme) => {
+    lastTitlebarTheme = theme
+    return ipcRenderer.invoke("set-titlebar", {
+      ...theme,
+      locale: document.documentElement?.lang || "en",
+    })
+  },
   runDesktopMenuAction: (action) => ipcRenderer.invoke("run-desktop-menu-action", action),
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
   exportDebugLogs: () => ipcRenderer.invoke("export-debug-logs"),
@@ -146,3 +206,7 @@ const api: ElectronAPI = {
 }
 
 contextBridge.exposeInMainWorld("api", api)
+
+const stopAppearanceSync = observeBrowserAppearance((theme) => api.setTitlebar({ ...lastTitlebarTheme, ...theme }))
+window.addEventListener("unload", stopAppearanceSync, { once: true })
+ipcRenderer.send("window-persistence-ready")

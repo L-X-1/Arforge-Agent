@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { promptPlaceholder } from "./placeholder"
+import { promptPlaceholder, promptDesignPlaceholder } from "./placeholder"
 
 describe("promptPlaceholder", () => {
+  test("inherits translated text and the existing command/context labels in the approved composer hint", () => {
+    const labels: Record<string, string> = { 'prompt.menu.commands': 'Commands', 'prompt.menu.context': 'Context' }
+    const translate = (key: string) => labels[key]
+    expect(promptDesignPlaceholder('normal', 'Ask anything...', translate)).toBe('Ask anything... / Commands, @ Context')
+    expect(promptDesignPlaceholder('shell', 'Enter shell command...', translate)).toBe('Enter shell command...')
+  })
   const t = (key: string, params?: Record<string, string>) => `${key}${params?.example ? `:${params.example}` : ""}`
 
   test("returns shell placeholder in shell mode", () => {

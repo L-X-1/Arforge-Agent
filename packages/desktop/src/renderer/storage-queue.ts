@@ -1,16 +1,19 @@
 import type { AsyncStorage } from "@solid-primitives/storage"
+import { createPersistenceDrain } from "../shared/persistence-drain"
 
 export function createStorageMutationQueue() {
   let tail = Promise.resolve()
+  const drain = createPersistenceDrain()
 
-  return <T>(operation: () => Promise<T>) => {
+  const enqueue = <T>(operation: () => Promise<T>, key = "mutation", options?: { clearsPrefix?: string }) => {
     const current = tail.catch(() => undefined).then(operation)
     tail = current.then(
       () => undefined,
       () => undefined,
     )
-    return current
+    return drain.track(key, current, options)
   }
+  return Object.assign(enqueue, { flush: drain.flush })
 }
 
 type DesktopStorageBridge = {
@@ -22,22 +25,29 @@ type DesktopStorageBridge = {
   storeLength: (name: string) => Promise<number>
 }
 
-export function createDesktopStorage(name: string, bridge: DesktopStorageBridge): AsyncStorage {
+export function createDesktopStorage(
+  name: string,
+  bridge: DesktopStorageBridge,
+): AsyncStorage & { flush: () => Promise<void> } {
   const mutate = createStorageMutationQueue()
-  const api: AsyncStorage = {
+  const api: AsyncStorage & { flush: () => Promise<void> } = {
+    flush: mutate.flush,
     getItem: (key: string) => bridge.storeGet(name, key),
     setItem: (key: string, value: string) =>
-      mutate(() => {
-        // @solid-primitives/storage removes nullish persisted signals, but its
-        // store branch can pass JSON.stringify(undefined) through setItem.
-        // Keep the desktop adapter consistent with the signal branch instead
-        // of forwarding an invalid IPC value and leaving the caller rejected.
-        if (value === undefined || value === null) return bridge.storeDelete(name, key)
-        if (typeof value !== "string") return Promise.reject(new TypeError("Invalid desktop store value"))
-        return bridge.storeSet(name, key, value)
-      }),
-    removeItem: (key: string) => mutate(() => bridge.storeDelete(name, key)),
-    clear: () => mutate(() => bridge.storeClear(name)),
+      mutate(
+        () => {
+          // @solid-primitives/storage removes nullish persisted signals, but its
+          // store branch can pass JSON.stringify(undefined) through setItem.
+          // Keep the desktop adapter consistent with the signal branch instead
+          // of forwarding an invalid IPC value and leaving the caller rejected.
+          if (value === undefined || value === null) return bridge.storeDelete(name, key)
+          if (typeof value !== "string") return Promise.reject(new TypeError("Invalid desktop store value"))
+          return bridge.storeSet(name, key, value)
+        },
+        JSON.stringify(["key", key]),
+      ),
+    removeItem: (key: string) => mutate(() => bridge.storeDelete(name, key), JSON.stringify(["key", key])),
+    clear: () => mutate(() => bridge.storeClear(name), JSON.stringify(["clear"]), { clearsPrefix: "" }),
     key: async (index: number) => (await bridge.storeKeys(name))[index],
     getLength: () => bridge.storeLength(name),
     get length() {

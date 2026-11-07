@@ -6,9 +6,12 @@ import type {
   SessionMessageUser,
 } from "@arforge-ai/client/promise"
 import type { AssistantMessage, FilePart, Message, Part, ToolPart, UserMessage } from "@arforge-ai/sdk/v2"
+import type { SessionMessageUser as CanonicalUser } from "@arforge-ai/sdk/v2/client"
 import { Option, Schema } from "effect"
+import type { FileAttachment as CanonicalAttachment } from "@arforge-ai/schema/prompt"
 
 type StructuredAssistant = SessionMessageAssistant & { structured?: Record<string, unknown> }
+type RequestUser = SessionMessageUser | (Omit<CanonicalUser, "files"> & { files?: ReadonlyArray<CanonicalAttachment> })
 
 const emptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const emptyModel: { id: string; providerID: string; variant?: string } = { id: "", providerID: "" }
@@ -39,12 +42,13 @@ function normalizeToolMetadata(name: string, metadata: Record<string, unknown>) 
   }
 }
 
-export function normalizeSessionMessages(sessionID: string, source: readonly SessionMessageInfo[]) {
+export function normalizeSessionMessages(sessionID: string, source: readonly (SessionMessageInfo | CanonicalUser)[]) {
   const messages: Message[] = []
   const parts = new Map<string, Part[]>()
   let agent = ""
   let model = emptyModel
   let parentID: string | undefined
+  let parentRoute: CanonicalUser["route"]
 
   source.forEach((message) => {
     if (message.type === "agent-switched") {
@@ -57,12 +61,14 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
     }
     if (message.type === "user") {
       parentID = message.id
+      parentRoute = "route" in message ? message.route : undefined
       messages.push(userMessage(sessionID, message, agent, model))
       parts.set(message.id, userParts(sessionID, message))
       return
     }
     if (message.type === "synthetic" && message.description?.trim()) {
       parentID = message.id
+      parentRoute = undefined
       messages.push({
         id: message.id,
         sessionID,
@@ -88,12 +94,16 @@ export function normalizeSessionMessages(sessionID: string, source: readonly Ses
       if (!parentID) return
       const parent = messages.findLast((item) => item.id === parentID)
       if (parent?.role === "user") {
-        parent.agent = assistant.agent
-        parent.model = {
-          providerID: assistant.model.providerID,
-          modelID: assistant.model.id,
-          variant: assistant.model.variant,
-        }
+        // Canonical admission captures the configured identity and strength.
+        // An assistant may use a wire alias or fallback; infer only missing
+        // legacy fields, never replace the caller's explicit turn route.
+        if (!parentRoute?.agent) parent.agent = assistant.agent
+        if (!parentRoute?.model)
+          parent.model = {
+            providerID: assistant.model.providerID,
+            modelID: assistant.model.id,
+            variant: assistant.model.variant,
+          }
       }
       messages.push(assistantMessage(sessionID, parentID, assistant))
       parts.set(assistant.id, assistantParts(sessionID, assistant))
@@ -183,53 +193,86 @@ export function sessionMessagePartID(messageID: string, type: "text" | "reasonin
 
 function userMessage(
   sessionID: string,
-  message: SessionMessageUser,
+  message: RequestUser,
   agent: string,
   model: { id: string; providerID: string; variant?: string },
 ): UserMessage {
+  const system = "system" in message ? message.system : undefined
+  const route = "route" in message ? message.route : undefined
+  const selectedModel = route?.model ?? model
   return {
     id: message.id,
     sessionID,
     role: "user",
     time: message.time,
-    agent,
-    model: { providerID: model.providerID, modelID: model.id, variant: model.variant },
+    agent: route?.agent ?? agent,
+    model: { providerID: selectedModel.providerID, modelID: selectedModel.id, variant: selectedModel.variant },
+    // Only the original caller's explicit turn instruction is replayable.
+    // Runtime/project context and unscoped legacy text must not be promoted.
+    system:
+      record(system) && system.source === "request" && system.scope === "turn" && typeof system.text === "string"
+        ? system.text
+        : undefined,
   }
 }
 
-function userParts(sessionID: string, message: SessionMessageUser): Part[] {
+function userParts(sessionID: string, message: RequestUser): Part[] {
   return [
     textPart(sessionID, message.id, 0, message.text),
-    ...(message.files ?? []).map(
-      (file, index): FilePart => ({
+    ...(message.files ?? []).map((file, index): FilePart => {
+      const canonical = "uri" in file
+      const mention = canonical ? file.source : file.mention
+      // Native live events retain resource identity on the compatibility file
+      // shape; a URI by itself cannot identify which MCP connection owns it.
+      const bridgedResource = !canonical && "resource" in file ? file.resource : undefined
+      const resource = canonical
+        ? file.resource
+        : record(bridgedResource) &&
+            typeof bridgedResource.server === "string" &&
+            typeof bridgedResource.uri === "string"
+          ? { server: bridgedResource.server, uri: bridgedResource.uri }
+          : undefined
+      return {
         id: `${message.id}:file:${index}`,
         sessionID,
         messageID: message.id,
         type: "file",
         mime: file.mime,
         filename: file.name,
-        url: file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`,
-        source: file.mention
+        url: canonical
+          ? file.uri
+          : file.source.type === "uri"
+            ? file.source.uri
+            : `data:${file.mime};base64,${file.data}`,
+        source: resource
           ? {
-              type: "file",
-              text: { value: file.mention.text, start: file.mention.start, end: file.mention.end },
-              path: file.mention.text.startsWith("@") ? file.mention.text.slice(1) : (file.name ?? file.mention.text),
+              type: "resource",
+              clientName: resource.server,
+              uri: resource.uri,
+              text: mention
+                ? { value: mention.text, start: mention.start, end: mention.end }
+                : { value: "", start: 0, end: 0 },
             }
-          : undefined,
-      }),
-    ),
-    ...(message.agents ?? []).map(
-      (item, index): Part => ({
+          : mention
+            ? {
+                type: "file",
+                text: { value: mention.text, start: mention.start, end: mention.end },
+                path: mention.text.startsWith("@") ? mention.text.slice(1) : (file.name ?? mention.text),
+              }
+            : undefined,
+      }
+    }),
+    ...(message.agents ?? []).map((item, index): Part => {
+      const mention = "source" in item ? item.source : "mention" in item ? item.mention : undefined
+      return {
         id: `${message.id}:agent:${index}`,
         sessionID,
         messageID: message.id,
         type: "agent",
         name: item.name,
-        source: item.mention
-          ? { value: item.mention.text, start: item.mention.start, end: item.mention.end }
-          : undefined,
-      }),
-    ),
+        source: mention ? { value: mention.text, start: mention.start, end: mention.end } : undefined,
+      }
+    }),
   ]
 }
 
@@ -309,6 +352,22 @@ function textPart(sessionID: string, messageID: string, ordinal: number, text: s
   }
 }
 
+function toolOutput(tool: SessionMessageAssistantTool & { state: { status: "completed" } }) {
+  const output = tool.state.structured
+  if (
+    tool.name === "read" &&
+    (output.type === "text-page" || output.encoding === "utf8") &&
+    typeof output.content === "string"
+  )
+    return output.content
+  const text = tool.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+  if (tool.name === "bash" && typeof output.output === "string")
+    return text && text !== output.output ? `${output.output}\n\n${text}` : output.output
+  if (tool.state.content.length) return text
+  if (Object.keys(output).length === 0 || output.encoding === "base64") return ""
+  return JSON.stringify(output, null, 2)
+}
+
 function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssistantTool): ToolPart {
   const start = tool.time.ran ?? tool.time.created
   const state = (() => {
@@ -352,7 +411,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
     return {
       status: "completed" as const,
       input: normalizeToolInput(tool.name, tool.state.input),
-      output: tool.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n"),
+      output: toolOutput({ ...tool, state: tool.state }),
       title: tool.name,
       metadata: normalizeToolMetadata(tool.name, tool.state.structured),
       time: { start, end: tool.time.completed ?? start },

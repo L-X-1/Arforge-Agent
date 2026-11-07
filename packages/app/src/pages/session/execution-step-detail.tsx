@@ -1,6 +1,7 @@
 import { createEffect, createMemo, Index, on, onCleanup, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { executionStepText, type ExecutionTraceStep } from "./execution-trace-model"
+import { executionContentPreview } from "./execution-content-preview"
 
 export function ExecutionStepDetail(props: { step: ExecutionTraceStep; chinese: boolean }) {
   const [state, setState] = createStore({ expanded: {} as Record<string, boolean>, copying: false, copied: false, error: "" })
@@ -27,17 +28,22 @@ export function ExecutionStepDetail(props: { step: ExecutionTraceStep; chinese: 
     <header><h3>{props.step.title || t("步骤详情", "Step details")}</h3>
       <button type="button" disabled={state.copying} onClick={() => void copy()}>{state.copied ? t("已复制", "Copied") : t("复制完整内容", "Copy full content")}</button>
     </header>
+    <Show when={props.step.preview}><p class="execution-detail-preview">{props.step.preview}</p></Show>
     <Show when={state.error}><p role="alert">{state.error}</p></Show>
     <Index each={sections()}>{(section, index) => {
       const key = () => section().source + ":" + section().kind + ":" + index
       const expanded = () => state.expanded[key()]
+      const preview = createMemo(() => executionContentPreview(section().content, !!expanded()))
       return <section>
         <h4>{heading(section().kind)} <span title={section().source}>{section().source}</span></h4>
-        <pre tabIndex={0} aria-label={heading(section().kind)}>{expanded() ? section().content : section().content.slice(0, 12000)}</pre>
-        <Show when={section().content.length > 12000}>
-          <button type="button" aria-expanded={!!expanded()} onClick={() => setState("expanded", key(), !expanded())}>
-            {expanded() ? t("收起长内容", "Collapse long content") : t("显示完整内容", "Show full content")} ({section().content.length.toLocaleString()})
-          </button>
+        <pre tabIndex={0} aria-label={heading(section().kind)}>{preview().text}</pre>
+        <Show when={preview().collapsible}>
+          <div class="execution-detail-disclosure">
+            <span role="status">1–{preview().shownLines} / {preview().totalLines} {t("行", "lines")}</span>
+            <button type="button" aria-expanded={!!expanded()} onClick={() => setState("expanded", key(), !expanded())}>
+              {expanded() ? t("收起长内容", "Collapse long content") : t("显示完整内容", "Show full content")}
+            </button>
+          </div>
         </Show>
       </section>
     }}</Index>

@@ -30,7 +30,10 @@ import {
 } from "./runtime"
 
 type RunningSidecar = {
-  listener: { stop: () => void; onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void }
+  listener: {
+    stop: () => void | Promise<void>
+    onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void
+  }
   url: string
   username: string | null
   password: string
@@ -67,6 +70,8 @@ export function createWslServersController(
   const listeners = new Set<(event: WslServersEvent) => void>()
   const sidecars = new Map<string, RunningSidecar>()
   const startAttempts = new Map<string, number>()
+  const pendingStarts = new Set<Promise<void>>()
+  let closing = false
   let jobAbort: AbortController | undefined
   const logger = options?.logger
   const readServers = options?.readServers ?? readPersistedServers
@@ -219,7 +224,7 @@ export function createWslServersController(
     return startAttempts.get(id) === attempt && state.servers.some((item) => item.config.id === id)
   }
 
-  const startServer = async (id: string) => {
+  const startServerOwned = async (id: string) => {
     const item = state.servers.find((x) => x.config.id === id)
     if (!item) return
     const attempt = nextStartAttempt(id)
@@ -231,8 +236,12 @@ export function createWslServersController(
       const sidecar = await spawnSidecar(item.config.distro)
       if (!isCurrentStartAttempt(id, attempt)) {
         try {
-          sidecar.listener.stop()
-        } catch {
+          await sidecar.listener.stop()
+        } catch (error) {
+          if (closing) {
+            sidecars.set(id, sidecar)
+            throw error
+          }
           // ignore stop errors for stale sidecars
         }
         return
@@ -254,6 +263,7 @@ export function createWslServersController(
       refreshArforgeCheckBackground(id, item.config.distro)
       logger?.log("wsl sidecar ready", { id, distro: item.config.distro, url: sidecar.url })
     } catch (error) {
+      if (closing) throw error
       const message = error instanceof Error ? error.message : String(error)
       if (!isCurrentStartAttempt(id, attempt)) return
       setRuntime(id, { kind: "failed", message })
@@ -264,12 +274,23 @@ export function createWslServersController(
     }
   }
 
+  const startServer = (id: string) => {
+    if (closing) return Promise.resolve()
+    const pending = startServerOwned(id)
+    pendingStarts.add(pending)
+    void pending.then(
+      () => pendingStarts.delete(pending),
+      () => pendingStarts.delete(pending),
+    )
+    return pending
+  }
+
   const stopServerInternal = async (id: string) => {
     const existing = sidecars.get(id)
     if (!existing) return
     sidecars.delete(id)
     try {
-      existing.listener.stop()
+      await existing.listener.stop()
     } catch {
       // ignore stop errors
     }
@@ -406,16 +427,21 @@ export function createWslServersController(
 
     startServer,
 
-    stopAll() {
+    async stopAll() {
+      closing = true
+      jobAbort?.abort()
       for (const item of state.servers) invalidateStartAttempt(item.config.id)
-      for (const existing of sidecars.values()) {
-        try {
-          existing.listener.stop()
-        } catch {
-          // ignore
-        }
-      }
-      sidecars.clear()
+      const stopping = [...sidecars.entries()].map(async ([id, existing]) => {
+        await existing.listener.stop()
+        if (sidecars.get(id) === existing) sidecars.delete(id)
+      })
+      const results = await Promise.allSettled([...stopping, ...pendingStarts])
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failures.length)
+        throw new AggregateError(
+          failures.map((result) => result.reason),
+          "Owned WSL sidecars failed to stop",
+        )
     },
   }
 }

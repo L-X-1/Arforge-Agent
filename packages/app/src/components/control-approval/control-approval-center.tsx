@@ -20,6 +20,9 @@ import {
   useControlApproval,
 } from "@/context/control-approval"
 import { useLanguage } from "@/context/language"
+import { ManagementStatus } from "../settings-v2/management-status"
+import "./control-approval.css"
+import { ReceiptOperationView } from "./receipt-operation-view"
 
 type Translate = ReturnType<typeof useLanguage>["t"]
 
@@ -217,6 +220,7 @@ function ApprovalCard(props: { item: PendingControlApproval }) {
       aria-busy={busy()}
       data-testid="control-approval-card"
       data-arforge-management="approval"
+      data-phase={busy() ? "submitting" : "waiting"}
     >
       <header class="flex items-start gap-3">
         <Icon name="warning" size="normal" class="mt-0.5 shrink-0 text-text-danger" aria-hidden="true" />
@@ -305,6 +309,7 @@ function ApprovalCard(props: { item: PendingControlApproval }) {
       </Show>
       <div class="flex flex-wrap gap-2 border-t border-border-weak-base pt-3">
         <ButtonV2
+          autofocus
           type="button"
           size="small"
           variant={busy() ? "loading" : "danger"}
@@ -340,7 +345,7 @@ export function ControlApprovalDialog() {
       title={t("controlApproval.title")}
       description={t("controlApproval.description")}
       size="large"
-      class="max-h-[min(760px,calc(100dvh-3rem))]"
+      class="control-approval-dialog max-h-[min(760px,calc(100dvh-3rem))]"
     >
       <section
         class="flex max-h-[min(620px,calc(100dvh-12rem))] flex-col gap-4 overflow-y-auto pr-1"
@@ -352,20 +357,12 @@ export function ControlApprovalDialog() {
         <p class="rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular text-text-strong">
           {t("controlApproval.manualOnly")}
         </p>
-        <Show when={approval.loading()}>
-          <div
-            role="status"
-            aria-live="polite"
-            class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak"
-          >
-            {t("controlApproval.loading")}
-          </div>
-        </Show>
+        <ManagementStatus loading={approval.loading()}
+          initialLoading={approval.items().length === 0 && approval.receipts().length === 0} />
         <For each={approval.loadErrors()}>
           {(error) => (
-            <div role="alert" class="rounded-md border border-border-danger p-3 text-12-regular text-text-danger">
-              {error} {t("controlApproval.retryHint")}
-            </div>
+            <ManagementStatus error={error} partial={approval.items().length > 0 || approval.receipts().length > 0}
+              onRetry={() => void approval.refresh()} loading={approval.loading()} />
           )}
         </For>
         <For each={approval.receipts()}>
@@ -373,6 +370,7 @@ export function ControlApprovalDialog() {
             <article class="rounded-md border border-border-weak-base p-3 text-12-regular"
               data-testid="control-approval-receipt"
               data-state={receipt.status}
+              data-phase={receipt.status === "pending" ? "submitting" : receipt.status === "failed" ? "unconfirmed" : receipt.reply === "once" ? "accepted" : "rejected"}
               role={receipt.status === "failed" ? "alert" : "status"}
               aria-live={receipt.status === "failed" ? "assertive" : "polite"}>
               <strong>{receipt.status === "pending" ? t("controlApproval.replying")
@@ -384,7 +382,14 @@ export function ControlApprovalDialog() {
               <p class="break-all">{t("controlApproval.approvalRequest")}: {receipt.requestID}</p>
               <p class="break-all">{t("controlApproval.controlRequest")}: {receipt.controlRequestID}</p>
               <p>{receipt.reply === "once" ? t("controlApproval.approveOnce") : t("controlApproval.reject")}</p>
+              <Show when={receipt.status === "confirmed"}>
+                <p class="control-approval-receipt-stage">{local({
+                  en: "The decision is confirmed. Execution progress and results remain in the source operation's receipt.",
+                  zh: "审批决定已确认。执行进度与结果请查看来源操作的回执。",
+                }, language.locale())}</p>
+              </Show>
               <Show when={receipt.error}><p class="break-words text-text-danger">{receipt.error}</p></Show>
+              <ReceiptOperationView receipt={receipt} />
             </article>
           )}
         </For>

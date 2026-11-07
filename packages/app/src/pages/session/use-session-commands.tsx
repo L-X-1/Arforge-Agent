@@ -1,5 +1,6 @@
 import { runTerminalNewShortcut, terminalPanelOperationPending } from "./terminal-panel-operations"
 import { useNavigate } from "@solidjs/router"
+import { createEffect, on, onCleanup, startTransition } from "solid-js"
 import { useCommand, type CommandOption } from "@/context/command"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { previewSelectedLines } from "@arforge-ai/session-ui/pierre/selection-bridge"
@@ -56,6 +57,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const navigate = useNavigate()
   const { params, sessionKey, tabs, view } = useSessionLayout()
   const sessionOwnership = createSessionOwnership(sessionKey)
+  let fileDialog: ReturnType<typeof dialog.showScoped> | undefined
+  const discardFileDialog = () => {
+    fileDialog?.discard()
+    fileDialog = undefined
+  }
+  createEffect(on(sessionOwnership.key, discardFileDialog, { defer: true }))
+  onCleanup(discardFileDialog)
+
   const openDialog = async <T,>(load: () => Promise<T>, show: (value: T) => void) => {
     const owner = sessionOwnership.capture()
     const value = await load()
@@ -224,9 +233,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const openFile = () => {
-    void openDialog(
-      () => import("@/components/dialog-select-file"),
-      (x) => dialog.show(() => <x.DialogSelectFile onOpenFile={showAllFiles} />),
+    const owner = sessionOwnership.capture()
+    void import("@/components/dialog-select-file").then(({ DialogSelectFile }) =>
+      startTransition(() => owner.run(() => {
+        fileDialog = dialog.showScoped(() => <DialogSelectFile onOpenFile={showAllFiles} />)
+      })),
     )
   }
 
@@ -375,7 +386,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
     await sdk().api.session.compact({
       sessionID,
-      model: { providerID: model.provider.id, modelID: model.id },
+      model: { providerID: model.provider.id, modelID: model.id, variant: local.model.variant.current() },
     })
   }
 

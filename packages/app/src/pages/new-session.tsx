@@ -39,6 +39,7 @@ import { useLocal } from "@/context/local"
 import { createPromptModelSelection } from "@/pages/session/composer/prompt-model-selection"
 import { NewSessionPromptGuide } from "@/components/onboarding/home-first-run-guide"
 import { useOnboarding } from "@/context/onboarding"
+import { homeCopy } from "@/pages/home/home-copy"
 
 const workspaceBarEnabled = import.meta.env.VITE_ARFORGE_CHANNEL !== "prod"
 const providerTipDismissalDuration = 30 * 24 * 60 * 60 * 1000
@@ -50,6 +51,11 @@ const providerTipExitDuration = 250
  * timeline. Submitting promotes the draft into a real session (see prompt-input/submit).
  */
 export default function NewSessionPage() {
+  return <NewSessionCompose />
+}
+
+/** Requires the existing draft route's SDK, directory, file, prompt and comments providers. */
+export function NewSessionCompose(props: { placement?: "home" }) {
   const prompt = usePrompt()
   const sdk = useSDK()
   const sync = useSync()
@@ -180,6 +186,63 @@ export default function NewSessionPage() {
     (promise) => promise.then(() => true),
   )
 
+  // The home surface shares the real composer and its controllers. The draft
+  // route continues to own persistence, source selection and session promotion.
+  if (props.placement === "home") {
+    const selectWorkspace = (value: string) => {
+      if (value === "create") {
+        setStore("worktree", value)
+        return
+      }
+      const directory = value === "main" ? projectRoot() : value
+      setStore("worktree", undefined)
+      if (searchParams.draftId) tabs.updateDraft(searchParams.draftId, { directory })
+    }
+    return (
+      <section data-component="home-compose" class="flex min-w-0 flex-col gap-6">
+        {suspendUntilPromptReady()}
+        <div class="flex min-h-7 min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 text-v2-text-text-muted">
+          <Show when={projectController.empty()}>
+            <PromptProjectAddButton controller={projectController} />
+          </Show>
+          <Show when={projectController.selected()}>
+            <PromptProjectSelector controller={projectController} placement="bottom" />
+            <Show
+              when={showWorkspaceBar()}
+              fallback={<PromptGitStatus branch={selectedBranch()} noGit={sync().project?.vcs !== "git"} />}
+            >
+              <PromptWorkspaceSelector
+                value={newSessionWorktree()}
+                projectRoot={projectRoot()}
+                workspaces={sync().project?.sandboxes ?? []}
+                branch={selectedBranch()}
+                onChange={selectWorkspace}
+                onDone={promptInputV2Controller.restoreFocus}
+              />
+            </Show>
+          </Show>
+        </div>
+        <h1 class="home-launchpad__title">{homeCopy(language.locale(), language.t("session.new.title")).start}</h1>
+        <PromptInputV2Composer controller={promptInputV2Controller} borderUnderlay />
+        <NewSessionPromptGuide
+          onUseExample={(text) => {
+            prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+            onboarding.dismiss()
+            promptInputV2Controller.restoreFocus()
+          }}
+        />
+        <div class="relative min-h-6">
+          <ProviderTip
+            inline
+            ready={() => serverSync().child(sdk().directory)[0].provider_ready}
+            connected={() => providers.paid().length > 0}
+            openProviders={openProviders}
+          />
+        </div>
+      </section>
+    )
+  }
+
   return (
     <div class="relative size-full overflow-hidden flex flex-col bg-v2-background-bg-deep">
       {suspendUntilPromptReady()}
@@ -265,7 +328,12 @@ export default function NewSessionPage() {
   )
 }
 
-function ProviderTip(props: { ready: () => boolean; connected: () => boolean; openProviders: () => void }) {
+function ProviderTip(props: {
+  inline?: boolean
+  ready: () => boolean
+  connected: () => boolean
+  openProviders: () => void
+}) {
   const language = useLanguage()
   const [persistedState, setPersistedState, , persistedReady] = persisted(
     Persist.global("new-session.provider-tip"),
@@ -291,7 +359,10 @@ function ProviderTip(props: { ready: () => boolean; connected: () => boolean; op
 
   return (
     <Show when={presence.present()}>
-      <div class="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-10">
+      <div
+        class="pointer-events-none flex justify-center"
+        classList={{ "absolute inset-x-0 bottom-4 px-10": !props.inline, "px-4": !!props.inline }}
+      >
         <div
           ref={setRef}
           data-component="provider-tip"

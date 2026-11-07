@@ -7,6 +7,8 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js"
 import { Effect } from "effect"
 import { McpAuth } from "./auth"
+import { McpOAuthFetch } from "./oauth-fetch"
+import { createHash } from "node:crypto"
 
 const OAUTH_CALLBACK_PORT = 19876
 const OAUTH_CALLBACK_PATH = "/mcp/oauth/callback"
@@ -22,9 +24,31 @@ export interface McpOAuthConfig {
 
 export interface McpOAuthCallbacks {
   onRedirect: (url: URL) => void | Promise<void>
+  withTokenWrite?: (write: Effect.Effect<void>) => Effect.Effect<void>
 }
 
 export class McpOAuthProvider implements OAuthClientProvider {
+  private readonly pendingFetch = McpOAuthFetch.make()
+  private persistentSession?: McpAuth.OAuthSession
+  readonly oauthFetch = McpOAuthFetch.delegate(() => this.pendingAuthorization()
+    ? this.pendingFetch : this.session().oauthFetch)
+
+  protected pendingAuthorization() { return false }
+
+  private session() {
+    if (this.persistentSession) return this.persistentSession
+    // The complete remote config/generation remains owned by withTokenWrite.
+    // Only fields actually present in this existing constructor participate in
+    // the internal target identity; the SDK request digest adds endpoint,
+    // client authentication, resource, scope and request options.
+    const target = createHash("sha256").update(JSON.stringify([
+      this.serverUrl, this.config.clientId, this.config.clientSecret,
+      this.config.clientUri, this.config.scope, this.config.callbackPort,
+      this.config.redirectUri, this.redirectUrl, this.clientMetadata,
+    ])).digest("hex")
+    this.persistentSession = this.auth.oauth(this.authKey, this.serverUrl, target)
+    return this.persistentSession
+  }
   constructor(
     protected mcpName: string,
     protected serverUrl: string,
@@ -37,7 +61,9 @@ export class McpOAuthProvider implements OAuthClientProvider {
      * two projects that happen to call their MCP server the same thing.
      */
     protected authKey: string = mcpName,
-  ) {}
+  ) {
+    this.config = Object.freeze({ ...config })
+  }
 
   get redirectUrl(): string {
     if (this.config.redirectUri) {
@@ -60,6 +86,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
+    const entry = await Effect.runPromise(this.session().read())
     if (this.config.clientId) {
       return {
         client_id: this.config.clientId,
@@ -69,7 +96,6 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
     // Check stored client info (from dynamic registration)
     // Use getForUrl to validate credentials are for the current server URL
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.authKey, this.serverUrl))
     if (entry?.clientInfo) {
       // Check if client secret has expired
       if (entry.clientInfo.clientSecretExpiresAt && entry.clientInfo.clientSecretExpiresAt < Date.now() / 1000) {
@@ -86,26 +112,21 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
-    await Effect.runPromise(
-      this.auth.updateClientInfo(
-        this.authKey,
-        {
-          clientId: info.client_id,
-          clientSecret: info.client_secret,
-          clientIdIssuedAt: info.client_id_issued_at,
-          clientSecretExpiresAt: info.client_secret_expires_at,
-        },
-        this.serverUrl,
-      ),
-    )
+    const write = Effect.suspend(() => this.session().saveClientInfo({
+      clientId: info.client_id,
+      clientSecret: info.client_secret,
+      clientIdIssuedAt: info.client_id_issued_at,
+      clientSecretExpiresAt: info.client_secret_expires_at,
+    }))
+    await Effect.runPromise(this.callbacks.withTokenWrite?.(write) ?? write)
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
     // Use getForUrl to validate tokens are for the current server URL
-    const entry = await Effect.runPromise(this.auth.getForUrl(this.authKey, this.serverUrl))
+    const entry = await Effect.runPromise(this.session().read())
     if (!entry?.tokens) return undefined
 
-    return {
+    const tokens: OAuthTokens = {
       access_token: entry.tokens.accessToken,
       token_type: "Bearer",
       refresh_token: entry.tokens.refreshToken,
@@ -114,21 +135,18 @@ export class McpOAuthProvider implements OAuthClientProvider {
         : undefined,
       scope: entry.tokens.scope,
     }
+    this.oauthFetch.observe(tokens)
+    return tokens
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    await Effect.runPromise(
-      this.auth.updateTokens(
-        this.authKey,
-        {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt: tokens.expires_in ? Date.now() / 1000 + tokens.expires_in : undefined,
-          scope: tokens.scope,
-        },
-        this.serverUrl,
-      ),
-    )
+    const write = Effect.suspend(() => this.session().saveTokens({
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt: tokens.expires_in ? Date.now() / 1000 + tokens.expires_in : undefined,
+      scope: tokens.scope,
+    }, tokens))
+    await Effect.runPromise(this.callbacks.withTokenWrite?.(write) ?? write)
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
@@ -169,29 +187,20 @@ export class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
-    const entry = await Effect.runPromise(this.auth.get(this.authKey))
-    if (!entry) return
-    switch (type) {
-      case "all":
-        await Effect.runPromise(this.auth.remove(this.authKey))
-        break
-      case "client":
-        delete entry.clientInfo
-        await Effect.runPromise(this.auth.set(this.authKey, entry))
-        break
-      case "tokens":
-        delete entry.tokens
-        await Effect.runPromise(this.auth.set(this.authKey, entry))
-        break
-    }
+    const write = Effect.suspend(() => this.session().invalidateCredentials(type))
+    await Effect.runPromise(this.callbacks.withTokenWrite?.(write) ?? write)
   }
 }
 
 export class McpOAuthPendingProvider extends McpOAuthProvider {
   private pendingClientInfo?: OAuthClientInformationFull
   private pendingTokens?: OAuthTokens
+  private committedToStore = false
+
+  protected override pendingAuthorization() { return !this.committedToStore }
 
   override async clientInformation(): Promise<OAuthClientInformation | undefined> {
+    if (this.committedToStore) return super.clientInformation()
     if (!this.config.clientId) return this.pendingClientInfo
     return {
       client_id: this.config.clientId,
@@ -200,18 +209,26 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
   }
 
   override async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
+    if (this.committedToStore) return super.saveClientInformation(info)
     this.pendingClientInfo = info
   }
 
   override async tokens(): Promise<OAuthTokens | undefined> {
+    if (this.committedToStore) return super.tokens()
+    this.oauthFetch.observe(this.pendingTokens)
     return this.pendingTokens
   }
 
   override async saveTokens(tokens: OAuthTokens): Promise<void> {
+    if (this.committedToStore) return super.saveTokens(tokens)
+    this.oauthFetch.assertSave(tokens)
     this.pendingTokens = tokens
+    this.oauthFetch.committed(tokens)
   }
 
   override async invalidateCredentials(type: "all" | "client" | "tokens"): Promise<void> {
+    if (this.committedToStore) return super.invalidateCredentials(type)
+    this.oauthFetch.invalidate()
     if (type === "all" || type === "client") this.pendingClientInfo = undefined
     if (type === "all" || type === "tokens") this.pendingTokens = undefined
   }
@@ -241,6 +258,11 @@ export class McpOAuthPendingProvider extends McpOAuthProvider {
         this.serverUrl,
       ),
     )
+    this.committedToStore = true
+    // The existing pending-identity publication gate owns this initial commit.
+    // Its transport handoff may already have closed the authorization socket.
+    // Only saveTokens can populate pendingTokens, and it fences late results.
+    this.oauthFetch.observe(this.pendingTokens)
   }
 }
 

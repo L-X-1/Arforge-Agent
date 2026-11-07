@@ -55,7 +55,18 @@ export const DESKTOP_IPC_OWNERSHIP = [
   {
     feature: "durable-renderer-storage",
     surface: "desktop-storage",
-    channels: ["store-get", "store-set", "store-delete", "store-clear", "store-keys", "store-length"],
+    channels: [
+      "store-get",
+      "store-set",
+      "store-delete",
+      "store-clear",
+      "store-keys",
+      "store-length",
+      "store-write-begin",
+      "store-write-chunk",
+      "store-write-commit",
+      "store-write-abort",
+    ],
     rationale:
       "The preload exposes bounded key/value persistence because the sandboxed renderer cannot access files directly.",
   },
@@ -98,6 +109,13 @@ export const DESKTOP_IPC_OWNERSHIP = [
       "zoom-factor-changed",
     ],
     rationale: "Window state and native menu/zoom events are Desktop-only presentation responsibilities.",
+  },
+  {
+    feature: "manual-workbench-browser",
+    surface: "desktop-window",
+    channels: ["workbench-browser", "workbench-browser-layout", "workbench-browser-state"],
+    rationale:
+      "The registered Desktop window owns manual browser navigation, native view bounds, and scoped state delivery.",
   },
   {
     feature: "desktop-diagnostics",

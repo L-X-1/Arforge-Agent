@@ -1,3 +1,8 @@
+import type { Prompt } from "@/context/prompt"
+import type { Prompt as DurablePrompt } from "@arforge-ai/schema/prompt"
+import type { FilePart, Part } from "@arforge-ai/sdk/v2"
+import type { OperationsApi } from "@/utils/server"
+import { extractPromptFromParts } from "@/utils/prompt"
 import { batch, createMemo, onCleanup, onMount, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -207,3 +212,67 @@ export const createSizing = () => {
 }
 
 export type Sizing = ReturnType<typeof createSizing>
+
+type QueuedPrompt = Awaited<ReturnType<OperationsApi["sessions"]["promptQueueList"]>>[number]
+
+export function queuedPromptParts(
+  item: Pick<QueuedPrompt, "id" | "sessionID"> & {
+    prompt: Pick<typeof DurablePrompt.Encoded, "text" | "files" | "agents">
+  },
+): Prompt {
+  const base = { sessionID: item.sessionID, messageID: item.id }
+  const files = (item.prompt.files ?? []).map(
+    (file, index): FilePart => ({
+      ...base,
+      id: item.id + ":file:" + index,
+      type: "file",
+      filename: file.name,
+      mime: file.mime,
+      url: file.uri,
+      source: file.resource
+        ? {
+            type: "resource",
+            clientName: file.resource.server,
+            uri: file.resource.uri,
+            text: { value: file.source?.text ?? "", start: file.source?.start ?? 0, end: file.source?.end ?? 0 },
+          }
+        : file.source && !(file.mime.startsWith("image/") && file.uri.startsWith("data:"))
+          ? {
+              type: "file",
+              path: file.name ?? file.uri,
+              text: { value: file.source.text, start: file.source.start, end: file.source.end },
+            }
+          : undefined,
+    }),
+  )
+  const parts: Part[] = [
+    { ...base, id: item.id + ":text", type: "text", text: item.prompt.text },
+    ...files,
+    ...(item.prompt.agents ?? []).map(
+      (agent, index): Part => ({
+        ...base,
+        id: item.id + ":agent:" + index,
+        type: "agent",
+        name: agent.name,
+        source: agent.source
+          ? { value: agent.source.text, start: agent.source.start, end: agent.source.end }
+          : undefined,
+      }),
+    ),
+  ]
+  return [
+    ...extractPromptFromParts(parts),
+    ...files
+      .filter((file) => !file.source && !file.url.startsWith("data:"))
+      .map((file) => ({
+        type: "file" as const,
+        path: file.filename ?? file.url,
+        filename: file.filename,
+        mime: file.mime,
+        url: file.url,
+        content: "",
+        start: 0,
+        end: 0,
+      })),
+  ]
+}

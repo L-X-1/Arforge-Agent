@@ -739,14 +739,12 @@ const layer = Layer.effect(
           const reason = bounded(input.reason, "review reason", 500)
           const row = yield* getVersionRow(identity, input.candidateID)
           if (!row) return yield* new SkillStoreNotFoundError({ kind: "candidate", id: input.candidateID })
-          if (
+          const replay =
             row.status === "canary" &&
             row.traffic_percent === input.trafficPercent &&
             row.review_actor === identity.actor &&
             row.review_reason === reason
-          )
-            return toProjection(row)
-          if (row.status !== "candidate" || row.revision !== input.expectedRevision)
+          if (!replay && (row.status !== "candidate" || row.revision !== input.expectedRevision))
             return yield* new SkillStoreConflictError({
               id: row.id,
               reason: "Skill is not the expected candidate revision",
@@ -767,9 +765,37 @@ const layer = Layer.effect(
             .pipe(Effect.orDie)
           if (!evaluation || !evaluation.passed || evaluation.report_digest !== row.evaluation_digest)
             return yield* new SkillStoreError({ reason: "canonical Skill evaluation is unavailable" })
-          const report = decodeReport(evaluation.report)
+          const baselineRow = row.baseline_version_id ? yield* getVersionRow(identity, row.baseline_version_id) : undefined
+          if (row.baseline_version_id && !baselineRow)
+            return yield* new SkillStoreError({ reason: "canonical Skill evaluation baseline is unavailable" })
+          const { report, candidate } = yield* Effect.try({
+            try: () => {
+              const report = decodeReport(evaluation.report)
+              const candidate = decodeSkill(row.skill_record)
+              const baselineDigest = baselineRow ? decodeSkill(baselineRow.skill_record).digest : "0".repeat(64)
+              if (
+                canonicalHash(report) !== evaluation.report_digest ||
+                report.passed !== evaluation.passed ||
+                report.candidateDigest !== candidate.digest || candidate.digest !== row.digest ||
+                report.baselineDigest !== baselineDigest
+              ) throw new Error("stored Skill evaluation failed integrity verification")
+              if (
+                report.passed !== true ||
+                report.newFailureCount !== 0 || report.newSecretFindings !== 0 || report.newEgressAttempts !== 0 ||
+                !Array.isArray(report.regressionCases) || report.regressionCases.length !== 0 ||
+                !Number.isFinite(report.utilityDelta) || report.utilityDelta < 0 ||
+                report.sampleSize <= 0 || report.sampleSize !== candidate.testIDs.length ||
+                ![
+                  report.checks.noPermissionExpansion, report.checks.noNewSecret, report.checks.noNewEgress,
+                  report.checks.noRegression, report.checks.utilityNonRegression,
+                ].every((check) => check === true)
+              ) throw new Error("Skill canary evaluation does not satisfy current safety policy")
+              return { report, candidate }
+            },
+            catch: storeFailure,
+          })
+          if (replay) return toProjection(row)
           const now = input.now ?? Date.now()
-          const candidate = decodeSkill(row.skill_record)
           const reviewed = SkillContract.Skill.make({
             ...candidate,
             securityReview: {

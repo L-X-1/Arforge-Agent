@@ -1,0 +1,99 @@
+[data-component="home-launchpad"] {
+  font-family: var(--font-family-sans);
+}
+
+.home-launchpad__content {
+  box-sizing: content-box;
+  width: calc(100% - 48px);
+  max-width: 760px;
+  min-height: calc(100cqh - 72px);
+  margin-inline: auto;
+  padding-inline: 24px;
+  padding-block: 24px 48px;
+}
+
+.home-launchpad__content[data-view="start"] {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 32px;
+}
+
+.home-launchpad__content h1.home-launchpad__title {
+  margin: 0;
+  color: var(--v2-text-text-base);
+  font-family: inherit;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.home-launchpad__navigation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.home-launchpad__action {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--v2-text-text-muted);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  transition:
+    background-color 150ms,
+    color 150ms;
+}
+
+.home-launchpad__action:is(:hover, :focus-visible) {
+  color: var(--v2-text-text-base);
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+
+[data-component="home-compose"] {
+  font-family: var(--font-family-sans);
+}
+
+[data-component="home-recent-sessions"] [data-component="home-session-item"] {
+  height: 44px;
+}
+
+@media (min-width: 1920px) {
+  .home-launchpad__content {
+    max-width: 800px;
+  }
+}
+
+@media (max-width: 639px) {
+  .home-launchpad__content {
+    width: calc(100% - 32px);
+    padding-inline: 16px;
+  }
+  .home-launchpad__content[data-view="start"] {
+    gap: 24px;
+  }
+  .home-launchpad__content h1.home-launchpad__title {
+    font-size: 24px;
+  }
+}
+
+@media (pointer: coarse) {
+  .home-launchpad__action {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-launchpad__action {
+    transition: none;
+  }
+}

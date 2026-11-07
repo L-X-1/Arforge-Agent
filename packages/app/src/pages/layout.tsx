@@ -12,7 +12,7 @@ import {
   type Accessor,
 } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
 import { useServerSync } from "@/context/server-sync"
 import { Persist, persisted } from "@/utils/persist"
@@ -39,7 +39,7 @@ import { toaster } from "@arforge-ai/ui/toast"
 import { setV2Toast, showToast, ToastRegion } from "@/utils/toast"
 import { feedbackUrl } from "@/utils/external-links"
 import { useServerSDK } from "@/context/server-sdk"
-import { normalizeProjectInfo } from "@/context/global-sync/utils"
+import { resolveProjectMetadataID, updateProjectMetadata } from "@/context/project-metadata"
 import { clearWorkspaceTerminals } from "@/context/terminal"
 import { pickSessionCacheEvictions } from "@/context/global-sync/session-cache"
 import { useNotification } from "@/context/notification"
@@ -59,6 +59,7 @@ import {
   type CompletedWorktree,
 } from "@/utils/control-operation-intent"
 import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
+import { sessionIDFromRoutePath, settingsRoute } from "@/components/settings-dialog-context"
 
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@arforge-ai/ui/theme/context"
@@ -71,6 +72,7 @@ import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
 import { pathKey } from "@/utils/path-key"
+import { activeDraftID } from "@/pages/home-compose/home-draft-state"
 import {
   displayName,
   effectiveWorkspaceOrder,
@@ -185,6 +187,14 @@ export default function LegacyLayout(props: ParentProps) {
   const notification = useNotification()
   const permission = usePermission()
   const navigate = useNavigate()
+  const routeLocation = useLocation()
+  const embeddedCompatibilityDraft = createMemo(
+    () =>
+      settings.general.newLayoutDesigns() &&
+      !!params.dir &&
+      !params.id &&
+      !!activeDraftID(routeLocation.pathname, routeLocation.search),
+  )
   setNavigate(navigate)
   const providers = useProviders()
   const dialog = useDialog()
@@ -1289,15 +1299,21 @@ export default function LegacyLayout(props: ParentProps) {
   function openSettings(defaultValue?: string) {
     const run = ++dialogRun
     if (settings.general.newLayoutDesigns()) {
-      void import("@/components/settings-v2").then((module) => {
-        if (dialogDead || dialogRun !== run) return
-        dialog.show(() => <module.DialogSettings defaultValue={defaultValue} permission={permission} />)
-      })
+      const origin = routeLocation.pathname + routeLocation.search
+      let target = routeLocation.pathname === "/settings"
+        ? origin
+        : settingsRoute(sessionIDFromRoutePath(routeLocation.pathname), origin)
+      if (defaultValue) {
+        const query = new URLSearchParams(target.split("?")[1])
+        query.set("tab", defaultValue)
+        target = `/settings?${query}`
+      }
+      navigate(target)
       return
     }
-    void import("@/components/dialog-settings").then((module) => {
+    void import("@/components/settings-v2").then((module) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <module.DialogSettings defaultValue={defaultValue} />)
+      dialog.show(() => <module.DialogSettings defaultValue={defaultValue} permission={permission} />)
     })
   }
 
@@ -1476,16 +1492,19 @@ export default function LegacyLayout(props: ParentProps) {
     const current = displayName(project)
     if (next === current) return
     const name = next === getFilename(project.worktree) ? "" : next
+    const origin = layout.projects.captureMetadata(project)
+    if (!origin) return
+    const currentOrigin = () => !dialogDead && origin.current()
+    const request = { ...origin, current: currentOrigin }
+    const id = request.id ?? (await resolveProjectMetadataID(request))
+    if (!id || !currentOrigin()) return
 
-    if (project.id && project.id !== "global") {
-      const result = await serverSDK().api.project.update({ projectID: project.id, name })
-      serverSync().set("project", (items) =>
-        items.map((item) => (item.id === result.id ? normalizeProjectInfo(result) : item)),
-      )
+    if (id !== "global") {
+      await updateProjectMetadata({ ...request, id }, { name })
       return
     }
 
-    serverSync().project.meta(project.worktree, { name })
+    origin.sync.project.meta(origin.worktree, { name })
   }
 
   const renameWorkspace = (directory: string, next: string, projectId?: string, branch?: string) => {
@@ -1532,9 +1551,11 @@ export default function LegacyLayout(props: ParentProps) {
   }
 
   const showEditProjectDialog = (conn: ServerConnection.Any, project: LocalProject) => {
+    const origin = layout.projects.captureMetadata(project)
+    if (!origin?.current()) return
     const run = ++dialogRun
     void import("@/components/dialog-edit-project").then((x) => {
-      if (dialogDead || dialogRun !== run) return
+      if (dialogDead || dialogRun !== run || !origin.current()) return
       dialog.show(() => <x.DialogEditProject server={conn} project={project} />)
     })
   }
@@ -2976,16 +2997,19 @@ export default function LegacyLayout(props: ParentProps) {
     <div
       data-arforge-atmosphere
       class="relative flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
+      classList={{ "w-full": embeddedCompatibilityDraft() }}
     >
       {autoselecting() ?? ""}
-      <Titlebar
-        update={titlebarUpdate}
-        debugTools={
-          debugToolsEnabled
-            ? { visible: state.debugTools, toggle: () => setState("debugTools", (value) => !value) }
-            : undefined
-        }
-      />
+      <Show when={!embeddedCompatibilityDraft()}>
+        <Titlebar
+          update={titlebarUpdate}
+          debugTools={
+            debugToolsEnabled
+              ? { visible: state.debugTools, toggle: () => setState("debugTools", (value) => !value) }
+              : undefined
+          }
+        />
+      </Show>
       <Show when={updateVersion() !== undefined}>
         <UpdateAvailableToast version={updateVersion() ?? ""} install={installUpdate} language={language} />
       </Show>

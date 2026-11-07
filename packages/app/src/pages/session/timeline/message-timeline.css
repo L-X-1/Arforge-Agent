@@ -1,0 +1,21 @@
+[data-component="timeline-jump-to-latest"] {
+  transition-duration: 140ms;
+}
+
+[data-component="timeline-jump-to-latest"] > button {
+  min-width: 32px;
+  min-height: 32px;
+}
+
+@media (pointer: coarse) {
+  [data-component="timeline-jump-to-latest"] > button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-component="timeline-jump-to-latest"] {
+    transition: none;
+  }
+}

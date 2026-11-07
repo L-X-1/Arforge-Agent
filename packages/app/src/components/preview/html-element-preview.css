@@ -2,7 +2,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
   min-height: 0;
   min-width: 0;
   overflow: auto;
@@ -22,15 +22,15 @@
     select, button {
       min-height: 32px;
       max-width: 100%;
-      border: 1px solid var(--border-weak-base);
-      border-radius: 6px;
-      background: var(--surface-base);
+      border: 0;
+      border-radius: 8px;
+      background: var(--background-stronger);
       color: var(--text-base);
       padding: 4px 8px;
     }
     button { cursor: pointer; }
     :disabled { opacity: .5; cursor: not-allowed; }
-    :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+    :focus-visible { outline: 2px solid var(--border-focus, currentColor); outline-offset: 2px; }
   }
 
   [data-slot="html-element-location"] { overflow-wrap: anywhere; color: var(--text-base); }
@@ -46,14 +46,14 @@
       resize: vertical;
       padding: 8px;
       border: 1px solid var(--border-weak-base);
-      border-radius: 6px;
+      border-radius: 8px;
       background: var(--background-base);
       color: var(--text-base);
       font-family: var(--font-family-mono);
       font-size: 12px;
       line-height: 1.6;
       white-space: pre;
-      &:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+      &:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
     }
   }
 }

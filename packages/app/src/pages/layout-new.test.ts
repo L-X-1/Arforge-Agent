@@ -11,8 +11,16 @@ describe("new layout route loading boundary", () => {
     expect(layout).not.toContain("<Suspense")
     expect(app).toContain("<Suspense fallback={<RouteLoadingFallback />}>")
     expect(fallback).toContain('data-component="route-loading-fallback"')
-    expect(fallback).toContain('aria-label="Arforge 正在载入会话"')
-    expect(fallback).toContain("正在载入会话，请稍候…")
+    expect(fallback).toContain('role="status"')
+    expect(fallback).toContain('aria-live="polite"')
+    expect(fallback).toContain("const language = useLanguage()")
+    expect(fallback).toContain('aria-label={language.t("session.messages.loading")}')
+    expect(fallback).toContain('{language.t("session.messages.loading")}')
+    expect(fallback).not.toContain("正在载入会话")
+    for (const locale of ["en", "zh"]) {
+      const dictionary = await Bun.file(join(import.meta.dir, `../i18n/${locale}.ts`)).text()
+      expect(dictionary).toContain('"session.messages.loading":')
+    }
     expect(fallback).not.toContain("animate-")
     expect(session).toContain("sessionSync.latest")
     expect(session).not.toContain("sessionSync()")

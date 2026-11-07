@@ -19,6 +19,51 @@ export interface UiCapabilityReview {
  */
 export const UI_CAPABILITY_REVIEW = [
   {
+    id: "html-preview-local-resource-grants",
+    disposition: "semantic-ui",
+    methods: ["files.open", "files.close"],
+    evidence: [
+      "packages/app/src/components/preview/html-preview.tsx",
+      "packages/app/src/utils/preview-resource-api.ts",
+      "packages/app/src/utils/server.ts",
+      "packages/server/src/handlers/fs.ts",
+      "packages/core/src/preview-resources.ts",
+    ],
+    rationale:
+      "HtmlPreview's existing local-resource control uses operationsApi.previewResources to POST /api/fs/preview/open and /api/fs/preview/close. Close revokes the original scoped grant on disable, source/path change, expiry, or disposal; it is not an editor-tab close or a file deletion. The server binds grants to the authenticated principal and location.",
+  },
+  {
+    id: "versioned-text-document-editing",
+    disposition: "semantic-ui",
+    methods: ["files.read", "files.save"],
+    evidence: [
+      "packages/app/src/components/preview/editable-file-preview.tsx",
+      "packages/app/src/components/preview/text-document-editor.tsx",
+      "packages/app/src/utils/text-document-api.ts",
+      "packages/app/src/utils/server.ts",
+      "packages/server/src/handlers/fs.ts",
+      "packages/core/src/text-document.ts",
+    ],
+    rationale:
+      "The existing Edit file entry mounts TextDocumentEditor with operationsApi.textDocuments. Its typed adapter reads GET /api/fs/text and saves PUT /api/fs/text with path, baseVersion, and text. The editor retains drafts and handles 409 conflicts; the server TextDocument owner performs the versioned save. These methods are not the raw byte-preview reader and do not add a generic overwrite action.",
+  },
+  {
+    id: "catalog-default-model-selection",
+    disposition: "semantic-ui",
+    methods: ["models.default"],
+    evidence: [
+      "packages/app/src/context/global-sync/bootstrap.ts",
+      "packages/app/src/context/global-sync/utils.ts",
+      "packages/app/src/context/local.tsx",
+      "packages/app/src/pages/session/composer/prompt-model-state.ts",
+      "packages/server/src/handlers/model.ts",
+      "packages/core/src/catalog.ts",
+      "packages/core/src/session/runner/model.ts",
+    ],
+    rationale:
+      "Catalog bootstrap reads sdk.model.default alongside providers and available models, then projects the result into the provider defaults consumed by existing session/composer model fallback. The generated models.default method is a GET of /api/model/default; the server delegates to Catalog.model.default and SessionRunnerModel uses that same catalog owner when the session has no explicit model. This is a read-only selection input, not a UI command to mutate a saved default.",
+  },
+  {
     id: "workspace-mature-surfaces",
     disposition: "semantic-ui",
     methods: [
@@ -169,12 +214,15 @@ export const UI_CAPABILITY_REVIEW = [
       "sessions.switchAgent",
       "sessions.switchModel",
       "sessions.compact",
+      "sessions.shell",
+      "sessions.command",
       "sessions.interrupt",
       "sessions.message",
     ],
     evidence: [
       "packages/app/src/pages/home/home-sessions-controller.tsx",
       "packages/app/src/components/prompt-input/submit.ts",
+      "packages/app/src/utils/session-operations-api.ts",
       "packages/app/src/pages/session/use-session-commands.tsx",
       "packages/app/src/pages/session.tsx",
     ],
@@ -202,11 +250,11 @@ export const UI_CAPABILITY_REVIEW = [
   },
   {
     id: "artifact-byte-read-adapters",
-    disposition: "transport-internal",
+    disposition: "semantic-ui",
     methods: ["artifacts.read", "artifacts.readRange", "artifacts.readScoped", "artifacts.readScopedRange"],
-    evidence: ["packages/client/test/promise.test.ts", "packages/client/test/effect.test.ts"],
+    evidence: ["packages/app/src/components/control-center/artifact-content-preview.tsx", "packages/app/src/components/control-center/artifact-content.ts", "packages/client/test/promise.test.ts"],
     rationale:
-      "Opaque artifact bytes stay behind authenticated, bounded SDK reads; the Control Center deliberately shows metadata and audit evidence instead of exposing paths or content through a generic button.",
+      "The selected artifact receipt offers explicit preview and download through its authenticated session/profile/tenant SDK read. Large receipts use ETag-bound ranges; the complete size/digest is verified before display or download, with cancellation and source fencing. Storage paths remain hidden.",
   },
   {
     id: "subagent-status-aggregation",

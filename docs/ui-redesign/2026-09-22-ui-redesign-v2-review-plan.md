@@ -2,7 +2,7 @@
 
 日期：2026-09-22
 状态：完整待审稿。只设计文档和独立预览，不修改实际应用。
-[64 个画面总览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/gallery.html) · [确认与待审矩阵](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-decision-matrix.md) · [页面与功能保留清单](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-page-state-inventory.md)
+[64 个画面总览] · [确认与待审矩阵](2026-09-22-ui-redesign-v2-decision-matrix.md) · [页面与功能保留清单](2026-09-22-ui-redesign-v2-page-state-inventory.md)
 
 ## 1. 本轮交付与边界
 

@@ -71,6 +71,8 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     )
 
     const inflight = new Map<string, Promise<void>>()
+    let generation = 0
+    let disposed = false
     const [store, setStore] = createStore<{
       file: Record<string, FileState>
     }>({
@@ -109,6 +111,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
 
     createEffect(() => {
       scope()
+      generation++
       inflight.clear()
       resetFileContentLru()
       batch(() => {
@@ -166,10 +169,13 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
     }
 
     const load = (input: string, options?: { force?: boolean }) => {
+      if (disposed) return Promise.resolve()
       const file = path.normalize(input)
       if (!file) return Promise.resolve()
 
       const directory = scope()
+      const requestGeneration = generation
+      const currentRequest = () => !disposed && generation === requestGeneration && scope() === directory
       const key = `${directory}\n${file}`
       ensure(file)
 
@@ -184,7 +190,7 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       const promise = sdk()
         .client.file.read({ path: file })
         .then((x) => {
-          if (scope() !== directory) return
+          if (!currentRequest()) return
           const content = x.data
           setLoaded(file, content)
 
@@ -193,35 +199,42 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
           evictContent(new Set([file]))
         })
         .catch((e) => {
-          if (scope() !== directory) return
+          if (!currentRequest()) return
           setLoadError(file, errorMessage(e, language.t("error.chain.unknown")))
         })
         .finally(() => {
-          inflight.delete(key)
+          if (inflight.get(key) === promise) inflight.delete(key)
         })
 
       inflight.set(key, promise)
       return promise
     }
 
-    const search = (query: string, dirs: "true" | "false", options?: { limit?: number; signal?: AbortSignal }) =>
+    const searchEntries = (
+      query: string,
+      type: "file" | "directory" | undefined,
+      options?: { limit?: number; signal?: AbortSignal },
+    ) =>
       serverSDK()
         .api.file.find(
           {
             location: { directory: sdk().directory },
             query,
-            type: dirs === "true" ? "directory" : "file",
+            ...(type === undefined ? {} : { type }),
             limit: options?.limit,
           },
           { signal: options?.signal },
         )
         .then(
-          (x) => x.data.map((entry) => path.normalize(entry.path)),
+          (x) => x.data.map((entry) => ({ ...entry, path: path.normalize(entry.path) })),
           (error) => {
             if (options?.signal?.aborted) throw error
             return []
           },
         )
+
+    const search = (...args: Parameters<typeof searchEntries>) =>
+      searchEntries(...args).then((entries) => entries.map((entry) => entry.path))
 
     const stop = sdk().event.listen((e) => {
       invalidateFromWatcher(e.details, {
@@ -266,6 +279,9 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       withPath(input, (file) => view().setSelectedLines(file, range))
 
     onCleanup(() => {
+      disposed = true
+      generation++
+      inflight.clear()
       stop()
       viewCache.clear()
     })
@@ -301,8 +317,9 @@ export const { use: useFile, provider: FileProvider } = createSimpleContext({
       setPreviewMode,
       setSelectedLines,
       searchFiles: (query: string, options?: { limit?: number; signal?: AbortSignal }) =>
-        search(query, "false", options),
-      searchFilesAndDirectories: (query: string) => search(query, "true"),
+        search(query, "file", options),
+      searchFilesAndDirectories: (query: string) => search(query, undefined),
+      searchFileAndDirectoryEntries: (query: string) => searchEntries(query, undefined),
     }
   },
 })

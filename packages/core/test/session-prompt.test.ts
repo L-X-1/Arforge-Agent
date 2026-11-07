@@ -5,7 +5,7 @@ import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
-import { EventTable } from "@arforge-ai/core/event/sql"
+import { EventSequenceTable, EventTable } from "@arforge-ai/core/event/sql"
 import { SessionEvent } from "@arforge-ai/core/session/event"
 import { Project } from "@arforge-ai/core/project"
 import { ModelV2 } from "@arforge-ai/core/model"
@@ -107,6 +107,116 @@ const eventCount = (type: string) =>
   )
 
 describe("SessionV2.prompt", () => {
+  it.effect("rejects queued resource retargeting without changing its row, sequence or events", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.create()
+      const first = yield* session.prompt({
+        sessionID,
+        id,
+        delivery: "queue",
+        resume: false,
+        prompt: {
+          text: "@manual",
+          files: [
+            { uri: "evidence://shared/manual", resource: { server: "server-A", uri: "evidence://shared/manual" } },
+          ],
+        },
+      })
+      const snapshot = Effect.all({
+        input: admitted(id),
+        revision: db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+        events: db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+      })
+      const before = yield* snapshot
+      const failure = yield* session.promptQueue
+        .update({
+          sessionID,
+          messageID: id,
+          expectedAdmittedSeq: first.admittedSeq,
+          prompt: {
+            text: "@manual",
+            files: [
+              { uri: "evidence://shared/manual", resource: { server: "server-B", uri: "evidence://other/private" } },
+            ],
+          },
+        })
+        .pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionExecution.OperationError", reason: "invalid" })
+      expect(yield* snapshot).toEqual(before)
+    }),
+  )
+
+  it.effect("rejects a conflicting resource target before durable admission", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const failure = yield* session
+        .prompt({
+          sessionID,
+          id: messageID,
+          resume: false,
+          prompt: {
+            text: "@manual",
+            files: [
+              { uri: "evidence://displayed/manual", resource: { server: "server-B", uri: "evidence://other/private" } },
+            ],
+          },
+        })
+        .pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionExecution.OperationError", reason: "invalid" })
+      expect(yield* admitted(messageID)).toBeUndefined()
+    }),
+  )
+  it.effect("retains exact MCP sources through durable queue, history replay and retry identity", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const uri = "evidence://shared/manual"
+      const prompt = Prompt.make({
+        text: "@manual @manual",
+        files: ["server-A", "server-B"].map((server) => ({ uri, mime: "text/plain", resource: { server, uri } })),
+        system: { text: "Retain request policy.", source: "request", scope: "turn" },
+        route: {
+          agent: "build",
+          model: {
+            id: ModelV2.ID.make("current"),
+            providerID: ProviderV2.ID.make("owned"),
+            variant: ModelV2.VariantID.make("high"),
+          },
+        },
+      })
+      const input = { sessionID, id: messageID, prompt, delivery: "queue" as const, resume: false }
+      const first = yield* session.prompt(input)
+      expect((yield* SessionInput.listQueued(db, sessionID))[0]?.prompt).toEqual(prompt)
+      expect(yield* session.prompt(input)).toEqual(first)
+      const conflicting = Prompt.make({
+        ...prompt,
+        files: prompt.files?.map((file) => ({ ...file, resource: { server: "server-C", uri } })),
+      })
+      expect(yield* session.prompt({ ...input, prompt: conflicting }).pipe(Effect.flip)).toMatchObject({
+        _tag: "Session.PromptConflictError",
+      })
+      expect(yield* SessionInput.promoteNextQueued(db, events, sessionID)).toBe(true)
+      const messages = yield* session.messages({ sessionID })
+      const user = messages.find((message) => message.type === "user")
+      expect(user?.type === "user" ? Prompt.fromUserMessage(user) : undefined).toEqual(prompt)
+      expect((yield* admitted(messageID))?.prompt).toEqual(prompt)
+      const committed = yield* admitted(messageID)
+      if (!committed) throw new Error("Committed resource prompt disappeared")
+      expect(yield* session.prompt(input)).toEqual(committed)
+    }),
+  )
+
   it.effect("exposes the execution registry", () =>
     Effect.gen(function* () {
       activeSessions.add(sessionID)
@@ -403,6 +513,63 @@ describe("SessionV2.prompt", () => {
       expect((yield* session.promptQueue.list(sessionID)).map((item) => item.id)).toEqual([secondID])
       expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptQueueUpdated.type, 1))).toBe(1)
       expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptQueueRemoved.type, 1))).toBe(1)
+    }),
+  )
+
+  it.effect("rejects stale queue model consent when an edit keeps the same FIFO sequence", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const model = {
+        providerID: ProviderV2.ID.make("queue-provider"),
+        id: ModelV2.ID.make("queue-model"),
+      }
+      const retired = { ...model, variant: ModelV2.VariantID.make("retired") }
+      const selected = { ...model, variant: ModelV2.VariantID.make("selected") }
+      const first = yield* session.prompt({
+        sessionID,
+        delivery: "queue",
+        resume: false,
+        prompt: { text: "First queued prompt", route: { model: retired } },
+      })
+      const second = yield* session.prompt({
+        sessionID,
+        delivery: "queue",
+        resume: false,
+        prompt: { text: "Second queued prompt" },
+      })
+      const target = { sessionID, messageID: first.id, expectedAdmittedSeq: first.admittedSeq }
+      const changed = yield* session.promptQueue.update({
+        ...target,
+        prompt: { text: "Edited in the other window", route: { model: selected } },
+      })
+      expect(changed.admittedSeq).toBe(first.admittedSeq)
+      const history = yield* session.history({ sessionID, limit: 20 })
+      const prompt = { text: "Use default", route: { model } }
+
+      for (const expectedModel of [
+        retired,
+        model,
+        { ...selected, providerID: ProviderV2.ID.make("other-provider") },
+        { ...selected, id: ModelV2.ID.make("other-model") },
+      ]) {
+        const failure = yield* session.promptQueue.update({ ...target, expectedModel, prompt }).pipe(Effect.flip)
+        expect(failure).toMatchObject({ _tag: "SessionExecution.OperationError", reason: "conflict" })
+      }
+      // This fixture has no command preparer. A stale route must fail before reaching it.
+      const commandFailure = yield* session.promptQueue.update({
+        ...target,
+        expectedModel: retired,
+        prompt: { ...prompt, command: { name: "test-command", arguments: "" } },
+      }).pipe(Effect.flip)
+      expect(commandFailure).toMatchObject({ _tag: "SessionExecution.OperationError", reason: "conflict" })
+      expect(yield* session.promptQueue.list(sessionID)).toEqual([changed, second])
+      expect(yield* session.history({ sessionID, limit: 20 })).toEqual(history)
+
+      const updated = yield* session.promptQueue.update({ ...target, expectedModel: selected, prompt })
+      expect(updated.prompt).toMatchObject(prompt)
+      expect(updated.admittedSeq).toBe(first.admittedSeq)
+      expect(yield* session.promptQueue.list(sessionID)).toEqual([updated, second])
     }),
   )
 

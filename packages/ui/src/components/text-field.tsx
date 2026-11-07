@@ -4,6 +4,7 @@ import type { ComponentProps } from "solid-js"
 import { useI18n } from "../context/i18n"
 import { IconButton } from "./icon-button"
 import { Tooltip } from "./tooltip"
+import { useUIPresentation, type UIPresentation } from "../context/presentation"
 
 export interface TextFieldProps
   extends ComponentProps<typeof Kobalte.Input>,
@@ -29,10 +30,12 @@ export interface TextFieldProps
   copyable?: boolean
   copyKind?: "clipboard" | "link"
   multiline?: boolean
+  presentation?: UIPresentation
 }
 
 export function TextField(props: TextFieldProps) {
   const i18n = useI18n()
+  const presentation = useUIPresentation(() => props.presentation)
   const [local, others] = splitProps(props, [
     "name",
     "defaultValue",
@@ -52,6 +55,7 @@ export function TextField(props: TextFieldProps) {
     "copyable",
     "copyKind",
     "multiline",
+    "presentation",
   ])
   const [copied, setCopied] = createSignal(false)
 
@@ -81,6 +85,7 @@ export function TextField(props: TextFieldProps) {
   return (
     <Kobalte
       data-component="input"
+      data-presentation={presentation()}
       data-variant={local.variant || "normal"}
       name={local.name}
       defaultValue={local.defaultValue}

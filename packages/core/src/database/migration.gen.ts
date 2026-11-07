@@ -78,6 +78,8 @@ import migration74 from "./migration/20260902192806_child_settlement_recovery_ou
 import migration75 from "./migration/20260903205327_20260904120000_child_settlement_recovery_outbox_owner_progress"
 import migration76 from "./migration/20260908114322_runtime_billing_receipt"
 
+import migration77 from "./migration/20261031010000_session_projection_ownership"
+
 export const migrations = [
   migration0,
   migration1,
@@ -156,4 +158,5 @@ export const migrations = [
   migration74,
   migration75,
   migration76,
+  migration77,
 ] satisfies DatabaseMigration.Migration[]

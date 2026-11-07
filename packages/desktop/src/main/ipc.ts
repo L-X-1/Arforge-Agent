@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import { requireBrowserStartLocale } from "./browser-appearance"
 import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { basename } from "node:path"
@@ -14,13 +15,26 @@ import { setForceFocus } from "./debug"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
 import { getStore, removeStoreFileIfEmpty } from "./store"
 import { StoreMutationCoordinator } from "./store-mutation"
-import { getPinchZoomEnabled, getWindowID, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
+import {
+  acknowledgeWindowClose,
+  rendererPersistenceReady,
+  getPinchZoomEnabled,
+  getWindowID,
+  setPinchZoomEnabled,
+  setTitlebar,
+  updateTitlebar,
+} from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 import { executeNative } from "./native-action-bridge"
 import { workbenchBrowserController } from "./browser-embed"
-import { requireBrowserLayoutRequest, requireBrowserWorkbenchRequest } from "./browser-embed-policy"
-import { compactDefined, requireNativeStoreValue } from "./native-input"
+import {
+  browserLayoutActionInput,
+  requireBrowserLayoutRequest,
+  requireBrowserWorkbenchRequest,
+} from "./browser-embed-policy"
+import { compactDefined, requireNativeStorePart, requireNativeStoreValue } from "./native-input"
+import { registerStoreTransferIpc } from "./store-transfer-ipc"
 
 const pickerFilters = (ext?: string[]) => {
   if (!ext || ext.length === 0) return undefined
@@ -32,7 +46,12 @@ const storeMutations = new StoreMutationCoordinator()
 
 function requireBrowserOwner(event: IpcMainInvokeEvent) {
   const owner = BrowserWindow.fromWebContents(event.sender)
-  if (!owner || owner.webContents !== event.sender || event.senderFrame !== event.sender.mainFrame || !getWindowID(owner))
+  if (
+    !owner ||
+    owner.webContents !== event.sender ||
+    event.senderFrame !== event.sender.mainFrame ||
+    !getWindowID(owner)
+  )
     throw new Error("Browser controls require the owning application main frame")
   return owner
 }
@@ -98,15 +117,6 @@ const requireNativeUrl = (value: unknown) => {
   return raw
 }
 
-const requireNativeStorePart = (name: string, value: unknown) => {
-  const raw = requireNativeString(name, value, 256)
-  // Persisted renderer keys intentionally use a namespaced `scope:key` form
-  // (for example `session:<id>:prompt`). Keep the key bounded and portable,
-  // while accepting the namespace separator used by the storage contract.
-  if (!/^[A-Za-z0-9._:-]+$/.test(raw)) throw new TypeError(`Invalid ${name}`)
-  return raw
-}
-
 const requireNativePayload = (payload: unknown) => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload))
     throw new TypeError("Native action payload must be an object")
@@ -168,23 +178,32 @@ const requireNativeDirectoryPickerOptions = (opts: unknown): NativeDirectoryPick
 }
 
 export function registerIpcHandlers(deps: Deps) {
+  ipcMain.on("window-close-prepared", acknowledgeWindowClose)
+  ipcMain.on("window-persistence-ready", rendererPersistenceReady)
   const updaterSubscriptions = createUpdaterSubscriptions()
   app.once("will-quit", updaterSubscriptions.clear)
 
   ipcMain.handle("workbench-browser", (event: IpcMainInvokeEvent, value: unknown) => {
     const checked = requireBrowserWorkbenchRequest(value)
     const controller = workbenchBrowserController(requireBrowserOwner(event))
-    return executeNative(deps.nativeActions, event, NativeActionKind.window, "workbench-browser", {
-      action: checked.action,
-      scopeDigest: browserInputDigest(checked.scope),
-      ...("pageID" in checked ? { pageID: checked.pageID } : {}),
-      ...(checked.action === "navigate" ? { addressDigest: browserInputDigest(checked.url) } : {}),
-    }, () => {
-      requireBrowserOwner(event)
-      if (checked.action === "open") return controller.open(checked.scope)
-      if (checked.action === "close") return controller.close(checked.scope, checked.pageID)
-      return controller.command(checked.scope, checked.pageID, checked)
-    })
+    return executeNative(
+      deps.nativeActions,
+      event,
+      NativeActionKind.window,
+      "workbench-browser",
+      {
+        action: checked.action,
+        scopeDigest: browserInputDigest(checked.scope),
+        ...("pageID" in checked ? { pageID: checked.pageID } : {}),
+        ...(checked.action === "navigate" ? { addressDigest: browserInputDigest(checked.url) } : {}),
+      },
+      () => {
+        requireBrowserOwner(event)
+        if (checked.action === "open") return controller.open(checked.scope)
+        if (checked.action === "close") return controller.close(checked.scope, checked.pageID)
+        return controller.command(checked.scope, checked.pageID, checked)
+      },
+    )
   })
 
   ipcMain.handle("workbench-browser-layout", (event: IpcMainInvokeEvent, value: unknown) => {
@@ -192,13 +211,17 @@ export function registerIpcHandlers(deps: Deps) {
     const controller = workbenchBrowserController(requireBrowserOwner(event))
     const epoch = controller.stageLayout(checked)
     if (epoch === undefined) return
-    return executeNative(deps.nativeActions, event, NativeActionKind.window, "workbench-browser-layout", {
-      scopeDigest: browserInputDigest(checked.scope), pageID: checked.pageID,
-      sequence: checked.sequence, bounds: checked.bounds,
-    }, () => {
-      requireBrowserOwner(event)
-      controller.commitLayout(checked, epoch)
-    })
+    return executeNative(
+      deps.nativeActions,
+      event,
+      NativeActionKind.window,
+      "workbench-browser-layout",
+      browserLayoutActionInput(checked),
+      () => {
+        requireBrowserOwner(event)
+        controller.commitLayout(checked, epoch)
+      },
+    )
   })
 
   ipcMain.handle("kill-sidecar", () => deps.killSidecar())
@@ -355,6 +378,13 @@ export function registerIpcHandlers(deps: Deps) {
   ipcMain.handle("store-length", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)
     return Object.keys(store.store).length
+  })
+  registerStoreTransferIpc(ipcMain, {
+    nativeActions: deps.nativeActions,
+    write: (name, key, value) =>
+      storeMutations.run(name, () => {
+        getStore(name).set(key, value)
+      }),
   })
 
   ipcMain.handle(
@@ -565,7 +595,12 @@ export function registerIpcHandlers(deps: Deps) {
     if (mode !== "light" && mode !== "dark") throw new TypeError("Invalid titlebar mode")
     if (scheme !== undefined && scheme !== "system" && scheme !== "light" && scheme !== "dark")
       throw new TypeError("Invalid titlebar scheme")
-    const checked = { mode, ...(scheme === undefined ? {} : { scheme }) }
+    const locale = payload.locale === undefined ? undefined : requireBrowserStartLocale(payload.locale)
+    const checked = {
+      mode,
+      ...(scheme === undefined ? {} : { scheme }),
+      ...(locale === undefined ? {} : { locale }),
+    }
     return executeNative(deps.nativeActions, event, NativeActionKind.window, "set-titlebar", checked, () =>
       setTitlebar(win, checked),
     )

@@ -19,8 +19,11 @@ import { sessionNotFoundError } from "@/utils/server-errors"
 import { rootSession } from "@/utils/session-route"
 import { normalizeSessionInfo } from "@/utils/session"
 import { normalizeSessionMessages } from "@/utils/session-message"
+import { pathKey } from "@/utils/path-key"
+import { assertBootstrapReadCurrent, isTransientBootstrapReadError } from "./global-sync/bootstrap-read"
 import { dropSessionCaches, pickSessionCacheEvictions, SESSION_CACHE_LIMIT } from "./global-sync/session-cache"
 import { createV2SessionReducer, type V2SessionReduction } from "./server-session-v2-reducer"
+import { isNativeSessionEvent, type CurrentServerEvent } from "./server-session-native-reducer"
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 const cmpMessage = (a: Message, b: Message) => a.time.created - b.time.created || cmp(a.id, b.id)
@@ -180,15 +183,15 @@ function reconcileFetched<T extends { id: string }>(
   return [...result.values()].sort((a, b) => cmp(a.id, b.id))
 }
 
-type ServerSessionOptions = { retry?: typeof retry; protocol?: Promise<"v1" | "v2"> }
+type ServerSessionOptions = { retry?: typeof retry; protocol?: Promise<"v1" | "v2">; capture?: () => () => boolean }
 
 export function createServerSession(
   client: ArforgeClient,
-  sessionApiOrOptions?: SessionApi | ServerSessionOptions,
+  sessionApiOrOptions?: Omit<SessionApi, "compact"> | ServerSessionOptions,
   messageApi?: MessageApi,
   currentOptions?: ServerSessionOptions,
 ) {
-  const sessionApi = messageApi ? (sessionApiOrOptions as SessionApi) : undefined
+  const sessionApi = messageApi ? (sessionApiOrOptions as Omit<SessionApi, "compact">) : undefined
   const options = messageApi ? currentOptions : (sessionApiOrOptions as ServerSessionOptions | undefined)
   const [data, setData] = createStore({
     info: {} as Record<string, Session | undefined>,
@@ -210,6 +213,7 @@ export function createServerSession(
   const inflightTodo = new Map<string, Promise<void>>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const v2 = createV2SessionReducer()
+  const activeRuns = new Map<string, string>()
   const messageLoads = new Map<string, MessageLoadState>()
   const pendingParts = new Map<string, Map<string, Set<string>>>()
   const orphanParts = new Map<string, Set<string>>()
@@ -229,6 +233,16 @@ export function createServerSession(
   const infoSeen = new Set<string>()
   const pinned = new Map<string, number>()
   const generations = new Map<string, object>()
+  const committedTitles = new Map<
+    string,
+    {
+      title: string
+      directory: string
+      workspaceID?: string
+      eventID: string
+      sequence?: number
+    }
+  >()
   const generation = (sessionID: string) => {
     const current = generations.get(sessionID)
     if (current) return current
@@ -254,7 +268,12 @@ export function createServerSession(
     )
   }
 
-  const remember = (session: Session) => {
+  const remember = (info: Session) => {
+    const title = committedTitles.get(info.id)
+    const session =
+      title && pathKey(title.directory) === pathKey(info.directory) && title.workspaceID === info.workspaceID
+        ? { ...info, title: title.title }
+        : info
     setData("info", session.id, reconcile(session))
     infoSeen.delete(session.id)
     infoSeen.add(session.id)
@@ -290,6 +309,7 @@ export function createServerSession(
       }
       stale.forEach((sessionID) => infoSeen.delete(sessionID))
       stale.forEach((sessionID) => generations.delete(sessionID))
+      stale.forEach((sessionID) => committedTitles.delete(sessionID))
       setData(
         "info",
         produce((draft) => stale.forEach((sessionID) => delete draft[sessionID])),
@@ -298,20 +318,35 @@ export function createServerSession(
     return session
   }
 
-  const resolve = (sessionID: string, options?: { force?: boolean }) => {
+  const resolve = (sessionID: string, requestOptions?: { force?: boolean }) => {
     const cached = data.info[sessionID]
-    if (cached && !options?.force) return Promise.resolve(cached)
+    if (cached && !requestOptions?.force) return Promise.resolve(cached)
     const pending = requests.get(sessionID)
     if (pending) return pending
     const active = generation(sessionID)
-    const request = sessionApi
-      ? sessionApi.get({ sessionID }).then(normalizeSessionInfo)
-      : client.session.get({ sessionID }).then((result) => {
-          if (!result.data) throw sessionNotFoundError(sessionID)
-          return result.data
-        })
+    const current = options?.capture?.() ?? (() => true)
+    const isCurrent = () => current() && generations.get(sessionID) === active
+    const request = retry(
+      () => {
+        assertBootstrapReadCurrent(isCurrent)
+        // Already-started obsolete metadata reads retain their completion
+        // contract; the publication fence below excludes their old generation.
+        return sessionApi
+          ? sessionApi.get({ sessionID }).then(normalizeSessionInfo)
+          : client.session.get({ sessionID }).then((result) => {
+              if (!result.data) throw sessionNotFoundError(sessionID)
+              return result.data
+            })
+      },
+      {
+        attempts: 3,
+        delay: 100,
+        maxDelay: 200,
+        retryIf: (error) => isCurrent() && isTransientBootstrapReadError(error),
+      },
+    )
     const resolved = request.then((result) => {
-      if (generations.get(sessionID) !== active) return result
+      if (!current() || generations.get(sessionID) !== active) return result
       return remember(result)
     })
     requests.set(sessionID, resolved)
@@ -488,6 +523,7 @@ export function createServerSession(
       inflightTodo.delete(sessionID)
       messageLoads.delete(sessionID)
       v2.clear(sessionID)
+      activeRuns.delete(sessionID)
       pendingParts.delete(sessionID)
       orphanParts.delete(sessionID)
       removedMessages.delete(sessionID)
@@ -534,13 +570,37 @@ export function createServerSession(
       pickSessionCacheEvictions({ seen, keep: sessionID, limit: SESSION_CACHE_LIMIT, preserve: protectedSessions() }),
     )
 
-  const fetchMessages = async (sessionID: string, limit: number, before?: string, onAttempt?: () => void) => {
+  // Message GETs may fail with a generated ClientError whose message is only
+  // "Transport". Keep retries bounded and attached to this page/session lifetime.
+  const readMessages = <T>(read: () => Promise<T>, isCurrent: () => boolean) =>
+    (options?.retry ?? retry)(
+      async () => {
+        assertBootstrapReadCurrent(isCurrent)
+        const result = await read()
+        assertBootstrapReadCurrent(isCurrent)
+        return result
+      },
+      {
+        attempts: 3,
+        delay: 100,
+        maxDelay: 200,
+        retryIf: (error) => isCurrent() && isTransientBootstrapReadError(error),
+      },
+    )
+
+  const fetchMessages = async (
+    sessionID: string,
+    limit: number,
+    isCurrent: () => boolean,
+    before?: string,
+    onAttempt?: () => void,
+  ) => {
     if (messageApi && (await options?.protocol) !== "v1") {
       const request = (cursor?: string) =>
-        (options?.retry ?? retry)(() => {
+        readMessages(() => {
           onAttempt?.()
           return messageApi.list(cursor ? { sessionID, limit, cursor } : { sessionID, limit, order: "desc" })
-        })
+        }, isCurrent)
       const first = await request(before)
       const pages = [first]
       while (pages.at(-1)?.cursor.next && needsOlderTurnRoot(pages.flatMap((page) => page.data).toReversed())) {
@@ -563,10 +623,10 @@ export function createServerSession(
         complete: response.data.length === 0,
       }
     }
-    const response = await (options?.retry ?? retry)(() => {
+    const response = await readMessages(() => {
       onAttempt?.()
       return client.session.messages({ sessionID, limit, before })
-    })
+    }, isCurrent)
     const items = (response.data ?? []).filter((item) => !!item?.info?.id)
     return {
       session: items.map((item) => cleanMessage(item.info)).sort((a, b) => cmp(a.id, b.id)),
@@ -581,21 +641,26 @@ export function createServerSession(
     }
   }
 
-  const fetchMessage = async (sessionID: string, messageID: string, onAttempt?: () => void) => {
+  const fetchMessage = async (
+    sessionID: string,
+    messageID: string,
+    isCurrent: () => boolean,
+    onAttempt?: () => void,
+  ) => {
     if (sessionApi && (await options?.protocol) !== "v1") {
-      const response = await (options?.retry ?? retry)(() => {
+      const response = await readMessages(() => {
         onAttempt?.()
         return sessionApi.message({ sessionID, messageID })
-      })
+      }, isCurrent)
       const normalized = normalizeSessionMessages(sessionID, [response])
       const message = normalized.messages[0]
       if (!message) throw new Error(`Message not found: ${messageID}`)
       return { message, parts: normalized.parts.get(messageID) ?? [] }
     }
-    const response = await (options?.retry ?? retry)(() => {
+    const response = await readMessages(() => {
       onAttempt?.()
       return client.session.message({ sessionID, messageID })
-    })
+    }, isCurrent)
     if (!response.data?.info?.id) throw new Error(`Message not found: ${messageID}`)
     return {
       message: cleanMessage(response.data.info),
@@ -732,6 +797,8 @@ export function createServerSession(
   const loadMessages = async (sessionID: string, limit: number, before?: string, mode?: "replace" | "prepend") => {
     if (meta.loading[sessionID]) return
     const active = generation(sessionID)
+    const current = options?.capture?.() ?? (() => true)
+    const isCurrent = () => current() && generations.get(sessionID) === active
     const load: MessageLoadState = {
       touchedMessages: new Set(),
       removedMessages: new Set(),
@@ -749,10 +816,13 @@ export function createServerSession(
     setMeta("loading", sessionID, true)
     let applied = false
     try {
-      const pageSize = Number.isSafeInteger(limit) && limit > 0
-        ? limit
-        : mode === "prepend" ? historyMessagePageSize : initialMessagePageSize
-      const page = await fetchMessages(sessionID, pageSize, before, () => resetMessageLoad(sessionID, load))
+      const pageSize =
+        Number.isSafeInteger(limit) && limit > 0
+          ? limit
+          : mode === "prepend"
+            ? historyMessagePageSize
+            : initialMessagePageSize
+      const page = await fetchMessages(sessionID, pageSize, isCurrent, before, () => resetMessageLoad(sessionID, load))
       const first = page.session.reduce<Message | undefined>(
         (oldest, message) => (!oldest || cmpMessage(message, oldest) < 0 ? message : oldest),
         undefined,
@@ -780,7 +850,7 @@ export function createServerSession(
         ]
         for (const parentID of parentIDs) {
           if (generations.get(sessionID) !== active) break
-          const parent = await fetchMessage(sessionID, parentID, () =>
+          const parent = await fetchMessage(sessionID, parentID, isCurrent, () =>
             resetMessageLoad(sessionID, load, messageLoadBaseline(load, parentID)),
           ).catch((error) => {
             const cause = error instanceof Error && typeof error.cause === "object" ? error.cause : undefined
@@ -820,6 +890,10 @@ export function createServerSession(
         mode !== "prepend",
       )
       applied = true
+    } catch (error) {
+      // A retired load already lost authority; callers historically resolve a
+      // deleted/replaced session load without changing its replacement cache.
+      if (isCurrent()) throw error
     } finally {
       if (!applied && generations.get(sessionID) === active && messageLoads.get(sessionID) === load) {
         for (const messageID of load.orphanParents) {
@@ -843,9 +917,12 @@ export function createServerSession(
         resolve(sessionID, options),
         cached && !options?.force
           ? Promise.resolve()
-          // The cached count can be zero or smaller than a page. Refresh a full
-          // recent window without shrinking already-loaded history.
-          : loadMessages(sessionID, options?.messageLimit ?? Math.max(meta.limit[sessionID] ?? 0, initialMessagePageSize)),
+          : // The cached count can be zero or smaller than a page. Refresh a full
+            // recent window without shrinking already-loaded history.
+            loadMessages(
+              sessionID,
+              options?.messageLimit ?? Math.max(meta.limit[sessionID] ?? 0, initialMessagePageSize),
+            ),
       ])
     })
   }
@@ -936,9 +1013,52 @@ export function createServerSession(
       .catch(() => {})
   }
 
-  const applyV2 = (event: ArforgeEvent) => {
+  const applyV2 = (event: CurrentServerEvent) => {
     if (!("data" in event) || !("sessionID" in event.data) || typeof event.data.sessionID !== "string") return
     const sessionID = event.data.sessionID
+    if (event.type === "session.next.renamed") {
+      const source = event.location
+      const info = data.info[sessionID]
+      if (!source || (event.durable && event.durable.aggregateID !== sessionID)) return false
+      if (info && (pathKey(info.directory) !== pathKey(source.directory) || info.workspaceID !== source.workspaceID))
+        return false
+      const previous = committedTitles.get(sessionID)
+      const sequence = event.durable?.seq
+      if (
+        previous &&
+        pathKey(previous.directory) === pathKey(source.directory) &&
+        previous.workspaceID === source.workspaceID &&
+        (previous.eventID === event.id ||
+          (previous.sequence !== undefined && sequence !== undefined && sequence <= previous.sequence))
+      )
+        return false
+      committedTitles.delete(sessionID)
+      committedTitles.set(sessionID, {
+        title: event.data.title,
+        directory: source.directory,
+        workspaceID: source.workspaceID,
+        eventID: event.id,
+        sequence,
+      })
+      if (committedTitles.size > sessionInfoLimit) {
+        const stale = [...committedTitles.keys()].find((id) => !requests.has(id) && !pinned.has(id))
+        if (stale) committedTitles.delete(stale)
+      }
+      // Timestamp is an event audit value, not a metadata/activity update.
+      if (info) remember({ ...info, title: event.data.title })
+      return true
+    }
+    if (event.type === "agent.run.state-changed") {
+      const inactive = ["paused", "completed", "failed", "cancelled"].includes(event.data.to)
+      if (!inactive) {
+        activeRuns.set(sessionID, event.data.runID)
+        setData("session_status", sessionID, { type: "busy" })
+      } else if (!activeRuns.has(sessionID) || activeRuns.get(sessionID) === event.data.runID) {
+        activeRuns.delete(sessionID)
+        setData("session_status", sessionID, { type: "idle" })
+      }
+      return
+    }
     const reduction = v2.reduce(data.session_message[sessionID] ?? [], event)
     if (reduction) {
       projectV2(reduction)
@@ -946,17 +1066,47 @@ export function createServerSession(
     }
 
     const info = data.info[sessionID]
-    if (event.type === "session.renamed" && info)
+    if (isNativeSessionEvent(event)) {
+      if (event.type === "session.next.step.started") {
+        if (event.data.runID) activeRuns.set(sessionID, event.data.runID)
+        setData("session_status", sessionID, { type: "busy" })
+      }
+      if (event.type === "session.next.title.generated" && info && info.title === event.data.expectedTitle)
+        remember({ ...info, title: event.data.title, time: { ...info.time, updated: event.data.timestamp } })
+      if (event.type === "session.next.moved") {
+        committedTitles.delete(sessionID)
+        generations.delete(sessionID)
+        requests.delete(sessionID)
+        if (info)
+          remember({
+            ...info,
+            directory: event.data.location.directory,
+            workspaceID: event.data.location.workspaceID,
+            path: event.data.subdirectory,
+            time: { ...info.time, updated: event.data.timestamp },
+          })
+      }
+      if (event.type.startsWith("session.next.revert.")) void resolve(sessionID, { force: true }).catch(() => {})
+      return
+    }
+    if (event.type === "session.renamed" && info) {
+      committedTitles.delete(sessionID)
       remember({ ...info, title: event.data.title, time: { ...info.time, updated: event.created } })
-    if (event.type === "session.moved" && info)
-      remember({
-        ...info,
-        projectID: event.data.projectID ?? info.projectID,
-        workspaceID: event.data.location.workspaceID,
-        directory: event.data.location.directory,
-        path: event.data.subpath,
-        time: { ...info.time, updated: event.created },
-      })
+    }
+    if (event.type === "session.moved") {
+      committedTitles.delete(sessionID)
+      generations.delete(sessionID)
+      requests.delete(sessionID)
+      if (info)
+        remember({
+          ...info,
+          projectID: event.data.projectID ?? info.projectID,
+          workspaceID: event.data.location.workspaceID,
+          directory: event.data.location.directory,
+          path: event.data.subpath,
+          time: { ...info.time, updated: event.created },
+        })
+    }
     if (event.type === "session.usage.updated" && info)
       remember({ ...info, cost: event.data.cost, tokens: event.data.tokens })
     if (event.type === "session.archived") {
@@ -1012,6 +1162,7 @@ export function createServerSession(
         const properties = event.properties as { sessionID?: string; info?: Session }
         const sessionID = properties.info?.id ?? properties.sessionID
         if (!sessionID) return
+        committedTitles.delete(sessionID)
         infoSeen.delete(sessionID)
         setData(
           "info",

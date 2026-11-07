@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import fuzzysort from "fuzzysort"
 import {
   absoluteTreePath,
   activeTreeNavigation,
@@ -17,6 +18,7 @@ import {
   createDirectorySearch,
   createPriorityTaskQueue,
   displayPickerPath,
+  directoryPickerSearchText,
   pickerParent,
   pickerRoot,
   pickerAbsoluteInput,
@@ -245,4 +247,76 @@ test("returns absolute directories and relative files", () => {
   expect(selectedTreePath("/home/luke/repo", "src/index.ts", "file")).toBe("src/index.ts")
   expect(selectedTreePath("/home/luke/repo/src", "index.ts", "file", "/home/luke/repo")).toBe("src/index.ts")
   expect(selectedTreePath("/home/luke/repo", "src/", "file")).toBeUndefined()
+})
+
+test("keeps Windows directory rows visible for raw List queries in either separator style", () => {
+  const cases = [
+    ["E:/Owned/run-49/workspace-a", "E:/Owned/run-49/"],
+    ["E:/Owned/run-49/workspace-a", "E:\\Owned\\run-49\\"],
+    ["E:/Owned/run-49/workspace-a", "E:/Owned/run-49/workspace-a/"],
+    ["E:/Owned/run-49/workspace-a", "E:\\Owned\\run-49\\workspace-a\\"],
+    ["E:/Owned/run-49/workspace-a", "E:\\Owned\\run-49\\workspace-a/"],
+    ["E:/", "E:/"],
+    ["E:/", "E:\\"],
+    ["//Server/Share/workspace-a", "//Server/Share/workspace-a/"],
+    ["//Server/Share/workspace-a", "\\\\Server\\Share\\workspace-a\\"],
+    ["//Server/Share", "\\\\Server\\Share\\"],
+  ]
+  for (const [absolute, query] of cases) {
+    const row = {
+      absolute: displayPickerPath(absolute, "", ""),
+      search: directoryPickerSearchText(absolute, ""),
+    }
+    // Match useFilteredList's raw, lowercased object query and exact filter keys.
+    const visible = fuzzysort.go(query.toLowerCase(), [row], { keys: ["search"] }).map((result) => result.obj)
+    expect(visible).toEqual([row])
+    expect(visible[0].absolute).toBe(row.absolute)
+  }
+})
+
+test("preserves POSIX directory search aliases and filtering", () => {
+  const search = directoryPickerSearchText("/home/owner/workspace-a", "/home/owner")
+  expect(search).toBe("/home/owner/workspace-a\n/home/owner/workspace-a/\n~/workspace-a\n~/workspace-a/\nworkspace-a")
+  const row = { search }
+  for (const query of ["/home/owner/", "~/workspace-a/", "wrks-a"]) {
+    expect(fuzzysort.go(query.toLowerCase(), [row], { keys: ["search"] }).map((result) => result.obj)).toEqual([row])
+  }
+  expect(fuzzysort.go("definitely-missing-folder-ZZZ", [row], { keys: ["search"] })).toHaveLength(0)
+})
+
+test("directory traversal retains the same owned requests before either raw List filter", async () => {
+  for (const query of ["E:/Owned/run-49/", "E:\\Owned\\run-49\\"]) {
+    const requests: string[] = []
+    const entries: Record<string, string[]> = {
+      "E:/": ["Owned"],
+      "E:/Owned": ["run-49"],
+      "E:/Owned/run-49": ["workspace-a", "workspace-b"],
+    }
+    const sdk = {
+      api: {
+        file: {
+          list: async (input: { location: { directory: string } }) => {
+            const directory = input.location.directory
+            requests.push(directory)
+            expect(Object.hasOwn(entries, directory)).toBeTrue()
+            return { data: entries[directory].map((name) => ({ path: name + "/", type: "directory" as const })) }
+          },
+        },
+      },
+    } as unknown as Parameters<typeof createDirectorySearch>[0]["sdk"]
+    const search = createDirectorySearch({ sdk, home: () => "E:/Owned", base: () => "E:/Owned" })
+    const returned = await search(query)
+    expect(requests).toEqual(["E:/", "E:/Owned", "E:/Owned/run-49"])
+    expect(returned).toEqual(["E:/Owned/run-49/workspace-a", "E:/Owned/run-49/workspace-b"])
+    const rows = returned.map((absolute) => ({
+      absolute: displayPickerPath(absolute, "", ""),
+      search: directoryPickerSearchText(absolute, "E:/Owned"),
+    }))
+    expect(
+      fuzzysort
+        .go(query.toLowerCase(), rows, { keys: ["search"] })
+        .map((result) => result.obj.absolute)
+        .sort(),
+    ).toEqual(["E:\\Owned\\run-49\\workspace-a", "E:\\Owned\\run-49\\workspace-b"])
+  }
 })

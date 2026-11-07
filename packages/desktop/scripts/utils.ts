@@ -5,6 +5,7 @@ export type Channel = "dev" | "beta" | "prod"
 export function resolveChannel(): Channel {
   const raw = Bun.env.ARFORGE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
+  if (raw === "latest") return "prod"
   return "dev"
 }
 

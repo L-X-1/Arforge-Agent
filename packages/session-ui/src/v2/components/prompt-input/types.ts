@@ -89,6 +89,7 @@ export type PromptInputV2History = {
 export type PromptInputV2Option = {
   id: string
   label: string
+  description?: string
   providerID?: string
 }
 

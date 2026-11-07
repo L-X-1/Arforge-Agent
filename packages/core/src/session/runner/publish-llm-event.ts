@@ -1,4 +1,11 @@
-import { ToolOutput, type LLMEvent, type ProviderMetadata, type ToolResultValue, type Usage } from "@arforge-ai/llm"
+import {
+  ToolOutput,
+  type LLMError,
+  type LLMEvent,
+  type ProviderMetadata,
+  type ToolResultValue,
+  type Usage,
+} from "@arforge-ai/llm"
 import { DateTime, Effect } from "effect"
 import type { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { EventV2 } from "../../event"
@@ -7,6 +14,7 @@ import { SessionEvent } from "../event"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import type { ToolOutputStore } from "../../tool-output-store"
+import { redact } from "../../redact"
 
 type Input = {
   readonly sessionID: SessionSchema.ID
@@ -41,6 +49,37 @@ const message = (value: unknown) => {
     return JSON.stringify(value) ?? String(value)
   } catch {
     return String(value)
+  }
+}
+
+const publicMessage = (value: string) =>
+  redact(value)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 500) || "Provider execution failed"
+
+/** Shared by the assistant failure and terminal Run reason; never serialize HTTP diagnostics. */
+export const publicProviderFailure = (failure: LLMError): SessionMessage.UnknownError => {
+  const reason = failure.reason._tag
+  const recognized = reason === "Authentication" || reason === "QuotaExceeded" || reason === "RateLimit"
+  const status = ("http" in failure.reason ? failure.reason.http?.response?.status : undefined) ??
+    ("status" in failure.reason ? failure.reason.status : undefined)
+  const validStatus = status !== undefined && Number.isInteger(status) && status >= 400 && status <= 599
+  const message =
+    reason === "Authentication"
+      ? "Provider authentication failed. Check the current provider credentials before retrying."
+      : reason === "QuotaExceeded"
+        ? "Provider quota is exhausted. Review the current provider account quota before retrying."
+        : reason === "RateLimit"
+          ? "Provider rate limit reached. Wait before retrying with the current model."
+          : validStatus
+            ? `Provider request failed with HTTP ${status}. Review the current connection and model settings.`
+            : publicMessage(failure.reason.message)
+  return {
+    type: "unknown",
+    message,
+    ...(recognized ? { reason, retryable: failure.retryable } : {}),
+    ...(recognized && validStatus ? { statusCode: status } : {}),
   }
 }
 
@@ -205,7 +244,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     yield* flushFragments()
   })
 
-  const failAssistant = Effect.fnUntraced(function* (message: string) {
+  const failAssistant = Effect.fnUntraced(function* (message: string, failure?: LLMError) {
     if (assistantFailed) return
     yield* flush()
     const assistantMessageID = yield* startAssistant()
@@ -215,7 +254,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       sessionID: input.sessionID,
       timestamp: yield* timestamp,
       assistantMessageID,
-      error: { type: "unknown", message },
+      error: failure ? publicProviderFailure(failure) : { type: "unknown", message: publicMessage(message) },
     })
   })
 

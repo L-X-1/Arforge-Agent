@@ -2,15 +2,18 @@ export * as FileSystemSearch from "./search"
 
 import { makeLocationNode } from "../effect/app-node"
 import path from "path"
-import { Context, Effect, Layer } from "effect"
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Option, Scope, Stream } from "effect"
 import { Fff } from "#fff"
 import fuzzysort from "fuzzysort"
-import { FileSystem } from "../filesystem"
+import type { FileSystem } from "../filesystem"
+import { Entry, Match } from "@arforge-ai/schema/filesystem"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
 import { Flag } from "../flag/flag"
+import { EventV2 } from "../event"
+import { FileSystemWatcher } from "@arforge-ai/schema/filesystem-watcher"
 
 export interface Interface {
   readonly find: (input: FileSystem.FindInput) => Effect.Effect<FileSystem.Entry[]>
@@ -26,25 +29,100 @@ export const ripgrepLayer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const ripgrep = yield* Ripgrep.Service
-    const state = {
-      files: [] as string[],
-      directories: [] as string[],
+    const events = yield* EventV2.Service
+    const scope = yield* Scope.Scope
+    type Index = {
+      files: string[]
+      directories: string[]
+      metadata: Map<string, string>
+      generation: number
+      createdAt: number
     }
-    const refresh = Effect.fnUntraced(function* () {
-      const entries = yield* ripgrep.find({
-        cwd: location.directory,
-        pattern: "*",
-        limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
-      })
-      const directories = new Set<string>()
-      state.files = entries.map((entry) => entry.path)
-      for (const file of state.files) {
-        const parts = file.split("/")
-        parts.slice(0, -1).forEach((_, index) => directories.add(parts.slice(0, index + 1).join("/") + path.sep))
+    let current: Index | undefined
+    type Pending = { result: Deferred.Deferred<Index>; fiber?: Fiber.Fiber<boolean> }
+    let pending: Pending | undefined
+    let generation = 0
+    let disposed = false
+    const metadata = (directories: Iterable<string>) =>
+      Effect.forEach([...new Set(directories)], (directory) => fs.stat(directory).pipe(
+        Effect.map((info) => [directory, JSON.stringify([
+          info.type, Option.getOrUndefined(info.mtime)?.getTime(), Option.getOrUndefined(info.birthtime)?.getTime(),
+          Option.getOrUndefined(info.ino), String(info.size),
+        ])] as const),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([directory, "missing"] as const)),
+        Effect.orDie,
+      ), { concurrency: 16 }).pipe(Effect.map((entries) => new Map(entries)))
+    const same = (before: Map<string, string>, after: Map<string, string>) =>
+      [...before].every(([directory, fingerprint]) => after.get(directory) === fingerprint)
+    const refresh = Effect.gen(function* () {
+      while (true) {
+        if (disposed) return yield* Effect.die(new Error("Filesystem search location is disposed"))
+        const revision = generation
+        const before = yield* metadata(current?.metadata.keys() ?? [location.directory])
+        const now = yield* Clock.currentTimeMillis
+        if (current && revision === generation && current.generation === revision &&
+            now - current.createdAt < 5_000 && same(current.metadata, before)) return current
+        const entries = yield* ripgrep.find({
+          cwd: location.directory, pattern: "*", limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
+        }).pipe(Effect.orDie)
+        const files = entries.map((entry) => entry.path), directories = new Set<string>()
+        for (const file of files) {
+          const parts = file.split("/")
+          parts.slice(0, -1).forEach((_, index) => directories.add(parts.slice(0, index + 1).join("/") + path.sep))
+        }
+        const paths = [location.directory, ...Array.from(directories, (directory) => path.resolve(location.directory, directory))]
+        const after = yield* metadata([...before.keys(), ...paths])
+        // Publish an immutable candidate only after its generation and directory
+        // metadata still match. Changes during a scan require a fresh scan.
+        if (revision !== generation || !same(before, after)) { yield* Effect.yieldNow; continue }
+        if (disposed) return yield* Effect.die(new Error("Filesystem search location is disposed"))
+        current = {
+          files, directories: Array.from(directories), generation: revision,
+          createdAt: yield* Clock.currentTimeMillis,
+          metadata: new Map(paths.map((directory) => [directory, after.get(directory)!])),
+        }
+        return current
       }
-      state.directories = Array.from(directories)
     })
-    const indexed = yield* Effect.cached(refresh().pipe(Effect.orDie))
+    // A shared location-owned worker coalesces metadata checks and scans. A
+    // cancelled reader cannot cancel the other readers' refresh.
+    const indexed: Effect.Effect<Index> = Effect.uninterruptibleMask((restore) => Effect.suspend(() => {
+      if (disposed) return Effect.die(new Error("Filesystem search location is disposed"))
+      const existing = pending
+      const slot = existing ?? { result: Deferred.makeUnsafe<Index>() }
+      const awaitIndex = restore(Deferred.await(slot.result)).pipe(
+        Effect.flatMap((index) => index.generation === generation ? Effect.succeed(index) : indexed),
+      )
+      if (existing) return awaitIndex
+      pending = slot
+      const work = Effect.uninterruptibleMask(() => refresh.pipe(
+        Effect.interruptible,
+        Effect.exit,
+        Effect.flatMap((exit) => {
+          if (pending === slot) pending = undefined
+          return Deferred.done(slot.result, exit)
+        }),
+      ))
+      return Effect.forkIn(work, scope).pipe(
+        Effect.tap((fiber) => Effect.sync(() => { slot.fiber = fiber })),
+        Effect.andThen(awaitIndex),
+      )
+    }))
+    yield* Effect.addFinalizer(() => Effect.gen(function* () {
+      disposed = true
+      generation++
+      const active = pending
+      if (active) {
+        yield* Deferred.interrupt(active.result)
+        if (active.fiber) yield* Fiber.interrupt(active.fiber)
+      }
+    }))
+    yield* events.subscribe(FileSystemWatcher.Event.Updated).pipe(
+      Stream.runForEach((event) => Effect.sync(() => {
+        if (event.location?.directory === location.directory && FSUtil.contains(location.directory, event.data.file)) generation++
+      })),
+      Effect.forkScoped({ startImmediately: true }),
+    )
     return Service.of({
       glob: (input) =>
         Effect.gen(function* () {
@@ -60,7 +138,7 @@ export const ripgrepLayer = Layer.effect(
             .pipe(
               Effect.map((result) =>
                 result.map((entry) =>
-                  FileSystem.Entry.make({
+                  Entry.make({
                     ...entry,
                     path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, entry.path))),
                   }),
@@ -85,9 +163,9 @@ export const ripgrepLayer = Layer.effect(
             .pipe(
               Effect.map((result) =>
                 result.map((match) =>
-                  FileSystem.Match.make({
+                  Match.make({
                     ...match,
-                    entry: FileSystem.Entry.make({
+                    entry: Entry.make({
                       ...match.entry,
                       path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, match.entry.path))),
                     }),
@@ -99,7 +177,7 @@ export const ripgrepLayer = Layer.effect(
         }),
       find: (input) =>
         Effect.gen(function* () {
-          yield* indexed
+          const state = yield* indexed
           const items =
             input.type === "file"
               ? state.files
@@ -109,7 +187,7 @@ export const ripgrepLayer = Layer.effect(
           return fuzzysort.go(input.query, items, { limit: input.limit ?? 50 }).map((item) => {
             const relative = item.target
             const type = relative.endsWith(path.sep) ? ("directory" as const) : ("file" as const)
-            return FileSystem.Entry.make({
+            return Entry.make({
               path: RelativePath.make(relative),
               type,
             })
@@ -172,7 +250,7 @@ export const fffLayer = Layer.effect(
             ? Array.from(directories)
             : [...files, ...directories]
       return fuzzysort.go(input.query, candidates, { limit: input.limit ?? 50 }).map((item) =>
-        FileSystem.Entry.make({
+        Entry.make({
           path: RelativePath.make(item.target),
           type: item.target.endsWith(path.sep) ? "directory" : "file",
         }),
@@ -190,7 +268,7 @@ export const fffLayer = Layer.effect(
           })
           if (!found.ok) throw found.error
           return found.value.items.map((item) =>
-            FileSystem.Entry.make({
+            Entry.make({
               path: RelativePath.make(item.relativePath.replaceAll("\\", "/")),
               type: "file",
             }),
@@ -209,8 +287,8 @@ export const fffLayer = Layer.effect(
           if (!found.ok) throw found.error
           return found.value.items.map((match) => {
             const bytes = Buffer.from(match.lineContent)
-            return FileSystem.Match.make({
-              entry: FileSystem.Entry.make({
+            return Match.make({
+              entry: Entry.make({
                 path: RelativePath.make(match.relativePath.replaceAll("\\", "/")),
                 type: "file",
               }),
@@ -260,7 +338,7 @@ export const fffLayer = Layer.effect(
             .sort((a, b) => b.score - a.score || a.path.length - b.path.length)
             .map((item) => {
               const relative = item.path.replaceAll("\\", "/").replace(/\/$/, "")
-              return FileSystem.Entry.make({
+              return Entry.make({
                 path: RelativePath.make(relative + (item.type === "directory" ? path.sep : "")),
                 type: item.type,
               })
@@ -276,4 +354,4 @@ const layer = Layer.unwrap(Effect.sync(() => (Flag.ARFORGE_DISABLE_FFF || !Fff.a
 
 export const locationLayer = layer
 
-export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node, Location.node, Ripgrep.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node, Location.node, Ripgrep.node, EventV2.node] })

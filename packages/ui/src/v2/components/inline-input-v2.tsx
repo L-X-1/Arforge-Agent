@@ -96,7 +96,7 @@ export function InlineInputV2(props: InlineInputV2Props) {
             disabled={local.disabled}
             onClick={local.onCopyClick}
           >
-            <Icon name="copy" />
+            <Icon name="outline-copy" />
           </button>
         </Show>
       </div>

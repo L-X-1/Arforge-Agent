@@ -274,6 +274,7 @@ describe("ChildSettlementRecovery owner replay", () => {
 
   it.effect(
     "finalizes a prepared outbox after all durable owners committed before the acknowledgement boundary",
+    // Bind this nonlocal crash fixture from creation, not only recordChildResult.
     Effect.gen(function* () {
       const runs = yield* DurableRun.Service
       const gateway = yield* ActionGateway.Service
@@ -439,12 +440,13 @@ describe("ChildSettlementRecovery owner replay", () => {
       const replayed = yield* outbox.read({ identity, intentID: plan.intentID })
       if (!replayed) throw new Error("acknowledgement fixture lost its replayed outbox receipt")
       expect(replayed.receiptDigest).toBe(committed.receiptDigest)
-    }),
+    }).pipe(Effect.provideService(Database.CurrentPrincipal, identity)),
     { timeout: 15_000 },
   )
 
   it.effect(
     "repairs a missing Evidence row after result and budget are already durable",
+    // Keep the same owner for creation, the simulated crash and recovery.
     Effect.gen(function* () {
       const runs = yield* DurableRun.Service
       const gateway = yield* ActionGateway.Service
@@ -593,7 +595,7 @@ describe("ChildSettlementRecovery owner replay", () => {
       expect(invalidSweep._tag).toBe("Failure")
       const resolvedAfter = yield* experience.resolveEvidenceIDs(identity, [materialized.evidence.id])
       expect(resolvedAfter.present).toEqual([materialized.evidence.id])
-    }),
+    }).pipe(Effect.provideService(Database.CurrentPrincipal, identity)),
     { timeout: 15_000 },
   )
 })

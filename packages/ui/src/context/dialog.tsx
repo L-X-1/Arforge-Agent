@@ -24,6 +24,7 @@ type Active = {
   dispose: () => void
   owner: Owner
   onClose?: () => void
+  closing?: boolean
   setClosing: (closing: boolean) => void
 }
 
@@ -31,7 +32,7 @@ const Context = createContext<ReturnType<typeof init>>()
 
 function init() {
   const [stack, setStack] = createSignal<Active[]>([])
-  const timer = { current: undefined as ReturnType<typeof setTimeout> | undefined }
+  const timer = { current: undefined as ReturnType<typeof setTimeout> | undefined, id: undefined as string | undefined }
   const lock = { value: false }
 
   onCleanup(() => {
@@ -43,8 +44,10 @@ function init() {
   const close = (id?: string) => {
     const items = stack()
     const current = id ? items.find((item) => item.id === id) : items.at(-1)
-    if (!current || lock.value) return
+    if (!current || current.closing || lock.value) return
     lock.value = true
+    current.closing = true
+    setStack((items) => [...items])
     current.onClose?.()
     current.setClosing(true)
 
@@ -54,7 +57,9 @@ function init() {
       timer.current = undefined
     }
 
+    timer.id = closed
     timer.current = setTimeout(() => {
+      timer.id = undefined
       timer.current = undefined
       current.dispose()
       setStack((items) => items.filter((item) => item.id !== closed))
@@ -66,7 +71,7 @@ function init() {
     if (stack().length === 0) return
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return
+      if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return
       close()
       event.preventDefault()
       event.stopPropagation()
@@ -125,15 +130,17 @@ function init() {
 
     const active: Active = { id, node, dispose, owner, onClose, setClosing }
     setStack((items) => [...items, active])
+    return id
   }
 
   const push = (element: DialogElement, owner: Owner, onClose?: () => void) => {
+    if (timer.id) discard(timer.id)
     if (timer.current !== undefined) {
       clearTimeout(timer.current)
       timer.current = undefined
     }
     lock.value = false
-    mount(element, owner, onClose, stack().length)
+    return mount(element, owner, onClose, stack().length)
   }
 
   const show = (element: DialogElement, owner: Owner, onClose?: () => void) => {
@@ -144,11 +151,29 @@ function init() {
       timer.current = undefined
     }
     lock.value = false
-    mount(element, owner, onClose, 0)
+    return mount(element, owner, onClose, 0)
+  }
+
+  const discard = (id: string) => {
+    const current = stack().find((item) => item.id === id)
+    if (!current) return
+    if (timer.id === id) {
+      if (timer.current !== undefined) clearTimeout(timer.current)
+      timer.current = undefined
+      timer.id = undefined
+      lock.value = false
+    }
+    if (!current.closing) {
+      current.closing = true
+      current.onClose?.()
+    }
+    setStack((items) => items.filter((item) => item.id !== id))
+    current.dispose()
   }
 
   return {
     stack,
+    discard,
     close,
     show,
     push,
@@ -178,17 +203,34 @@ export function useDialog() {
     throw new Error("useDialog must be used within a DialogProvider")
   }
 
+  const scoped = (id: string | undefined) => ({
+    close: () => {
+      if (id) ctx.close(id)
+    },
+    discard: () => {
+      if (id) ctx.discard(id)
+    },
+  })
+
   return {
     get active() {
-      return ctx.stack().at(-1)
+      return ctx.stack().findLast((item) => !item.closing)
     },
     show(element: DialogElement, onClose?: () => void) {
-      const base = ctx.stack().at(-1)?.owner ?? owner
+      const base = ctx.stack().findLast((item) => !item.closing)?.owner ?? owner
       return startTransition(() => ctx.show(element, base, onClose))
     },
+    showScoped(element: DialogElement, onClose?: () => void) {
+      const base = ctx.stack().findLast((item) => !item.closing)?.owner ?? owner
+      return scoped(ctx.show(element, base, onClose))
+    },
     push(element: DialogElement, onClose?: () => void) {
-      const base = ctx.stack().at(-1)?.owner ?? owner
+      const base = ctx.stack().findLast((item) => !item.closing)?.owner ?? owner
       return startTransition(() => ctx.push(element, base, onClose))
+    },
+    pushScoped(element: DialogElement, onClose?: () => void) {
+      const base = ctx.stack().findLast((item) => !item.closing)?.owner ?? owner
+      return scoped(ctx.push(element, base, onClose))
     },
     close() {
       ctx.close()

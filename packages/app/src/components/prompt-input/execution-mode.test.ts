@@ -16,6 +16,13 @@ describe("unified prompt execution mode", () => {
     expect(canUnifyAgentAndPermissionMode(["build"])).toBe(false)
   })
 
+  test("never unifies away a retained unavailable selection when only native options remain", () => {
+    expect(canUnifyAgentAndPermissionMode(["build", "plan"], "owned-r02-review")).toBe(false)
+    expect(canUnifyAgentAndPermissionMode(["build", "plan"], "")).toBe(false)
+    expect(canUnifyAgentAndPermissionMode(["build", "plan"], "build")).toBe(true)
+    expect(canUnifyAgentAndPermissionMode(["build", "plan"], "plan")).toBe(true)
+  })
+
   test("maps the three permission choices onto the two native agents", () => {
     expect(agentForPermissionMode("plan")).toBe("plan")
     expect(agentForPermissionMode("acceptEdits")).toBe("build")

@@ -8,15 +8,15 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  height: 28px;
+  height: var(--file-tree-row-size, 36px);
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 8px;
   padding-right: 8px;
   overflow: visible;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   background-color: transparent;
   color: var(--v2-text-text-muted);
   text-align: left;
@@ -134,4 +134,21 @@
 
 [data-component="file-tree-v2"] [data-slot="file-tree-v2-change"][data-change="deleted"] {
   color: var(--v2-state-fg-danger);
+}
+
+/* Approved workbench controls: keep virtual geometry and pointer target in sync. */
+[data-component="file-tree-v2"] [data-slot="file-tree-v2-row"]:focus-visible {
+  outline: 2px solid var(--border-focus, var(--v2-text-text-base));
+  outline-offset: 2px;
+}
+[data-component="file-tree-v2"]:focus-within [data-slot="file-tree-v2-guide"] {
+  opacity: 0.5;
+}
+@media (pointer: coarse) {
+  [data-component="file-tree-v2"] { --file-tree-row-size: 44px; }
+  [data-component="file-tree-v2"] [data-slot="file-tree-v2-row"] { touch-action: manipulation; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-component="file-tree-v2"] [data-slot="file-tree-v2-row"],
+  [data-component="file-tree-v2"] [data-slot="file-tree-v2-chevron"] svg { transition: none; }
 }

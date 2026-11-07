@@ -1,12 +1,13 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { and, eq, sql } from "drizzle-orm"
 import { Database } from "@arforge-ai/core/database/database"
+import * as TransactionEffects from "@arforge-ai/core/database/transaction-effects"
 import { ProjectDirectoryTable, ProjectTable } from "@arforge-ai/core/project/sql"
 import { ProjectDirectories } from "@arforge-ai/core/project/directories"
 import { SessionTable } from "@arforge-ai/core/session/sql"
 import { WorkspaceTable } from "@arforge-ai/core/control-plane/workspace.sql"
 import { Flag } from "@arforge-ai/core/flag/flag"
-import { GlobalBus } from "@/bus/global"
+import { KeyedMutex } from "@arforge-ai/core/effect/keyed-mutex"
 import { which } from "@arforge-ai/core/util/which"
 import { Command } from "@/command"
 import { InstanceState } from "@/effect/instance-state"
@@ -72,6 +73,8 @@ export const UpdatePayload = Schema.Struct({
 }).annotate({ identifier: "ProjectUpdateInput" })
 export type UpdatePayload = Types.DeepMutable<Schema.Schema.Type<typeof UpdatePayload>>
 
+type UpdateScope = { principal: Database.Principal; worktree?: string }
+
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Project.NotFoundError", {
   projectID: ProjectV2.ID,
 }) {}
@@ -96,7 +99,7 @@ export interface Interface {
   readonly discover: (input: Info) => Effect.Effect<void>
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: ProjectV2.ID) => Effect.Effect<Info | undefined>
-  readonly update: (input: UpdateInput) => Effect.Effect<Info, NotFoundError>
+  readonly update: (input: UpdateInput, scope?: UpdateScope) => Effect.Effect<Info, NotFoundError>
   readonly initGit: (input: { directory: string; project: Info }) => Effect.Effect<Info>
   readonly setInitialized: (id: ProjectV2.ID) => Effect.Effect<void>
   readonly sandboxes: (id: ProjectV2.ID) => Effect.Effect<string[]>
@@ -135,13 +138,31 @@ const layer = Layer.effect(
       Effect.catch(() => Effect.succeed({ code: 1, text: "", stderr: "" } satisfies GitResult)),
     )
 
-    const emitUpdated = (data: Info) =>
-      Effect.sync(() =>
-        GlobalBus.emit("event", {
-          directory: "global",
-          project: data.id,
-          payload: { type: Event.Updated.type, properties: data },
-        }),
+    const publications = yield* KeyedMutex.make<ProjectV2.ID>()
+    const emitUpdated = (saved: Row) =>
+      TransactionEffects.afterCommit(
+        db.$client,
+        publications.withLock(saved.id)(
+          Effect.gen(function* () {
+            // Discovery can finish recording its directory after a PATCH has
+            // committed. Publish the latest row in the same order on both feeds.
+            const principal = { tenantID: saved.tenant_id, userID: saved.owner_user_id }
+            const row = yield* db
+              .select()
+              .from(ProjectTable)
+              .where(
+                and(
+                  eq(ProjectTable.id, saved.id),
+                  eq(ProjectTable.tenant_id, principal.tenantID),
+                  eq(ProjectTable.owner_user_id, principal.userID),
+                ),
+              )
+              .get()
+              .pipe(Effect.orDie)
+            if (!row) return
+            yield* Database.principalContext(principal, events.publish(Event.Updated, fromRow(row)))
+          }),
+        ),
       )
 
     const fakeVcs = Schema.decodeUnknownSync(Schema.optional(Project.Vcs))(Flag.ARFORGE_FAKE_VCS)
@@ -259,7 +280,7 @@ const layer = Layer.effect(
         { concurrency: "unbounded" },
       ).pipe(Effect.map((arr) => arr.filter((x): x is string => x !== undefined)))
 
-      yield* db
+      const saved = yield* db
         .insert(ProjectTable)
         .values({
           id: result.id,
@@ -280,18 +301,14 @@ const layer = Layer.effect(
           set: {
             worktree: AbsolutePath.make(result.worktree),
             vcs: result.vcs ?? null,
-            name: result.name,
-            icon_url: result.icon?.url,
-            icon_url_override: result.icon?.override,
-            icon_color: result.icon?.color,
-            time_updated: result.time.updated,
-            time_initialized: result.time.initialized,
+            time_updated: sql`case when ${ProjectTable.time_updated} > ${result.time.updated} then ${ProjectTable.time_updated} else ${result.time.updated} end`,
             sandboxes: result.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
-            commands: result.commands,
           },
         })
-        .run()
+        .returning()
+        .get()
         .pipe(Effect.orDie)
+      if (!saved) return yield* Effect.die(new Error(`Project not saved: ${projectID}`))
 
       if (projectID !== ProjectV2.ID.global) {
         yield* db
@@ -307,11 +324,12 @@ const layer = Layer.effect(
         directory: data.directory,
       })
 
-      yield* emitUpdated(result)
+      const project = fromRow(saved)
+      yield* emitUpdated(saved)
       if (projectID !== ProjectV2.ID.global && data.vcs?.type === "git") {
         yield* projectV2.commit({ store: data.vcs.store, id: data.id })
       }
-      return { project: result, sandbox: data.vcs ? data.directory : worktree }
+      return { project, sandbox: data.vcs ? data.directory : worktree }
     })
 
     const discover = Effect.fn("Project.discover")(function* (input: Info) {
@@ -333,9 +351,20 @@ const layer = Layer.effect(
       const base64 = Buffer.from(buffer).toString("base64")
       const mime = FSUtil.mimeType(shortest)
       const url = `data:${mime};base64,${base64}`
-      yield* update({ projectID: input.id, icon: { url } }).pipe(
-        Effect.catchTag("Project.NotFoundError", () => Effect.void),
-      )
+      const saved = yield* db
+        .update(ProjectTable)
+        .set({ icon_url: url, time_updated: Date.now() })
+        .where(
+          and(
+            eq(ProjectTable.id, input.id),
+            sql`coalesce(${ProjectTable.icon_url}, '') = ''`,
+            sql`coalesce(${ProjectTable.icon_url_override}, '') = ''`,
+          ),
+        )
+        .returning()
+        .get()
+        .pipe(Effect.orDie)
+      if (saved) yield* emitUpdated(saved)
     })
 
     const list = Effect.fn("Project.list")(function* () {
@@ -347,7 +376,7 @@ const layer = Layer.effect(
       return row ? fromRow(row) : undefined
     })
 
-    const update = Effect.fn("Project.update")(function* (input: UpdateInput) {
+    const update = Effect.fn("Project.update")(function* (input: UpdateInput, scope?: UpdateScope) {
       const result = yield* db
         .update(ProjectTable)
         .set({
@@ -358,13 +387,20 @@ const layer = Layer.effect(
           commands: input.commands,
           time_updated: Date.now(),
         })
-        .where(eq(ProjectTable.id, input.projectID))
+        .where(
+          and(
+            eq(ProjectTable.id, input.projectID),
+            scope && eq(ProjectTable.tenant_id, scope.principal.tenantID),
+            scope && eq(ProjectTable.owner_user_id, scope.principal.userID),
+            scope?.worktree ? eq(ProjectTable.worktree, AbsolutePath.make(scope.worktree)) : undefined,
+          ),
+        )
         .returning()
         .get()
         .pipe(Effect.orDie)
       if (!result) return yield* new NotFoundError({ projectID: input.projectID })
       const data = fromRow(result)
-      yield* emitUpdated(data)
+      yield* emitUpdated(result)
       return data
     })
 
@@ -433,7 +469,7 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!result) throw new Error(`Project not found: ${id}`)
-      yield* emitUpdated(fromRow(result))
+      yield* emitUpdated(result)
     })
 
     const removeSandbox = Effect.fn("Project.removeSandbox")(function* (id: ProjectV2.ID, directory: string) {
@@ -449,7 +485,7 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!result) throw new Error(`Project not found: ${id}`)
-      yield* emitUpdated(fromRow(result))
+      yield* emitUpdated(result)
     })
 
     return Service.of({

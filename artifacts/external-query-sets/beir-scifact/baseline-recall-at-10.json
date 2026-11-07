@@ -1,0 +1,490 @@
+{
+  "schemaVersion": 1,
+  "dataset": {
+    "id": "beir-scifact",
+    "split": "test",
+    "source": "external",
+    "queryCount": 20,
+    "corpusCount": 5183,
+    "qrelCount": 339,
+    "officialDownloadURL": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+    "officialMD5": "5f7d1de60b170fc8027bb7898e2efca1",
+    "downloadedZipMD5": "5f7d1de60b170fc8027bb7898e2efca1"
+  },
+  "baseline": {
+    "retriever": "@arforge-ai/core CodeRetrieval",
+    "embedding": "hashing",
+    "limit": 10,
+    "queryCount": 20,
+    "relevantJudgements": 23,
+    "retrievedRelevantAt10": 11,
+    "recallAt10": 0.4782608695652174,
+    "queryHitRateAt10": 0.55,
+    "perQuery": [
+      {
+        "queryID": "1",
+        "relevantIDs": [
+          "31715818"
+        ],
+        "retrievedIDs": [
+          "10009203",
+          "10931595",
+          "11674596",
+          "12824568",
+          "17518195",
+          "18953920",
+          "23244529",
+          "37762357",
+          "43385013",
+          "45638119"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10619
+      },
+      {
+        "queryID": "100",
+        "relevantIDs": [
+          "4381486"
+        ],
+        "retrievedIDs": [
+          "4381486",
+          "15728433",
+          "18374364",
+          "21479575",
+          "10015292",
+          "10165258",
+          "10273147",
+          "11141995",
+          "11674288",
+          "11900630"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10593
+      },
+      {
+        "queryID": "1012",
+        "relevantIDs": [
+          "9745001"
+        ],
+        "retrievedIDs": [
+          "9745001",
+          "26026009",
+          "43122426",
+          "6751418",
+          "20544428",
+          "37912677",
+          "13902570",
+          "26067999",
+          "10617916",
+          "12409683"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10424
+      },
+      {
+        "queryID": "1014",
+        "relevantIDs": [
+          "6277638"
+        ],
+        "retrievedIDs": [
+          "18557974",
+          "10852047",
+          "2266471",
+          "12224536",
+          "15615957",
+          "41354899",
+          "45336190",
+          "6277638",
+          "7150238",
+          "12130690"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10198
+      },
+      {
+        "queryID": "1019",
+        "relevantIDs": [
+          "11603066"
+        ],
+        "retrievedIDs": [
+          "11603066",
+          "40429879",
+          "11411060",
+          "1225513",
+          "16669757",
+          "20374609",
+          "20602517",
+          "26996935",
+          "43566999",
+          "44172171"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10505
+      },
+      {
+        "queryID": "1020",
+        "relevantIDs": [
+          "9433958"
+        ],
+        "retrievedIDs": [
+          "14367469",
+          "15521377",
+          "15593561",
+          "1744097",
+          "23052989",
+          "26071782",
+          "4688340",
+          "4999633",
+          "25263810",
+          "31803596"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10191
+      },
+      {
+        "queryID": "1021",
+        "relevantIDs": [
+          "9433958"
+        ],
+        "retrievedIDs": [
+          "15521377",
+          "15593561",
+          "26071782",
+          "4688340",
+          "31803596",
+          "654735",
+          "7386360",
+          "8995263",
+          "14367469",
+          "515489"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10199
+      },
+      {
+        "queryID": "1024",
+        "relevantIDs": [
+          "5373138"
+        ],
+        "retrievedIDs": [
+          "5373138",
+          "24995939",
+          "38630735",
+          "10145528",
+          "10650521",
+          "11016410",
+          "11603066",
+          "13322804",
+          "140874",
+          "14663842"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 11437
+      },
+      {
+        "queryID": "1029",
+        "relevantIDs": [
+          "11899391",
+          "13923140",
+          "13940200"
+        ],
+        "retrievedIDs": [
+          "11899391",
+          "34025053",
+          "7115651",
+          "26068103",
+          "32454714",
+          "36642096",
+          "23342845",
+          "25453683",
+          "13106686",
+          "13398997"
+        ],
+        "relevantCount": 3,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 0.3333333333333333,
+        "hitAt10": true,
+        "latencyMs": 10703
+      },
+      {
+        "queryID": "1041",
+        "relevantIDs": [
+          "16626264",
+          "25254425"
+        ],
+        "retrievedIDs": [
+          "5966635",
+          "9451052",
+          "11844791",
+          "37699461",
+          "4457834",
+          "502591",
+          "12315072",
+          "15521377",
+          "1791637",
+          "21622715"
+        ],
+        "relevantCount": 2,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10877
+      },
+      {
+        "queryID": "1049",
+        "relevantIDs": [
+          "12486491"
+        ],
+        "retrievedIDs": [
+          "6670101",
+          "19485649",
+          "26067999",
+          "10024681",
+          "14180565",
+          "14657344",
+          "1744097",
+          "18333304",
+          "19701340",
+          "20344442"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10651
+      },
+      {
+        "queryID": "1062",
+        "relevantIDs": [
+          "20381484"
+        ],
+        "retrievedIDs": [
+          "20381484",
+          "13639330",
+          "19138874",
+          "37248765",
+          "10074251",
+          "11011905",
+          "11411060",
+          "11532659",
+          "11535539",
+          "116075383"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 11265
+      },
+      {
+        "queryID": "1086",
+        "relevantIDs": [
+          "39281140"
+        ],
+        "retrievedIDs": [
+          "39281140",
+          "308862",
+          "2496002",
+          "3981244",
+          "30058568",
+          "21003930",
+          "841371",
+          "118568",
+          "13496853",
+          "20471181"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10656
+      },
+      {
+        "queryID": "1088",
+        "relevantIDs": [
+          "37549932"
+        ],
+        "retrievedIDs": [
+          "15521377",
+          "41548287",
+          "7621534",
+          "23716150",
+          "2541699",
+          "5238341",
+          "6517763",
+          "7046487",
+          "8087082",
+          "1871499"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10673
+      },
+      {
+        "queryID": "1089",
+        "relevantIDs": [
+          "17628888"
+        ],
+        "retrievedIDs": [
+          "17628888",
+          "7915836",
+          "7645565",
+          "143251",
+          "6268106",
+          "11903247",
+          "20960682",
+          "9505448",
+          "21754541",
+          "10534299"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10802
+      },
+      {
+        "queryID": "1099",
+        "relevantIDs": [
+          "7662206"
+        ],
+        "retrievedIDs": [
+          "11071351",
+          "1336292",
+          "14711483",
+          "15615957",
+          "15663829",
+          "17934603",
+          "21495419",
+          "22420524",
+          "23273454",
+          "23577867"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10963
+      },
+      {
+        "queryID": "1100",
+        "relevantIDs": [
+          "7662206"
+        ],
+        "retrievedIDs": [
+          "10984005",
+          "12206390",
+          "12549585",
+          "1336292",
+          "13497630",
+          "1358909",
+          "1360607",
+          "13702924",
+          "14865329",
+          "15663829"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10706
+      },
+      {
+        "queryID": "1104",
+        "relevantIDs": [
+          "3898784"
+        ],
+        "retrievedIDs": [
+          "3898784",
+          "13282296",
+          "32328114",
+          "5884524",
+          "6158879",
+          "26067999",
+          "5691302",
+          "16760369",
+          "29981186",
+          "5596332"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 10538
+      },
+      {
+        "queryID": "1107",
+        "relevantIDs": [
+          "20532591"
+        ],
+        "retrievedIDs": [
+          "20532591",
+          "29381091",
+          "14865329",
+          "27686445",
+          "16905344",
+          "21891856",
+          "39187170",
+          "41790911",
+          "42387637",
+          "52865789"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 1,
+        "recallAt10": 1,
+        "hitAt10": true,
+        "latencyMs": 11471
+      },
+      {
+        "queryID": "1110",
+        "relevantIDs": [
+          "13770184"
+        ],
+        "retrievedIDs": [
+          "12122482",
+          "43226130",
+          "12561083",
+          "26067999",
+          "3090454",
+          "10374686",
+          "1049501",
+          "10675756",
+          "11344428",
+          "12471115"
+        ],
+        "relevantCount": 1,
+        "retrievedRelevantAt10": 0,
+        "recallAt10": 0,
+        "hitAt10": false,
+        "latencyMs": 10515
+      }
+    ]
+  },
+  "rawContentPersisted": false
+}

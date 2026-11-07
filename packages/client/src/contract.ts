@@ -57,6 +57,8 @@ export const groupNames = {
 } as const
 
 export const endpointNames = {
+  "provider.configuration.get": "configurationGet",
+  "provider.configuration.test": "configurationTest",
   "session.messages": "list",
   "integration.connect.key": "connectKey",
   "integration.connect.oauth": "connectOauth",
@@ -69,6 +71,7 @@ export const endpointNames = {
   "question.request.list": "listRequests",
   "mcp.resource.catalog": "resourceCatalog",
   "mcp.capabilities": "capabilities",
+  "mcp.tool.describe": "toolDetails",
   "mcp.action.reconciliation": "actionReconciliation",
   "mcp.action.reconciliationRecord": "recordReconciliation",
 } as const

@@ -2,7 +2,7 @@ import { usePlatform } from "@/context/platform"
 import { ServerConnection } from "@/context/server"
 import { authTokenFromCredentials, createSdkForServer } from "./server"
 import { ClientError, Arforge } from "@arforge-ai/client"
-import { Accessor, createEffect, onCleanup } from "solid-js"
+import { Accessor, createEffect, onCleanup, untrack } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 
 export type ServerHealth = { healthy: boolean; version?: string }
@@ -118,12 +118,14 @@ export function useCheckServerHealth() {
   const platform = usePlatform()
   const fetcher = platform.fetch ?? globalThis.fetch
 
-  return (http: ServerConnection.HttpBase) => {
-    const key = cacheKey(http)
+  return (http: ServerConnection.HttpBase, options?: { force?: boolean }) => {
+    // Keep both protocol attempts bound to the credentials that started them.
+    const source = { ...http }
+    const key = cacheKey(source)
     const hit = healthCache.get(key)
     const now = Date.now()
-    if (hit && hit.fetch === fetcher && (!hit.done || now - hit.at < cacheMs)) return hit.promise
-    const promise = checkServerHealth(http, fetcher).finally(() => {
+    if (hit && hit.fetch === fetcher && (!hit.done || (!options?.force && now - hit.at < cacheMs))) return hit.promise
+    const promise = checkServerHealth(source, fetcher).finally(() => {
       const next = healthCache.get(key)
       if (!next || next.promise !== promise) return
       next.done = true
@@ -134,39 +136,61 @@ export function useCheckServerHealth() {
   }
 }
 
-export const useServerHealth = (servers: Accessor<ServerConnection.Any[]>, enabled: Accessor<boolean>) => {
+export const createServerHealth = (servers: Accessor<ServerConnection.Any[]>, enabled: Accessor<boolean>) => {
   const checkServerHealth = useCheckServerHealth()
   const [status, setStatus] = createStore({} as Record<ServerConnection.Key, ServerHealth | undefined>)
+  let generation = 0
+  let disposed = false
+  let identities = new Map<ServerConnection.Key, string>()
+
+  const probe = async (conn: ServerConnection.Any, force: boolean): Promise<ServerHealth | undefined> => {
+    const key = ServerConnection.key(conn)
+    const source = { ...conn.http }
+    const identity = cacheKey(source)
+    const expectedGeneration = generation
+    const active = () => !disposed && enabled() && generation === expectedGeneration &&
+      servers().some((item) => ServerConnection.key(item) === key && cacheKey(item.http) === identity)
+    if (!active()) return
+    const result = await checkServerHealth(source, { force }).catch(() => ({ healthy: false }))
+    if (!active()) return
+    setStatus(key, result)
+    return result
+  }
+
+  onCleanup(() => { disposed = true; generation++ })
 
   createEffect(() => {
+    generation++
     if (!enabled()) {
+      identities.clear()
       setStatus(reconcile({}))
       return
     }
     const list = servers()
-    let dead = false
-
-    const refresh = async () => {
-      const results: Record<string, ServerHealth> = {}
-      await Promise.all(
-        list.map(async (conn) => {
-          const key = ServerConnection.key(conn)
-          const result = await checkServerHealth(conn.http)
-          results[key] = result
-          if (!dead) setStatus(key, result)
-        }),
-      )
-      if (dead) return
-      setStatus(reconcile(results))
+    const nextIdentities = new Map<ServerConnection.Key, string>()
+    const retained: Record<string, ServerHealth> = {}
+    for (const conn of list) {
+      const key = ServerConnection.key(conn)
+      const identity = cacheKey(conn.http)
+      nextIdentities.set(key, identity)
+      const previous = untrack(() => status[key])
+      if (identities.get(key) === identity && previous) retained[key] = previous
     }
+    identities = nextIdentities
+    setStatus(reconcile(retained))
 
-    void refresh()
-    const id = setInterval(() => void refresh(), pollMs)
+    const poll = () => { for (const conn of list) void probe(conn, false) }
+    poll()
+    const id = setInterval(poll, pollMs)
     onCleanup(() => {
-      dead = true
+      generation++
       clearInterval(id)
     })
   })
 
-  return status
+  return { status, refresh: (conn: ServerConnection.Any) => probe(conn, true) }
 }
+
+// Existing consumers retain their record-shaped API and normal cache behavior.
+export const useServerHealth = (servers: Accessor<ServerConnection.Any[]>, enabled: Accessor<boolean>) =>
+  createServerHealth(servers, enabled).status

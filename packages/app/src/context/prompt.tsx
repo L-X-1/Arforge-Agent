@@ -129,7 +129,14 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
       return entry.value
     }
 
-    const session = createMemo(() => load(scope()))
+    let claimed: PromptSession | undefined
+    const session = createMemo(() => {
+      const target = scope(),
+        next = load(target)
+      if ("draftID" in target && claimed !== next) next.ownership.claim()
+      claimed = next
+      return next
+    })
     const pick = (scope?: PromptScope) => (scope ? load(scope) : session())
     const ready = createPromptReady(session)
 

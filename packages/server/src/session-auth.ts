@@ -6,6 +6,7 @@ import { ServerAuth } from "./auth"
 
 export const COOKIE_NAME = "arforge_session"
 export const SESSION_TTL_SECONDS = 8 * 60 * 60
+export const AUTH_TOKEN_QUERY = "auth_token"
 
 const Payload = Schema.Struct({
   version: Schema.Literal(1),
@@ -122,6 +123,22 @@ export function requestAuthorized(
   if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return true
   if (!request.origin || !request.host || !URL.canParse(request.origin)) return false
   return new URL(request.origin).host.toLowerCase() === request.host.toLowerCase()
+}
+
+export function basicChallengeHeaders(
+  url: URL,
+  headers: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  // Keep background browser 401s from opening a native Basic prompt over the login form.
+  // Fetch Metadata only selects the response headers after authentication has failed.
+  if (
+    headers["sec-fetch-site"] === "same-origin" &&
+    headers["sec-fetch-dest"] === "empty" &&
+    !/^Basic(?:\s|$)/i.test(headers.authorization ?? "") &&
+    !url.searchParams.has(AUTH_TOKEN_QUERY)
+  )
+    return {}
+  return { "www-authenticate": 'Basic realm="Secure Area"' }
 }
 
 function signature(payload: string, config: ServerAuth.Info) {

@@ -2,7 +2,7 @@ export * as PromptInput from "./prompt-input"
 
 import { Schema } from "effect"
 import { Model } from "./model"
-import { AgentAttachment, OutputFormat, RequestSystem, ScheduledTask, Source } from "./prompt"
+import { AgentAttachment, McpResourceReference, OutputFormat, RequestSystem, ScheduledTask, Source } from "./prompt"
 import { optional, statics } from "./schema"
 
 export interface FileAttachment extends Schema.Schema.Type<typeof FileAttachment> {}
@@ -12,6 +12,7 @@ export const FileAttachment = Schema.Struct({
   name: Schema.String.pipe(optional),
   description: Schema.String.pipe(optional),
   source: Source.pipe(optional),
+  resource: McpResourceReference.pipe(optional),
 })
   .annotate({ identifier: "PromptInput.FileAttachment" })
   .pipe(

@@ -5,6 +5,7 @@ import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
+import { EventSequenceTable, EventTable } from "@arforge-ai/core/event/sql"
 import { ExperienceStoreV1 } from "@arforge-ai/core/experience-store"
 import { LearningV2 } from "@arforge-ai/core/learning"
 import { Location } from "@arforge-ai/core/location"
@@ -16,6 +17,7 @@ import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
 import * as RuntimeEvaluation from "@arforge-ai/core/runtime/evaluation"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { Effect, Layer } from "effect"
+import { inArray } from "drizzle-orm"
 import { identity, phases, runIDs, type Phase } from "../fixture/admission-settlement-cross-owner-contract"
 import { assertRecoveryOutboxReceipt, recoveryOutboxReceipt } from "../../src/runtime/child-settlement-recovery"
 import * as SettlementOutbox from "../../src/runtime/settlement-outbox"
@@ -23,6 +25,27 @@ import { tmpdir } from "../fixture/tmpdir"
 
 const project = Project.ID.global
 const location = AbsolutePath.make("C:/cross-owner-settlement")
+
+const assertAggregateOwners = (aggregateIDs: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const sequences = yield* database.db
+      .select()
+      .from(EventSequenceTable)
+      .where(inArray(EventSequenceTable.aggregate_id, [...aggregateIDs]))
+      .all()
+    expect(sequences.map((row) => row.aggregate_id).sort()).toEqual([...aggregateIDs].sort())
+    const events = yield* database.db
+      .select()
+      .from(EventTable)
+      .where(inArray(EventTable.aggregate_id, [...aggregateIDs]))
+      .all()
+    expect(events.length).toBeGreaterThan(0)
+    for (const row of [...sequences, ...events]) {
+      expect(row.tenant_id).toBe(identity.tenantID)
+      expect(row.owner_user_id).toBe(identity.userID)
+    }
+  })
 
 type CrossOwnerMarker = Readonly<{
   readonly phase: Phase
@@ -156,6 +179,7 @@ describe("real cross-owner admission settlement crash/recovery", () => {
           const recovered = await Effect.runPromise(
             Effect.scoped(
               Effect.gen(function* () {
+                yield* assertAggregateOwners([parentRunID, childRunID])
                 const audit = yield* ChildSettlementAudit.Service
                 const recovery = yield* ChildSettlementRecovery.Service
                 const outbox = yield* SettlementOutbox.Service
@@ -194,7 +218,10 @@ describe("real cross-owner admission settlement crash/recovery", () => {
                   replayOutbox,
                   durableReplay,
                 }
-              }).pipe(Effect.provide(restartLayer(databasePath))),
+              }).pipe(
+                Effect.provide(restartLayer(databasePath)),
+                Effect.provideService(Database.CurrentPrincipal, identity),
+              ),
             ),
           )
 
@@ -204,6 +231,7 @@ describe("real cross-owner admission settlement crash/recovery", () => {
           const secondRestart = await Effect.runPromise(
             Effect.scoped(
               Effect.gen(function* () {
+                yield* assertAggregateOwners([parentRunID, childRunID])
                 const audit = yield* ChildSettlementAudit.Service
                 const recovery = yield* ChildSettlementRecovery.Service
                 const outbox = yield* SettlementOutbox.Service
@@ -220,7 +248,10 @@ describe("real cross-owner admission settlement crash/recovery", () => {
                 const durableAfter = yield* outbox.read({ identity, intentID: afterOutbox.intentID })
                 if (!durableAfter) throw new Error("second restart lost its durable receipt after replay")
                 return { before, beforeOutbox, durableBefore, replay, after, afterOutbox, durableAfter }
-              }).pipe(Effect.provide(restartLayer(databasePath))),
+              }).pipe(
+                Effect.provide(restartLayer(databasePath)),
+                Effect.provideService(Database.CurrentPrincipal, identity),
+              ),
             ),
           )
 

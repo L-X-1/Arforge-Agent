@@ -36,7 +36,9 @@ import {
   Suspense,
   type ParentProps,
   Show,
+  untrack,
 } from "solid-js"
+import { createStore } from "solid-js/store"
 import { Dynamic } from "solid-js/web"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { CommandProvider, useCommand, type CommandOption } from "@/context/command"
@@ -57,7 +59,7 @@ import { usePlatform } from "@/context/platform"
 import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider, useSettings } from "@/context/settings"
-import { TabsProvider, useTabs, type DraftTab } from "@/context/tabs"
+import { DraftTabsScopeProvider, TabsProvider, useTabs, type DraftTab } from "@/context/tabs"
 import { SDKProvider, useSDK } from "@/context/sdk"
 import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout, { DirectoryDataProvider } from "@/pages/directory-layout"
@@ -74,10 +76,19 @@ import { ControlOperationRecovery } from "@/components/control-operation-recover
 import { OnboardingProvider } from "@/context/onboarding"
 
 import { NewHome } from "@/pages/home"
+import { createHomeController, type HomeController } from "@/pages/home/home-controller"
+import { createLogExportAction } from "@/utils/log-export-action"
+import { showToast } from "@/utils/toast"
+import { HomeProjectPicker } from "@/pages/home/home-project-picker"
+import { homeCopy } from "@/pages/home/home-copy"
+import { activeDraftID, sameDraftSource, type DraftSource } from "@/pages/home-compose/home-draft-state"
 import { LegacyHome } from "@/pages/home/legacy-home"
 import SettingsPage from "@/pages/settings"
 
 const NewSession = lazy(preloadNewSessionRoute)
+const HomeComposer = lazy(() =>
+  import("@/pages/home-compose/home-compose").then((module) => ({ default: module.HomeCompose })),
+)
 const SessionPage = lazy(async () => {
   const module = await import("@/pages/session")
   return { default: module.SessionPage }
@@ -229,30 +240,185 @@ function DraftRoute() {
   )
 }
 
-function ResolvedDraftRoute(props: { draft: DraftTab }) {
+function ResolvedDraftRoute(props: { draft: DraftTab; home?: HomeController }) {
+  // A disposed composer's async callbacks retain their original SDK and draft
+  // actions. A later server/directory selection gets a new provider subtree.
+  const snapshot = createMemo(() => ({ ...props.draft }), undefined, {
+    equals: (left, right) => !!left && left.draftID === right.draftID && sameDraftSource(left, right),
+  })
+  return (
+    <Show when={snapshot()} keyed>
+      {(draft) => <ResolvedDraftProviders draft={draft} home={props.home} />}
+    </Show>
+  )
+}
+
+function ResolvedDraftProviders(props: { draft: DraftTab; home?: HomeController }) {
   const global = useGlobal()
-  const conn = createMemo(() => global.servers.list().find((item) => ServerConnection.key(item) === props.draft.server))
-  const directory = () => props.draft.directory
-  const serverKey = () => props.draft.server
+  const location = useLocation()
+  const draft = { ...props.draft }
+  const conn = global.servers.list().find((item) => ServerConnection.key(item) === draft.server)
+  const directory = () => draft.directory
+  const serverKey = () => draft.server
+  const active = () => {
+    if (activeDraftID(location.pathname, location.search) !== draft.draftID) return false
+    if (!props.home) return true
+    const selection = props.home.selection.value()
+    return !!selection.directory && sameDraftSource({ server: selection.server, directory: selection.directory }, draft)
+  }
+  const retarget = props.home ? (source: DraftSource) => props.home!.selection.set(source) : undefined
 
   return (
-    <Show when={`${props.draft.server}\0${props.draft.directory}`} keyed>
-      <ServerSDKProvider server={conn}>
-        <ServerSyncProvider server={conn}>
-          <ModelsProvider directory={directory}>
-            <SDKProvider directory={directory}>
-              <DirectoryDataProvider directory={directory} server={serverKey}>
-                <DraftProviders>
-                  <Suspense fallback={<RouteLoadingFallback />}>
-                    <NewSession />
-                  </Suspense>
-                </DraftProviders>
-              </DirectoryDataProvider>
-            </SDKProvider>
-          </ModelsProvider>
-        </ServerSyncProvider>
-      </ServerSDKProvider>
+    <Show when={conn}>
+      <DraftTabsScopeProvider draft={draft} active={active} retarget={retarget}>
+        <ServerSDKProvider server={() => conn}>
+          <ServerSyncProvider server={() => conn}>
+            <ModelsProvider directory={directory}>
+              <SDKProvider directory={directory}>
+                <DirectoryDataProvider directory={directory} server={serverKey} draftID={draft.draftID}>
+                  <DraftProviders>
+                    <Suspense fallback={<RouteLoadingFallback />}>
+                      <Show when={props.home} fallback={<NewSession />}>
+                        <HomeComposer />
+                      </Show>
+                    </Suspense>
+                  </DraftProviders>
+                </DirectoryDataProvider>
+              </SDKProvider>
+            </ModelsProvider>
+          </ServerSyncProvider>
+        </ServerSDKProvider>
+      </DraftTabsScopeProvider>
     </Show>
+  )
+}
+
+function HomeRoute() {
+  const home = createHomeController()
+  const tabs = useTabs()
+  const language = useLanguage()
+  const location = useLocation()
+  const [search, setSearch] = useSearchParams<{ draftId?: string; history?: string; archived?: string }>()
+  const [state, setState] = createStore({ error: "", retry: 0 })
+  let request = 0
+  let initialized = false
+  let lastDraftID: string | undefined
+  onCleanup(() => {
+    request++
+  })
+  const source = createMemo<DraftSource | undefined>(
+    () => {
+      const conn = home.server.focused()
+      const project = home.project.newSession()
+      if (!conn || !project) return
+      const selected = home.selection.value().directory
+      const server = ServerConnection.key(conn)
+      const directory =
+        selected &&
+        [project.worktree, ...(project.sandboxes ?? [])].some((directory) =>
+          sameDraftSource({ server, directory }, { server, directory: selected }),
+        )
+          ? selected
+          : project.worktree
+      return { server, directory }
+    },
+    undefined,
+    { equals: (left, right) => left === right || (!!left && !!right && sameDraftSource(left, right)) },
+  )
+
+  createEffect(() => {
+    if (!tabs.ready()) return
+    const preferredID = search.draftId
+    const preferred = tabs.store.find(
+      (tab): tab is DraftTab => tab.type === "draft" && !!tab.home && tab.draftID === preferredID,
+    )
+    const changedURL = !initialized || preferredID !== lastDraftID
+    initialized = true
+    lastDraftID = preferredID
+    const target = source()
+    const revision = ++request
+    state.retry
+    if (search.history === "1" || search.archived === "1") return
+    // Explicit navigation to a home draft restores its source. A sidebar source
+    // change with the same URL instead selects a different, independent draft.
+    if (changedURL && preferred && (!target || !sameDraftSource(preferred, target))) {
+      const conn = home.server.list().find((conn) => ServerConnection.key(conn) === preferred.server)
+      if (conn) home.server.context(conn).projects.open(preferred.directory)
+      home.selection.set({ server: preferred.server, directory: preferred.directory })
+      return
+    }
+    if (!target) return
+    if (preferred && sameDraftSource(preferred, target)) {
+      untrack(() => {
+        setState("error", "")
+        const selection = home.selection.value()
+        if (selection.server !== target.server || selection.directory !== target.directory) home.selection.set(target)
+      })
+      return
+    }
+    untrack(() => {
+      setState("error", "")
+      void tabs
+        .ensureHomeDraft(target, preferredID)
+        .then((draft) => {
+          if (
+            revision !== request ||
+            location.pathname !== "/" ||
+            !source() ||
+            !sameDraftSource(source()!, target) ||
+            !sameDraftSource(draft, target)
+          )
+            return
+          home.selection.set({ server: draft.server, directory: draft.directory })
+          setSearch({ draftId: draft.draftID }, { replace: true })
+        })
+        .catch((error) => {
+          if (revision === request) setState("error", error instanceof Error ? error.message : String(error))
+        })
+    })
+  })
+  const draft = createMemo(() => {
+    const target = source()
+    if (!target) return
+    return tabs.store.find(
+      (tab): tab is DraftTab =>
+        tab.type === "draft" && !!tab.home && tab.draftID === search.draftId && sameDraftSource(tab, target),
+    )
+  })
+  return (
+    <NewHome
+      home={home}
+      compose={() => (
+        <Show
+          when={source()}
+          fallback={
+            <section class="flex flex-col items-center gap-6">
+              <HomeProjectPicker home={home} />
+              <h1 class="home-launchpad__title">
+                {homeCopy(language.locale(), language.t("session.new.title")).start}
+              </h1>
+              <p class="text-[13px] text-v2-text-text-muted">{language.t("home.empty.description")}</p>
+            </section>
+          }
+        >
+          <Show
+            when={!state.error}
+            fallback={
+              <div class="workspace-sidebar__notice" role="alert">
+                <span>{language.t("common.requestFailed")}</span>
+                <button type="button" onClick={() => setState("retry", (value) => value + 1)}>
+                  {language.t("common.retry")}
+                </button>
+              </div>
+            }
+          >
+            <Show when={draft()} keyed fallback={<RouteLoadingFallback />}>
+              {(draft) => <ResolvedDraftRoute draft={draft} home={home} />}
+            </Show>
+          </Show>
+        </Show>
+      )}
+    />
   )
 }
 
@@ -347,6 +513,27 @@ function DesktopCommands() {
   const command = useCommand()
   const language = useLanguage()
   const platform = usePlatform()
+  let active = true
+  onCleanup(() => {
+    active = false
+  })
+  const exportLogs = createLogExportAction({
+    exportLogs: () => platform.exportDebugLogs!(),
+    active: () => active,
+    notify: (result) => {
+      if (result.type === "success") {
+        showToast({ title: language.t("desktop.logs.exported"), variant: "success" })
+        return
+      }
+      showToast({
+        title: language.t("desktop.logs.exportFailed"),
+        description: language.t("desktop.logs.exportFailed.description"),
+        variant: "error",
+        persistent: true,
+        actions: [{ label: language.t("desktop.logs.exportRetry"), onClick: result.retry }],
+      })
+    },
+  })
 
   command.register("desktop", () => {
     const commands: CommandOption[] = []
@@ -356,7 +543,7 @@ function DesktopCommands() {
         title: "导出日志",
         category: language.t("command.category.settings"),
         onSelect: () => {
-          void platform.exportDebugLogs?.()
+          void exportLogs()
         },
       })
     }
@@ -677,7 +864,7 @@ function Routes(props: { serverScoped?: JSX.Element }) {
         </Route>
       </Route>
       <Show when={settings.general.newLayoutDesigns()}>
-        <Route path="/" component={NewHome} />
+        <Route path="/" component={HomeRoute} />
         <Route path="/:dir/session/:id" component={NewLayoutLegacySessionRedirect} />
         <Route path="/server/:serverKey/session/:id" component={TargetSessionRoute} />
       </Show>

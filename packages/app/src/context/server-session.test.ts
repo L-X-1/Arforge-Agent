@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { retry } from "@arforge-ai/core/util/retry"
 import type { MessageApi, ArforgeEvent, SessionApi } from "@arforge-ai/client/promise"
 import type { Message, ArforgeClient, Part, Session } from "@arforge-ai/sdk/v2/client"
+import { unwrap } from "solid-js/store"
 import { createServerSession } from "./server-session"
 
 const session = (id: string, parentID?: string): Session => ({
@@ -201,13 +202,14 @@ describe("server session", () => {
       data: { sessionID: "child", assistantMessageID: "msg_2_assistant", ordinal: 0, delta: "world" },
     })
 
-    expect(ctx.store.data.session_message.child?.at(-1)).toMatchObject({
+    // Bun's partial matcher does not traverse live Solid store proxies.
+    expect(unwrap(ctx.store.data.session_message.child?.at(-1))).toMatchObject({
       id: "msg_2_assistant",
       type: "assistant",
       content: [{ type: "text", text: "world" }],
     })
     expect(ctx.store.data.message.child?.map((message) => message.id)).toEqual(["msg_1_user", "msg_2_assistant"])
-    expect(ctx.store.data.part.msg_2_assistant).toMatchObject([{ type: "text", text: "world" }])
+    expect(unwrap(ctx.store.data.part.msg_2_assistant)).toMatchObject([{ type: "text", text: "world" }])
   })
 
   test("resolves lineage by session ID without directory", async () => {
@@ -269,7 +271,7 @@ describe("server session", () => {
       { sessionID: "root", limit: 20, order: "desc" },
     ])
     expect(store.data.session_message.root.map((message) => message.id)).toEqual([user.id, assistant.id])
-    expect(store.data.part[assistant.id]).toMatchObject([{ type: "text", text: "saved" }])
+    expect(unwrap(store.data.part[assistant.id])).toMatchObject([{ type: "text", text: "saved" }])
   })
 
   test.each([0, 1, 25])("refreshes a cached %s-message window without requesting a smaller page", async (count) => {
@@ -407,7 +409,7 @@ describe("server session", () => {
     await store.sync("root")
 
     expect(store.data.message.root.map((message) => message.id)).toEqual([user.id, assistant.id])
-    expect(store.data.session_message.root).toMatchObject([
+    expect(unwrap(store.data.session_message.root)).toMatchObject([
       { id: user.id, type: "user", text: "text" },
       { id: assistant.id, type: "assistant" },
     ])
@@ -1492,6 +1494,8 @@ describe("server session", () => {
     guard.active = true
 
     await store.history.loadMore("child")
+    // The guard covers history loading; the equality matcher must inspect the result.
+    guard.active = false
 
     expect(store.data.message.child).toEqual([older, latest])
   })

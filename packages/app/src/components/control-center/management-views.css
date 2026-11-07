@@ -1,0 +1,54 @@
+.arforge-management-views {
+  min-width: 0;
+  width: 100%;
+}
+.arforge-management-views > [data-slot="tabs-v2-list"] {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 44px;
+}
+.arforge-management-views > [data-slot="tabs-v2-content"] {
+  min-width: 0;
+  padding-top: 16px;
+}
+.arforge-management-views > [data-slot="tabs-v2-content"][hidden] {
+  display: none;
+}
+
+/* Settings navigation rules also match nested tabs. Keep management views in
+   the content flow instead of inheriting the full-height vertical nav layout. */
+.settings-v2-surface .arforge-management-views[data-component="tabs-v2"] {
+  height: auto;
+  flex: none;
+  overflow: visible;
+}
+.settings-v2-surface
+  .arforge-management-views[data-component="tabs-v2"][data-variant="normal"][data-orientation="horizontal"]
+  > [data-slot="tabs-v2-list"] {
+  flex-direction: row;
+  flex-wrap: wrap;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 44px;
+  padding: 0;
+  border-right: 0;
+  background: transparent;
+  overflow: visible;
+}
+.settings-v2-surface
+  .arforge-management-views[data-component="tabs-v2"][data-variant="normal"][data-orientation="horizontal"]
+  > [data-slot="tabs-v2-list"]
+  > [data-slot="tabs-v2-trigger-wrapper"] {
+  width: auto;
+  height: auto;
+  min-height: 44px;
+}
+.settings-v2-surface
+  .arforge-management-views[data-component="tabs-v2"][data-variant="normal"][data-orientation="horizontal"]
+  > [data-slot="tabs-v2-content"] {
+  height: auto;
+  flex: none;
+  overflow: visible;
+}

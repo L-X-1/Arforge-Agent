@@ -195,25 +195,36 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
   if (event.durable === undefined) return Effect.die("Durable Session event is missing aggregate sequence")
   const encoded = encodeMessage(message)
   const { id, type, ...data } = encoded
-  return db
-    .insert(SessionMessageTable)
-    .values({
-      id: SessionMessage.ID.make(id),
-      session_id: event.data.sessionID,
-      type,
-      seq: event.durable.seq,
-      time_created: DateTime.toEpochMillis(message.time.created),
-      data,
-    })
-    .run()
-    .pipe(Effect.orDie)
+  const sequence = event.durable.seq
+  return Effect.gen(function* () {
+    const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+    return yield* db
+      .insert(SessionMessageTable)
+      .values({
+        tenant_id: principal.tenantID,
+        owner_user_id: principal.userID,
+        id: SessionMessage.ID.make(id),
+        session_id: event.data.sessionID,
+        type,
+        seq: sequence,
+        time_created: DateTime.toEpochMillis(message.time.created),
+        data,
+      })
+      .run()
+      .pipe(Effect.orDie)
+  })
 }
 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
-    if (!SessionV1.Event.Created.durable || !SessionV1.Event.Updated.durable || !SessionEvent.TitleGenerated.durable)
+    if (
+      !SessionV1.Event.Created.durable ||
+      !SessionV1.Event.Updated.durable ||
+      !SessionEvent.TitleGenerated.durable ||
+      !SessionEvent.Renamed.durable
+    )
       return yield* Effect.die(new Error("Title projection requires durable metadata definitions"))
     const createdTitleType = EventV2.versionedType(
       SessionV1.Event.Created.type,
@@ -227,11 +238,16 @@ const layer = Layer.effectDiscard(
       SessionEvent.TitleGenerated.type,
       SessionEvent.TitleGenerated.durable.version,
     )
+    const renamedTitleType = EventV2.versionedType(SessionEvent.Renamed.type, SessionEvent.Renamed.durable.version)
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
+        const principal = yield* Database.CurrentPrincipal
         const stored = yield* db
           .insert(SessionTable)
-          .values(sessionRow(event.data.info))
+          .values({
+            ...sessionRow(event.data.info),
+            ...(principal ? { tenant_id: principal.tenantID, owner_user_id: principal.userID } : {}),
+          })
           .onConflictDoNothing()
           .returning({ sessionID: SessionTable.id })
           .get()
@@ -258,7 +274,7 @@ const layer = Layer.effectDiscard(
         let priorTitle = expectedTitle
         for (const previous of yield* EventV2.readSerialized(db, {
           aggregateIDs: [sessionID],
-          types: [createdTitleType, updatedTitleType, generatedTitleType],
+          types: [createdTitleType, updatedTitleType, generatedTitleType, renamedTitleType],
         })) {
           if (previous.type === createdTitleType) {
             priorTitle = Schema.decodeUnknownSync(SessionV1.Event.Created.data)(previous.data).info.title
@@ -266,6 +282,9 @@ const layer = Layer.effectDiscard(
             const nextTitle = Schema.decodeUnknownSync(SessionV1.Event.Updated.data)(previous.data).info.title
             if (nextTitle !== priorTitle) return
             priorTitle = nextTitle
+          } else if (previous.type === renamedTitleType) {
+            // Even returning to the original default is a manual decision.
+            return
           } else if (previous.type === generatedTitleType) {
             const generated = Schema.decodeUnknownSync(SessionEvent.TitleGenerated.data)(previous.data)
             if (
@@ -287,6 +306,14 @@ const layer = Layer.effectDiscard(
           .run()
           .pipe(Effect.orDie)
       }),
+    )
+    yield* events.project(SessionEvent.Renamed, (event) =>
+      db
+        .update(SessionTable)
+        .set({ title: event.data.title, time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie, Effect.asVoid),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
       db

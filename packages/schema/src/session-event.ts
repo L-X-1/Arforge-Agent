@@ -89,6 +89,17 @@ export const TitleGenerated = Event.define({
 })
 export type TitleGenerated = typeof TitleGenerated.Type
 
+/** A committed manual metadata edit; it is not conversation content. */
+export const Renamed = Event.define({
+  type: "session.next.renamed",
+  ...options,
+  schema: {
+    ...Base,
+    title: Schema.String,
+  },
+})
+export type Renamed = typeof Renamed.Type
+
 export const Moved = Event.define({
   type: "session.next.moved",
   ...options,
@@ -650,6 +661,7 @@ export namespace RevertEvent {
 
 export const DurableDefinitions = Event.inventory(
   TitleGenerated,
+  Renamed,
   AgentSwitched,
   ModelSwitched,
   Moved,
@@ -690,6 +702,7 @@ export const DurableDefinitions = Event.inventory(
 
 export const Definitions = Event.inventory(
   TitleGenerated,
+  Renamed,
   AgentSwitched,
   ModelSwitched,
   Moved,

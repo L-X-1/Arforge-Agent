@@ -1,6 +1,7 @@
 import { ContextMenu as Kobalte } from "@kobalte/core/context-menu"
 import { splitProps } from "solid-js"
 import type { ComponentProps, ParentProps } from "solid-js"
+import { useUIPresentation } from "../context/presentation"
 
 export interface ContextMenuProps extends ComponentProps<typeof Kobalte> {}
 export interface ContextMenuTriggerProps extends ComponentProps<typeof Kobalte.Trigger> {}
@@ -23,7 +24,7 @@ export interface ContextMenuSubTriggerProps extends ComponentProps<typeof Kobalt
 export interface ContextMenuSubContentProps extends ComponentProps<typeof Kobalte.SubContent> {}
 
 function ContextMenuRoot(props: ContextMenuProps) {
-  return <Kobalte {...props} data-component="context-menu" />
+  return <Kobalte gutter={4} overflowPadding={8} {...props} data-component="context-menu" />
 }
 
 function ContextMenuTrigger(props: ParentProps<ContextMenuTriggerProps>) {
@@ -63,11 +64,13 @@ function ContextMenuPortal(props: ContextMenuPortalProps) {
 }
 
 function ContextMenuContent(props: ParentProps<ContextMenuContentProps>) {
+  const presentation = useUIPresentation()
   const [local, rest] = splitProps(props, ["class", "classList", "children"])
   return (
     <Kobalte.Content
       {...rest}
       data-component="context-menu-content"
+      data-presentation={presentation()}
       data-arforge-material="floating"
       classList={{
         ...local.classList,
@@ -252,7 +255,7 @@ function ContextMenuCheckboxItem(props: ParentProps<ContextMenuCheckboxItemProps
 }
 
 function ContextMenuSub(props: ContextMenuSubProps) {
-  return <Kobalte.Sub {...props} />
+  return <Kobalte.Sub gutter={4} overflowPadding={8} {...props} />
 }
 
 function ContextMenuSubTrigger(props: ParentProps<ContextMenuSubTriggerProps>) {
@@ -272,11 +275,13 @@ function ContextMenuSubTrigger(props: ParentProps<ContextMenuSubTriggerProps>) {
 }
 
 function ContextMenuSubContent(props: ParentProps<ContextMenuSubContentProps>) {
+  const presentation = useUIPresentation()
   const [local, rest] = splitProps(props, ["class", "classList", "children"])
   return (
     <Kobalte.SubContent
       {...rest}
       data-component="context-menu-sub-content"
+      data-presentation={presentation()}
       data-arforge-material="floating"
       classList={{
         ...local.classList,

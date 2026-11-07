@@ -1,3 +1,7 @@
+import { Spinner } from "@arforge-ai/ui/spinner"
+import { ManagementStatus } from "@/components/settings-v2/management-status"
+import { managementCopy } from "@/components/settings-v2/management-state"
+import { useConfirmAction } from "@/components/confirm-action"
 import { For, Show, createEffect, createMemo, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
@@ -28,8 +32,8 @@ type Candidate = Awaited<ReturnType<OperationsApi["agentCapabilities"]["evolutio
 function badge(label: string, tone: "automatic" | "human") {
   const colors =
     tone === "automatic"
-      ? { background: "rgba(34,197,94,0.14)", color: "#22c55e" }
-      : { background: "rgba(245,158,11,0.15)", color: "#f59e0b" }
+      ? { background: "var(--v2-state-bg-success)", color: "var(--v2-state-fg-success)" }
+      : { background: "var(--v2-state-bg-warning)", color: "var(--v2-state-fg-warning)" }
   return (
     <span
       style={`display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:${colors.background};color:${colors.color};font-weight:600;margin-left:8px`}
@@ -44,12 +48,12 @@ function authorityLabel(
   locale: Parameters<typeof authorityText>[1],
 ): { text: string; color: string; background: string } {
   if (authority === "automatic")
-    return { text: authorityText(authority, locale), color: "#22c55e", background: "rgba(34,197,94,0.14)" }
+    return { text: authorityText(authority, locale), color: "var(--v2-state-fg-success)", background: "var(--v2-state-bg-success)" }
   if (authority === "scoped_grant")
-    return { text: authorityText(authority, locale), color: "#818cf8", background: "rgba(129,140,248,0.15)" }
+    return { text: authorityText(authority, locale), color: "var(--v2-text-text-muted)", background: "var(--v2-background-bg-layer-02)" }
   if (authority === "human")
-    return { text: authorityText(authority, locale), color: "#f59e0b", background: "rgba(245,158,11,0.15)" }
-  return { text: authorityText(authority, locale), color: "#ef4444", background: "rgba(239,68,68,0.12)" }
+    return { text: authorityText(authority, locale), color: "var(--v2-state-fg-warning)", background: "var(--v2-state-bg-warning)" }
+  return { text: authorityText(authority, locale), color: "var(--v2-state-fg-danger)", background: "var(--v2-state-bg-danger)" }
 }
 
 function candidateStage(status: Candidate["state"]["status"]): number {
@@ -72,6 +76,7 @@ function box() {
  * 展示自动记录的事实；人工操作集中在这里：审批进化候选、校验审计链。
  */
 export function SessionProcessPanel() {
+  const confirmAction = useConfirmAction()
   const language = useLanguage()
   const copy = () => sessionProcessCopy(language.locale())
   const serverSDK = useServerSDK()
@@ -79,69 +84,85 @@ export function SessionProcessPanel() {
   const { params } = useSessionLayout()
   const [state, setState] = createStore({
     loading: false,
+    freshCandidates: false,
     expanded: true,
     verifying: false,
     verifyMessage: "",
     refreshError: "",
     actingCandidate: "",
+    actingAction: undefined as "approve" | "reject" | undefined,
     actionError: "",
     data: undefined as Snapshot | undefined,
     evolution: undefined as ReadonlyArray<AuditEvent> | undefined,
     candidates: undefined as ReadonlyArray<Candidate> | undefined,
   })
   const sessionID = () => params.id
-  const location = () => ({ location: { directory: sdk().directory } })
+  const processScope = createMemo(() => ({ source: serverSDK(), directory: sdk().directory, sessionID: sessionID() }))
+  let disposed = false
+  onCleanup(() => { disposed = true })
+  const currentScope = (origin: ReturnType<typeof processScope>) => !disposed && processScope() === origin
 
   const refresh = async () => {
-    if (!sessionID() || state.loading) return
-    setState("loading", true)
+    const origin = processScope()
+    if (!origin.sessionID || state.loading) return
+    setState({ loading: true, freshCandidates: false, refreshError: "" })
+    const input = { location: { directory: origin.directory } }
     try {
-      const [snapshot, evolution, candidates] = await Promise.all([
-        serverSDK().operationsApi.runtimeInsight.snapshot({ ...location(), limit: "100" }),
-        serverSDK().operationsApi.agentCapabilities.evolutionAuditEvents({ ...location(), limit: 100 }),
-        serverSDK().operationsApi.agentCapabilities.evolutionCandidates({ ...location(), limit: 50 }),
+      const [snapshot, evolution, candidates] = await Promise.allSettled([
+        origin.source.operationsApi.runtimeInsight.snapshot({ ...input, limit: "100" }),
+        origin.source.operationsApi.agentCapabilities.evolutionAuditEvents({ ...input, limit: 100 }),
+        origin.source.operationsApi.agentCapabilities.evolutionCandidates({ ...input, limit: 50 }),
       ])
-      setState({ data: snapshot, evolution: evolution.data.items, candidates: candidates.data.items, refreshError: "" })
+      if (!currentScope(origin)) return
+      const errors: string[] = []
+      if (snapshot.status === "fulfilled") setState("data", snapshot.value)
+      else errors.push(copy().processTitle + ": " + runtimeReasonText(snapshot.reason instanceof Error ? snapshot.reason.message : String(snapshot.reason), language.locale()))
+      if (evolution.status === "fulfilled") setState("evolution", evolution.value.data.items)
+      else errors.push(copy().auditTitle + ": " + runtimeReasonText(evolution.reason instanceof Error ? evolution.reason.message : String(evolution.reason), language.locale()))
+      if (candidates.status === "fulfilled") setState({ candidates: candidates.value.data.items, freshCandidates: true })
+      else errors.push(copy().evolutionTitle + ": " + runtimeReasonText(candidates.reason instanceof Error ? candidates.reason.message : String(candidates.reason), language.locale()))
+      setState("refreshError", errors.length ? copy().refreshFailed(errors.join("\n")) : "")
     } catch (error) {
-      setState(
-        "refreshError",
-        copy().refreshFailed(
-          runtimeReasonText(error instanceof Error ? error.message : String(error), language.locale()),
-        ),
-      )
+      if (!currentScope(origin)) return
+      setState("refreshError", copy().refreshFailed(runtimeReasonText(error instanceof Error ? error.message : String(error), language.locale())))
     } finally {
-      setState("loading", false)
+      if (currentScope(origin)) setState("loading", false)
     }
   }
   const verifyAudit = async () => {
-    if (state.verifying) return
+    const origin = processScope()
+    if (state.verifying || !currentScope(origin)) return
     setState("verifying", true)
     try {
-      const result = await serverSDK().operationsApi.runtimeInsight.auditVerify(location())
-      setState(
-        "verifyMessage",
-        result.valid ? copy().auditVerified(result.count) : copy().auditFailed(result.issue ?? ""),
-      )
+      const result = await origin.source.operationsApi.runtimeInsight.auditVerify({ location: { directory: origin.directory } })
+      if (!currentScope(origin)) return
+      setState("verifyMessage", result.valid ? copy().auditVerified(result.count) : copy().auditFailed(result.issue ?? ""))
+    } catch (error) {
+      if (currentScope(origin)) setState("verifyMessage", copy().auditFailed(runtimeReasonText(error instanceof Error ? error.message : String(error), language.locale())))
     } finally {
-      setState("verifying", false)
+      if (currentScope(origin)) setState("verifying", false)
     }
   }
   const transitionCandidate = async (candidate: Candidate, action: "approve" | "reject") => {
-    if (state.actingCandidate) return
+    if (state.actingCandidate || !state.freshCandidates) return
     const label = action === "approve" ? copy().approve : copy().reject
     const confirmation = action === "approve" ? copy().approveConfirm : copy().rejectConfirm
-    if (!window.confirm(confirmation(candidate.title, candidate.rationale.slice(0, 200)))) return
-    setState({ actingCandidate: candidate.candidate_id, actionError: "" })
+    const origin = processScope()
+    const revision = candidate.state.revision
+    if (!await confirmAction(confirmation(candidate.title, candidate.rationale.slice(0, 200)), { isCurrent: () => currentScope(origin) && !state.actingCandidate && state.freshCandidates && candidate.state.revision === revision })) return
+    if (!currentScope(origin) || state.actingCandidate || !state.freshCandidates || candidate.state.revision !== revision) return
+    setState({ actingCandidate: candidate.candidate_id, actingAction: action, actionError: "" })
     try {
-      await serverSDK().operationsApi.agentCapabilities.evolutionTransition({
-        ...location(),
+      await origin.source.operationsApi.agentCapabilities.evolutionTransition({
+        location: { directory: origin.directory },
         candidateID: candidate.candidate_id,
         action,
-        expectedRevision: candidate.state.revision,
+        expectedRevision: revision,
         reason: copy().transitionReason(label),
       })
-      await refresh()
+      if (currentScope(origin)) await refresh()
     } catch (error) {
+      if (!currentScope(origin)) return
       setState(
         "actionError",
         copy().transitionFailed(
@@ -150,24 +171,21 @@ export function SessionProcessPanel() {
         ),
       )
     } finally {
-      setState("actingCandidate", "")
+      if (currentScope(origin)) setState({ actingCandidate: "", actingAction: undefined })
     }
   }
 
-  createEffect(
-    on(
-      () => sessionID(),
-      (id) => {
-        if (id) void refresh()
-      },
-    ),
-  )
-  onCleanup(
-    sdk().event.on("session.status", (evt) => {
-      if (evt.properties.sessionID !== sessionID()) return
+  createEffect(on(processScope, (origin) => {
+    setState({ loading: false, freshCandidates: false, verifying: false, actingCandidate: "", actingAction: undefined, verifyMessage: "", refreshError: "", actionError: "", data: undefined, evolution: undefined, candidates: undefined })
+    if (origin.sessionID) void refresh()
+  }))
+  createEffect(() => {
+    const context = sdk()
+    onCleanup(context.event.on("session.status", (evt) => {
+      if (context !== sdk() || evt.properties.sessionID !== sessionID()) return
       void refresh()
-    }),
-  )
+    }))
+  })
 
   const runs = createMemo(() =>
     (state.data?.durableRuns ?? []).filter((run) => run.sessionID === sessionID()).slice(0, 3),
@@ -215,6 +233,7 @@ export function SessionProcessPanel() {
   return (
     <section
       data-component="session-process-panel"
+      aria-busy={state.loading || state.verifying || !!state.actingCandidate}
       aria-live="polite"
       style="padding:12px 14px 14px;display:grid;gap:12px"
     >
@@ -243,14 +262,11 @@ export function SessionProcessPanel() {
       </button>
 
       <Show when={state.expanded}>
-        <Show when={state.refreshError}>
-          <div role="alert" style={`${box()};font-size:12px;color:#ef4444`}>
-            {state.refreshError} · {copy().refreshFailedHint}
-          </div>
-        </Show>
-        <Show when={!hasContent()}>
-          <p style="margin:0;color:var(--v2-text-text-muted);font-size:12px;line-height:1.6">{copy().empty}</p>
-        </Show>
+        <ManagementStatus loading={state.loading}
+          initialLoading={state.data === undefined && state.evolution === undefined && state.candidates === undefined}
+          error={state.refreshError} empty={!state.loading && !state.refreshError && !hasContent()}
+          emptyText={copy().empty} scope={sdk().directory + " / " + (sessionID() ?? "")}
+          onRetry={() => void refresh()} />
 
         {/* 自主学习与进化（可操作） */}
         <Show when={pendingCandidates().length > 0 || evolutionEvents().length > 0}>
@@ -278,7 +294,7 @@ export function SessionProcessPanel() {
                   return (
                     <>
                       <span
-                        style={`flex:1;text-align:center;font-size:10px;line-height:1.3;padding:3px 2px;border-radius:6px;font-weight:${active ? 600 : 400};color:${active ? "#f59e0b" : reached ? "#22c55e" : "var(--v2-text-text-muted)"};background:${active ? "rgba(245,158,11,0.12)" : "transparent"}`}
+                        style={`flex:1;text-align:center;font-size:10px;line-height:1.3;padding:3px 2px;border-radius:6px;font-weight:${active ? 600 : 400};color:${active ? "var(--v2-state-fg-warning)" : reached ? "var(--v2-state-fg-success)" : "var(--v2-text-text-muted)"};background:${active ? "var(--v2-state-bg-warning)" : "transparent"}`}
                       >
                         {index() + 1} {stage}
                       </span>
@@ -299,12 +315,12 @@ export function SessionProcessPanel() {
                     <Show
                       when={candidate.evaluation?.gate_passed}
                       fallback={
-                        <span style="font-size:10px;padding:0 6px;border-radius:8px;background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:600">
+                        <span style="font-size:10px;padding:0 6px;border-radius:8px;background:var(--v2-state-bg-warning);color:var(--v2-state-fg-warning);font-weight:600">
                           {candidate.state.status === "proposed" ? copy().testing : copy().awaitingApproval}
                         </span>
                       }
                     >
-                      <span style="font-size:10px;padding:0 6px;border-radius:8px;background:rgba(34,197,94,0.14);color:#22c55e;font-weight:600">
+                      <span style="font-size:10px;padding:0 6px;border-radius:8px;background:var(--v2-state-bg-success);color:var(--v2-state-fg-success);font-weight:600">
                         {copy().testedAwaitingApproval}
                       </span>
                     </Show>
@@ -316,34 +332,37 @@ export function SessionProcessPanel() {
                   <div style="font-size:11px;margin:0 0 6px">
                     <Show
                       when={candidate.evaluation?.gate_passed}
-                      fallback={<span style="color:#ef4444">{copy().testFailed}</span>}
+                      fallback={<span style="color:var(--v2-state-fg-danger)">{copy().testFailed}</span>}
                     >
-                      <span style="color:#22c55e">{copy().testPassed}</span>
+                      <span style="color:var(--v2-state-fg-success)">{copy().testPassed}</span>
                     </Show>
                   </div>
+                  <Show when={!state.freshCandidates || state.actingCandidate}>
+                    <p class="text-12-regular text-text-weak">{state.actingCandidate ? managementCopy(language.locale()).saving : managementCopy(language.locale()).conflictHint}</p>
+                  </Show>
                   <div style="display:flex;gap:8px">
                     <button
                       type="button"
-                      disabled={state.actingCandidate === candidate.candidate_id}
+                      disabled={!!state.actingCandidate || !state.freshCandidates}
                       onClick={() => void transitionCandidate(candidate, "approve")}
-                      style="font-size:12px;padding:4px 12px;min-height:44px;border-radius:8px;border:none;cursor:pointer;background:rgba(34,197,94,0.15);color:#22c55e;font-weight:600"
+                      style="display:inline-flex;align-items:center;gap:8px;font-size:12px;padding:4px 12px;min-height:36px;border-radius:8px;border:none;cursor:pointer;background:var(--v2-state-bg-success);color:var(--v2-state-fg-success);font-weight:600"
                     >
-                      {copy().approve}
+                      <Show when={state.actingCandidate === candidate.candidate_id && state.actingAction === "approve"} fallback={copy().approve}><Spinner class="size-4" />{managementCopy(language.locale()).saving}</Show>
                     </button>
                     <button
                       type="button"
-                      disabled={state.actingCandidate === candidate.candidate_id}
+                      disabled={!!state.actingCandidate || !state.freshCandidates}
                       onClick={() => void transitionCandidate(candidate, "reject")}
-                      style="font-size:12px;padding:4px 12px;min-height:44px;border-radius:8px;border:none;cursor:pointer;background:rgba(239,68,68,0.12);color:#ef4444;font-weight:600"
+                      style="display:inline-flex;align-items:center;gap:8px;font-size:12px;padding:4px 12px;min-height:36px;border-radius:8px;border:none;cursor:pointer;background:var(--v2-state-bg-danger);color:var(--v2-state-fg-danger);font-weight:600"
                     >
-                      {copy().reject}
+                      <Show when={state.actingCandidate === candidate.candidate_id && state.actingAction === "reject"} fallback={copy().reject}><Spinner class="size-4" />{managementCopy(language.locale()).saving}</Show>
                     </button>
                   </div>
                 </div>
               )}
             </For>
             <Show when={state.actionError}>
-              <p role="alert" style="margin:6px 0 0;font-size:12px;color:#ef4444">
+              <p role="alert" style="margin:6px 0 0;font-size:12px;color:var(--v2-state-fg-danger)">
                 {state.actionError}
               </p>
             </Show>
@@ -353,12 +372,12 @@ export function SessionProcessPanel() {
                   {(event) => (
                     <div style="display:flex;gap:8px;align-items:center">
                       <span
-                        style={`display:inline-block;width:6px;height:6px;border-radius:50%;background:${event.action === "candidate_approved" || event.action === "candidate_promoted" ? "#22c55e" : event.action === "candidate_rejected" || event.action === "candidate_rolled_back" ? "#ef4444" : "#818cf8"}`}
+                        style={`display:inline-block;width:6px;height:6px;border-radius:50%;background:${event.action === "candidate_approved" || event.action === "candidate_promoted" ? "var(--v2-state-fg-success)" : event.action === "candidate_rejected" || event.action === "candidate_rolled_back" ? "var(--v2-state-fg-danger)" : "var(--v2-text-text-muted)"}`}
                       />
                       <span>{copy().evolutionEvent(event.action)}</span>
                       <span style="font-family:monospace">{event.subject_id ? event.subject_id.slice(0, 8) : ""}</span>
                       {event.action === "candidate_approved" || event.action === "candidate_rejected" ? (
-                        <span style="font-size:11px;color:#f59e0b;font-weight:600">{copy().humanParenthesized}</span>
+                        <span style="font-size:11px;color:var(--v2-state-fg-warning);font-weight:600">{copy().humanParenthesized}</span>
                       ) : null}
                     </div>
                   )}
@@ -395,7 +414,7 @@ export function SessionProcessPanel() {
                       <Show when={run.lease}>
                         <span
                           title={`${copy().workerOnline} · ${run.lease!.ownerID}`}
-                          style={`${run.checkpoint ? "" : "margin-left:auto;"}color:#22c55e;font-size:11px`}
+                          style={`${run.checkpoint ? "" : "margin-left:auto;"}color:var(--v2-state-fg-success);font-size:11px`}
                         >
                           {copy().workerOnline}
                         </span>
@@ -412,7 +431,7 @@ export function SessionProcessPanel() {
                       <span>{copy().modelCost(costText(run.costMicrosUsed), costText(run.maxCostMicros))}</span>
                       <Show when={run.activeAttempt}>
                         {(attempt) => (
-                          <span style="color:#22c55e">
+                          <span style="color:var(--v2-state-fg-success)">
                             {copy().activeAttempt(
                               attempt().attempt,
                               formatRuntimeTime(attempt().startedAt, language.locale()),
@@ -456,10 +475,10 @@ export function SessionProcessPanel() {
                         <span>{runtimeReasonText(action.reasonSummary, language.locale())}</span>
                         <span>{copy().impactRange(action.resourceCount)}</span>
                         <Show when={action.observationStatus === "failed"}>
-                          <span style="color:#ef4444">{copy().executionFailed}</span>
+                          <span style="color:var(--v2-state-fg-danger)">{copy().executionFailed}</span>
                         </Show>
                         <Show when={action.observationStatus === "succeeded"}>
-                          <span style="color:#22c55e">{copy().executionSucceeded}</span>
+                          <span style="color:var(--v2-state-fg-success)">{copy().executionSucceeded}</span>
                         </Show>
                         <span>{copy().attempts(action.attemptsUsed, action.maxAttempts)}</span>
                         <span>{copy().durationSingle(durationText(action.durationMsUsed, language.locale()))}</span>
@@ -501,7 +520,7 @@ export function SessionProcessPanel() {
             <For each={verifications()}>
               {(verification) => (
                 <div style={`${box()};margin-bottom:4px`}>
-                  <span style={`font-weight:600;${verification.passed ? "color:#22c55e" : "color:#ef4444"}`}>
+                  <span style={`font-weight:600;${verification.passed ? "color:var(--v2-state-fg-success)" : "color:var(--v2-state-fg-danger)"}`}>
                     {verification.passed ? copy().passed : copy().failed}
                   </span>{" "}
                   <span style="color:var(--v2-text-text-muted)">
@@ -524,7 +543,7 @@ export function SessionProcessPanel() {
                     <span style="font-size:12px;font-weight:600">
                       {copy().fingerprint} {recall.queryFingerprint.slice(0, 12)}
                     </span>
-                    <span style="font-size:10px;padding:0 6px;border-radius:8px;background:rgba(129,140,248,0.15);color:#818cf8;font-weight:600">
+                    <span style="font-size:10px;padding:0 6px;border-radius:8px;background:var(--v2-background-bg-layer-02);color:var(--v2-text-text-muted);font-weight:600">
                       {recall.algorithm}
                     </span>
                     <span style="font-size:11px;color:var(--v2-text-text-muted)">
@@ -541,8 +560,8 @@ export function SessionProcessPanel() {
                           <span style="flex:1;color:var(--v2-text-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                             {copy().governedRecord} · {hit.source}
                           </span>
-                          <span style="font-family:monospace;color:#22c55e">{(hit.score * 100).toFixed(0)}%</span>
-                          <span style="font-size:10px;padding:0 6px;border-radius:8px;background:rgba(245,158,11,0.15);color:#f59e0b;font-weight:600">
+                          <span style="font-family:monospace;color:var(--v2-state-fg-success)">{(hit.score * 100).toFixed(0)}%</span>
+                          <span style="font-size:10px;padding:0 6px;border-radius:8px;background:var(--v2-state-bg-warning);color:var(--v2-state-fg-warning);font-weight:600">
                             {hit.source}
                           </span>
                         </div>
@@ -563,16 +582,17 @@ export function SessionProcessPanel() {
               <span style="font-size:11px;color:var(--v2-text-text-muted)">{copy().auditNotice}</span>
               <button
                 type="button"
-                style="margin-left:auto;font-size:11px;color:#818cf8;background:none;border:none;cursor:pointer;text-decoration:underline"
+                style="margin-left:auto;font-size:11px;color:var(--v2-text-text-muted);background:none;border:none;cursor:pointer;text-decoration:underline"
                 disabled={state.verifying}
                 onClick={() => void verifyAudit()}
               >
+                <Show when={state.verifying}><Spinner class="size-4" /></Show>
                 {state.verifying ? copy().verifyingAudit : copy().verifyAudit}
               </button>
             </div>
             <Show when={state.verifyMessage}>
               <p
-                style={`margin:4px 0;font-size:12px;${/校验通过|稽核鏈校驗通過|Audit chain verified/.test(state.verifyMessage) ? "color:#22c55e" : "color:#ef4444"}`}
+                style={`margin:4px 0;font-size:12px;${/校验通过|稽核鏈校驗通過|Audit chain verified/.test(state.verifyMessage) ? "color:var(--v2-state-fg-success)" : "color:var(--v2-state-fg-danger)"}`}
               >
                 {state.verifyMessage}
               </p>

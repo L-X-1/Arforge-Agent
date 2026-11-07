@@ -9,6 +9,21 @@ const config = {
 }
 
 describe("Arforge signed sessions", () => {
+  test("only omits the Basic challenge for exact same-origin background request metadata", () => {
+    const url = new URL("https://private.arforge.example/file/content")
+    const browser = { "sec-fetch-site": "same-origin", "sec-fetch-dest": "empty" }
+    const challenge = { "www-authenticate": 'Basic realm="Secure Area"' }
+
+    expect(SessionAuth.basicChallengeHeaders(url, browser)).toEqual({})
+    expect(SessionAuth.basicChallengeHeaders(url, {})).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(url, { ...browser, "sec-fetch-site": "cross-site" })).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(url, { ...browser, "sec-fetch-site": "same-site" })).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(url, { ...browser, "sec-fetch-site": "none" })).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(url, { ...browser, "sec-fetch-dest": "document" })).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(url, { ...browser, authorization: "bAsIc invalid" })).toEqual(challenge)
+    expect(SessionAuth.basicChallengeHeaders(new URL("?auth_token=", url), browser)).toEqual(challenge)
+  })
+
   test("issues an HttpOnly, strict, time-limited cookie", () => {
     const session = SessionAuth.issue(config, { now: 1_700_000_000_000, secure: true })
 

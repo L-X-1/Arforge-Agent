@@ -14,6 +14,7 @@ export function SortableTabV2(props: {
   tab: string
   index: () => number
   temporary?: boolean
+  dirty?: boolean
   onTabClose: (tab: string) => void
   onTabDoubleClick?: (tab: string) => void
 }): JSX.Element {
@@ -33,7 +34,7 @@ export function SortableTabV2(props: {
   const content = createMemo(() => {
     const value = path()
     if (!value) return
-    return <FileVisual path={value} temporary={props.temporary} />
+    return <FileVisual path={value} temporary={props.temporary} dirty={props.dirty} dirtyLabel={language.locale().startsWith("zh") ? "未保存的修改" : "Unsaved changes"} />
   })
   return (
     <div ref={sortable.ref} class="h-full flex items-center">

@@ -14,6 +14,7 @@ import { Config as EffectConfig, Context, Effect, Layer, Option } from "effect"
 import { createHash, createHmac, randomBytes } from "node:crypto"
 import type { IdentityContext } from "./identity-context"
 import { usesPostgres } from "@arforge-ai/core/database/dialect"
+import { hashPassword, verifyPassword } from "./user-password"
 
 export const COOKIE_NAME = "arforge_session"
 export const SESSION_ABSOLUTE_TTL_MS = 30 * 24 * 60 * 60 * 1_000
@@ -146,9 +147,7 @@ export function register(
 
     // Pay the same password-hashing cost before looking up the address. This
     // keeps duplicate-registration timing from becoming an account oracle.
-    const passwordHash = yield* Effect.promise(() =>
-      Bun.password.hash(input.password, { algorithm: "argon2id", memoryCost: 19_456, timeCost: 2 }),
-    )
+    const passwordHash = yield* Effect.promise(() => hashPassword(input.password))
 
     const existing = yield* db
       .select()
@@ -276,9 +275,7 @@ export function requestPasswordReset(db: Store, input: { readonly email: string 
 export function resetPassword(db: Store, token: string, password: string, now = Date.now()) {
   return Effect.gen(function* () {
     if (!validPassword(password)) return { ok: false as const, field: "password" as const }
-    const passwordHash = yield* Effect.promise(() =>
-      Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 19_456, timeCost: 2 }),
-    )
+    const passwordHash = yield* Effect.promise(() => hashPassword(password))
     const result = yield* consumeToken(db, token, "reset_password", now, (tx, userID) =>
       Effect.gen(function* () {
         yield* tx
@@ -325,7 +322,7 @@ export function login(
           .pipe(Effect.orDie)
       : undefined
     const passwordHash = user?.password_hash.startsWith("$argon2id$") ? user.password_hash : DUMMY_PASSWORD_HASH
-    const matches = yield* Effect.promise(() => Bun.password.verify(input.password, passwordHash))
+    const matches = yield* Effect.promise(() => verifyPassword(input.password, passwordHash))
     if (!user || !matches || user.status === "disabled") {
       yield* recordFailures(db, keys, now)
       return { ok: false as const, reason: "invalid" as const }

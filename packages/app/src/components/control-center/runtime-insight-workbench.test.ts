@@ -180,3 +180,19 @@ describe("runtime insight audit labels", () => {
     expect(runtimeInsightCopy("zht").settlementRecoveryReview(1)).toContain("人工復核")
   })
 })
+
+describe("principal audit scope labels", () => {
+  test.each(["en", "zh", "zht"] as const)("keeps scoped record verification distinct from a profile chain in %s", (locale) => {
+    const copy = runtimeInsightCopy(locale)
+    expect(copy.principalAuditTitle).not.toBe(copy.auditTitle)
+    expect(copy.principalAuditVerified(3)).not.toBe(copy.auditVerified(3))
+    expect(copy.principalAuditValid(3)).toContain("3")
+    expect(copy.principalAuditHint.length).toBeGreaterThan(10)
+    expect(copy.verifyPrincipalAudit).not.toBe(copy.verifyAudit)
+  })
+  test("explains the record-only and retention boundaries in English", () => {
+    const copy = runtimeInsightCopy("en")
+    expect(copy.principalAuditVerified(3)).toContain("Full profile chain continuity is not checked")
+    expect(copy.principalAuditHint).toContain("global retention counts are unavailable")
+  })
+})

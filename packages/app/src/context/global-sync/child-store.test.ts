@@ -199,7 +199,7 @@ describe("createChildStoreManager", () => {
     try {
       if (!manager) throw new Error("manager required")
       const [store, setStore] = manager.child("/project", { bootstrap: false })
-      expect(querySingles.length - offset).toBe(6)
+      expect(querySingles.length - offset).toBe(7)
       const query = querySingles[offset + 1]
       const resourceQuery = querySingles[offset + 2]
       if (!query) throw new Error("query required")
@@ -250,11 +250,12 @@ describe("createChildStoreManager", () => {
       const [store] = manager.child("/project", { bootstrap: false })
       const queries = querySingles.slice(offset)
 
-      expect(queries).toHaveLength(6)
+      expect(queries).toHaveLength(7)
       expect(queries[0]?.().enabled).toBe(false)
       expect(queries[3]?.().enabled).toBe(false)
       expect(queries[4]?.().enabled).toBe(false)
       expect(queries[5]?.().enabled).toBe(false)
+      expect(queries[6]?.().enabled).toBe(false)
       expect(store.path.directory).toBe("/project")
       expect(store.provider_ready).toBe(false)
       expect(store.lsp_ready).toBe(false)
@@ -265,6 +266,7 @@ describe("createChildStoreManager", () => {
       expect(queries[3]?.().enabled).toBe(true)
       expect(queries[4]?.().enabled).toBe(true)
       expect(queries[5]?.().enabled).toBe(true)
+      expect(queries[6]?.().enabled).toBe(true)
       expect(bootstraps).toEqual(["/project"])
 
       manager.child("/project", { bootstrap: false })

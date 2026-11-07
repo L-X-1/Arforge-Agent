@@ -9,10 +9,51 @@ describe("isolated workbench browser", () => {
   })
 
   test.each([
-    undefined, null, 42, "", "example.com", "//example.com", "javascript:alert(1)",
+    ["example.com/path?q=hello#part", "https://example.com/path?q=hello#part"],
+    [" EXAMPLE.com:8443/a?next=b#c ", "https://example.com:8443/a?next=b#c"],
+    ["localhost:5173/path?q=x#y", "http://localhost:5173/path?q=x#y"],
+    ["localhost:443/path", "http://localhost:443/path"],
+    ["localhost.:5173/path?q=x#y", "http://localhost.:5173/path?q=x#y"],
+    ["LOCALHOST.:443/path", "http://localhost.:443/path"],
+    ["example.com:80/path", "https://example.com:80/path"],
+    ["127.0.0.1:5173/path", "http://127.0.0.1:5173/path"],
+    ["192.168.1.2:8080/path", "http://192.168.1.2:8080/path"],
+    ["[::1]:5173/path?q=x#y", "http://[::1]:5173/path?q=x#y"],
+    ["[2001:db8::1]:8443/path", "http://[2001:db8::1]:8443/path"],
+    ["https://localhost:5173/path", "https://localhost:5173/path"],
+    ["http://example.com/path", "http://example.com/path"],
+  ])("opens address %s with one canonical protocol", (input, expected) => {
+    expect(normalizeWorkbenchBrowserUrl(input)).toBe(expected)
+    expect(normalizeWorkbenchBrowserUrl(expected)).toBe(expected)
+  })
+
+  test("keeps an exactly8192 canonical address valid through repeated normalization", () => {
+    const prefix = "https://example.com/"
+    const canonical = prefix + "x".repeat(8192 - prefix.length)
+    expect(canonical.length).toBe(8192)
+    expect(normalizeWorkbenchBrowserUrl(canonical)).toBe(canonical)
+    expect(normalizeWorkbenchBrowserUrl(canonical.slice("https://".length))).toBe(canonical)
+    expect(normalizeWorkbenchBrowserUrl(normalizeWorkbenchBrowserUrl(canonical))).toBe(canonical)
+  })
+
+  test.each([
+    ["prefix", "example.com/" + "x".repeat(8192 - "example.com/".length)],
+    ["percent encoding", "https://example.com/" + "中".repeat(1000)],
+    ["punycode", "https://例子.测试/" + "x".repeat(8192 - "https://例子.测试/".length)],
+  ])("rejects %s expansion beyond the native canonical URL limit", (_kind, value) => {
+    expect(value.length).toBeLessThanOrEqual(8192)
+    const canonical = new URL(value.startsWith("https:") ? value : "https://" + value).href
+    expect(canonical.length).toBeGreaterThan(8192)
+    expect(() => normalizeWorkbenchBrowserUrl(value)).toThrow("bounded HTTP(S) URL")
+  })
+
+  test.each([
+    undefined, null, 42, "", " ", "//example.com", "/relative", "?query", "#hash", "javascript:alert(1)",
     "file:///C:/private.txt", "data:text/html,hello", "about:blank", "ftp://example.com", "https://user:pass@example.com",
     "https://example.com/?access_token=secret", "https://example.com/?TOKEN=secret", "https://example.com/#api_key=secret",
     "https://example.com/?%70assword=secret", "https://exam\tple.com", "https://example.com/\n", "https://example.com/" + "x".repeat(8192),
+    "example.com/?access_token=secret", "localhost:5173/#TOKEN=secret", "user:pass@example.com", "user@example.com",
+    "javascript:443", "data:80", "file:443", "custom:123", "ws://localhost:5173", "example.com:bad-port",
   ])("rejects unsafe or credential-bearing address %p", (value) => {
     expect(() => normalizeWorkbenchBrowserUrl(value)).toThrow()
   })

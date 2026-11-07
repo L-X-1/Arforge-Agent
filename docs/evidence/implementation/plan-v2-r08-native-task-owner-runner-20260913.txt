@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/core
+Working directory: %ARFORGE_REPO%/packages/core
 Command: bun test --rerun-every --timeout 60000 test/session-runner.test.ts test/session-runner-tool-registry.test.ts
 Exit code: 0
 Raw captured output:

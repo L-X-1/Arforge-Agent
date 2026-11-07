@@ -58,6 +58,27 @@ describe("Npm.add", () => {
 })
 
 describe("Npm.install", () => {
+  test("updates a bundled SDK file target and repairs a missing installed SDK without losing user config", async () => {
+    await using tmp = await tmpdir()
+    for (const version of ["1.0.0", "1.0.1"]) {
+      const sdk = path.join(tmp.path, `sdk-${version}`)
+      await fs.mkdir(sdk)
+      await writePackage(sdk, { name: "owned-sdk", version, main: "index.js" })
+      await Bun.write(path.join(sdk, "index.js"), `export const version = ${JSON.stringify(version)}`)
+    }
+    const profile = path.join(tmp.path, "profile")
+    await fs.mkdir(profile)
+    const config = '{"theme":"dark","customPlugin":"preserved"}'
+    await Bun.write(path.join(profile, "arforge.json"), config)
+    await Npm.install(profile, { add: [{ name: "owned-sdk", version: `file:${path.join(tmp.path, "sdk-1.0.0")}` }] })
+    await Npm.install(profile, { add: [{ name: "owned-sdk", version: `file:${path.join(tmp.path, "sdk-1.0.1")}` }] })
+    const installed = path.join(profile, "node_modules", "owned-sdk")
+    expect((await Bun.file(path.join(installed, "package.json")).json()).version).toBe("1.0.1")
+    await fs.rm(installed, { recursive: true, force: true })
+    await Npm.install(profile, { add: [{ name: "owned-sdk", version: `file:${path.join(tmp.path, "sdk-1.0.1")}` }] })
+    expect((await Bun.file(path.join(installed, "package.json")).json()).version).toBe("1.0.1")
+    expect(await Bun.file(path.join(profile, "arforge.json")).text()).toBe(config)
+  })
   test("respects omit from project .npmrc", async () => {
     await using tmp = await tmpdir()
 

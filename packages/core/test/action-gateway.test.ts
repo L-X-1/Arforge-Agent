@@ -4575,13 +4575,13 @@ describe("ActionGateway control-plane subject", () => {
     Effect.gen(function* () {
       const gateway = yield* ActionGateway.Service
       const authorizer = yield* Authorizer.Service
+      const actions = yield* DurableAction.Service
       let executions = 0
       const asked = yield* waitForControlAsked()
+      const action = controlInput()
+      const operation = controlOperation(() => Effect.sync(() => executions++).pipe(Effect.as("connected")))
       const fiber = yield* gateway
-        .execute(
-          controlInput(),
-          controlOperation(() => Effect.sync(() => executions++).pipe(Effect.as("connected"))),
-        )
+        .execute(action, operation)
         .pipe(Effect.forkScoped)
       const request = yield* Deferred.await(asked)
       yield* authorizer.reply({ requestID: request.id, reply: "reject" })
@@ -4590,7 +4590,21 @@ describe("ActionGateway control-plane subject", () => {
       if (exit._tag === "Failure") {
         const error = Cause.squash(exit.cause)
         expect(error).toBeInstanceOf(ActionGateway.BlockedError)
+        expect(error).toMatchObject({ actionID: action.actionID })
       }
+      const blocked = yield* actions.load(action.actionID)
+      expect(blocked.action.status).toBe("blocked")
+      expect(blocked.action.budget.attemptsUsed).toBe(0)
+      expect(blocked.authorization).toBeUndefined()
+      expect(blocked.activeAttempt).toBeUndefined()
+      expect(executions).toBe(0)
+      expect(yield* authorizer.get(request.id)).toBeUndefined()
+
+      const replay = yield* gateway.execute(action, operation).pipe(Effect.exit)
+      expect(Exit.isFailure(replay)).toBe(true)
+      if (Exit.isFailure(replay)) expect(Cause.squash(replay.cause)).toBeInstanceOf(ActionGateway.BlockedError)
+      expect((yield* actions.load(action.actionID)).action.status).toBe("blocked")
+      expect(yield* authorizer.list()).toEqual([])
       expect(executions).toBe(0)
     }),
   )

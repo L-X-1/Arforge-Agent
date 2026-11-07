@@ -1,13 +1,13 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Exit, Layer, Stream } from "effect"
 import { AgentV2 } from "@arforge-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { EventV2 } from "@arforge-ai/core/event"
-import { EventTable } from "@arforge-ai/core/event/sql"
+import { EventSequenceTable, EventTable } from "@arforge-ai/core/event/sql"
 import { Location } from "@arforge-ai/core/location"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { ProjectV2 } from "@arforge-ai/core/project"
@@ -48,6 +48,77 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  it.effect("creates sessions and durable rows for the captured principal", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const database = yield* Database.Service
+      const principal = { tenantID: "ten_captured_create", userID: "usr_captured_create" }
+      const created = yield* database.runAsPrincipal(principal, sessions.create({ location }))
+      const ownership = { tenant_id: principal.tenantID, owner_user_id: principal.userID }
+
+      expect(yield* database.runAsPrincipal(principal, sessions.get(created.id))).toEqual(created)
+      expect(yield* database.runAsPrincipal(principal, sessions.create({ id: created.id, location }))).toEqual(created)
+      expect(yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, created.id)).get()).toMatchObject(ownership)
+      expect(yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).get()).toMatchObject(ownership)
+      expect(yield* database.db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, created.id)).get()).toMatchObject(ownership)
+      expect(yield* Database.CurrentPrincipal).toBeUndefined()
+    }),
+  )
+
+  it.effect("rejects another principal's existing create ID without revealing or changing it", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const database = yield* Database.Service
+      const created = yield* sessions.create({ location })
+      const before = yield* database.db.select().from(EventTable).all()
+      const foreign = { tenantID: "ten_foreign_create", userID: "usr_foreign_create" }
+      expect(Exit.isFailure(yield* database.runAsPrincipal(foreign, sessions.get(created.id)).pipe(Effect.exit))).toBe(true)
+
+      const retried = yield* database.runAsPrincipal(foreign, sessions.create({ id: created.id, location })).pipe(Effect.exit)
+      expect(Exit.isFailure(retried)).toBe(true)
+      expect(yield* database.db.select().from(EventTable).all()).toEqual(before)
+      expect(yield* sessions.get(created.id)).toEqual(created)
+    }),
+  )
+
+  it.effect("filters session search and counts to the captured principal", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const database = yield* Database.Service
+      const local = yield* sessions.create({ location })
+      const foreign = { tenantID: "ten_foreign_list", userID: "usr_foreign_list" }
+      const rows = yield* database.runAsPrincipal(foreign, sessions.list({ directory: location.directory, search: local.title }))
+      expect(rows).toEqual([])
+      expect((yield* sessions.list({ directory: location.directory })).map((row) => row.id)).toEqual([local.id])
+    }),
+  )
+
+  it.effect("keeps one owner when different principals race the same supplied create ID", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const database = yield* Database.Service
+      const id = SessionV2.ID.create()
+      const principals = [
+        { tenantID: "ten_race_a", userID: "usr_race_a" },
+        { tenantID: "ten_race_b", userID: "usr_race_b" },
+      ]
+      const attempts = yield* Effect.all(principals.map((principal) =>
+        database.runAsPrincipal(principal, sessions.create({ id, location })).pipe(Effect.exit),
+      ), { concurrency: "unbounded" })
+      expect(attempts.filter(Exit.isSuccess)).toHaveLength(1)
+      expect(attempts.filter(Exit.isFailure)).toHaveLength(1)
+      const winner = principals[attempts.findIndex(Exit.isSuccess)]!
+      const loser = principals[attempts.findIndex(Exit.isFailure)]!
+      expect((yield* database.runAsPrincipal(winner, sessions.get(id))).id).toBe(id)
+      expect(Exit.isFailure(yield* database.runAsPrincipal(loser, sessions.get(id)).pipe(Effect.exit))).toBe(true)
+      expect((yield* database.runAsPrincipal(winner, sessions.list())).map((session) => session.id)).toEqual([id])
+      expect(yield* database.runAsPrincipal(loser, sessions.list())).toEqual([])
+      expect(yield* database.db.select().from(EventTable).all()).toMatchObject([
+        { aggregate_id: id, seq: 0, tenant_id: winner.tenantID, owner_user_id: winner.userID },
+      ])
+    }),
+  )
+
   it.effect("creates a fresh projected session when the ID is omitted", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -310,7 +381,7 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const created = yield* session.create({ location })
       const unavailable = (
-        effect: Effect.Effect<void, SessionV2.NotFoundError | SessionV2.OperationUnavailableError>,
+        effect: Effect.Effect<void, SessionV2.NotFoundError | SessionV2.OperationUnavailableError | import("../src/session/execution").OperationError>,
       ) =>
         effect.pipe(
           Effect.flip,

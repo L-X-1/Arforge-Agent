@@ -1,5 +1,5 @@
 import * as i18n from "@solid-primitives/i18n"
-import { createEffect, createMemo, createResource } from "solid-js"
+import { createEffect, createMemo, createResource, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { Persist, persisted } from "@/utils/persist"
@@ -201,11 +201,18 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
   gate: false,
   init: (props: { locale?: Locale }) => {
     const initial = props.locale ?? readStoredLocale() ?? detectLocale()
-    const [store, setStore, _, ready] = persisted(
+    const [persistence, setPersistence] = createStore({ failed: false, retrying: false })
+    let live = true
+    onCleanup(() => { live = false })
+    const [store, setStore, _, ready, controls] = persisted(
       Persist.global("language", ["language.v1"]),
       createStore({
         locale: initial,
       }),
+      {
+        preserveOnFailure: true,
+        onWrite(saved) { if (live) setPersistence("failed", !saved) },
+      },
     )
 
     const locale = createMemo<Locale>(() => normalizeLocale(store.locale))
@@ -230,6 +237,16 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
 
     return {
       ready,
+      persistence: {
+        failed: () => persistence.failed,
+        retrying: () => persistence.retrying,
+        async retry() {
+          if (!live || persistence.retrying || !controls) return false
+          setPersistence("retrying", true)
+          try { return await controls.retry() }
+          finally { if (live) setPersistence("retrying", false) }
+        },
+      },
       locale,
       intl,
       locales: LOCALES,

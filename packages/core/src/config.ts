@@ -154,7 +154,12 @@ function patchDocument(text: string, value: unknown, pointer: string[] = []): st
 export const updateDocument = Effect.fn("Config.updateDocument")(function* (
   directory: string,
   patch: Readonly<Record<string, unknown>>,
-  options?: { local?: boolean; validate?: (document: { path: string; text: string }) => void },
+  options?: {
+    local?: boolean
+    validate?: (document: { path: string; text: string }) => void
+    beforePatch?: (document: { path: string; text: string }) => void
+    removePaths?: ReadonlyArray<ReadonlyArray<string>>
+  },
 ) {
   const fs = yield* FSUtil.Service
   const flock = yield* EffectFlock.Service
@@ -192,7 +197,13 @@ export const updateDocument = Effect.fn("Config.updateDocument")(function* (
           issues: [{ path: [], message: "The configuration is invalid; no changes were saved." }],
         })
       if (base !== undefined && decodeDocument(base, file).length === 0) return yield* Effect.die(invalid())
-      const after = patchDocument(base ?? "{}\n", patch)
+      options?.beforePatch?.({ path: file, text: base ?? "{}\n" })
+      let after = patchDocument(base ?? "{}\n", patch)
+      for (const pointer of options?.removePaths ?? [])
+        after = applyEdits(
+          after,
+          modify(after, [...pointer], undefined, { formattingOptions: { insertSpaces: true, tabSize: 2 } }),
+        )
       if (decodeDocument(after, file).length === 0) return yield* Effect.die(invalid())
       // A remaining compatibility consumer must validate its response before
       // the commit. Reporting a failed save after modifying the file is unsafe.

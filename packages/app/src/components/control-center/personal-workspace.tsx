@@ -1,5 +1,5 @@
 import { Button } from "@arforge-ai/ui/button"
-import { For, Show, createEffect, createSignal, type JSX } from "solid-js"
+import { For, Show, createEffect, createSignal, onCleanup, type JSX } from "solid-js"
 import type { OperationsApi } from "@/utils/server"
 import { useLanguage, type Locale } from "@/context/language"
 import { useNavigate } from "@solidjs/router"
@@ -11,13 +11,12 @@ import type { ArforgeSettingsValue } from "./navigation"
 import type { SessionSettingsValue } from "@/components/session/session-settings-navigation"
 import { attentionAction, attentionDetail, attentionTitle, type AttentionTarget } from "./personal-workspace-attention"
 import { MemoryCandidateReviewCard } from "./memory-candidate-review"
+import { PersonalWorkspaceRuns } from "./personal-workspace-runs"
+import { canReadRunSource, workspaceSnapshotSources, type WorkspaceRun, type WorkspaceSnapshot } from "./personal-workspace-source"
 import {
   formatWorkspaceTime,
   childReceiptPresentation,
   personalJobApprovalLabel,
-  riskTierLabel,
-  runAuthorityLabel,
-  runInitiatorLabel,
   statusLabel,
   visibilityLabel,
   workspaceCopy,
@@ -29,7 +28,7 @@ type LocationInput = {
     workspace?: string
   }
 }
-type Snapshot = Awaited<ReturnType<OperationsApi["personalWorkspace"]["snapshot"]>>
+type Snapshot = WorkspaceSnapshot
 type ChildGroup = Awaited<ReturnType<OperationsApi["subagentControl"]["children"]>>
 type ChildSummary = ChildGroup["children"][number]
 
@@ -49,6 +48,8 @@ export function PersonalWorkspace(props: {
   ready: () => boolean
   sessionID?: string
   onNavigate?: (value: ArforgeSettingsValue | SessionSettingsValue) => void
+  serverName?: string
+  onOpenSource?: (run: WorkspaceRun, current: () => boolean) => Promise<unknown>
 }) {
   const t = useControlCenterText()
   const language = useLanguage()
@@ -65,16 +66,23 @@ export function PersonalWorkspace(props: {
   const [candidateNotice, setCandidateNotice] = createSignal<string>()
   const [childGroups, setChildGroups] = createSignal<ChildGroup[]>([])
   const [childrenLoading, setChildrenLoading] = createSignal(false)
+  let disposed = false
+  let scopeAPI = props.api()
+  let apiGeneration = 0
   const locationScopeKey = () => {
+    if (scopeAPI !== props.api()) { scopeAPI = props.api(); apiGeneration += 1 }
     const value = props.location().location
-    return value.directory + "\u0000" + (value.workspace ?? "")
+    return apiGeneration + "\u0000" + value.directory + "\u0000" + (value.workspace ?? "")
   }
   const scopeGuard = createScopeRequestGuard(locationScopeKey)
   let activeLoad: ScopeRequestToken | undefined
+  onCleanup(() => { disposed = true; scopeGuard.invalidate() })
 
   const loadChildren = async (data: Snapshot, requestedLocation: LocationInput, request: ScopeRequestToken) => {
     if (!scopeGuard.isCurrent(request)) return
-    const candidateParents = data.runs.slice(0, 12)
+    const candidateParents = data.location.directory === requestedLocation.location.directory
+      ? data.runs.filter(run => canReadRunSource(run, data.location)).slice(0, 12)
+      : []
     if (candidateParents.length === 0) {
       if (scopeGuard.isCurrent(request)) setChildGroups([])
       return
@@ -102,6 +110,11 @@ export function PersonalWorkspace(props: {
     }
   }
 
+  const openRunSource = async (run: WorkspaceRun, current: () => boolean) => {
+    const request = scopeGuard.capture()
+    await props.onOpenSource?.(run, () => !disposed && scopeGuard.isCurrent(request) && current())
+  }
+
   const load = async (force = false) => {
     if (!props.ready()) return
     if (activeLoad && !force) return
@@ -111,7 +124,7 @@ export function PersonalWorkspace(props: {
     setLoading(true)
     setError("")
     try {
-      const next = await props.api().personalWorkspace.snapshot({ ...requestedLocation, limit: 50 })
+      const next = workspaceSnapshotSources(await props.api().personalWorkspace.snapshot({ ...requestedLocation, limit: 50 }))
       if (!scopeGuard.isCurrent(request)) return
       setSnapshot(next)
       void loadChildren(next, requestedLocation, request)
@@ -479,33 +492,7 @@ export function PersonalWorkspace(props: {
               </div>
 
               <ProjectionSection title={copy().runs} count={data.runs.length}>
-                <div class="grid gap-2 md:grid-cols-2">
-                  <For each={data.runs}>
-                    {(run) => (
-                      <article class="rounded-md border border-border-weak-base bg-background-base p-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                          <code class="truncate text-10-regular text-text-weak">{run.runID}</code>
-                          <StateBadge state={run.state} locale={language.locale()} />
-                        </div>
-                        <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-10-regular text-text-weak">
-                          <span>{statusLabel(run.status, language.locale())}</span>
-                          <span>
-                            {copy().initiatedBy}: {runInitiatorLabel(run.initiator, language.locale())}
-                          </span>
-                          <span>{runAuthorityLabel(run.authority, language.locale())}</span>
-                          <span>{riskTierLabel(run.riskTier, language.locale())}</span>
-                          <Show when={run.recoveryRequired}>
-                            <span class="text-text-warning">{statusLabel("recovery_required", language.locale())}</span>
-                          </Show>
-                        </div>
-                        <div class="mt-2 text-10-regular text-text-weak">
-                          {formatMicros(run.budget.costMicrosUsed)} / {formatMicros(run.budget.maxCostMicros)} ·{" "}
-                          {copy().updated} {formatWorkspaceTime(run.updatedAt, language.locale())}
-                        </div>
-                      </article>
-                    )}
-                  </For>
-                </div>
+                <PersonalWorkspaceRuns runs={data.runs} serverName={props.serverName} onOpenSource={props.onOpenSource ? openRunSource : undefined} />
               </ProjectionSection>
 
               <ProjectionSection

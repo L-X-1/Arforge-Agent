@@ -89,6 +89,14 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
 function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
   const copy = { ...data }
+  if (copy.commands !== undefined) {
+    const commands = ConfigParse.schema(CoreConfig.Info.fields.commands, copy.commands, source)
+    const legacy = copy.command === undefined ? undefined : ConfigParse.schema(ConfigV1.Info.fields.command, copy.command, source)
+    // Normalize only the compatibility view, before ordinary document layering.
+    // An explicit legacy definition retains whole-entry precedence for its name.
+    copy.command = { ...commands, ...legacy }
+    delete copy.commands
+  }
   if (copy.mcp !== undefined) {
     const parts = ConfigMCPV1.split(copy.mcp)
     const canonical =

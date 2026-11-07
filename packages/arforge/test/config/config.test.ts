@@ -947,6 +947,76 @@ it.instance("handles command configuration", () =>
   }),
 )
 
+it.instance("loads canonical commands through the existing command configuration owner", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const commands = {
+      fmcheck: { template: "FM_NAMED $ARGUMENTS", description: "Canonical fixture", agent: "build", model: "local/model-b", variant: "careful", subtask: false },
+    }
+    yield* writeConfigEffect(test.directory, { commands, model: "local/default", username: "retained", formatter: false })
+    const config = yield* Config.use.get()
+    expect(config.command).toEqual(commands)
+    expect(config.model).toBe("local/default")
+    expect(config.username).toBe("retained")
+    expect(config.formatter).toBe(false)
+  }),
+)
+
+it.instance("canonical commands retain legacy whole-entry precedence in the same document", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const legacy = { template: "Legacy $ARGUMENTS", agent: "legacy-agent" }
+    yield* writeConfigEffect(test.directory, {
+      commands: {
+        fmcheck: { template: "Canonical $ARGUMENTS", model: "local/canonical", variant: "canonical-variant", subtask: true },
+        canonicalOnly: { template: "Canonical only" },
+      },
+      command: { fmcheck: legacy, legacyOnly: { template: "Legacy only" } },
+    })
+    const config = yield* Config.use.get()
+    expect(config.command).toEqual({
+      fmcheck: legacy, canonicalOnly: { template: "Canonical only" }, legacyOnly: { template: "Legacy only" },
+    })
+  }),
+)
+
+it.live("canonical commands preserve normal document layering over global legacy definitions", () =>
+  withConfigTree({
+    global: { username: "retained-global", command: { fmcheck: { template: "Global legacy", model: "local/global", variant: "global-variant" } } },
+    project: { commands: { fmcheck: { template: "Project canonical", agent: "build", subtask: false } } },
+  }, Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.command?.fmcheck).toEqual({ template: "Project canonical", model: "local/global", variant: "global-variant", agent: "build", subtask: false })
+    expect(config.username).toBe("retained-global")
+  })),
+)
+
+for (const command of [{ template: 42 }, { template: "Invalid variant", variant: 42 }])
+  it.instance(`canonical commands reject malformed entries without falling back to legacy: ${JSON.stringify(command)}`, () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* writeConfigEffect(test.directory, { commands: { fmcheck: command }, command: { fmcheck: { template: "Valid legacy" } } })
+      const result = yield* Config.use.get().pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({
+        name: "ConfigInvalidError",
+        data: { issues: expect.arrayContaining([expect.objectContaining({ path: ["fmcheck", "variant" in command ? "variant" : "template"] })]) },
+      })
+    }),
+  )
+
+it.effect("canonical commands retain authored spelling and fields across an unrelated global update", () =>
+  withGlobalConfig({ config: { commands: { fmcheck: { template: "Keep $ARGUMENTS", model: "local/model-b", variant: "careful", subtask: false } } } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const result = yield* Config.use.updateGlobal({ username: "saved" }, yield* LocationServiceMap.Service)
+      expect(result.info.command?.fmcheck).toEqual({ template: "Keep $ARGUMENTS", model: "local/model-b", variant: "careful", subtask: false })
+      const saved = yield* FSUtil.use.readJson(path.join(dir, "arforge.json"))
+      expect(saved).toMatchObject({ username: "saved", commands: { fmcheck: { template: "Keep $ARGUMENTS", model: "local/model-b", variant: "careful", subtask: false } } })
+      expect(saved).not.toHaveProperty("command")
+    }),
+  ),
+)
+
 it.instance("migrates autoshare to share field", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance

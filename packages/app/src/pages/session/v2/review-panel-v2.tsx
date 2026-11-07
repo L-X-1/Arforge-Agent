@@ -1,4 +1,14 @@
-import { createMemo, createResource, createSignal, Show, type JSX } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+  type JSX,
+} from "solid-js"
 import type { SnapshotFileDiff, VcsFileDiff } from "@arforge-ai/sdk/v2"
 import type { FileDiffInfo } from "@arforge-ai/client/promise"
 import {
@@ -21,6 +31,9 @@ import type {
 import FileTreeV2 from "@/components/file-tree-v2"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { useSessionLayout } from "@/pages/session/session-layout"
+import { reviewPanelDiffStyle } from "./review-panel-v2-layout"
 import {
   filterRenderableDiff,
   filterReviewFiles,
@@ -30,6 +43,7 @@ import {
 } from "@/pages/session/v2/review-diff-kinds"
 import type { ReviewPanelV2State } from "@/pages/session/v2/review-panel-v2-state"
 import { applyFileListKeyDown, SessionFileListV2 } from "@/pages/session/v2/session-file-list-v2"
+import "./review-panel-v2.css"
 
 type ReviewDiff = FileDiffInfo | SnapshotFileDiff | VcsFileDiff
 
@@ -43,6 +57,8 @@ export type ReviewPanelV2Props = {
   activeFile?: string
   onSelectFile: (path: string) => void
   diffStyle: SessionReviewDiffStyle
+  /** null: no explicit preference, use responsive default; undefined: preserve legacy controlled value. */
+  diffStylePreference?: SessionReviewDiffStyle | null
   onDiffStyleChange?: (style: SessionReviewDiffStyle) => void
   state: ReviewPanelV2State
   onLineComment?: (comment: SessionReviewLineComment) => void
@@ -56,6 +72,47 @@ export type ReviewPanelV2Props = {
 
 export function ReviewPanelV2(props: ReviewPanelV2Props) {
   const sdk = useSDK()
+  const serverSDK = useServerSDK()
+  const { sessionKey, view } = useSessionLayout()
+  const sourceKey = createMemo(() =>
+    JSON.stringify([serverSDK().scope, sdk().directory, sessionKey(), view().review.mode()]),
+  )
+  let choiceSource: string | undefined
+  let root!: HTMLDivElement
+  onMount(() => {
+    const preview = root.querySelector<HTMLElement>('[data-slot="session-review-v2-preview"]')
+    if (!preview) return
+    const measure = () => props.state.setPreviewWidth(preview.clientWidth)
+    const observer = new ResizeObserver(measure)
+    observer.observe(preview)
+    measure()
+    onCleanup(() => observer.disconnect())
+  })
+  const diffStyle = createMemo<SessionReviewDiffStyle>(() => {
+    const selected = props.state.diffStyleChoice()
+    return reviewPanelDiffStyle({
+      width: props.state.previewWidth(),
+      preference: props.diffStylePreference,
+      choice: choiceSource === sourceKey() ? selected : undefined,
+      controlled: props.diffStyle,
+    })
+  })
+  const setDiffStyle = (style: SessionReviewDiffStyle) => {
+    // Keep a same-value explicit choice effective while the real preference setter runs.
+    choiceSource = sourceKey()
+    props.state.setDiffStyleChoice(style)
+    props.onDiffStyleChange?.(style)
+  }
+  createEffect(
+    on(
+      () => [sourceKey(), props.diffStyle, props.diffStylePreference] as const,
+      () => {
+        choiceSource = undefined
+        props.state.setDiffStyleChoice(undefined)
+      },
+      { defer: true },
+    ),
+  )
 
   const diffs = createMemo(() => props.diffs().filter(filterRenderableDiff))
   const filteredFiles = createMemo(() =>
@@ -110,61 +167,63 @@ export function ReviewPanelV2(props: ReviewPanelV2Props) {
       })
 
   return (
-    <SessionReviewV2
-      title={props.title}
-      stats={<DiffChanges changes={diffs()} />}
-      empty={props.empty}
-      sidebarOpen={props.state.sidebarOpened()}
-      sidebar={
-        // Always mounted: the sidebar header hosts the changes-mode dropdown,
-        // which must stay reachable when the current mode has zero diffs.
-        <ReviewPanelV2Sidebar
-          title={props.title}
-          state={props.state}
-          diffsReady={props.diffsReady}
-          onSelectFile={props.onSelectFile}
-          diffs={diffs}
-          filteredFiles={filteredFiles}
-          searching={searching}
-          kinds={treeKinds}
-          activeDiff={activeDiff}
-        />
-      }
-      activeFile={activeDiff()}
-      files={filteredFiles()}
-      onSelectFile={props.onSelectFile}
-      diffStyle={props.diffStyle}
-      onDiffStyleChange={props.onDiffStyleChange}
-      expandMode={props.state.expandMode()}
-      onExpandModeChange={props.state.setExpandMode}
-      hasDiffs={diffs().length > 0}
-      preview={
-        // Key on the file path, not the diff object identity, so refreshed diff data
-        // updates the mounted preview instead of remounting the whole viewer.
-        <Show when={activeDiff()} keyed>
-          {(file) => (
-            <Show when={activeItem()}>
-              {(diff) => (
-                <SessionReviewFilePreviewV2
-                  file={file}
-                  diff={diff()}
-                  diffStyle={props.diffStyle}
-                  expandMode={props.state.expandMode()}
-                  readFile={readFile}
-                  onLineComment={props.onLineComment}
-                  onLineCommentUpdate={props.onLineCommentUpdate}
-                  onLineCommentDelete={props.onLineCommentDelete}
-                  lineCommentActions={props.lineCommentActions}
-                  comments={props.comments}
-                  focusedComment={props.focusedComment}
-                  onFocusedCommentChange={props.onFocusedCommentChange}
-                />
-              )}
-            </Show>
-          )}
-        </Show>
-      }
-    />
+    <div ref={root} data-component="review-panel-v2">
+      <SessionReviewV2
+        title={props.title}
+        stats={<DiffChanges changes={diffs()} />}
+        empty={props.empty}
+        sidebarOpen={props.state.sidebarOpened()}
+        sidebar={
+          // Always mounted: the sidebar header hosts the changes-mode dropdown,
+          // which must stay reachable when the current mode has zero diffs.
+          <ReviewPanelV2Sidebar
+            title={props.title}
+            state={props.state}
+            diffsReady={props.diffsReady}
+            onSelectFile={props.onSelectFile}
+            diffs={diffs}
+            filteredFiles={filteredFiles}
+            searching={searching}
+            kinds={treeKinds}
+            activeDiff={activeDiff}
+          />
+        }
+        activeFile={activeDiff()}
+        files={filteredFiles()}
+        onSelectFile={props.onSelectFile}
+        diffStyle={diffStyle()}
+        onDiffStyleChange={props.onDiffStyleChange ? setDiffStyle : undefined}
+        expandMode={props.state.expandMode()}
+        onExpandModeChange={props.state.setExpandMode}
+        hasDiffs={diffs().length > 0}
+        preview={
+          // Key on the file path, not the diff object identity, so refreshed diff data
+          // updates the mounted preview instead of remounting the whole viewer.
+          <Show when={activeDiff()} keyed>
+            {(file) => (
+              <Show when={activeItem()}>
+                {(diff) => (
+                  <SessionReviewFilePreviewV2
+                    file={file}
+                    diff={diff()}
+                    diffStyle={diffStyle()}
+                    expandMode={props.state.expandMode()}
+                    readFile={readFile}
+                    onLineComment={props.onLineComment}
+                    onLineCommentUpdate={props.onLineCommentUpdate}
+                    onLineCommentDelete={props.onLineCommentDelete}
+                    lineCommentActions={props.lineCommentActions}
+                    comments={props.comments}
+                    focusedComment={props.focusedComment}
+                    onFocusedCommentChange={props.onFocusedCommentChange}
+                  />
+                )}
+              </Show>
+            )}
+          </Show>
+        }
+      />
+    </div>
   )
 }
 

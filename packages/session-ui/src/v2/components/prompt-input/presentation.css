@@ -1,8 +1,11 @@
 form[data-component="prompt-input-v2"] {
   font-family: var(--font-family-sans, var(--arforge-font-sans, "Noto Sans SC", sans-serif));
-  border-radius: 16px;
+  padding: 16px 16px 12px;
+  border-radius: 20px;
+  border-color: var(--v2-border-border-muted);
   background: var(--arforge-review-composer-background, var(--v2-background-bg-layer-01));
-  box-shadow: none;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 1%);
+  transition: border-color 140ms ease;
 }
 
 form[data-component="prompt-input-v2"] [data-slot="prompt-input-editor"],
@@ -10,15 +13,15 @@ form[data-component="prompt-input-v2"] [data-slot="prompt-input-placeholder"] {
   font-size: var(--arforge-review-body-size, 17px);
   font-weight: 400;
   line-height: var(--arforge-review-body-line, 1.8);
-  padding: 16px 20px 8px;
+  padding: 0;
   overflow-wrap: anywhere;
 }
 
 form[data-component="prompt-input-v2"] [data-slot="prompt-input-editor"] {
   /* lh tracks the actual font/zoom: attachments and tools are separate siblings. */
   box-sizing: border-box;
-  min-height: calc(2lh + 24px);
-  max-height: calc(8lh + 24px);
+  min-height: 2lh;
+  max-height: 8lh;
   overflow-y: auto;
   overscroll-behavior-y: contain;
   scrollbar-width: thin;
@@ -26,6 +29,11 @@ form[data-component="prompt-input-v2"] [data-slot="prompt-input-editor"] {
 
 form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] {
   flex-shrink: 0;
+  align-items: center;
+  min-height: 32px;
+  margin-top: 12px;
+  padding: 0;
+  gap: 4px;
 }
 
 @media (pointer: coarse) {
@@ -38,5 +46,212 @@ form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] {
 @media (prefers-reduced-motion: reduce) {
   form[data-component="prompt-input-v2"] [data-slot="prompt-input-controls"] {
     transition: none !important;
+  }
+}
+
+/* Z02: DOM and keyboard order follow attachment/mode left, model/send right. */
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-controls"] {
+  align-self: center;
+  gap: 4px;
+  overflow: visible;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-model-controls"] {
+  margin-inline-start: auto;
+  max-width: 55%;
+  align-self: center;
+}
+form[data-component="prompt-input-v2"]
+  [data-slot="prompt-input-model-controls"]
+  > [data-component="tooltip-v2-trigger"] {
+  min-width: 0;
+  max-width: 100%;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] [data-component="button-v2"] {
+  min-height: 32px;
+  height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 400;
+}
+form[data-component="prompt-input-v2"] [data-action="prompt-submit"] {
+  width: 32px;
+  height: 32px;
+  background: var(--v2-background-bg-contrast);
+  color: var(--v2-icon-icon-contrast);
+  box-shadow: none;
+}
+/* This legacy primary IconButton assigns its SVG a separate strong color. */
+form[data-component="prompt-input-v2"] [data-action="prompt-submit"] [data-component="icon"],
+form[data-component="prompt-input-v2"] [data-action="prompt-submit"] [data-slot="icon-svg"] {
+  color: inherit;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] [data-component="button-v2"] {
+  font-size: 14px;
+}
+[data-component="menu-v2-content"][data-prompt-attachment-menu],
+[data-component="menu-v2-content"][data-prompt-mode-menu] {
+  padding: 8px;
+  border-radius: 16px;
+}
+[data-prompt-attachment-menu] [data-component="menu-v2-item"] {
+  min-height: 36px;
+}
+[data-prompt-mode-menu] [data-component="menu-v2-item"][data-checked] {
+  background: var(--v2-overlay-simple-overlay-hover);
+}
+@media (max-width: 520px) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-model-controls"] {
+    max-width: calc(100% - 44px);
+  }
+}
+@media (pointer: coarse) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] [data-component="button-v2"],
+  form[data-component="prompt-input-v2"] [data-action="prompt-submit"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  [data-prompt-attachment-menu] [data-component="menu-v2-item"] {
+    min-height: 44px;
+  }
+}
+
+/* R12: retain the attachment strip above text and keep removal reachable by keyboard/touch. */
+form[data-component="prompt-input-v2"] [data-slot="prompt-attachments-scroll"] {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-attachments"] button:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-attachments-scroll"] {
+    padding-block: 12px 4px;
+  }
+  form[data-component="prompt-input-v2"] [data-slot="prompt-attachments"] button {
+    opacity: 1;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* F11–F12: composer-owned controls and menus use the approved solid surfaces. */
+form[data-component="prompt-input-v2"]:focus-within {
+  border-color: var(--v2-text-text-muted);
+}
+form[data-component="prompt-input-v2"] :is([data-action="prompt-attach"], [data-action="prompt-submit"]) {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 8px;
+  border-radius: 8px;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] :is(svg, [data-slot="icon-svg"]) {
+  width: 16px;
+  height: 16px;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] button:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+[data-component="menu-v2-content"]:is([data-prompt-attachment-menu], [data-prompt-mode-menu]),
+[data-component="prompt-input-suggestions"] {
+  max-height: min(480px, var(--kb-popper-content-available-height, calc(100dvh - 16px)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 16px;
+  background: var(--v2-background-bg-layer-01);
+  box-shadow: 0 10px 28px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 24%));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:is([data-prompt-attachment-menu], [data-prompt-mode-menu]) [data-component="menu-v2-item"] {
+  height: auto;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+:is([data-prompt-attachment-menu], [data-prompt-mode-menu]) [data-slot="menu-v2-item-content"] {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+:is([data-prompt-attachment-menu], [data-prompt-mode-menu], [data-component="prompt-input-suggestions"])
+  [data-slot="prompt-menu-labels"] {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+:is([data-prompt-attachment-menu], [data-prompt-mode-menu], [data-component="prompt-input-suggestions"])
+  [data-slot="prompt-menu-description"] {
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+[data-component="prompt-input-suggestions"] {
+  font-family: var(--font-family-sans);
+}
+[data-component="prompt-input-suggestions"] [data-suggestion-id] {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+[data-component="prompt-input-suggestions"] :is(button, input):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+:is([data-prompt-attachment-menu], [data-prompt-mode-menu]) [data-component="menu-v2-item"]:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-attachments-scroll"] {
+  padding: 4px 4px 12px;
+}
+form[data-component="prompt-input-v2"] [data-slot="prompt-attachment-preview"] {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+@media (max-width: 639px) {
+  form[data-component="prompt-input-v2"] {
+    padding: 12px;
+  }
+}
+@media (pointer: coarse) {
+  form[data-component="prompt-input-v2"] :is([data-action="prompt-attach"], [data-action="prompt-submit"]),
+  :is([data-prompt-attachment-menu], [data-prompt-mode-menu]) [data-component="menu-v2-item"],
+  [data-component="prompt-input-suggestions"] [data-suggestion-id] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  form[data-component="prompt-input-v2"],
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-model-controls"] {
+    transition: none !important;
+  }
+  :is([data-prompt-attachment-menu], [data-prompt-mode-menu])[data-expanded] {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  form[data-component="prompt-input-v2"] [data-slot="prompt-input-footer"] button:focus-visible,
+  form[data-component="prompt-input-v2"] [data-slot="prompt-attachments"] button:focus-visible,
+  :is([data-prompt-attachment-menu], [data-prompt-mode-menu]) [data-component="menu-v2-item"]:focus-visible,
+  [data-component="prompt-input-suggestions"] :is(button, input):focus-visible {
+    outline-color: Highlight;
   }
 }

@@ -1,5 +1,6 @@
 import { Button } from "@arforge-ai/ui/button"
-import { For, Show, createEffect, createSignal } from "solid-js"
+import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js"
+import { createScopeRequestGuard, type ScopeRequestToken } from "@/utils/scope-request"
 import { useLanguage, type Locale } from "@/context/language"
 import type { OperationsApi } from "@/utils/server"
 import { serializedTimeMillis, type MemoryCandidateReviewDto } from "@/utils/memory-candidate-api"
@@ -43,25 +44,51 @@ export function MemoryCandidateReviewCard(props: {
   const [reason, setReason] = createSignal("")
   const [confirmReject, setConfirmReject] = createSignal(false)
   let autoOpened = false
+  let disposed = false
+  let sourceAPI = props.api()
+  let sourceGeneration = 0
+  let loadedReview: ScopeRequestToken | undefined
 
   const location = () => props.location().location
+  const scopeKey = () => {
+    const api = props.api()
+    if (api !== sourceAPI) { sourceAPI = api; sourceGeneration += 1 }
+    const source = location()
+    return `${sourceGeneration}\u0000${source.directory}\u0000${source.workspace ?? ""}\u0000${props.candidate.candidateID}`
+  }
+  const guard = createScopeRequestGuard(scopeKey)
+  const current = (request: ScopeRequestToken) => !disposed && guard.isCurrent(request)
+  onCleanup(() => { disposed = true; loadedReview = undefined; guard.invalidate() })
   const load = async () => {
+    if (disposed) return
+    const request = guard.invalidate()
+    const api = props.api()
+    const source = { ...location() }
+    const candidateID = props.candidate.candidateID
+    loadedReview = undefined
     setLoading(true)
     setError(undefined)
     try {
-      setReview(
-        await props.api().memoryCandidates.review({
-          candidateID: props.candidate.candidateID,
-          directory: location().directory,
-          workspace: location().workspace,
-        }),
-      )
+      const next = await api.memoryCandidates.review({ candidateID, directory: source.directory, workspace: source.workspace })
+      if (!current(request)) return
+      setReview(next)
+      loadedReview = request
     } catch (cause) {
-      setError(publicError(cause))
+      if (current(request)) setError(publicError(cause))
     } finally {
-      setLoading(false)
+      if (current(request)) setLoading(false)
     }
   }
+  createEffect(on(scopeKey, () => {
+    guard.current()
+    loadedReview = undefined
+    setReview(undefined)
+    setReason("")
+    setError(undefined)
+    setAction(undefined)
+    setConfirmReject(false)
+    if (expanded() || props.autoOpen) void load()
+  }, { defer: true }))
 
   createEffect(() => {
     if (!props.autoOpen) {
@@ -85,20 +112,25 @@ export function MemoryCandidateReviewCard(props: {
   }
 
   const decide = async (operation: "approve" | "reject" | "activate") => {
-    const current = review()
+    const value = review()
     const decisionReason = reason().trim()
-    if (!current || !decisionReason) return
+    if (!value || !decisionReason || !loadedReview || !current(loadedReview)) return
+    const request = guard.capture()
+    const api = props.api()
+    const source = { ...location() }
     setAction(operation)
     setError(undefined)
     try {
-      const next = await props.api().memoryCandidates[operation]({
-        candidateID: current.candidateID,
-        directory: location().directory,
-        workspace: location().workspace,
-        expectedUpdatedAt: serializedTimeMillis(current.time.updated),
+      const next = await api.memoryCandidates[operation]({
+        candidateID: value.candidateID,
+        directory: source.directory,
+        workspace: source.workspace,
+        expectedUpdatedAt: serializedTimeMillis(value.time.updated),
         reason: decisionReason,
       })
+      if (!current(request)) return
       setReview(next)
+      loadedReview = request
       setReason("")
       setConfirmReject(false)
       props.onChanged(
@@ -106,9 +138,9 @@ export function MemoryCandidateReviewCard(props: {
         next.status,
       )
     } catch (cause) {
-      setError(publicError(cause))
+      if (current(request)) setError(publicError(cause))
     } finally {
-      setAction(undefined)
+      if (current(request)) setAction(undefined)
     }
   }
 
@@ -195,7 +227,12 @@ export function MemoryCandidateReviewCard(props: {
                   </div>
                   <div>
                     <dt class="text-text-base">{copy().evidence}</dt>
-                    <dd class="break-all">{value().sourceEvidenceIDs.join(", ") || "—"}</dd>
+                    <dd class="break-all" data-testid="memory-candidate-source-preview">
+                      <Show when={value().sourceEvidenceIDs.length > 0} fallback={copy().noSourceEvidence}>
+                        <For each={value().sourceEvidenceIDs}>{id => <code class="block">{id}</code>}</For>
+                        <p>{copy().sourcePreviewUnavailable}</p>
+                      </Show>
+                    </dd>
                   </div>
                 </dl>
 

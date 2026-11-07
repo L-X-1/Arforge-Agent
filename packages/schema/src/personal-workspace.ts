@@ -8,7 +8,7 @@ import { Session } from "./session"
 import { TaskGraph } from "./task-graph"
 import { Workspace } from "./workspace"
 import { AbsolutePath, DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath, optional } from "./schema"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 /** Safe UI state: it describes who must act without exposing execution input. */
 export const AutomationState = Schema.Literals([
@@ -71,9 +71,29 @@ export const RunBudget = Schema.Struct({
 }).annotate({ identifier: "PersonalWorkspace.RunBudget" })
 export interface RunBudget extends Schema.Schema.Type<typeof RunBudget> {}
 
+/** Persisted parent origin, never inferred from the workspace displaying history.
+ * Inspectability describes source compatibility, not permission or control authority.
+ */
+export const RunSource = Schema.Union([
+  Schema.Struct({
+    inspectability: Schema.Literals(["current", "requires-navigation", "session-moved"]),
+    projectID: Project.ID,
+    directory: AbsolutePath,
+  }),
+  Schema.Struct({
+    inspectability: Schema.Literal("missing-binding"),
+    projectID: Project.ID.pipe(optional),
+    directory: AbsolutePath.pipe(optional),
+  }),
+]).annotate({ identifier: "PersonalWorkspace.RunSource" })
+export type RunSource = typeof RunSource.Type
+
 export const RunSummary = Schema.Struct({
   runID: AgentRuntime.RunID,
   sessionID: Session.ID,
+  // Older servers/history projections have no origin field. Decode to a safe
+  // read-only state; constructors and the Core projection still supply source.
+  source: RunSource.pipe(Schema.withDecodingDefault(Effect.succeed({ inspectability: "missing-binding" as const }))),
   status: AgentRuntime.RunStatus,
   initiator: AgentRuntime.Initiator,
   authority: AgentRuntime.Authority,

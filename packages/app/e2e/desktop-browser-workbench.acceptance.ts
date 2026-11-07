@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawnSync, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
+import { createRequire } from "node:module"
 import { createServer } from "node:http"
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { _electron, expect, type ElectronApplication, type Page } from "@playwright/test"
 
 // Real built desktop renderer, preload, registered IPC handlers and Core runtime.
@@ -102,6 +103,12 @@ const navigateSession = async (id: string) => {
   assert.equal(await appAPI().evaluate(() =>
     Array.isArray((window as unknown as { __browserAcceptanceStates?: unknown }).__browserAcceptanceStates)), true,
     "Session navigation lost the original preload state subscription")
+  // Enter the inspection surface through its actual control. A background
+  // home/session transition may restore a closed per-view panel preference.
+  const reviewToggle = appAPI().locator('button[aria-controls="review-panel"]:visible')
+  await expect(reviewToggle).toBeVisible()
+  if (await reviewToggle.getAttribute("aria-expanded") !== "true") await reviewToggle.click()
+  await expect(reviewToggle).toHaveAttribute("aria-expanded", "true")
   await expect(panel()).toBeVisible()
 }
 const nativePages = async (): Promise<NativePage[]> => application!.evaluate(({ BrowserWindow }, id) => {
@@ -138,6 +145,20 @@ const assertBounds = async () => {
   assert.ok(rect)
   const zoom = await application!.evaluate(({ BrowserWindow }, id) =>
     BrowserWindow.getAllWindows().find((win) => win.webContents.id === id)!.webContents.getZoomFactor(), ownerID)
+  const mismatched = (["x", "y", "width", "height"] as const)
+    .filter((key) => Math.abs(current.bounds[key] - rect[key] * zoom) > 2)
+  if (mismatched.length) {
+    diagnostics.push({ time: Date.now(), stage, event: "native-bounds-first-mismatch",
+      native: current.bounds, renderer: rect, zoom, mismatched })
+    // Observe subsequent frames without changing the original assertion. This
+    // distinguishes a stale asynchronous sample from persistent geometry drift.
+    for (let sample = 0; sample < 4; sample++) {
+      await sleep(32)
+      diagnostics.push({ time: Date.now(), stage, event: "native-bounds-followup",
+        native: (await nativePages()).filter((item) => item.visible).map((item) => item.bounds),
+        renderer: await panel().locator("[data-browser-viewport]").boundingBox(), zoom })
+    }
+  }
   for (const key of ["x", "y", "width", "height"] as const)
     assert.ok(Math.abs(current.bounds[key] - rect[key] * zoom) <= 2, "Native view differs from renderer viewport: " + key)
 }
@@ -155,6 +176,25 @@ const navigateWebsite = async (url: string) => {
 
 try {
   for (const directory of [workspace, profile]) await mkdir(directory, { recursive: true })
+  // A synthetic legacy attachment history reproduces the real 2.2M-character
+  // store. Keep user profiles and their actual images entirely out of this test.
+  const storageName = "arforge.storage-regression.dat"
+  const legacyHistory = JSON.stringify({ entries: [{ prompt: [
+    { type: "text", content: "Synthetic attachment history", start: 0, end: 28 },
+    { type: "image", id: "synthetic", filename: "synthetic.png", mime: "image/png",
+      dataUrl: "data:image/png;base64," + "A".repeat(2_232_000) },
+  ], comments: [] }] })
+  await writeFile(join(profile, storageName), JSON.stringify({ history: legacyHistory }), "utf8")
+  const requireBuild = createRequire(import.meta.url)
+  const { build } = await import(pathToFileURL(requireBuild.resolve("vite")).href)
+  await build({
+    configFile: false, root: runRoot, envDir: runRoot, logLevel: "warn",
+    build: {
+      lib: { entry: join(desktopRoot, "src/renderer/storage-queue.ts"), name: "ArforgeStorageRegression",
+        formats: ["iife"], fileName: () => "storage-regression.js" },
+      outDir: join(runRoot, "storage-module"), emptyOutDir: false, minify: false,
+    },
+  })
   await writeFile(join(workspace, "notes.txt"), "Isolated desktop browser acceptance.\n", "utf8")
   await new Promise<void>((done, fail) => { fixture.once("error", fail); fixture.listen(0, "127.0.0.1", done) })
   bound = true
@@ -163,6 +203,7 @@ try {
   const origin = "http://127.0.0.1:" + address.port
   await writeFile(join(workspace, "arforge.json"), JSON.stringify({
     $schema: "urn:arforge:config", formatter: false, lsp: false,
+    ...(process.platform === "win32" ? { shell: process.env.COMSPEC || "cmd.exe" } : {}),
     provider: {
       test: {
         name: "Manual browser acceptance", id: "test", env: [], npm: "@ai-sdk/openai-compatible",
@@ -312,6 +353,48 @@ try {
   const healthBody = await health.json() as { healthy: boolean; protocol: string }
   assert.equal(healthBody.healthy, true)
   assert.equal(healthBody.protocol, "v2")
+  const shells = await fetch(initialization.url + "/api/pty/shells", {
+    headers: { "x-arforge-directory": workspace }, signal: AbortSignal.timeout(15_000),
+  })
+  assert.equal(shells.status, 200, "The available-shell catalogue must not match the PTY-ID route")
+  const shellBody = await shells.json() as { data?: Array<{ path: string; name: string; acceptable: boolean }> }
+  assert.ok(Array.isArray(shellBody.data))
+  assert.ok(shellBody.data.length > 0, "This host has an installed shell")
+  assert.ok(shellBody.data.every((item) => typeof item.path === "string" && typeof item.name === "string" &&
+    typeof item.acceptable === "boolean"))
+  checks.push("real canonical v2 available-shell catalogue returns installed choices without spawning a terminal")
+  progress("real-large-storage-compatibility")
+  // DevTools evaluates the reviewed production helper for this bridge test;
+  // keep the application's script CSP intact rather than adding inline script.
+  await page.evaluate(await readFile(join(runRoot, "storage-module/storage-regression.js"), "utf8"))
+  const storageResult = await page.evaluate(async ({ name, legacy }) => {
+    type Storage = {
+      getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<void>
+      removeItem(key: string): Promise<void>; key(index: number): Promise<string | undefined>
+      getLength(): Promise<number>
+    }
+    const target = window as unknown as {
+      api: unknown
+      ArforgeStorageRegression: { createDesktopStorage(name: string, bridge: unknown): Storage }
+    }
+    const storage = target.ArforgeStorageRegression.createDesktopStorage(name, target.api)
+    const legacyRead = await storage.getItem("history")
+    if (legacyRead !== legacy) throw new Error("Legacy attachment history was not preserved")
+    const next = legacy + "\n" // byte-exact large string; no truncation or image stripping
+    await storage.setItem("history", next)
+    const freshAdapter = target.ArforgeStorageRegression.createDesktopStorage(name, target.api)
+    const restored = await freshAdapter.getItem("history")
+    if (restored !== next) throw new Error("Large history changed across a fresh adapter")
+    const length = await freshAdapter.getLength()
+    const key = await freshAdapter.key(0)
+    if (length !== 1 || key !== "history") throw new Error("Internal storage keys escaped the adapter")
+    await freshAdapter.removeItem("history")
+    if (await storage.getItem("history") !== null) throw new Error("Large history removal did not settle")
+    return { passed: true, legacy_characters: legacy.length, restored_characters: restored.length,
+      logical_keys: length, actual_preload_and_ipc: true, user_data_used: false }
+  }, { name: storageName, legacy: legacyHistory })
+  report.large_storage = storageResult
+  checks.push("synthetic 2.2M-character legacy attachment history survives bounded real preload/IPC storage, fresh adapter read, logical enumeration and removal")
   const sessions: string[] = []
   for (let i = 0; i < 2; i++) {
     const created = await fetch(initialization.url + "/api/session", {
@@ -365,9 +448,51 @@ try {
   await navigateSession(sessions[0]!)
   checks.push("real home rows and session tabs without document reload; real desktop renderer and preload; registered IPC/Core runtime; isolated v2 server and real sessions")
 
+  progress("real-native-terminal-input-output")
+  let terminalOutput = ""
+  const terminalDiagnostic = { connected: false, framesSent: 0, framesReceived: 0, paths: [] as string[] }
+  report.terminal = terminalDiagnostic
+  page.on("websocket", (socket) => {
+    terminalDiagnostic.paths.push(new URL(socket.url()).pathname)
+    if (!/\/api\/pty\/[^/]+\/connect/.test(socket.url())) return
+    socket.on("framesent", () => terminalDiagnostic.framesSent++)
+    socket.on("framereceived", ({ payload }) => {
+      terminalDiagnostic.connected = true
+      terminalDiagnostic.framesReceived++
+      const text = typeof payload === "string" ? payload : payload.toString("utf8")
+      if (!text.startsWith("\u0000")) terminalOutput = (terminalOutput + text).slice(-16_000)
+    })
+  })
+  const terminalToggle = page.locator('button[aria-controls="terminal-panel"]:visible')
+  if (await terminalToggle.count() === 1) await terminalToggle.click()
+  else await page.getByRole("button", { name: "\u5207\u6362\u7ec8\u7aef", exact: true }).click()
+  const terminalInput = page.locator('[data-component="terminal"] textarea')
+  await expect(terminalInput).toHaveCount(1, { timeout: 20_000 })
+  await expect.poll(() => terminalDiagnostic.connected, { timeout: 15_000 }).toBe(true)
+  await page.locator('[data-component="terminal"]').click({ position: { x: 30, y: 30 } })
+  await expect.poll(() => terminalInput.evaluate((element) => element === document.activeElement)).toBe(true)
+  await page.keyboard.type("echo ARFORGE_NATIVE_TERMINAL_OK")
+  const plainTerminal = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+  // ConPTY can position the cursor instead of emitting CR/LF. Observe the
+  // complete input echo first, then require a new result after Enter, so an
+  // echoed command alone cannot satisfy the round-trip assertion.
+  await expect.poll(() => plainTerminal(terminalOutput).includes("echo ARFORGE_NATIVE_TERMINAL_OK"),
+    { timeout: 15_000 }).toBe(true)
+  const outputBeforeEnter = terminalOutput.length
+  await page.keyboard.press("Enter")
+  try {
+    await expect.poll(() => plainTerminal(terminalOutput.slice(outputBeforeEnter)).includes("ARFORGE_NATIVE_TERMINAL_OK"),
+      { timeout: 15_000, message: "The real shell did not return new marker output after Enter" }).toBe(true)
+  } finally {
+    Object.assign(terminalDiagnostic, { outputTail: terminalOutput.slice(-3000) })
+  }
+  report.terminal = { passed: true, transport: "real PTY websocket", input: "real Ghostty keyboard", outputLineVerified: true }
+  checks.push("actual desktop terminal toggle creates a real shell; Ghostty keyboard input reaches native PTY and a verified output line returns")
+
   progress("ui-browser-open-address-and-native-bounds")
   const start = await openBrowser()
-  assert.ok(start.url.startsWith("data:text/html"))
+  await expect.poll(async () => (await nativePages()).find((item) => item.id === start.id)?.url)
+    .toMatch(/^data:text\/html/)
   const first = await navigateWebsite(origin + "/one")
   await assertBounds()
   assert.deepEqual(await nativeValue(first.id, "({api:typeof window.api,node:typeof require,process:typeof process})"),
@@ -407,11 +532,26 @@ try {
   await page.keyboard.press("Escape")
   await expect(menu).toBeHidden()
   await visiblePage(origin + "/two")
-  await application.evaluate(({ BrowserWindow }, id) => {
-    BrowserWindow.getAllWindows().find((win) => win.webContents.id === id)!.setContentSize(1320, 920)
-  }, ownerID)
-  await expect.poll(() => page!.evaluate(() => innerWidth)).toBe(1320)
-  await assertBounds()
+  const resizeWidths = process.env.ARFORGE_BROWSER_RESIZE_PROBE === "1" ? [1280, 1360, 1240, 1320, 1260, 1320] : [1320]
+  for (const width of resizeWidths) {
+    diagnostics.push({ time: Date.now(), stage, event: "native-resize-request", width })
+    await application.evaluate(({ BrowserWindow }, input) => {
+      BrowserWindow.getAllWindows().find((win) => win.webContents.id === input.id)!.setContentSize(input.width, 920)
+    }, { id: ownerID, width })
+    await expect.poll(() => page!.evaluate(() => innerWidth)).toBe(width)
+    await assertBounds()
+  }
+  if (process.env.ARFORGE_BROWSER_RESIZE_PROBE === "1") {
+    for (const zoom of [1.25, 0.8, 1]) {
+      diagnostics.push({ time: Date.now(), stage, event: "native-zoom-request", zoom })
+      await page.evaluate((zoom) => (window as unknown as {
+        api: { setZoomFactor(value: number): Promise<number> }
+      }).api.setZoomFactor(zoom), zoom)
+      await expect.poll(() => application!.evaluate(({ BrowserWindow }, id) =>
+        BrowserWindow.getAllWindows().find((win) => win.webContents.id === id)!.webContents.getZoomFactor(), ownerID)).toBeCloseTo(zoom, 8)
+      await assertBounds()
+    }
+  }
   checks.push("real model menu suppresses native content; dismissal and real window resize restore correctly bounded content")
 
   progress("real-session-switch-isolation")
@@ -433,7 +573,9 @@ try {
 
   progress("ui-close-reopen-and-stale-ipc-handle")
   const closeStarted = Date.now()
+  await button("\u5173\u95ed\u9875\u9762").evaluate((element) => element.addEventListener("click", () => Reflect.set(window, "__nativeCloseClickObserved", true), { once: true }))
   await button("\u5173\u95ed\u9875\u9762").click()
+  diagnostics.push({ time: Date.now(), stage, event: "close-click", observed: await page.evaluate(() => Reflect.get(window, "__nativeCloseClickObserved")), native_id: first.id })
   await hiddenPages()
   // Hiding a view and destroying its native contents are distinct asynchronous events.
   // Observe real destruction with a deadline; never force-close here to make the test pass.
@@ -445,7 +587,8 @@ try {
     contents_id: first.id, elapsed_ms: Date.now() - closeStarted })
   const reopened = await openBrowser()
   assert.notEqual(reopened.id, first.id)
-  assert.ok(reopened.url.startsWith("data:text/html"))
+  await expect.poll(async () => (await nativePages()).find((item) => item.id === reopened.id)?.url)
+    .toMatch(/^data:text\/html/)
   await expect(panel().getByLabel("\u7f51\u7ad9\u5730\u5740", { exact: true })).toHaveValue("")
   const stale = await page.evaluate(async (old) => {
     try {
@@ -602,6 +745,7 @@ try {
     privacy: "no raw browser URL, session scope, session ID or fixture draft in receipts",
   }
   checks.push("real Core journal binds nine UI commands by canonical inputDigest; action lifecycles, intentional stale rejection and receipt privacy verified")
+
   assert.deepEqual(rendererErrors, [])
   assert.deepEqual(apiFailures, [])
   assert.equal(modelRequests, 0)
@@ -613,6 +757,11 @@ try {
 } catch (error) {
   failure = error
   report.error = error instanceof Error ? error.stack ?? error.message : String(error)
+  if (error instanceof Error && error.cause && typeof error.cause === "object") {
+    const cause = error.cause as { name?: unknown; message?: unknown; code?: unknown }
+    report.error_cause = Object.fromEntries(Object.entries({ name: cause.name, message: cause.message, code: cause.code })
+      .filter(([, value]) => typeof value === "string"))
+  }
   if (page) {
     await page.screenshot({ path: join(runRoot, "failure.png"), fullPage: true, timeout: 5000 }).catch(() => undefined)
     report.renderer_text = await page.locator("body").innerText({ timeout: 3000 })
@@ -644,6 +793,19 @@ try {
   }
   Object.assign(report, { stage, checks, renderer_errors: rendererErrors, api_failures: apiFailures,
     model_requests: modelRequests, app_stdout: appStdout, app_stderr: appStderr })
+  const expectedIPCRejections = new Set([
+    "此会话的网页已关闭，请重新打开",
+    "Browser controls require the owning application main frame",
+  ])
+  const unexpectedIPCErrors = [...appStderr.matchAll(/Error occurred in handler for '([^']+)': (?:\w*Error|Error): ([^\r\n]+)/g)]
+    .map((match) => ({ channel: match[1]!, message: match[2]!.trim() }))
+    .filter((error) => error.channel !== "workbench-browser" || !expectedIPCRejections.has(error.message))
+  report.unexpected_ipc_errors = unexpectedIPCErrors
+  if (unexpectedIPCErrors.length) {
+    report.passed = false
+    report.ipc_error = "Unexpected native IPC failure; inspect unexpected_ipc_errors"
+    failure ??= new Error(String(report.ipc_error))
+  }
   await writeFile(join(runRoot, "report.json"), JSON.stringify(report, null, 2), "utf8")
   await writeFile(join(artifacts, "desktop-browser-workbench-audit.json"), JSON.stringify(report, null, 2), "utf8")
 }

@@ -1856,11 +1856,12 @@ const layer = Layer.effect(
           const current = yield* assertOwnership()
           if (current.action.status !== "blocked")
             yield* change(input, current.action.status, "blocked", reason, assertOwnership)
-          // An explicit human refusal is a stop signal, not a recoverable
-          // policy error. Persist the blocked action first, then preserve the
-          // original cause so SessionRunner can stop its provider continuation.
-          // A replay still sees the blocked action and cannot ask or execute again.
+          // A session's explicit human refusal must stop its provider continuation.
+          // Control-plane callers retain the gateway's typed blocked contract.
+          // Both subjects are durably blocked before returning, so replay cannot
+          // ask or execute again.
           if (
+            subject.type === "session" &&
             authorization.cause.reasons.some(
               (reason) => Cause.isDieReason(reason) && reason.defect instanceof PermissionV2.DeclinedError,
             )

@@ -2,6 +2,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/PreviewRegistry"
@@ -38,6 +39,7 @@ async function setup(page: Page, read: (path: string) => unknown) {
 async function openPanel(page: Page) {
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   return panel
@@ -62,6 +64,7 @@ test("file preview routes source safely and isolates unavailable formats", async
   await panel.getByRole("button", { name: "notes.md", exact: true }).click()
   await expect(preview.getByText("# Preview notes", { exact: true })).toBeVisible()
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   await page.screenshot({ path: test.info().outputPath("file-preview.png") })
 })
 
@@ -156,7 +159,7 @@ test("file preview splits Markdown into independently scrollable responsive pane
   expect(await sourcePane.evaluate((element) => element.scrollTop)).toBe(120)
 
   // Exercise a narrow preview container without hiding the desktop review panel.
-  await split.evaluate((element) => { element.style.maxWidth = "420px" })
+  await preview.evaluate((element) => { element.style.maxWidth = "420px" })
   const narrowSource = await sourcePane.boundingBox()
   const narrowPreview = await previewPane.boundingBox()
   expect(narrowSource).not.toBeNull()

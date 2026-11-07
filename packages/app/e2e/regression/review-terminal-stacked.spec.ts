@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../utils/mock-server"
 import { expectSessionTitle } from "../utils/waits"
+import { scrollReviewToEnd } from "../utils/workbench"
 
 const directory = "C:/Arforge/ReviewTerminalStacked"
 const projectID = "proj_review_terminal_stacked"
@@ -161,8 +162,7 @@ test("keeps the review tree and terminal sized when both panels are open", async
   await expectStackGeometry(page)
 
   const treeViewport = page.locator('#review-panel [data-slot="session-review-v2-sidebar-tree"] .scroll-view__viewport')
-  await treeViewport.hover()
-  await page.mouse.wheel(0, 100_000)
+  await scrollReviewToEnd(page, treeViewport)
   await expect
     .poll(() => treeViewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop))
     .toBeLessThanOrEqual(1)
@@ -253,7 +253,10 @@ async function selectMode(page: Page, current: string, next: string) {
       // visibility check and click. Re-open the same user-facing menu so the
       // next attempt targets a fresh option node instead of a detached one.
       await page.keyboard.press("Escape").catch(() => undefined)
-      await page.getByRole("button", { name: current }).click().catch(() => undefined)
+      await page
+        .getByRole("button", { name: current })
+        .click()
+        .catch(() => undefined)
     }
   }
   throw lastError instanceof Error ? lastError : new Error(`Unable to select review mode: ${next}`)

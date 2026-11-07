@@ -2,13 +2,19 @@ import type { QueryClient } from "@tanstack/solid-query"
 import { pathKey } from "@/utils/path-key"
 import { shouldOpenSessionInBackground } from "../home-session-open"
 
-export const SHELL_DRAWER_QUERY = "(max-width: 1279px)"
-export const DEFAULT_WORKSPACE_SIDEBAR_WIDTH = 216
+export const SHELL_DRAWER_QUERY = "(max-width: 959px)"
+export const DEFAULT_WORKSPACE_SIDEBAR_WIDTH = 264
 
 export function workspaceSidebarWidth(value: number | undefined) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? value
-    : DEFAULT_WORKSPACE_SIDEBAR_WIDTH
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : DEFAULT_WORKSPACE_SIDEBAR_WIDTH
+}
+
+/** Project the preference into the available shell space without persisting a
+ * viewport constraint. Keep the legacy upper bound and room for the content. */
+export function workspaceSidebarSize(value: number | undefined, availableWidth?: number) {
+  const available = typeof availableWidth === "number" && Number.isFinite(availableWidth) ? availableWidth : Infinity
+  const max = Math.min(1000, Math.max(180, available - 320))
+  return { width: Math.min(workspaceSidebarWidth(value), max), max }
 }
 
 export type NavigationTarget = { server: string; directory: string; sessionID: string }
@@ -56,12 +62,21 @@ export function navigationPinTargets(
     if (!enabled) return []
     try {
       const parts: unknown = JSON.parse(key)
-      if (!Array.isArray(parts) || parts.length !== 3 || !parts.every((part) => typeof part === "string" && part.length > 0))
+      if (
+        !Array.isArray(parts) ||
+        parts.length !== 3 ||
+        !parts.every((part) => typeof part === "string" && part.length > 0)
+      )
         return []
       const target = { server: parts[0] as string, directory: parts[1] as string, sessionID: parts[2] as string }
       const detail = details[key]
-      if (detail && typeof detail.server === "string" && typeof detail.directory === "string" &&
-        typeof detail.sessionID === "string" && navigationSessionKey(detail) === navigationSessionKey(target))
+      if (
+        detail &&
+        typeof detail.server === "string" &&
+        typeof detail.directory === "string" &&
+        typeof detail.sessionID === "string" &&
+        navigationSessionKey(detail) === navigationSessionKey(target)
+      )
         return [{ ...detail }]
       return [target]
     } catch {
@@ -79,8 +94,9 @@ export async function loadPinnedNavigationSessions<T extends NavigationSession>(
   signal?: AbortSignal,
   revision?: (target: Readonly<NavigationTarget>) => number,
 ): Promise<PinnedNavigationResult<T>> {
-  const pending = [...new Map(targets.map((target) =>
-    [navigationSessionKey(target), Object.freeze({ ...target })] as const)).values()]
+  const pending = [
+    ...new Map(targets.map((target) => [navigationSessionKey(target), Object.freeze({ ...target })] as const)).values(),
+  ]
   const entries: (PinnedNavigationEntry<T> | undefined)[] = []
   const failures: PinnedNavigationResult<T>["failures"] = []
   let cursor = 0
@@ -114,8 +130,11 @@ export function mergePinnedNavigationSessions<T extends NavigationSession>(
   server: string,
 ): T[] {
   const key = (session: T) => navigationSessionKey({ server, directory: session.directory, sessionID: session.id })
-  const candidates = new Map(loaded.filter((entry) => entry.target.server === server &&
-    navigationSessionKey(entry.target) === key(entry.session)).map((entry) => [key(entry.session), entry.session]))
+  const candidates = new Map(
+    loaded
+      .filter((entry) => entry.target.server === server && navigationSessionKey(entry.target) === key(entry.session))
+      .map((entry) => [key(entry.session), entry.session]),
+  )
   // The live index wins over an older supplemental response, including archive events.
   for (const session of indexed) candidates.set(key(session), session)
   const result = new Map(recent.map((session) => [key(session), session]))
@@ -129,11 +148,20 @@ export function mergePinnedNavigationSessions<T extends NavigationSession>(
 }
 
 export function retainPinnedNavigationRecords<T extends { session: NavigationSession }>(
-  records: readonly T[], targets: readonly NavigationTarget[], server: string, limit: number,
+  records: readonly T[],
+  targets: readonly NavigationTarget[],
+  server: string,
+  limit: number,
 ): T[] {
   const pins = new Set(targets.filter((target) => target.server === server).map(navigationSessionKey))
-  return [...records.slice(0, limit), ...records.slice(limit).filter(({ session }) =>
-    pins.has(navigationSessionKey({ server, directory: session.directory, sessionID: session.id })))]
+  return [
+    ...records.slice(0, limit),
+    ...records
+      .slice(limit)
+      .filter(({ session }) =>
+        pins.has(navigationSessionKey({ server, directory: session.directory, sessionID: session.id })),
+      ),
+  ]
 }
 
 export function shouldOpenNavigationSessionInBackground(
@@ -141,34 +169,54 @@ export function shouldOpenNavigationSessionInBackground(
   mac: boolean,
 ) {
   return shouldOpenSessionInBackground({
-    button: event.button, mac, meta: event.metaKey, ctrl: event.ctrlKey, shift: event.shiftKey, alt: event.altKey,
+    button: event.button,
+    mac,
+    meta: event.metaKey,
+    ctrl: event.ctrlKey,
+    shift: event.shiftKey,
+    alt: event.altKey,
   })
 }
 
-export type PinnedNavigationEvents = Record<string, {
-  revision: number
-  removed: false | "archived" | "deleted"
-}>
+export type PinnedNavigationEvents = Record<
+  string,
+  {
+    revision: number
+    removed: false | "archived" | "deleted"
+  }
+>
 
-export const pinnedNavigationEventsKey = (server: string) =>
-  ["home", "pinned-session-events", server] as const
+export const pinnedNavigationEventsKey = (server: string) => ["home", "pinned-session-events", server] as const
 
 export function pinnedNavigationRevision(queryClient: QueryClient, target: Readonly<NavigationTarget>) {
-  return queryClient.getQueryData<PinnedNavigationEvents>(pinnedNavigationEventsKey(target.server))
-    ?.[navigationSessionKey(target)]?.revision ?? 0
+  return (
+    queryClient.getQueryData<PinnedNavigationEvents>(pinnedNavigationEventsKey(target.server))?.[
+      navigationSessionKey(target)
+    ]?.revision ?? 0
+  )
 }
 
 export function pinnedNavigationRemoved(queryClient: QueryClient, target: Readonly<NavigationTarget>) {
-  return !!queryClient.getQueryData<PinnedNavigationEvents>(pinnedNavigationEventsKey(target.server))
-    ?.[navigationSessionKey(target)]?.removed
+  return !!queryClient.getQueryData<PinnedNavigationEvents>(pinnedNavigationEventsKey(target.server))?.[
+    navigationSessionKey(target)
+  ]?.removed
 }
 
 export function filterRemovedNavigationSessions<T extends NavigationSession>(
-  sessions: readonly T[], server: string, events: PinnedNavigationEvents,
+  sessions: readonly T[],
+  server: string,
+  events: PinnedNavigationEvents,
 ): T[] {
-  return sessions.filter((session) => !events[navigationSessionKey({
-    server, directory: session.directory, sessionID: session.id,
-  })]?.removed)
+  return sessions.filter(
+    (session) =>
+      !events[
+        navigationSessionKey({
+          server,
+          directory: session.directory,
+          sessionID: session.id,
+        })
+      ]?.removed,
+  )
 }
 
 // Only explicit server events invalidate a target. A missing index row is not
@@ -184,29 +232,42 @@ export function applyPinnedNavigationEvent<T extends NavigationSession>(
   const key = navigationSessionKey(target)
   const eventsKey = pinnedNavigationEventsKey(server)
   const previous = queryClient.getQueryData<PinnedNavigationEvents>(eventsKey)?.[key]
-  const removed: PinnedNavigationEvents[string]["removed"] = event.type === "session.deleted"
-    ? "deleted"
-    : previous?.removed === "deleted" && event.type !== "session.created"
+  const removed: PinnedNavigationEvents[string]["removed"] =
+    event.type === "session.deleted"
       ? "deleted"
-      : typeof session.time.archived === "number" ? "archived" : false
+      : previous?.removed === "deleted" && event.type !== "session.created"
+        ? "deleted"
+        : typeof session.time.archived === "number"
+          ? "archived"
+          : false
   if ((!previous && !removed) || previous?.removed === removed) return false
   const predicate = (query: { queryKey: readonly unknown[] }) => {
     const [home, kind, scope, targets] = query.queryKey
-    return home === "home" && kind === "pinned-sessions" && scope === server &&
-      Array.isArray(targets) && targets.includes(key)
+    return (
+      home === "home" &&
+      kind === "pinned-sessions" &&
+      scope === server &&
+      Array.isArray(targets) &&
+      targets.includes(key)
+    )
   }
   // Keep tracking a known tombstone through restore, even if its query was GC'd.
   if (!previous && queryClient.getQueryCache().findAll({ predicate }).length === 0) return false
   queryClient.setQueryData<PinnedNavigationEvents>(eventsKey, (current) => ({
-    ...current, [key]: { revision: (previous?.revision ?? 0) + 1, removed },
+    ...current,
+    [key]: { revision: (previous?.revision ?? 0) + 1, removed },
   }))
   // Do not allow cancellation to revert the removal to the pre-request cache.
   void queryClient.cancelQueries({ predicate }, { revert: false }).catch(() => undefined)
-  queryClient.setQueriesData<PinnedNavigationResult<T>>({ predicate }, (current) => current && ({
-    ...current,
-    entries: current.entries.filter((entry) => navigationSessionKey(entry.target) !== key),
-    failures: current.failures.filter((failure) => navigationSessionKey(failure.target) !== key),
-  }))
+  queryClient.setQueriesData<PinnedNavigationResult<T>>(
+    { predicate },
+    (current) =>
+      current && {
+        ...current,
+        entries: current.entries.filter((entry) => navigationSessionKey(entry.target) !== key),
+        failures: current.failures.filter((failure) => navigationSessionKey(failure.target) !== key),
+      },
+  )
   void queryClient.invalidateQueries({ predicate, refetchType: "active" }).catch(() => undefined)
   return true
 }

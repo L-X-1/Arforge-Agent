@@ -1,5 +1,6 @@
 import * as http from "node:http"
 import * as tls from "node:tls"
+import { createSidecarOwner } from "./lifecycle"
 
 type NodeHttpWithEnvProxy = typeof http & {
   setGlobalProxyFromEnv: () => void
@@ -37,7 +38,8 @@ type Listener = {
 }
 
 const parentPort = getParentPort()
-let listener: Listener | undefined
+const owner = createSidecarOwner<Listener>()
+let finishing: Promise<void> | undefined
 
 parentPort.on("message", (event) => {
   const command = parseCommand(event.data)
@@ -57,27 +59,31 @@ async function start(command: StartCommand) {
     useEnvProxy()
     const { Server } = await import("virtual:arforge-server")
 
-    listener = await Server.listen({
-      port: command.port,
-      hostname: command.hostname,
-      username: command.username,
-      cors: ["arforge://renderer"],
-    })
-    parentPort.postMessage({ type: "ready" })
+    await owner.start(() =>
+      Server.listen({
+        port: command.port,
+        hostname: command.hostname,
+        username: command.username,
+        cors: ["arforge://renderer"],
+      }),
+    )
+    if (!owner.stopping) parentPort.postMessage({ type: "ready" })
   } catch (error) {
     parentPort.postMessage({ type: "error", error: serializeError(error) })
     setImmediate(() => process.exit(1))
   }
 }
 
-async function stop() {
-  try {
-    await listener?.stop()
-  } finally {
-    listener = undefined
-    parentPort.postMessage({ type: "stopped" })
-    setImmediate(() => process.exit(0))
-  }
+function stop() {
+  return (finishing ??= (async () => {
+    try {
+      await owner.stop()
+      parentPort.postMessage({ type: "stopped" })
+      setImmediate(() => process.exit(0))
+    } catch (error) {
+      parentPort.postMessage({ type: "error", error: serializeError(error) })
+    }
+  })())
 }
 
 function prepareSidecarEnv(username: string, userDataPath: string) {

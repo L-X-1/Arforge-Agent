@@ -1,5 +1,4 @@
 import type { AssistantMessage, Message, Part, SessionStatus, ToolPart } from "@arforge-ai/sdk/v2"
-import { reasoningProfile } from "@arforge-ai/core/reasoning-profile"
 
 export type ExecutionTraceKind = "reasoning" | "context" | "command" | "edit" | "agent" | "verify" | "tool" | "answer" | "retry"
 export type ExecutionTraceStatus = "pending" | "running" | "completed" | "error"
@@ -25,12 +24,6 @@ export type ExecutionTrace = {
   steps: ExecutionTraceStep[]
   completed: number
   failed: number
-}
-
-export type ExecutionMascotForm = 1 | 2 | 3
-
-export function executionMascotForm(variant?: string): ExecutionMascotForm {
-  return reasoningProfile(variant).mascotForm
 }
 
 const contextTools = new Set(["read", "glob", "grep", "list", "webfetch", "websearch", "search", "fetch"])
@@ -257,7 +250,24 @@ export function buildExecutionTrace(input: {
     : []
   const busy = input.status.type !== "idle"
   const steps = mergeSteps(
-    assistants.flatMap((message) => input.parts(message.id).flatMap((part) => partStep(part, busy) ?? [])),
+    assistants.flatMap((message) => {
+      const steps = input.parts(message.id).flatMap((part) => partStep(part, busy) ?? [])
+      const error = message.error
+      if (!error || error.name === "MessageAbortedError") return steps
+
+      const detail = typeof error.data.message === "string" ? error.data.message : ""
+      steps.push({
+        id: `${message.id}:error`,
+        kind: "answer",
+        status: "error",
+        count: 1,
+        detail: clipped(detail),
+        startedAt: message.time.created,
+        endedAt: message.time.completed,
+        sections: detail.trim() ? [{ kind: "error", source: message.id, content: detail }] : undefined,
+      })
+      return steps
+    }),
   )
 
   if (busy && steps.length === 0) {

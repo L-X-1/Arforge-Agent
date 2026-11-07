@@ -159,6 +159,19 @@ export const Profile = Schema.Struct({
   policy: ProfilePolicy,
 }).annotate({ identifier: "Model.Profile" })
 
+/** Manufacturer reference only; never a connection, wire model or credential identity. */
+export interface PresetOrigin extends Schema.Schema.Type<typeof PresetOrigin> {}
+export const PresetOrigin = Schema.Struct({
+  vendorID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+  modelID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+}).annotate({ identifier: "ModelPreset.Origin" })
+
+export interface PresetReference extends Schema.Schema.Type<typeof PresetReference> {}
+export const PresetReference = Schema.Struct({
+  origin: PresetOrigin,
+  revision: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+}).annotate({ identifier: "ModelPreset.Reference" })
+
 export const Api = Schema.Union([
   Schema.Struct({
     id: ID,
@@ -181,6 +194,7 @@ export const Info = Schema.Struct({
   name: Schema.String,
   api: Api,
   profile: Profile.pipe(optional),
+  preset: PresetReference.pipe(optional),
   capabilities: Capabilities,
   request: Schema.Struct({
     ...Provider.Request.fields,

@@ -1,0 +1,1 @@
+export const suites = ["system-overview-scope", "agent-extension-scope", "skill-lifecycle-scope", "experience-candidate-scope", "provider-scope", "personal-workspace-scope", "control-scope", "tenant-platform-scope", "artifact-evidence-scope", "runtime-insight"] as const

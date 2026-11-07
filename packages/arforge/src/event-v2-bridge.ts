@@ -3,10 +3,12 @@
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { GlobalBus } from "@/bus/global"
+import { Database } from "@arforge-ai/core/database/database"
 import { EventV2 } from "@arforge-ai/core/event"
 import { Location } from "@arforge-ai/core/location"
 import { Project } from "@arforge-ai/core/project"
 import { AbsolutePath } from "@arforge-ai/core/schema"
+import { Project as ProjectSchema } from "@arforge-ai/schema/project"
 import { Context, Effect, Layer } from "effect"
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@arforge/EventV2Bridge") {}
@@ -18,6 +20,12 @@ const layer = Layer.effect(
 
     const publish: EventV2.Interface["publish"] = (definition, data, options) =>
       Effect.gen(function* () {
+        if (definition.type === ProjectSchema.Event.Updated.type) {
+          // Project metadata belongs to the principal across all open directories.
+          return yield* events.publish(definition, data).pipe(
+            Effect.updateContext((context: Context.Context<never>) => Context.omit(Location.Service)(context)),
+          )
+        }
         if (options?.location) return yield* events.publish(definition, data, options)
         const ctx = yield* InstanceRef
         if (!ctx) return yield* events.publish(definition, data, options)
@@ -34,6 +42,18 @@ const layer = Layer.effect(
 
     const unsubscribe = yield* events.listen((event) =>
       Effect.gen(function* () {
+        if (event.type === ProjectSchema.Event.Updated.type) {
+          const principal = yield* Database.CurrentPrincipal
+          if (!principal) return
+          const data = event.data as EventV2.Data<typeof ProjectSchema.Event.Updated>
+          GlobalBus.emit("event", {
+            directory: "global",
+            project: data.id,
+            principal,
+            payload: { id: event.id, type: event.type, properties: data },
+          })
+          return
+        }
         const ctx = yield* InstanceRef
         const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
         GlobalBus.emit("event", {

@@ -3,7 +3,8 @@ export * from "./session/schema"
 export * from "./session/request-envelope"
 export * from "./session/checkpoint"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import { DateTime, Effect, Layer, Schema, Context, Stream, Option, Semaphore } from "effect"
+import { canonicalHash } from "./util/canonical-hash"
 import { ListAnchor } from "@arforge-ai/schema/session"
 import { and, asc, desc, eq, exists, gt, inArray, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
@@ -89,12 +90,13 @@ type CreateInput = {
   location: Location.Ref
 }
 
-type CompactInput = {
-  sessionID: SessionSchema.ID
-  prompt?: Prompt
-}
+type CompactInput = SessionExecution.CompactInput
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
+  sessionID: SessionSchema.ID,
+}) {}
+
+export class RenameConflictError extends Schema.TaggedErrorClass<RenameConflictError>()("Session.RenameConflictError", {
   sessionID: SessionSchema.ID,
 }) {}
 
@@ -124,6 +126,10 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly rename: (input: {
+    sessionID: SessionSchema.ID
+    title: string
+  }) => Effect.Effect<void, NotFoundError | RenameConflictError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -160,34 +166,30 @@ export interface Interface {
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionExecution.OperationError>
   readonly promptQueue: {
     readonly list: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<SessionInput.Admitted>, NotFoundError>
     readonly update: (input: {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       expectedAdmittedSeq: number
+      expectedModel?: ModelV2.Ref
       prompt: PromptInput.Prompt
-    }) => Effect.Effect<SessionInput.Admitted, NotFoundError | SessionInput.QueuedPromptNotFoundError>
+    }) => Effect.Effect<SessionInput.Admitted, NotFoundError | SessionInput.QueuedPromptNotFoundError | SessionExecution.OperationError>
     readonly remove: (input: {
       sessionID: SessionSchema.ID
       messageID: SessionMessage.ID
       expectedAdmittedSeq: number
     }) => Effect.Effect<void, NotFoundError | SessionInput.QueuedPromptNotFoundError>
   }
-  readonly shell: (input: {
-    id?: EventV2.ID
-    sessionID: SessionSchema.ID
-    command: string
-    resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  readonly shell: (input: SessionExecution.ShellInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError | SessionExecution.OperationError>
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError | SessionExecution.OperationError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
@@ -216,17 +218,10 @@ export interface Interface {
     ) => Effect.Effect<ReadonlyArray<SessionOrganization.Checkpoint>, NotFoundError>
   }
   readonly rewind: {
-    readonly preview: (input: {
-      sessionID: SessionSchema.ID
-      checkpointID: SessionOrganization.CheckpointID
-    }) => Effect.Effect<SessionOrganization.RewindPreview, NotFoundError | SessionOrganization.CheckpointNotFoundError>
-    readonly apply: (input: {
-      sessionID: SessionSchema.ID
-      checkpointID: SessionOrganization.CheckpointID
-      expectedLastSequence: number
-    }) => Effect.Effect<
+    readonly preview: (input: { sessionID: SessionSchema.ID } & SessionOrganizationContract.RewindTarget) => Effect.Effect<SessionOrganization.RewindPreview, NotFoundError | BusyError | SessionOrganization.CheckpointNotFoundError | SessionOrganization.RewindMessageNotFoundError | SessionOrganization.RewindConflictError>
+    readonly apply: (input: { sessionID: SessionSchema.ID } & SessionOrganizationContract.RewindApplyInput) => Effect.Effect<
       SessionOrganization.RewindResult,
-      NotFoundError | BusyError | SessionOrganization.CheckpointNotFoundError | SessionOrganization.StaleRewindError
+      NotFoundError | BusyError | SessionOrganization.CheckpointNotFoundError | SessionOrganization.StaleRewindError | SessionOrganization.RewindMessageNotFoundError | SessionOrganization.RewindConflictError
     >
   }
   readonly revert: {
@@ -259,6 +254,39 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
+    // Serialize preparation with admission so a same-ID retry never reruns a
+    // mutable command template (which may itself contain command substitutions).
+    const preparation = yield* Semaphore.make(1)
+    const prepare = Effect.fn("V2Session.preparePrompt")(function* (
+      sessionID: SessionSchema.ID,
+      id: SessionMessage.ID,
+      input: PromptInput.Prompt,
+      retry = false,
+    ) {
+      if (input.files?.some((file) => file.resource !== undefined && file.resource.uri !== file.uri))
+        return (
+          yield *
+          new SessionExecution.OperationError({
+            operation: "prompt",
+            reason: "invalid",
+            message: "MCP attachment URI differs from its selected resource target",
+          })
+        )
+      if (!input.command) return resolvePrompt(input)
+      const requestDigest = canonicalHash(resolvePrompt(input))!
+      if (retry) {
+        const existing = yield* SessionInput.find(db, id)
+        if (existing) {
+          if (existing.sessionID !== sessionID || existing.prompt.command?.requestDigest !== requestDigest)
+            return yield* new SessionExecution.OperationError({ operation: "command", reason: "conflict", message: "Command identity already belongs to a different request" })
+          return existing.prompt
+        }
+      }
+      if (!execution.preparePrompt)
+        return yield* new SessionExecution.OperationError({ operation: "command", reason: "unavailable", message: "Command preparation is unavailable" })
+      const resolved = yield* execution.preparePrompt({ sessionID, id, prompt: input })
+      return Prompt.make({ ...resolved, command: { ...input.command, requestDigest } })
+    })
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -276,7 +304,7 @@ const layer = Layer.effect(
       create: Effect.fn("V2Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
-        if (recorded) return recorded
+        if (recorded) return yield* result.get(sessionID).pipe(Effect.orDie)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -315,12 +343,11 @@ const layer = Layer.effect(
                 return Effect.die(defect)
               }
               // Concurrent creation lost the projection race. The existing Session identity wins.
-              return store
+              return result
                 .get(sessionID)
                 .pipe(
-                  Effect.flatMap((session) =>
-                    session ? Effect.succeed({ type: "existing", session } as const) : Effect.die(defect),
-                  ),
+                  Effect.map((session) => ({ type: "existing", session } as const)),
+                  Effect.orDie,
                 )
             }),
           )
@@ -329,16 +356,84 @@ const layer = Layer.effect(
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
+        const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+        const owned = yield* db.select({ id: SessionTable.id }).from(SessionTable).where(and(
+          eq(SessionTable.id, sessionID), eq(SessionTable.tenant_id, principal.tenantID), eq(SessionTable.owner_user_id, principal.userID),
+        )).get().pipe(Effect.orDie)
+        if (!owned) return yield* new NotFoundError({ sessionID })
         const session = yield* store.get(sessionID)
         if (!session) return yield* new NotFoundError({ sessionID })
         return session
       }),
+      rename: Effect.fn("V2Session.rename")(function* (input) {
+        const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
+        const owned = () =>
+          db
+            .select()
+            .from(SessionTable)
+            .where(
+              and(
+                eq(SessionTable.id, input.sessionID),
+                eq(SessionTable.tenant_id, principal.tenantID),
+                eq(SessionTable.owner_user_id, principal.userID),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+        const original = yield* owned()
+        if (!original) return yield* new NotFoundError({ sessionID: input.sessionID })
+        const activeLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+        if (
+          activeLocation &&
+          (activeLocation.directory !== original.directory ||
+            (activeLocation.workspaceID ?? null) !== original.workspace_id)
+        )
+          return yield* new RenameConflictError({ sessionID: input.sessionID })
+        if (original.title === input.title) return
+        yield* events
+          .publish(
+            SessionEvent.Renamed,
+            {
+              sessionID: input.sessionID,
+              title: input.title,
+              timestamp: yield* DateTime.now,
+            },
+            {
+              location: Location.Ref.make({
+                directory: AbsolutePath.make(original.directory),
+                workspaceID: original.workspace_id ?? undefined,
+              }),
+              // EventV2 runs this after projection, inside the same transaction and
+              // before inserting the event/sequence. Failure rolls every write back;
+              // no notification can escape an uncommitted or moved-source rename.
+              commit: () =>
+                Effect.gen(function* () {
+                  const current = yield* owned()
+                  if (!current) return yield* Effect.die(new NotFoundError({ sessionID: input.sessionID }))
+                  if (current.directory !== original.directory || current.workspace_id !== original.workspace_id)
+                    return yield* Effect.die(new RenameConflictError({ sessionID: input.sessionID }))
+                }),
+            },
+          )
+          .pipe(
+            Effect.asVoid,
+            Effect.catchDefect((defect) =>
+              defect instanceof NotFoundError || defect instanceof RenameConflictError
+                ? Effect.fail(defect)
+                : Effect.die(defect),
+            ),
+          )
+      }),
       list: Effect.fn("V2Session.list")(function* (input = {}) {
+        const principal = (yield* Database.CurrentPrincipal) ?? Database.DefaultLocalPrincipal
         const direction = input.anchor?.direction ?? "next"
         const requestedOrder = input.order ?? "desc"
         const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
         const sortColumn = SessionTable.time_created
-        const conditions: SQL[] = []
+        const conditions: SQL[] = [
+          eq(SessionTable.tenant_id, principal.tenantID),
+          eq(SessionTable.owner_user_id, principal.userID),
+        ]
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
@@ -477,11 +572,29 @@ const layer = Layer.effect(
         })
       }),
       prompt: Effect.fn("V2Session.prompt")((input) =>
-        Effect.uninterruptible(
+        Effect.uninterruptibleMask(restore =>
           Effect.gen(function* () {
-            yield* result.get(input.sessionID)
-            const prompt = resolvePrompt(input.prompt)
+            const source = yield* result.get(input.sessionID)
             const messageID = input.id ?? SessionMessage.ID.create()
+            const prompt = yield* restore(prepare(input.sessionID, messageID, input.prompt, true))
+            const requestedAgent = prompt.route?.agent
+            if (requestedAgent !== undefined && (yield* SessionInput.find(db, messageID)) === undefined) {
+              const agent = yield* restore(AgentV2.Service.use((agents) => Effect.gen(function* () {
+                yield* agents.reload()
+                return yield* agents.get(AgentV2.ID.make(requestedAgent))
+              })).pipe(
+                Effect.provide(locations.get(source.location)),
+                Effect.mapError(() => new SessionExecution.OperationError({
+                  operation: "prompt", reason: "unavailable", message: "Agent availability could not be checked for the Session source",
+                })),
+              ))
+              if (!agent) return yield* new SessionExecution.OperationError({
+                operation: "prompt", reason: "invalid", message: `Unknown or unavailable Agent: ${requestedAgent}`,
+              })
+            }
+            const current = yield* result.get(input.sessionID)
+            if (canonicalHash(current.location) !== canonicalHash(source.location))
+              return yield* new SessionExecution.OperationError({ operation: "command", reason: "conflict", message: "Session source changed during prompt preparation" })
             const delivery = input.delivery ?? "steer"
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
             const admitted = yield* SessionInput.admit(db, events, {
@@ -501,7 +614,7 @@ const layer = Layer.effect(
             if (input.resume !== false) yield* execution.wake(admitted.sessionID)
             return admitted
           }),
-        ),
+        ).pipe(preparation.withPermit),
       ),
       promptQueue: {
         list: Effect.fn("V2Session.promptQueue.list")(function* (sessionID) {
@@ -509,15 +622,33 @@ const layer = Layer.effect(
           return yield* SessionInput.listQueued(db, sessionID)
         }),
         update: Effect.fn("V2Session.promptQueue.update")((input) =>
-          Effect.uninterruptible(
+          Effect.uninterruptibleMask(restore =>
             Effect.gen(function* () {
               yield* result.get(input.sessionID)
+              const queued = (yield* SessionInput.listQueued(db, input.sessionID)).find(item => item.id === input.messageID && item.admittedSeq === input.expectedAdmittedSeq)
+              if (!queued) return yield* new SessionInput.QueuedPromptNotFoundError(input)
+              // Check under the permit before command preparation can run substitutions.
+              const expected = input.expectedModel
+              const current = queued.prompt.route?.model
+              if (
+                expected &&
+                (current?.providerID !== expected.providerID ||
+                  current.id !== expected.id ||
+                  current.variant !== expected.variant)
+              ) {
+                return yield* new SessionExecution.OperationError({
+                  operation: "promptQueue.update",
+                  reason: "conflict",
+                  message: "Queued prompt model changed before the edit was applied",
+                })
+              }
+              const prompt = yield* restore(prepare(input.sessionID, input.messageID, input.prompt))
               return yield* SessionInput.updateQueued(db, events, {
                 ...input,
-                prompt: resolvePrompt(input.prompt),
+                prompt,
               })
             }),
-          ),
+          ).pipe(preparation.withPermit),
         ),
         remove: Effect.fn("V2Session.promptQueue.remove")((input) =>
           Effect.uninterruptible(
@@ -528,8 +659,10 @@ const layer = Layer.effect(
           ),
         ),
       },
-      shell: Effect.fn("V2Session.shell")(function* () {
-        return yield* new OperationUnavailableError({ operation: "shell" })
+      shell: Effect.fn("V2Session.shell")(function* (input) {
+        yield* result.get(input.sessionID)
+        if (!execution.shell) return yield* new OperationUnavailableError({ operation: "shell" })
+        return yield* execution.shell(input)
       }),
       skill: Effect.fn("V2Session.skill")(function* () {
         return yield* new OperationUnavailableError({ operation: "skill" })
@@ -560,7 +693,8 @@ const layer = Layer.effect(
       }),
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+        if (!execution.compact) return yield* new OperationUnavailableError({ operation: "compact" })
+        return yield* execution.compact(input)
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
@@ -612,16 +746,18 @@ const layer = Layer.effect(
         }),
       },
       rewind: {
-        preview: Effect.fn("V2Session.rewind.preview")(function* (input) {
+        preview: Effect.fn("V2Session.rewind.preview")((input) => Effect.gen(function* () {
           yield* result.get(input.sessionID)
+          if ((yield* execution.active).has(input.sessionID))
+            return yield* new BusyError({ sessionID: input.sessionID, operation: "preview conversation rewind" })
           return yield* SessionOrganization.previewRewind(input).pipe(Effect.provideService(Database.Service, database))
-        }),
-        apply: Effect.fn("V2Session.rewind.apply")(function* (input) {
+        }).pipe(effect => preparation.withPermit(effect))),
+        apply: Effect.fn("V2Session.rewind.apply")((input) => Effect.gen(function* () {
           yield* result.get(input.sessionID)
           if ((yield* execution.active).has(input.sessionID))
             return yield* new BusyError({ sessionID: input.sessionID, operation: "rewind conversation" })
           return yield* SessionOrganization.applyRewind(input).pipe(Effect.provideService(Database.Service, database))
-        }),
+        }).pipe(effect => preparation.withPermit(effect))),
       },
       revert: {
         stage: Effect.fn("V2Session.revert.stage")(function* (input) {

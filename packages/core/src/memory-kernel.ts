@@ -23,6 +23,8 @@ import {
 import { digest } from "./memory-revision"
 import { maintenanceDeleteDecision } from "./memory-retention"
 import { redact } from "./redact"
+import * as MemoryRunEvidence from "./memory-run-evidence"
+import { canonicalHash } from "./util/canonical-hash"
 
 export const POLICY_VERSION = "memory-v1"
 
@@ -31,6 +33,8 @@ export class GateError extends Schema.TaggedErrorClass<GateError>()("MemoryKerne
 }) {}
 
 export type ProposalInput = {
+  /** Internal committed-settlement producer only; never accepted by a public DTO. */
+  readonly settlement?: { readonly facts: MemoryRunEvidence.Settlement; readonly messageID: string }
   readonly content: Memory.Content
   readonly proposedClass: MemoryClass.MemoryClass
   readonly sourceEvidenceIDs: ReadonlyArray<string>
@@ -359,12 +363,31 @@ const layer = Layer.effect(
         return yield* new GateError({ reason: "Denied candidate cannot be persisted." })
       const identity = yield* principal()
       const now = Date.now()
-      const candidateID = MemoryCandidate.CandidateID.create()
+      const settlement = input.settlement
+      if (settlement) {
+        const facts = settlement.facts
+        const prompt = facts.prompts.find(value => value.messageID === settlement.messageID)
+        if (!MemoryRunEvidence.isIssued(facts) || facts.identity.tenantID !== identity.tenantID ||
+          facts.identity.userID !== identity.userID || facts.directory !== location.directory ||
+          facts.projectID !== projectID || !prompt || input.scope !== "workspace" ||
+          input.proposer.runID !== facts.runID ||
+          input.sourceEvidenceIDs.some(id => !prompt.evidenceIDs.includes(AgentRuntime.EvidenceID.make(id))))
+          return yield* new GateError({ reason: "Memory settlement source does not match the current owner and workspace." })
+      }
+      const candidateID = settlement ? MemoryCandidate.CandidateID.make("mcan_" + canonicalHash({
+        tenantID: identity.tenantID, userID: identity.userID, projectID, workspacePath: normalizedWorkspacePath, runID: settlement.facts.runID,
+        messageID: settlement.messageID, content: input.content, proposedClass: input.proposedClass,
+      })) : MemoryCandidate.CandidateID.create()
       const redactedContent = redact(input.content)
       const credentialLike = redactedContent !== input.content
       const row = yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
+            if (settlement) {
+              const existing = yield* tx.select().from(MemoryCandidateTable).where(ownedCandidate(identity, candidateID)).get()
+              // Review/approval/rejection and manual revisions survive redundant settlement.
+              if (existing) return existing
+            }
             const created = yield* tx
               .insert(MemoryCandidateTable)
               .values({
@@ -400,8 +423,15 @@ const layer = Layer.effect(
                 time_updated: now,
                 time_expires: input.expiresAt,
               })
+              .onConflictDoNothing()
               .returning()
               .get()
+            if (!created) {
+              const existing = yield* tx.select().from(MemoryCandidateTable).where(ownedCandidate(identity, candidateID)).get()
+              if (settlement && existing) return existing
+              return yield* new GateError({ reason: "Candidate identity conflict." })
+            }
+            if (settlement) yield* MemoryRunEvidence.persist(tx, settlement.facts, input.sourceEvidenceIDs)
             yield* appendCandidateAudit(tx, identity, {
               candidateID,
               operation: "proposed",

@@ -1,4 +1,4 @@
-import { batch, createMemo } from "solid-js"
+import { batch, createMemo, onCleanup } from "solid-js"
 import type { ModelKey, ModelSelection } from "@/context/local"
 import type { useModels } from "@/context/models"
 import type { usePrompt } from "@/context/prompt"
@@ -16,6 +16,10 @@ export function createPromptModelState(input: {
   scope: () => { server: string; directory: string }
 }) {
   const { models, prompt, providers } = input
+  let disposed = false
+  onCleanup(() => {
+    disposed = true
+  })
   const connected = createMemo(() => new Set(providers.connected().map((item) => item.id)))
   const targets = new WeakMap<object, number>()
   let nextTarget = 0
@@ -72,7 +76,11 @@ export function createPromptModelState(input: {
     return selected && valid(selected) ? models.find(selected) : undefined
   }
   const recentModels = createMemo(() =>
-    models.recent.list().filter(valid).map(models.find).filter((item): item is NonNullable<typeof item> => !!item),
+    models.recent
+      .list()
+      .filter(valid)
+      .map(models.find)
+      .filter((item): item is NonNullable<typeof item> => !!item),
   )
   const capture = () => ({
     target: prompt.capture(),
@@ -81,7 +89,8 @@ export function createPromptModelState(input: {
     ready: ready.promise,
   })
   const assertScope = (owner: ReturnType<typeof capture>) => {
-    if (scope() !== owner.scope || prompt.capture() !== owner.target) throw new ModelChoiceError("scope-changed")
+    if (disposed || scope() !== owner.scope || prompt.capture() !== owner.target)
+      throw new ModelChoiceError("scope-changed")
   }
 
   const selection = {
@@ -129,7 +138,9 @@ export function createPromptModelState(input: {
       },
       current() {
         const resolved = resolveModelVariant({
-          variants: this.list(), selected: this.selected(), configured: this.configured(),
+          variants: this.list(),
+          selected: this.selected(),
+          configured: this.configured(),
         })
         if (resolved) return resolved
         const model = current()
@@ -171,7 +182,7 @@ export function createPromptModelState(input: {
       return selected ? unavailableKey(selected) : undefined
     },
     async select(item, expectedScope) {
-      if (scope() !== expectedScope) throw new ModelChoiceError("scope-changed")
+      if (disposed || scope() !== expectedScope) throw new ModelChoiceError("scope-changed")
       await selection.set(item, { recent: false })
     },
   }

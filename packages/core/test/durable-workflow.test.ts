@@ -87,6 +87,74 @@ const agentDefinition = (name: string, access: "read" | "write" = "read"): Workf
 })
 
 describe("DurableWorkflowGraphRuntime", () => {
+  for (const from of ["failed", "recovering", "paused"] as const) {
+    it.effect(`retries rejected approval through legal ${from} recovery and requires fresh approval`, () =>
+      Effect.gen(function* () {
+        const durableRun = yield* DurableRun.Service
+        let runnerCalls = 0
+        const runtime = new DurableWorkflowGraphRuntime({
+          durableRun,
+          ownerId: `approval-retry-${from}`,
+          runner: async () => { runnerCalls++; throw new Error("Safe checkpoint workflow cannot invoke an agent") },
+        })
+        const safeDefinition: WorkflowDefinition = {
+          ...definition,
+          name: `approval-retry-${from}`,
+          steps: definition.steps.map((step) => step.kind === "agent" ? { ...step, kind: "checkpoint" } : step),
+        }
+        const created = yield* Effect.promise(() => runtime.createRun({
+          definition: safeDefinition,
+          sessionId: SessionSchema.ID.create(),
+          workspace: "E:/isolated-approval-retry",
+          permissionMode: "plan",
+          maxParallel: 1,
+        }))
+        const runID = AgentRuntime.RunID.make(created.run_id)
+        yield* Effect.promise(() => runtime.start(created.run_id))
+        expect((yield* Effect.promise(() => runtime.wait(created.run_id, 5_000))).status).toBe("waiting_approval")
+        yield* Effect.promise(() => runtime.decideApproval(created.run_id, "approval", false, "Explicit rejection"))
+        const failed = yield* Effect.promise(() => runtime.wait(created.run_id, 5_000))
+        expect(failed.status).toBe("failed")
+        const failedNodes = [...(yield* Effect.promise(() => runtime.nodesFor(created.run_id))).values()]
+        expect(failedNodes.map((node) => [node.node_id, node.status])).toEqual([
+          ["agent", "completed"], ["approval", "failed"], ["checkpoint", "blocked"],
+        ])
+        if (from !== "failed")
+          yield* durableRun.transition({ runID, to: "recovering", reason: "Explicit recovery before retry" })
+        if (from === "paused")
+          yield* durableRun.transition({ runID, to: "paused", reason: "Paused recovery before retry" })
+        expect((yield* durableRun.load(runID)).run.status).toBe(from)
+        expect(DurableRun.canTransition("recovering", "queued")).toBe(false)
+
+        yield* Effect.promise(() => runtime.retryNode(created.run_id, "approval", true))
+        const waiting = yield* Effect.promise(() => runtime.wait(created.run_id, 5_000))
+        expect(waiting.status).toBe("waiting_approval")
+        expect(waiting.run_id).toBe(created.run_id)
+        expect(waiting.definition_digest).toBe(created.definition_digest)
+        const waitingNodes = [...(yield* Effect.promise(() => runtime.nodesFor(created.run_id))).values()]
+        expect(waitingNodes.map((node) => [node.node_id, node.status])).toEqual([
+          ["agent", "completed"], ["approval", "waiting_approval"], ["checkpoint", "pending"],
+        ])
+        expect(waitingNodes.find((node) => node.node_id === "checkpoint")?.output).toBe("")
+        const events = (yield* Effect.promise(() => runtime.events(created.run_id))).items
+        expect(events.filter((event) => event.event_type === "node.retry_requested")).toHaveLength(1)
+        expect(events.filter((event) => event.event_type === "node.approval_requested")).toHaveLength(2)
+        expect(events.some((event) => event.event_type === "node.approved")).toBe(false)
+
+        yield* Effect.promise(() => runtime.decideApproval(created.run_id, "approval", true, "Explicit retry approval"))
+        const completed = yield* Effect.promise(() => runtime.wait(created.run_id, 5_000))
+        expect(completed.status).toBe("completed")
+        const completedNodes = [...(yield* Effect.promise(() => runtime.nodesFor(created.run_id))).values()]
+        expect(completedNodes.every((node) => node.status === "completed")).toBe(true)
+        expect(completedNodes.find((node) => node.node_id === "checkpoint")?.output).toBe("released")
+        expect(completed.verification).toMatchObject({ passed: true, total: 3, passed_count: 3, failed_checks: [] })
+        expect(completed.verification?.evidence_digest).toMatch(/^[0-9a-f]{64}$/)
+        expect((yield* durableRun.load(runID)).run.status).toBe("completed")
+        expect(runnerCalls).toBe(0)
+      }),
+    )
+  }
+
   it.effect("uses DurableRun for workflow state, approval, child runs, and recovery", () =>
     Effect.gen(function* () {
       const durableRun = yield* DurableRun.Service

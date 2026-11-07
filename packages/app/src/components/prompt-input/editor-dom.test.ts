@@ -1,7 +1,63 @@
 import { describe, expect, test } from "bun:test"
-import { createTextFragment, getCursorPosition, getNodeLength, getTextLength, setCursorPosition } from "./editor-dom"
+import type { FileAttachmentPart } from "@/context/prompt"
+import {
+  createPromptPill,
+  createTextFragment,
+  getCursorPosition,
+  getNodeLength,
+  getTextLength,
+  readFilePill,
+  setCursorPosition,
+} from "./editor-dom"
+
+const unmentionedResource = (clientName: string): FileAttachmentPart => ({
+  type: "file",
+  path: "evidence://shared/manual",
+  url: "evidence://shared/manual",
+  filename: "manual",
+  mime: "application/pdf",
+  content: "",
+  start: 0,
+  end: 0,
+  source: { type: "resource", clientName, uri: "evidence://shared/manual", text: { value: "", start: 0, end: 0 } },
+})
 
 describe("prompt-input editor dom", () => {
+  test("unmentioned resource pills expose their target without changing parsed text or ranges", () => {
+    for (const server of ["server-A", "server-B"]) {
+      const part = unmentionedResource(server)
+      const pill = createPromptPill(part)
+      expect(pill.dataset.resourceLabel).toBe(`${server}: manual`)
+      expect(pill.getAttribute("aria-label")).toBe(`${server}: manual (evidence://shared/manual)`)
+      expect(pill.getAttribute("title")).toBe(`${server}: evidence://shared/manual`)
+      expect(pill.classList.contains("before:content-[attr(data-resource-label)]")).toBe(true)
+      expect(pill.textContent).toBe("")
+      expect(getNodeLength(pill)).toBe(0)
+      expect(getTextLength(pill)).toBe(0)
+      expect(readFilePill(pill, 0)).toEqual(part)
+    }
+  })
+
+  test("unmentioned resource pills can remove only their own attachment by pointer or keyboard", () => {
+    for (const key of ["click", "Enter", " ", "Backspace", "Delete"]) {
+      const editor = document.createElement("div")
+      const first = createPromptPill(unmentionedResource("server-A"), {
+        removeLabel: "Remove attachment",
+        onRemove: (pill) => pill.remove(),
+      })
+      const second = createPromptPill(unmentionedResource("server-B"))
+      editor.append(first, second, document.createTextNode("Review these"))
+      expect(first.getAttribute("role")).toBe("button")
+      expect(first.tabIndex).toBe(0)
+      expect(first.getAttribute("aria-label")).toBe("Remove attachment: server-A: manual (evidence://shared/manual)")
+      if (key === "click") first.click()
+      else first.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }))
+      expect(editor.childNodes).toHaveLength(2)
+      expect(readFilePill(second, 0)).toEqual(unmentionedResource("server-B"))
+      expect(editor.textContent).toBe("Review these")
+    }
+  })
+
   test("createTextFragment preserves newlines with consecutive br nodes", () => {
     const fragment = createTextFragment("foo\n\nbar")
     const container = document.createElement("div")

@@ -1,34 +1,89 @@
-import { Show } from "solid-js"
+import { Show, createEffect, createMemo, onCleanup } from "solid-js"
+import { createStore } from "solid-js/store"
+import { useLanguage } from "@/context/language"
+import type { ExecutionTraceStep } from "./execution-trace-model"
 import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
 
 export function SessionExecutionStatusBar(props: {
   running: boolean
   stepCount: number
+  steps?: readonly ExecutionTraceStep[]
   label: string
   countLabel: string
   onOpen: () => void
 }) {
+  const language = useLanguage()
+  const [clock, setClock] = createStore({ now: Date.now() })
+  const timing = createMemo(() => {
+    const starts = (props.steps ?? [])
+      .map((step) => step.startedAt)
+      .filter((time): time is number => typeof time === "number" && Number.isFinite(time) && time > 0)
+    const ends = (props.steps ?? [])
+      .map((step) => step.endedAt)
+      .filter((time): time is number => typeof time === "number" && Number.isFinite(time))
+    return { start: starts.length ? Math.min(...starts) : undefined, end: ends.length ? Math.max(...ends) : undefined }
+  })
+  createEffect(() => {
+    if (!props.running || timing().start === undefined) return
+    setClock("now", Date.now())
+    const timer = window.setInterval(() => setClock("now", Date.now()), 1000)
+    onCleanup(() => window.clearInterval(timer))
+  })
+  const current = createMemo(() => {
+    const steps = props.steps ?? []
+    for (let i = steps.length - 1; i >= 0; i--) if (steps[i].status === "running") return steps[i]
+    return steps[steps.length - 1]
+  })
+  const elapsed = createMemo(() => {
+    const { start, end } = timing()
+    if (start === undefined || (!props.running && end === undefined)) return undefined
+    const seconds = Math.max(0, Math.floor(((props.running ? clock.now : end!) - start) / 1000))
+    return seconds + (language.locale() === "zh" || language.locale() === "zht" ? " 秒" : "s")
+  })
+  const stepSummary = createMemo(() => {
+    const step = current()
+    if (!step) return undefined
+    const zh = language.locale().startsWith("zh")
+    if (step.kind === "answer") return zh ? "生成答复" : "Deliver answer"
+    if (step.kind === "reasoning") return zh ? "分析任务" : "Analyze task"
+    return (step.title || step.preview)?.replace(/\s+/g, " ").trim().slice(0, 80)
+  })
+  const summary = createMemo(() =>
+    [props.label, stepSummary(), elapsed(), props.stepCount > 0 ? props.countLabel : undefined]
+      .filter(Boolean)
+      .join(" · "),
+  )
   return (
-    <div class="flex h-10 shrink-0 items-center px-4">
+    <div class="flex min-h-8 shrink-0 items-center px-4">
       <button
         type="button"
         data-component="execution-status-bar"
-        class="group flex h-8 items-center gap-2 rounded-[10px] border border-v2-border-border-muted bg-v2-background-bg-layer-01/80 px-3 text-left transition-[background-color,border-color] duration-160 ease-out hover:border-v2-border-border-strong hover:bg-v2-background-bg-layer-01"
+        class="group flex h-8 min-w-0 max-w-full items-center gap-2 whitespace-nowrap rounded-lg border-0 bg-transparent px-2 text-left transition-colors duration-140 hover:bg-v2-overlay-simple-overlay-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-v2-border-border-focus motion-reduce:transition-none [@media(pointer:coarse)]:min-h-11"
         onClick={props.onOpen}
-        aria-label={props.label}
+        aria-label={summary()}
+        title={summary()}
+        aria-busy={props.running || undefined}
       >
         <span
-          class="relative block size-2 shrink-0 rounded-full"
+          class="relative block size-2 shrink-0 rounded-full bg-v2-icon-icon-muted"
           data-running={props.running ? "" : undefined}
           aria-hidden="true"
         />
-        <span class="text-[12px] font-[440] leading-none text-v2-text-text-muted">{props.label}</span>
+        <span class="shrink-0 text-[12px] font-normal leading-none text-v2-text-text-muted">{props.label}</span>
+        <Show when={stepSummary()}>
+          <span class="min-w-0 truncate text-[12px] text-v2-text-text-muted" title={stepSummary()}>
+            {stepSummary()}
+          </span>
+        </Show>
+        <Show when={elapsed()}>
+          {(value) => <span class="shrink-0 text-[12px] tabular-nums text-v2-text-text-muted">{value()}</span>}
+        </Show>
         <Show when={props.stepCount > 0}>
-          <span class="rounded-full bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-[530] leading-none text-v2-text-text-muted">
+          <span class="shrink-0 rounded-full bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[12px] font-normal leading-none text-v2-text-text-muted">
             {props.countLabel}
           </span>
         </Show>
-        <IconV2 name="chevron-right" size="small" class="shrink-0 text-v2-icon-icon-muted transition-transform duration-160 ease-out group-hover:translate-x-0.5" />
+        <IconV2 name="chevron-down" class="shrink-0 -rotate-90 text-v2-icon-icon-muted" />
       </button>
     </div>
   )

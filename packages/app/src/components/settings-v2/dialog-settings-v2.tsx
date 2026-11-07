@@ -1,4 +1,5 @@
-import { Component, ErrorBoundary, For, Show, Suspense, createSignal, lazy, startTransition } from "solid-js"
+import { Component, ErrorBoundary, For, Show, Suspense, createEffect, createUniqueId, lazy, on, onCleanup, onMount, startTransition } from "solid-js"
+import { createStore } from "solid-js/store"
 import { Dialog } from "@arforge-ai/ui/v2/dialog-v2"
 import { TabsV2 } from "@arforge-ai/ui/v2/tabs-v2"
 import { Icon } from "@arforge-ai/ui/icon"
@@ -16,7 +17,7 @@ import { ManagementStatus } from "./management-status"
 import { SettingsServersV2 } from "./servers"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useControlCenterText } from "../control-center/control-center-text"
-import { ARFORGE_SETTINGS_TABS, arforgeSettingsTab, isArforgeSettingsValue } from "../control-center/navigation"
+import { ARFORGE_SETTINGS_GROUPS, ARFORGE_SETTINGS_TABS, arforgeSettingsTab, isArforgeSettingsValue } from "../control-center/navigation"
 import { useSessionOperationsText } from "../session/session-operations-text"
 import {
   SESSION_SETTINGS_TABS,
@@ -24,6 +25,7 @@ import {
   sessionSettingsTab,
 } from "../session/session-settings-navigation"
 import { onboardingCopy } from "../onboarding/onboarding-copy"
+import { settingsTabValue } from "./navigation"
 
 const ArforgeSettingsPanels = lazy(async () => {
   const module = await import("../control-center")
@@ -40,6 +42,8 @@ type SettingsProps = {
   defaultValue?: string
   sync?: ReturnType<typeof useSync>
   permission: ReturnType<typeof usePermission>
+  onReturnToWorkspace?: () => void
+  onTabChange?: (value: string) => void
 }
 
 const SettingsTabs: Component<SettingsProps> = (props) => {
@@ -47,31 +51,61 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
   const controlText = useControlCenterText()
   const sessionText = useSessionOperationsText()
   const dialog = useDialog()
-  const [tab, setTab] = createSignal(props.defaultValue ?? "general")
-  const advancedValues = new Set([
-    "arforge-memory",
-    "arforge-evolution",
-    "arforge-runtime",
-    "arforge-extensions",
-    "arforge-diagnostics",
-    "arforge-operations",
-    "arforge-coverage",
-    "session-automation",
-    "session-team",
-    "session-feedback",
-  ])
-  const [advancedOpen, setAdvancedOpen] = createSignal(true)
+  const [state, setState] = createStore({ tab: settingsTabValue(props.defaultValue), compact: false, navigationOpen: false })
+  createEffect(on(() => props.defaultValue, value => setState("tab", settingsTabValue(value)), { defer: true }))
+  const tab = () => state.tab
+  const navID = createUniqueId()
+  let root!: HTMLDivElement
+  let navigationToggle!: HTMLButtonElement
+  onMount(() => {
+    const resize = () => {
+      const compact = root.getBoundingClientRect().width < 640
+      if (compact === state.compact) return
+      const active = root.ownerDocument.activeElement
+      const inNavigation = active instanceof Element && !!active.closest(".settings-v2-nav-list")
+      setState({ compact, navigationOpen: false })
+      if (compact && inNavigation) navigationToggle.focus({ preventScroll: true })
+      if (!compact && active === navigationToggle)
+        root.querySelector<HTMLButtonElement>('[data-slot="tabs-v2-trigger"][data-selected]')?.focus({ preventScroll: true })
+    }
+    resize()
+    const observer = new ResizeObserver(resize)
+    observer.observe(root)
+    onCleanup(() => observer.disconnect())
+  })
   const setCurrentTab = (value: string) => {
-    if (advancedValues.has(value)) setAdvancedOpen(true)
-    void startTransition(() => setTab(value))
+    setState("navigationOpen", false)
+    if (state.compact) navigationToggle.focus({ preventScroll: true })
+    void startTransition(() => {
+      setState("tab", value)
+      props.onTabChange?.(value)
+    }).then(() => requestAnimationFrame(() => {
+      if (!root.isConnected || !state.compact || state.navigationOpen || state.tab !== value) return
+      const active = root.ownerDocument.activeElement
+      // The tab primitive may focus its trigger after onChange returns.
+      // Once the compact list is hidden, restore that focus to its toggle;
+      // a later interaction with the content keeps its own focus.
+      if (active === root.ownerDocument.body || active === root.ownerDocument.documentElement ||
+          (active instanceof Element && active.closest(".settings-v2-nav-list")))
+        navigationToggle.focus({ preventScroll: true })
+    }))
   }
-  const primaryArforgeTabs = () => ARFORGE_SETTINGS_TABS.filter((item) => !advancedValues.has(item.value))
-  const advancedArforgeTabs = () => ARFORGE_SETTINGS_TABS.filter((item) => advancedValues.has(item.value))
-  const primarySessionTabs = () => SESSION_SETTINGS_TABS.filter((item) => !advancedValues.has(item.value))
-  const advancedSessionTabs = () => SESSION_SETTINGS_TABS.filter((item) => advancedValues.has(item.value))
+  const groupedTabs = (id: string) => {
+    const values: readonly string[] = ARFORGE_SETTINGS_GROUPS.find(group => group.id === id)?.values ?? []
+    return ARFORGE_SETTINGS_TABS.filter(item => values.includes(item.value))
+  }
+  const groupLabel = (id: string) => {
+    const labels: Record<string, readonly [string, string, string]> = {
+      basic: ["基础", "基礎", "Basics"], connections: ["连接", "連線", "Connections"],
+      agent: ["Agent 能力", "Agent 能力", "Agent capabilities"], security: ["安全", "安全", "Security"],
+      data: ["数据", "資料", "Data"], navigation: ["设置导航", "設定導覽", "Settings navigation"],
+    }
+    return labels[id]?.[language.locale() === "zh" ? 0 : language.locale() === "zht" ? 1 : 2] ?? id
+  }
   const copy = () => {
     if (language.locale() === "zh") {
       return {
+        returnToWorkspace: "返回工作区",
         arforge: "Arforge 工作台",
         session: "当前会话",
         advanced: "高级工具",
@@ -83,6 +117,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
     }
     if (language.locale() === "zht") {
       return {
+        returnToWorkspace: "返回工作區",
         arforge: "Arforge 工作台",
         session: "目前 Session",
         advanced: "進階工具",
@@ -93,6 +128,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
       }
     }
     return {
+      returnToWorkspace: "Back to workspace",
       arforge: "Arforge workspace",
       session: "Current session",
       advanced: "Advanced tools",
@@ -115,16 +151,44 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
   }
 
   return (
-    <TabsV2 orientation="vertical" variant="settings" value={tab()} onChange={setCurrentTab} class="settings-v2">
-      <TabsV2.List aria-label={language.t("sidebar.settings")}>
+    <TabsV2 ref={root} orientation="vertical" variant="settings" value={tab()} onChange={setCurrentTab}
+      class="settings-v2" data-compact={state.compact} data-navigation-open={state.navigationOpen}
+      onKeyDown={(event: KeyboardEvent) => {
+        if (event.key !== "Escape" || !state.compact || !state.navigationOpen) return
+        event.preventDefault()
+        event.stopPropagation()
+        setState("navigationOpen", false)
+        navigationToggle.focus({ preventScroll: true })
+      }}>
+      <button ref={navigationToggle} type="button" class="settings-v2-navigation-toggle"
+        aria-expanded={state.navigationOpen} aria-controls={navID}
+        onClick={() => {
+          setState("navigationOpen", !state.navigationOpen)
+          if (state.navigationOpen) queueMicrotask(() => root.querySelector<HTMLButtonElement>('[data-slot="tabs-v2-trigger"][data-selected]')?.focus({ preventScroll: true }))
+        }}>
+        <Icon name={state.navigationOpen ? "close" : "menu"} /><span>{groupLabel("navigation")}</span>
+      </button>
+      <TabsV2.List id={navID} class="settings-v2-nav-list" aria-label={language.t("sidebar.settings")}
+        hidden={state.compact && !state.navigationOpen}>
         <div class="settings-v2-nav">
           <div class="settings-v2-nav-heading">
+            <button
+              type="button"
+              class="settings-v2-return"
+              onClick={() => {
+                if (props.onReturnToWorkspace) props.onReturnToWorkspace()
+                else dialog.close()
+              }}
+            >
+              <Icon name="arrow-left" />
+              <span>{copy().returnToWorkspace}</span>
+            </button>
             <h1>{language.t("sidebar.settings")}</h1>
           </div>
           <div class="settings-v2-nav-scroll">
             <div class="flex flex-col gap-3">
               <div class="flex flex-col gap-1.5">
-                <TabsV2.SectionTitle>{language.t("settings.section.desktop")}</TabsV2.SectionTitle>
+                <TabsV2.SectionTitle>{groupLabel("basic")}</TabsV2.SectionTitle>
                 <div class="flex flex-col gap-1.5 w-full">
                   <TabsV2.Trigger value="general">
                     <Icon name="sliders" />
@@ -138,7 +202,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
               </div>
 
               <div class="flex flex-col gap-1.5">
-                <TabsV2.SectionTitle>{language.t("settings.section.server")}</TabsV2.SectionTitle>
+                <TabsV2.SectionTitle>{groupLabel("connections")}</TabsV2.SectionTitle>
                 <div class="flex flex-col gap-1.5 w-full">
                   <TabsV2.Trigger value="servers">
                     <Icon name="server" />
@@ -152,27 +216,31 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
                     <Icon name="models" />
                     {language.t("settings.models.title")}
                   </TabsV2.Trigger>
-                </div>
-              </div>
-
-              <div class="flex flex-col gap-1.5">
-                <TabsV2.SectionTitle>{copy().arforge}</TabsV2.SectionTitle>
-                <div class="flex flex-col gap-1.5 w-full">
-                  <For each={primaryArforgeTabs()}>
-                    {(item) => (
-                      <TabsV2.Trigger value={item.value} title={controlText(item.label)}>
-                        <Icon name={item.icon} />
-                        {controlText(item.label)}
-                      </TabsV2.Trigger>
-                    )}
+                  <For each={groupedTabs("connections")}>
+                    {(item) => <TabsV2.Trigger value={item.value} title={controlText(item.label)}>
+                      <Icon name={item.icon} />{controlText(item.label)}
+                    </TabsV2.Trigger>}
                   </For>
                 </div>
               </div>
 
+              <For each={["agent", "security", "data"]}>{(group) => (
+                <div class="flex flex-col gap-1.5" data-settings-group={group}>
+                  <TabsV2.SectionTitle>{groupLabel(group)}</TabsV2.SectionTitle>
+                  <div class="flex flex-col gap-1.5 w-full">
+                    <For each={groupedTabs(group)}>{(item) => (
+                      <TabsV2.Trigger value={item.value} title={controlText(item.label)}>
+                        <Icon name={item.icon} />{controlText(item.label)}
+                      </TabsV2.Trigger>
+                    )}</For>
+                  </div>
+                </div>
+              )}</For>
+
               <div class="flex flex-col gap-1.5">
                 <TabsV2.SectionTitle>{copy().session}</TabsV2.SectionTitle>
                 <div class="flex flex-col gap-1.5 w-full">
-                  <For each={primarySessionTabs()}>
+                  <For each={SESSION_SETTINGS_TABS}>
                     {(item) => (
                       <TabsV2.Trigger value={item.value} disabled={!props.sessionID}>
                         <Icon name={item.icon} />
@@ -187,20 +255,10 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
               </div>
 
               <div class="flex flex-col gap-1.5 border-t border-border-weak-base pt-3">
-                <button
-                  type="button"
-                  class="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-12-medium text-text-strong transition-colors hover:bg-surface-raised-base-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-border-focus"
-                  aria-expanded={advancedOpen()}
-                  aria-controls="arforge-advanced-settings"
-                  onClick={() => setAdvancedOpen((value) => !value)}
-                >
-                  <Icon name={advancedOpen() ? "chevron-down" : "chevron-right"} />
-                  {advancedOpen() ? copy().hideAdvanced : copy().showAdvanced}
-                </button>
-                <p class="settings-v2-nav-hint">{copy().advancedHint}</p>
-                <Show when={advancedOpen()}>
-                  <div id="arforge-advanced-settings" class="flex flex-col gap-3 pt-1">
-                    <div class="mx-1 rounded-lg border border-border-weak-base bg-surface-base px-3 py-2.5">
+                <details class="settings-v2-nav-help">
+                  <summary>{copy().advanced}</summary>
+                  <p class="settings-v2-nav-hint">{copy().advancedHint}</p>
+                    <div class="settings-v2-nav-hint">
                       <p class="text-11-medium text-text-strong">
                         {onboardingCopy(language.locale()).advancedAudience}
                       </p>
@@ -208,30 +266,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
                         {onboardingCopy(language.locale()).advancedHelp}
                       </p>
                     </div>
-                    <div class="flex flex-col gap-1.5">
-                      <TabsV2.SectionTitle>{copy().advanced}</TabsV2.SectionTitle>
-                      <For each={advancedArforgeTabs()}>
-                        {(item) => (
-                          <TabsV2.Trigger value={item.value} title={controlText(item.label)}>
-                            <Icon name={item.icon} />
-                            {controlText(item.label)}
-                          </TabsV2.Trigger>
-                        )}
-                      </For>
-                    </div>
-                    <div class="flex flex-col gap-1.5">
-                      <TabsV2.SectionTitle>{copy().session}</TabsV2.SectionTitle>
-                      <For each={advancedSessionTabs()}>
-                        {(item) => (
-                          <TabsV2.Trigger value={item.value} disabled={!props.sessionID}>
-                            <Icon name={item.icon} />
-                            {sessionText()[item.label]}
-                          </TabsV2.Trigger>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </Show>
+                </details>
               </div>
             </div>
           </div>
@@ -241,6 +276,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
           </div>
         </div>
       </TabsV2.List>
+      <div class="settings-v2-main" inert={state.compact && state.navigationOpen} aria-hidden={state.compact && state.navigationOpen ? "true" : undefined}>
       <TabsV2.Content value="general" class="settings-v2-panel">
         <SettingsGeneralV2 sessionID={props.sessionID} permission={props.permission} />
       </TabsV2.Content>
@@ -251,7 +287,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
         <SettingsServersV2 />
       </TabsV2.Content>
       <TabsV2.Content value="providers" class="settings-v2-panel">
-        <SettingsProvidersV2 onBack={showProviders} />
+        <SettingsProvidersV2 onBack={showProviders} onNavigate={setCurrentTab} />
       </TabsV2.Content>
       <TabsV2.Content value="models" class="settings-v2-panel">
         <SettingsModelsV2 />
@@ -266,9 +302,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
                 </h2>
               </header>
               <div class="settings-v2-tab-body">
-                <div class="settings-v2-loading" role="status" aria-live="polite">
-                  {controlText("正在解析工作区…")}
-                </div>
+                <ManagementStatus loading initialLoading />
               </div>
             </TabsV2.Content>
           }
@@ -294,9 +328,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
                 </h2>
               </header>
               <div class="settings-v2-tab-body">
-                <div class="settings-v2-loading" role="status" aria-live="polite">
-                  {sessionText().loading}
-                </div>
+                <ManagementStatus loading initialLoading />
               </div>
             </TabsV2.Content>
           }
@@ -334,12 +366,13 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
           </Show>
         </Suspense>
       </Show>
+      </div>
     </TabsV2>
   )
 }
 
 export const DialogSettings: Component<SettingsProps> = (props) => (
-  <Dialog size="x-large" variant="settings" class="settings-v2-dialog settings-v2-surface">
+  <Dialog size="x-large" variant="settings" class="settings-v2-dialog settings-v2-surface" containerClass="settings-v2-dialog-container">
     <SettingsTabs {...props} />
   </Dialog>
 )
@@ -349,6 +382,7 @@ export const DialogSettings: Component<SettingsProps> = (props) => (
 export const SettingsWorkspace: Component<SettingsProps> = (props) => (
   <div
     data-component="settings-workspace"
+    data-settings-navigation="dedicated"
     data-arforge-material="dialog"
     class="settings-v2-workspace settings-v2-surface"
   >

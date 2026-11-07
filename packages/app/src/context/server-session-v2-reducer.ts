@@ -1,5 +1,10 @@
 import type { ArforgeEvent, SessionMessageInfo, SessionPendingMessage } from "@arforge-ai/client/promise"
 import { type AssistantWithPrimaryDelivery, type PrimaryDeliveredEvent } from "@/utils/primary-delivery"
+import {
+  isNativeSessionEvent,
+  translateNativeSessionEvent,
+  type CurrentServerEvent,
+} from "./server-session-native-reducer"
 
 type Assistant = Extract<SessionMessageInfo, { type: "assistant" }> & { structured?: Record<string, unknown> }
 type Compaction = Extract<SessionMessageInfo, { type: "compaction" }>
@@ -15,7 +20,12 @@ export type V2SessionReduction = {
 export function createV2SessionReducer() {
   const pending = new Map<string, SessionPendingMessage>()
 
-  const reduce = (source: readonly SessionMessageInfo[], event: ArforgeEvent): V2SessionReduction | undefined => {
+  const reduce = (source: readonly SessionMessageInfo[], input: CurrentServerEvent): V2SessionReduction | undefined => {
+    const translated = isNativeSessionEvent(input) ? translateNativeSessionEvent(source, input) : input
+    if (!translated) return
+    if ("messages" in translated) return translated
+    if (translated.type === "agent.run.state-changed") return
+    const event: ArforgeEvent = translated
     const primary = event as unknown as PrimaryDeliveredEvent
     if (primary.type === "session.next.primary.delivered") {
       const current = source.find(

@@ -2,7 +2,7 @@
 
 日期：2026-09-22
 状态：设计覆盖清单，不是业务回归通过报告。
-[总览入口](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/gallery.html) · [设计计划](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-review-plan.md) · [决策矩阵](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-decision-matrix.md)
+[总览入口] · [设计计划](2026-09-22-ui-redesign-v2-review-plan.md) · [决策矩阵](2026-09-22-ui-redesign-v2-decision-matrix.md)
 
 ## 1. 来源与证据边界
 
@@ -14,70 +14,70 @@
 
 | 序号 | 页面与图片 | 设计归组 | 预览类型 | 保留动作 |
 | --- | --- | --- | --- | --- |
-| 01 | [主会话](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/01-chat.png) | 01 对话与工作区 | chat | 文件、执行 |
-| 02 | [深色会话](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/02-chat-dark.png) | 01 对话与工作区 | chat | 保留当前页面原有局部操作 |
-| 03 | [首页与新会话](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/03-home.png) | 01 对话与工作区 | home | 打开项目、新建会话 |
-| 04 | [会话搜索与管理](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/04-sessions.png) | 01 对话与工作区 | table | 新建会话 |
-| 05 | [文件工作台](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/05-files.png) | 01 对话与工作区 | files | 查找文件、在应用中打开 |
-| 06 | [变更审查](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/06-diff.png) | 01 对话与工作区 | diff | 并排查看、添加评论 |
-| 07 | [隔离浏览器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/07-browser.png) | 01 对话与工作区 | browser | 重新加载、关闭浏览器 |
-| 08 | [PDF 预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/08-preview-pdf.png) | 02 文件与内容预览 | document | 适合宽度、下载 |
-| 09 | [Word 预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/09-preview-word.png) | 02 文件与内容预览 | document | 在应用中打开、下载 |
-| 10 | [表格预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/10-preview-sheet.png) | 02 文件与内容预览 | sheet | 切换工作表、下载 |
-| 11 | [演示文稿预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/11-preview-slides.png) | 02 文件与内容预览 | slides | 适合页面、在应用中打开 |
-| 12 | [Markdown 与文本编辑](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/12-preview-markdown.png) | 02 文件与内容预览 | editor | 预览、保存草稿 |
-| 13 | [HTML 与元素预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/13-preview-html.png) | 02 文件与内容预览 | html | 选择元素、查看修改预览 |
-| 14 | [图像与其他附件](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/14-preview-media.png) | 02 文件与内容预览 | media | 原始尺寸、下载 |
-| 15 | [会话内终端](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/15-terminal.png) | 01 对话与工作区 | terminal | 新建终端、收起 |
-| 16 | [执行详情](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/16-execution.png) | 03 会话管理 | execution | 停止、运行历史 |
-| 17 | [上下文与用量](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/17-context.png) | 03 会话管理 | context | 查看来源、压缩预览 |
-| 18 | [目标与任务](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/18-goals.png) | 03 会话管理 | tasks | 新增目标、新增任务 |
-| 19 | [待发送消息](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/19-queue.png) | 03 会话管理 | table | 添加到队列 |
-| 20 | [定时消息](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/20-schedules.png) | 03 会话管理 | table | 新增定时消息 |
-| 21 | [触发器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/21-triggers.png) | 03 会话管理 | table | 新增触发器 |
-| 22 | [协作等待](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/22-waits.png) | 03 会话管理 | timeline | 查看等待条件 |
-| 23 | [团队与子代理](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/23-team.png) | 03 会话管理 | team | 添加成员、发送消息 |
-| 24 | [检查点与对话回退](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/24-checkpoints.png) | 03 会话管理 | timeline | 创建检查点、预览对话回退 |
-| 25 | [会话反馈](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/25-feedback.png) | 03 会话管理 | form | 保存反馈 |
-| 26 | [个人后台任务](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/26-jobs.png) | 03 会话管理 | table | 新建后台任务 |
-| 27 | [个人工作区](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/27-workspace.png) | 04 控制中心 | workspace | 工作区快照、管理项目副本 |
-| 28 | [系统概览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/28-overview.png) | 04 控制中心 | overview | 刷新状态 |
-| 29 | [模型服务商](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/29-providers.png) | 05 连接与设置 | table | 连接服务商 |
-| 30 | [模型管理](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/30-models.png) | 05 连接与设置 | table | 管理可见模型 |
-| 31 | [服务器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/31-servers.png) | 05 连接与设置 | table | 添加服务器 |
-| 32 | [权限与安全](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/32-permissions.png) | 04 控制中心 | table | 待处理请求、查看已保存规则 |
-| 33 | [记忆与学习](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/33-memory.png) | 04 控制中心 | memory | 新增记忆、查看候选 |
-| 34 | [受控自主进化](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/34-evolution.png) | 04 控制中心 | pipeline | 查看候选、查看审计 |
-| 35 | [运行时透视](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/35-runtime.png) | 04 控制中心 | runtime | 刷新快照、恢复审查 |
-| 36 | [代理配置](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/36-agents.png) | 04 控制中心 | table | 选择现有代理 |
-| 37 | [技能](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/37-skills.png) | 04 控制中心 | table | 刷新技能、查看生命周期 |
-| 38 | [插件](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/38-plugins.png) | 04 控制中心 | table | 检查插件 |
-| 39 | [工作流](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/39-workflows.png) | 04 控制中心 | pipeline | 预览工作流、查看运行 |
-| 40 | [MCP 与资源](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/40-mcp.png) | 04 控制中心 | table | 连接服务、资源目录 |
-| 41 | [诊断与运行报告](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/41-diagnostics.png) | 04 控制中心 | table | 选择诊断模式、导出报告 |
-| 42 | [数据库与本地运维](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/42-operations.png) | 04 控制中心 | operations | 导出日志、查看安全说明 |
-| 43 | [开发者能力映射](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/43-coverage.png) | 04 控制中心 | table | 筛选能力 |
-| 44 | [数据与租户治理](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/44-tenant.png) | 04 控制中心 | table | 查看政策、审计导出 |
-| 45 | [产物与审计证据](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/45-artifacts.png) | 04 控制中心 | table | 查看审计 |
-| 46 | [通用与外观设置](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/46-settings.png) | 05 连接与设置 | settings | 恢复默认值 |
-| 47 | [快捷键](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/47-shortcuts.png) | 05 连接与设置 | table | 恢复默认绑定 |
-| 48 | [首次启动引导](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/48-onboarding.png) | 06 状态与组件 | onboarding | 开始配置、稍后 |
-| 49 | [空白、加载与异常](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/49-states.png) | 06 状态与组件 | states | 查看状态规范 |
-| 50 | [弹窗、菜单与选择器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/50-dialogs.png) | 06 状态与组件 | dialogs | 查看确认流程 |
-| 51 | [审批与提问](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/51-approvals.png) | 06 状态与组件 | approvals | 查看操作范围 |
-| 52 | [完整内容排版](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/52-typography.png) | 06 状态与组件 | typography | 查看设计参数 |
-| 53 | [手机 Web 会话](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/53-mobile.png) | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
-| 54 | [手机历史预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/54-mobile-history.png) | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
-| 55 | [窄窗口工作区](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/55-tablet.png) | 07 多尺寸与平台 | files | 保留当前页面原有局部操作 |
-| 56 | [桌面标题栏与原生菜单](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/56-desktop-menus.png) | 07 多尺寸与平台 | menus | 保留当前页面原有局部操作 |
-| 57 | [模型选择器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/57-model-picker.png) | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
-| 58 | [深色模型选择器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/58-model-picker-dark.png) | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
-| 59 | [模型搜索无结果](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/59-model-picker-empty.png) | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
-| 60 | [模型不可用与恢复](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/60-model-picker-error.png) | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
-| 61 | [全局搜索](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/61-search-global.png) | 01 对话与工作区 | search | 搜索 |
-| 62 | [项目与工作区切换](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/62-project-switcher.png) | 01 对话与工作区 | projects | 打开项目 |
-| 63 | [触屏模型选择器](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/63-mobile-model-picker.png) | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
-| 64 | [深色设置](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/screens/64-settings-dark.png) | 05 连接与设置 | settings | 恢复默认值 |
+| 01 | [主会话] | 01 对话与工作区 | chat | 文件、执行 |
+| 02 | [深色会话] | 01 对话与工作区 | chat | 保留当前页面原有局部操作 |
+| 03 | [首页与新会话] | 01 对话与工作区 | home | 打开项目、新建会话 |
+| 04 | [会话搜索与管理] | 01 对话与工作区 | table | 新建会话 |
+| 05 | [文件工作台] | 01 对话与工作区 | files | 查找文件、在应用中打开 |
+| 06 | [变更审查] | 01 对话与工作区 | diff | 并排查看、添加评论 |
+| 07 | [隔离浏览器] | 01 对话与工作区 | browser | 重新加载、关闭浏览器 |
+| 08 | [PDF 预览] | 02 文件与内容预览 | document | 适合宽度、下载 |
+| 09 | [Word 预览] | 02 文件与内容预览 | document | 在应用中打开、下载 |
+| 10 | [表格预览] | 02 文件与内容预览 | sheet | 切换工作表、下载 |
+| 11 | [演示文稿预览] | 02 文件与内容预览 | slides | 适合页面、在应用中打开 |
+| 12 | [Markdown 与文本编辑] | 02 文件与内容预览 | editor | 预览、保存草稿 |
+| 13 | [HTML 与元素预览] | 02 文件与内容预览 | html | 选择元素、查看修改预览 |
+| 14 | [图像与其他附件] | 02 文件与内容预览 | media | 原始尺寸、下载 |
+| 15 | [会话内终端] | 01 对话与工作区 | terminal | 新建终端、收起 |
+| 16 | [执行详情] | 03 会话管理 | execution | 停止、运行历史 |
+| 17 | [上下文与用量] | 03 会话管理 | context | 查看来源、压缩预览 |
+| 18 | [目标与任务] | 03 会话管理 | tasks | 新增目标、新增任务 |
+| 19 | [待发送消息] | 03 会话管理 | table | 添加到队列 |
+| 20 | [定时消息] | 03 会话管理 | table | 新增定时消息 |
+| 21 | [触发器] | 03 会话管理 | table | 新增触发器 |
+| 22 | [协作等待] | 03 会话管理 | timeline | 查看等待条件 |
+| 23 | [团队与子代理] | 03 会话管理 | team | 添加成员、发送消息 |
+| 24 | [检查点与对话回退] | 03 会话管理 | timeline | 创建检查点、预览对话回退 |
+| 25 | [会话反馈] | 03 会话管理 | form | 保存反馈 |
+| 26 | [个人后台任务] | 03 会话管理 | table | 新建后台任务 |
+| 27 | [个人工作区] | 04 控制中心 | workspace | 工作区快照、管理项目副本 |
+| 28 | [系统概览] | 04 控制中心 | overview | 刷新状态 |
+| 29 | [模型服务商] | 05 连接与设置 | table | 连接服务商 |
+| 30 | [模型管理] | 05 连接与设置 | table | 管理可见模型 |
+| 31 | [服务器] | 05 连接与设置 | table | 添加服务器 |
+| 32 | [权限与安全] | 04 控制中心 | table | 待处理请求、查看已保存规则 |
+| 33 | [记忆与学习] | 04 控制中心 | memory | 新增记忆、查看候选 |
+| 34 | [受控自主进化] | 04 控制中心 | pipeline | 查看候选、查看审计 |
+| 35 | [运行时透视] | 04 控制中心 | runtime | 刷新快照、恢复审查 |
+| 36 | [代理配置] | 04 控制中心 | table | 选择现有代理 |
+| 37 | [技能] | 04 控制中心 | table | 刷新技能、查看生命周期 |
+| 38 | [插件] | 04 控制中心 | table | 检查插件 |
+| 39 | [工作流] | 04 控制中心 | pipeline | 预览工作流、查看运行 |
+| 40 | [MCP 与资源] | 04 控制中心 | table | 连接服务、资源目录 |
+| 41 | [诊断与运行报告] | 04 控制中心 | table | 选择诊断模式、导出报告 |
+| 42 | [数据库与本地运维] | 04 控制中心 | operations | 导出日志、查看安全说明 |
+| 43 | [开发者能力映射] | 04 控制中心 | table | 筛选能力 |
+| 44 | [数据与租户治理] | 04 控制中心 | table | 查看政策、审计导出 |
+| 45 | [产物与审计证据] | 04 控制中心 | table | 查看审计 |
+| 46 | [通用与外观设置] | 05 连接与设置 | settings | 恢复默认值 |
+| 47 | [快捷键] | 05 连接与设置 | table | 恢复默认绑定 |
+| 48 | [首次启动引导] | 06 状态与组件 | onboarding | 开始配置、稍后 |
+| 49 | [空白、加载与异常] | 06 状态与组件 | states | 查看状态规范 |
+| 50 | [弹窗、菜单与选择器] | 06 状态与组件 | dialogs | 查看确认流程 |
+| 51 | [审批与提问] | 06 状态与组件 | approvals | 查看操作范围 |
+| 52 | [完整内容排版] | 06 状态与组件 | typography | 查看设计参数 |
+| 53 | [手机 Web 会话] | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
+| 54 | [手机历史预览] | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
+| 55 | [窄窗口工作区] | 07 多尺寸与平台 | files | 保留当前页面原有局部操作 |
+| 56 | [桌面标题栏与原生菜单] | 07 多尺寸与平台 | menus | 保留当前页面原有局部操作 |
+| 57 | [模型选择器] | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
+| 58 | [深色模型选择器] | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
+| 59 | [模型搜索无结果] | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
+| 60 | [模型不可用与恢复] | 06 状态与组件 | chat | 保留当前页面原有局部操作 |
+| 61 | [全局搜索] | 01 对话与工作区 | search | 搜索 |
+| 62 | [项目与工作区切换] | 01 对话与工作区 | projects | 打开项目 |
+| 63 | [触屏模型选择器] | 07 多尺寸与平台 | chat | 保留当前页面原有局部操作 |
+| 64 | [深色设置] | 05 连接与设置 | settings | 恢复默认值 |
 
 
 ## 3. 每页状态设计与来源
@@ -88,7 +88,7 @@
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -98,7 +98,7 @@
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/context/settings.tsx](E:/Arforge-Agent/packages/app/src/context/settings.tsx)。
+来源定位：[packages/app/src/context/settings.tsx](../../packages/app/src/context/settings.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -108,7 +108,7 @@
 
 状态设计：首次无配置 / 已配置 / 最近草稿 / 无项目 / 连接失败。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -118,7 +118,7 @@
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -128,7 +128,7 @@
 
 状态设计：临时预览 / 固定标签 / dirty / 只读 / 保存冲突 / 空树 / 加载失败。
 
-来源定位：[packages/app/src/pages/session/session-side-panel.tsx](E:/Arforge-Agent/packages/app/src/pages/session/session-side-panel.tsx)。
+来源定位：[packages/app/src/pages/session/session-side-panel.tsx](../../packages/app/src/pages/session/session-side-panel.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -138,7 +138,7 @@
 
 状态设计：无变更 / 文件差异 / 并排与统一 / 行评论 / 回退预览 / 权限不足。
 
-来源定位：[packages/app/src/pages/session/session-side-panel.tsx](E:/Arforge-Agent/packages/app/src/pages/session/session-side-panel.tsx)。
+来源定位：[packages/app/src/pages/session/session-side-panel.tsx](../../packages/app/src/pages/session/session-side-panel.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -148,7 +148,7 @@
 
 状态设计：空白 / 加载 / 停止 / 网络错误 / 身份隔离 / 不支持平台。
 
-来源定位：[packages/app/src/components/browser-workbench-panel.tsx](E:/Arforge-Agent/packages/app/src/components/browser-workbench-panel.tsx)。
+来源定位：[packages/app/src/components/browser-workbench-panel.tsx](../../packages/app/src/components/browser-workbench-panel.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -158,7 +158,7 @@
 
 状态设计：加载 / 页码与缩放 / 查找无结果 / 受限 / 解析失败 / 下载。
 
-来源定位：[packages/app/src/components/preview/pdf-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/pdf-preview.tsx)。
+来源定位：[packages/app/src/components/preview/pdf-preview.tsx](../../packages/app/src/components/preview/pdf-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -168,7 +168,7 @@
 
 状态设计：加载 / 页码与缩放 / 查找无结果 / 受限 / 解析失败 / 下载。
 
-来源定位：[packages/app/src/components/preview/office-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/office-preview.tsx)。
+来源定位：[packages/app/src/components/preview/office-preview.tsx](../../packages/app/src/components/preview/office-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -178,7 +178,7 @@
 
 状态设计：多工作表 / 横向滚动 / 空表 / 不支持格式 / 读取失败。
 
-来源定位：[packages/app/src/components/preview/office-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/office-preview.tsx)。
+来源定位：[packages/app/src/components/preview/office-preview.tsx](../../packages/app/src/components/preview/office-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -188,7 +188,7 @@
 
 状态设计：缩略图 / 当前页 / 适合窗口 / 缺失资源 / 解析失败。
 
-来源定位：[packages/app/src/components/preview/office-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/office-preview.tsx)。
+来源定位：[packages/app/src/components/preview/office-preview.tsx](../../packages/app/src/components/preview/office-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -198,7 +198,7 @@
 
 状态设计：源码 / 预览 / 草稿 / 保存中 / 版本冲突 / 只读。
 
-来源定位：[packages/app/src/components/preview/text-document-editor.tsx](E:/Arforge-Agent/packages/app/src/components/preview/text-document-editor.tsx)、[packages/app/src/components/preview/markdown-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/markdown-preview.tsx)。
+来源定位：[packages/app/src/components/preview/text-document-editor.tsx](../../packages/app/src/components/preview/text-document-editor.tsx)、[packages/app/src/components/preview/markdown-preview.tsx](../../packages/app/src/components/preview/markdown-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -208,7 +208,7 @@
 
 状态设计：加载 / 沙箱限制 / 元素选择 / 修改差异 / 脚本错误。
 
-来源定位：[packages/app/src/components/preview/html-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/html-preview.tsx)、[packages/app/src/components/preview/html-element-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/html-element-preview.tsx)。
+来源定位：[packages/app/src/components/preview/html-preview.tsx](../../packages/app/src/components/preview/html-preview.tsx)、[packages/app/src/components/preview/html-element-preview.tsx](../../packages/app/src/components/preview/html-element-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -218,7 +218,7 @@
 
 状态设计：图片 / 音频 / 视频 / 格式不支持 / 下载失败 / 权限。
 
-来源定位：[packages/app/src/components/preview/file-preview.tsx](E:/Arforge-Agent/packages/app/src/components/preview/file-preview.tsx)。
+来源定位：[packages/app/src/components/preview/file-preview.tsx](../../packages/app/src/components/preview/file-preview.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -228,7 +228,7 @@
 
 状态设计：连接中 / 活跃PTY / 断线 / 重连 / 多标签 / 退出。
 
-来源定位：[packages/app/src/pages/session/terminal-panel-v2.tsx](E:/Arforge-Agent/packages/app/src/pages/session/terminal-panel-v2.tsx)。
+来源定位：[packages/app/src/pages/session/terminal-panel-v2.tsx](../../packages/app/src/pages/session/terminal-panel-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -238,7 +238,7 @@
 
 状态设计：待启动 / 运行 / 审批暂停 / 成功 / 失败 / 取消 / 历史。
 
-来源定位：[packages/app/src/pages/session/session-execution-dock.tsx](E:/Arforge-Agent/packages/app/src/pages/session/session-execution-dock.tsx)、[packages/app/src/components/session/session-run-history.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-run-history.tsx)。
+来源定位：[packages/app/src/pages/session/session-execution-dock.tsx](../../packages/app/src/pages/session/session-execution-dock.tsx)、[packages/app/src/components/session/session-run-history.tsx](../../packages/app/src/components/session/session-run-history.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -248,7 +248,7 @@
 
 状态设计：来源加载 / 预算估算 / 超限 / 压缩预览 / 权限限制。
 
-来源定位：[packages/app/src/components/session/session-context-tab.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-context-tab.tsx)。
+来源定位：[packages/app/src/components/session/session-context-tab.tsx](../../packages/app/src/components/session/session-context-tab.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -258,7 +258,7 @@
 
 状态设计：新目标 / 依赖等待 / 领取 / 执行 / 暂停 / 完成 / revision冲突。
 
-来源定位：[packages/app/src/components/session/session-goal-control.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-goal-control.tsx)、[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-goal-control.tsx](../../packages/app/src/components/session/session-goal-control.tsx)、[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -268,7 +268,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/session/session-prompt-queue-control.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-prompt-queue-control.tsx)。
+来源定位：[packages/app/src/components/session/session-prompt-queue-control.tsx](../../packages/app/src/components/session/session-prompt-queue-control.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -278,7 +278,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -288,7 +288,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -298,7 +298,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：空记录 / 当前锚点 / 历史来源 / 范围预览 / 忙碌限制。
 
-来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -308,7 +308,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：成员列表 / 隔离收件箱 / 等待输入 / 运行 / 跟进 / 取消。
 
-来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -318,7 +318,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：空记录 / 当前锚点 / 历史来源 / 范围预览 / 忙碌限制。
 
-来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-operations-dialog.tsx)。
+来源定位：[packages/app/src/components/session/session-operations-dialog.tsx](../../packages/app/src/components/session/session-operations-dialog.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -328,7 +328,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：未填写 / 校验错误 / 保存中 / 保存失败 / 本地回执。
 
-来源定位：[packages/app/src/components/session/session-feedback-control.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-feedback-control.tsx)。
+来源定位：[packages/app/src/components/session/session-feedback-control.tsx](../../packages/app/src/components/session/session-feedback-control.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -338,7 +338,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/session/session-personal-jobs-control.tsx](E:/Arforge-Agent/packages/app/src/components/session/session-personal-jobs-control.tsx)。
+来源定位：[packages/app/src/components/session/session-personal-jobs-control.tsx](../../packages/app/src/components/session/session-personal-jobs-control.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -348,7 +348,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：当前项目 / 最近项目 / 切换 / 副本预览 / 快照 / 删除确认。
 
-来源定位：[packages/app/src/components/control-center/personal-workspace.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/personal-workspace.tsx)。
+来源定位：[packages/app/src/components/control-center/personal-workspace.tsx](../../packages/app/src/components/control-center/personal-workspace.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -358,7 +358,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：连接正常示例 / 状态未知 / 服务失败 / 刷新中 / 部分可用。
 
-来源定位：[packages/app/src/components/control-center/navigation.ts](E:/Arforge-Agent/packages/app/src/components/control-center/navigation.ts)。
+来源定位：[packages/app/src/components/control-center/navigation.ts](../../packages/app/src/components/control-center/navigation.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -368,7 +368,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/settings-v2/providers.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/providers.tsx)。
+来源定位：[packages/app/src/components/settings-v2/providers.tsx](../../packages/app/src/components/settings-v2/providers.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -378,7 +378,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/settings-v2/models.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/models.tsx)。
+来源定位：[packages/app/src/components/settings-v2/models.tsx](../../packages/app/src/components/settings-v2/models.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -388,7 +388,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/settings-v2/servers.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/servers.tsx)。
+来源定位：[packages/app/src/components/settings-v2/servers.tsx](../../packages/app/src/components/settings-v2/servers.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -398,7 +398,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/navigation.ts](E:/Arforge-Agent/packages/app/src/components/control-center/navigation.ts)。
+来源定位：[packages/app/src/components/control-center/navigation.ts](../../packages/app/src/components/control-center/navigation.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -408,7 +408,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：生效 / 候选 / 证据 / 冲突 / 纠错 / 撤销 / 无权限。
 
-来源定位：[packages/app/src/components/control-center/capability-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/capability-workbench.tsx)。
+来源定位：[packages/app/src/components/control-center/capability-workbench.tsx](../../packages/app/src/components/control-center/capability-workbench.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -418,7 +418,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：未开始 / 等待依赖 / 运行 / 审批 / 失败重试 / 回滚。
 
-来源定位：[packages/app/src/components/control-center/evolution-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/evolution-workbench.tsx)。
+来源定位：[packages/app/src/components/control-center/evolution-workbench.tsx](../../packages/app/src/components/control-center/evolution-workbench.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -428,7 +428,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：快照 / 路由依据 / 未验证 / 审计 / 恢复审批 / 来源不可用。
 
-来源定位：[packages/app/src/components/control-center/runtime-insight-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/runtime-insight-workbench.tsx)。
+来源定位：[packages/app/src/components/control-center/runtime-insight-workbench.tsx](../../packages/app/src/components/control-center/runtime-insight-workbench.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -438,7 +438,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)、[packages/app/src/components/settings-v2/general.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/general.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)、[packages/app/src/components/settings-v2/general.tsx](../../packages/app/src/components/settings-v2/general.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -448,7 +448,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/dialog-control-center.tsx)。
+来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](../../packages/app/src/components/control-center/dialog-control-center.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -458,7 +458,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/dialog-control-center.tsx)。
+来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](../../packages/app/src/components/control-center/dialog-control-center.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -468,7 +468,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：未开始 / 等待依赖 / 运行 / 审批 / 失败重试 / 回滚。
 
-来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/dialog-control-center.tsx)。
+来源定位：[packages/app/src/components/control-center/dialog-control-center.tsx](../../packages/app/src/components/control-center/dialog-control-center.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -478,7 +478,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/capabilities/ui-capability-review.ts](E:/Arforge-Agent/packages/app/src/capabilities/ui-capability-review.ts)。
+来源定位：[packages/app/src/capabilities/ui-capability-review.ts](../../packages/app/src/capabilities/ui-capability-review.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -488,7 +488,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/capability-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/capability-workbench.tsx)。
+来源定位：[packages/app/src/components/control-center/capability-workbench.tsx](../../packages/app/src/components/control-center/capability-workbench.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -498,7 +498,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：健康未知 / 迁移阻塞 / 权限不足 / 日志脱敏 / 安全恢复。
 
-来源定位：[packages/app/src/components/control-center/navigation.ts](E:/Arforge-Agent/packages/app/src/components/control-center/navigation.ts)。
+来源定位：[packages/app/src/components/control-center/navigation.ts](../../packages/app/src/components/control-center/navigation.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -508,7 +508,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/capabilities/control-center-map.ts](E:/Arforge-Agent/packages/app/src/capabilities/control-center-map.ts)。
+来源定位：[packages/app/src/capabilities/control-center-map.ts](../../packages/app/src/capabilities/control-center-map.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -518,7 +518,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/governance-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/governance-workbench.tsx)、[packages/app/src/capabilities/control-center-map.ts](E:/Arforge-Agent/packages/app/src/capabilities/control-center-map.ts)。
+来源定位：[packages/app/src/components/control-center/governance-workbench.tsx](../../packages/app/src/components/control-center/governance-workbench.tsx)、[packages/app/src/capabilities/control-center-map.ts](../../packages/app/src/capabilities/control-center-map.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -528,7 +528,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/control-center/artifact-evidence-workbench.tsx](E:/Arforge-Agent/packages/app/src/components/control-center/artifact-evidence-workbench.tsx)。
+来源定位：[packages/app/src/components/control-center/artifact-evidence-workbench.tsx](../../packages/app/src/components/control-center/artifact-evidence-workbench.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -538,7 +538,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：缺省 / 已有偏好 / 即时预览 / 保存失败 / 迁移 / 限定重置。
 
-来源定位：[packages/app/src/components/settings-v2/general.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/general.tsx)、[packages/app/src/context/settings.tsx](E:/Arforge-Agent/packages/app/src/context/settings.tsx)。
+来源定位：[packages/app/src/components/settings-v2/general.tsx](../../packages/app/src/components/settings-v2/general.tsx)、[packages/app/src/context/settings.tsx](../../packages/app/src/context/settings.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -548,7 +548,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：加载 / 空数据 / 无筛选结果 / 选中详情 / 分页 / 无权限 / 写入与冲突。
 
-来源定位：[packages/app/src/components/settings-keybinds.tsx](E:/Arforge-Agent/packages/app/src/components/settings-keybinds.tsx)。
+来源定位：[packages/app/src/components/settings-keybinds.tsx](../../packages/app/src/components/settings-keybinds.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -558,7 +558,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：未开始 / 部分完成 / 连接失败 / 已有配置 / 稍后继续。
 
-来源定位：[packages/app/src/components/onboarding/home-first-run-guide.tsx](E:/Arforge-Agent/packages/app/src/components/onboarding/home-first-run-guide.tsx)。
+来源定位：[packages/app/src/components/onboarding/home-first-run-guide.tsx](../../packages/app/src/components/onboarding/home-first-run-guide.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -568,7 +568,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：全局加载 / 空数据 / 离线 / 认证 / 权限 / 冲突 / 迁移 / 更新。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)、[packages/app/src/components/route-loading-fallback.tsx](E:/Arforge-Agent/packages/app/src/components/route-loading-fallback.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)、[packages/app/src/components/route-loading-fallback.tsx](../../packages/app/src/components/route-loading-fallback.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -578,7 +578,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：打开 / 关闭 / 取消 / 提交 / 失败保留 / 作用域确认。
 
-来源定位：[packages/app/src/components](E:/Arforge-Agent/packages/app/src/components)。
+来源定位：[packages/app/src/components]。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -588,7 +588,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：待处理 / 允许一次 / 持久策略 / 拒绝 / 过期 / 已处理。
 
-来源定位：[packages/app/src/components/control-approval/control-approval-center.tsx](E:/Arforge-Agent/packages/app/src/components/control-approval/control-approval-center.tsx)、[packages/app/src/capabilities/ui-capability-review.ts](E:/Arforge-Agent/packages/app/src/capabilities/ui-capability-review.ts)。
+来源定位：[packages/app/src/components/control-approval/control-approval-center.tsx](../../packages/app/src/components/control-approval/control-approval-center.tsx)、[packages/app/src/capabilities/ui-capability-review.ts](../../packages/app/src/capabilities/ui-capability-review.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -598,7 +598,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：所有Markdown内容 / 长行 / 嵌套 / 首尾 / 深色 / 放大。
 
-来源定位：[docs/ui-redesign/2026-09-21-ui-planning-baseline.md](E:/Arforge-Agent/docs/ui-redesign/2026-09-21-ui-planning-baseline.md)。
+来源定位：[docs/ui-redesign/2026-09-21-ui-planning-baseline.md](2026-09-21-ui-planning-baseline.md)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -608,7 +608,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -618,7 +618,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[docs/ui-redesign/2026-09-21-ui-planning-baseline.md](E:/Arforge-Agent/docs/ui-redesign/2026-09-21-ui-planning-baseline.md)。
+来源定位：[docs/ui-redesign/2026-09-21-ui-planning-baseline.md](2026-09-21-ui-planning-baseline.md)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -628,7 +628,7 @@ FIFO 顺序、编辑、移除与投递状态，不混淆排队和立即引导。
 
 状态设计：临时预览 / 固定标签 / dirty / 只读 / 保存冲突 / 空树 / 加载失败。
 
-来源定位：[packages/app/src/pages/session/session-side-panel.tsx](E:/Arforge-Agent/packages/app/src/pages/session/session-side-panel.tsx)。
+来源定位：[packages/app/src/pages/session/session-side-panel.tsx](../../packages/app/src/pages/session/session-side-panel.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -638,7 +638,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：Windows / macOS / Web能力差异 / 快捷键冲突 / 多窗口。
 
-来源定位：[packages/app/src/desktop-menu.ts](E:/Arforge-Agent/packages/app/src/desktop-menu.ts)。
+来源定位：[packages/app/src/desktop-menu.ts](../../packages/app/src/desktop-menu.ts)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -648,7 +648,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -658,7 +658,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -668,7 +668,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -678,7 +678,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -688,7 +688,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：未输入 / 搜索中 / 分类 / 无结果 / 权限过滤 / 键盘定位。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)、[packages/app/src/context/settings.tsx](E:/Arforge-Agent/packages/app/src/context/settings.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)、[packages/app/src/context/settings.tsx](../../packages/app/src/context/settings.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -698,7 +698,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：当前 / 最近 / 未连接 / 目录不可用 / 切换保护 / 权限。
 
-来源定位：[packages/app/src/app.tsx](E:/Arforge-Agent/packages/app/src/app.tsx)。
+来源定位：[packages/app/src/app.tsx](../../packages/app/src/app.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -708,7 +708,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：草稿 / 发送中 / 流式 / 向上阅读 / 已完成 / 工具审批 / 失败重试。
 
-来源定位：[packages/app/src/components/prompt-input-v2.tsx](E:/Arforge-Agent/packages/app/src/components/prompt-input-v2.tsx)。
+来源定位：[packages/app/src/components/prompt-input-v2.tsx](../../packages/app/src/components/prompt-input-v2.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 
@@ -718,7 +718,7 @@ Windows / macOS 各自遵循平台窗口与菜单行为，保留缩放、多窗�
 
 状态设计：缺省 / 已有偏好 / 即时预览 / 保存失败 / 迁移 / 限定重置。
 
-来源定位：[packages/app/src/components/settings-v2/general.tsx](E:/Arforge-Agent/packages/app/src/components/settings-v2/general.tsx)。
+来源定位：[packages/app/src/components/settings-v2/general.tsx](../../packages/app/src/components/settings-v2/general.tsx)。
 
 边界：该页预览仅展示一种代表性布局；这里列出的所有状态应在实施时分别接入与验收，不把一张截图当成全部状态已实现。
 

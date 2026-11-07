@@ -10,7 +10,11 @@ import { homeSessionSearchKey, type HomeSessionRecord, type HomeSessionsControll
 
 type HomeSessionSearchSource = Pick<HomeSessionsController, "data" | "session">
 
-export function createHomeSessionSearchController(home: HomeController, sessions: HomeSessionSearchSource) {
+export function createHomeSessionSearchController(
+  home: HomeController,
+  sessions: HomeSessionSearchSource,
+  options: { onFocus?: () => void } = {},
+) {
   const command = useCommand()
   const language = useLanguage()
   const [state, setState] = createStore({ value: "", focused: false, highlighted: "" })
@@ -61,7 +65,9 @@ export function createHomeSessionSearchController(home: HomeController, sessions
   ])
 
   function focus() {
-    input?.focus()
+    options.onFocus?.()
+    // The launchpad opens the full history before mounting its search field.
+    queueMicrotask(() => input?.isConnected && input.focus())
     setState("focused", true)
   }
 

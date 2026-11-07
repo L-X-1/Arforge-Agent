@@ -43,11 +43,18 @@ function setup(
         return new Response(undefined, { status: 204 })
       if (request.method === "POST" && request.url.endsWith("/prompt")) {
         if (responses?.promptError) {
-          return Response.json({
-            _tag: responses.promptError === 400 ? "InvalidRequestError"
-              : responses.promptError === 409 ? "ConflictError" : "ServiceUnavailableError",
-            message: "Prompt admission rejected",
-          }, { status: responses.promptError })
+          return Response.json(
+            {
+              _tag:
+                responses.promptError === 400
+                  ? "InvalidRequestError"
+                  : responses.promptError === 409
+                    ? "ConflictError"
+                    : "ServiceUnavailableError",
+              message: "Prompt admission rejected",
+            },
+            { status: responses.promptError },
+          )
         }
         const body = await request.clone().json()
         return Response.json({
@@ -165,7 +172,8 @@ describe("createCompatibleApi", () => {
 
   test("sends V2 prompt data, frozen HTML references, and routing in the canonical envelope", async () => {
     const { api, requests } = setup("v2")
-    const text = 'Change the selected heading.\r\n<html_selection_snapshot>\r\n&lt;h1&gt;Before&lt;/h1&gt;\r\n</html_selection_snapshot>'
+    const text =
+      "Change the selected heading.\r\n<html_selection_snapshot>\r\n&lt;h1&gt;Before&lt;/h1&gt;\r\n</html_selection_snapshot>"
     const receipt = await api.session.prompt({
       sessionID: "ses_1",
       id: "msg_frozen_html",
@@ -174,7 +182,9 @@ describe("createCompatibleApi", () => {
       model: { providerID: "test", modelID: "test-model" },
       variant: "high",
       system: "Keep the existing human approval boundary.",
-      files: [{ uri: "file:///repo/example.html", name: "example.html", mention: { start: 0, end: 7, text: "example" } }],
+      files: [
+        { uri: "file:///repo/example.html", name: "example.html", mention: { start: 0, end: 7, text: "example" } },
+      ],
       agents: [{ name: "review", mention: { start: 8, end: 15, text: "@review" } }],
       legacyParts: [
         { id: "prt_text", type: "text", text },
@@ -189,7 +199,14 @@ describe("createCompatibleApi", () => {
       id: "msg_frozen_html",
       prompt: {
         text,
-        files: [{ uri: "file:///repo/example.html", name: "example.html", mime: "text/html", source: { start: 0, end: 7, text: "example" } }],
+        files: [
+          {
+            uri: "file:///repo/example.html",
+            name: "example.html",
+            mime: "text/html",
+            source: { start: 0, end: 7, text: "example" },
+          },
+        ],
         agents: [{ name: "review", source: { start: 8, end: 15, text: "@review" } }],
         system: { text: "Keep the existing human approval boundary.", source: "request", scope: "turn" },
         route: { agent: "build", model: { id: "test-model", providerID: "test", variant: "high" } },
@@ -241,17 +258,117 @@ describe("createCompatibleApi", () => {
     expect(new URL(requests[0]!.url).pathname).toBe("/api/session/ses_1/prompt")
   })
 
+  test("preserves MCP resource identity on the canonical V2 prompt transport", async () => {
+    const { api, requests } = setup("v2")
+    const uri = "evidence://manual/shared"
+    await api.session.prompt({
+      sessionID: "ses_1",
+      id: "msg_resource",
+      text: "@manual",
+      files: [{ uri, name: "manual", mention: { start: 0, end: 7, text: "@manual" } }],
+      legacyParts: [
+        {
+          type: "file",
+          mime: "text/plain",
+          url: uri,
+          filename: "manual",
+          source: { type: "resource", clientName: "server-A", uri, text: { value: "@manual", start: 0, end: 7 } },
+        },
+      ],
+    })
+    expect(requests).toHaveLength(1)
+    const body = await requests[0]!.clone().json()
+    const prompt = Schema.decodeUnknownSync(PromptInput.Prompt)(body.prompt)
+    expect(prompt.files?.[0]).toMatchObject({
+      uri,
+      mime: "text/plain",
+      resource: { server: "server-A", uri },
+      source: { start: 0, end: 7, text: "@manual" },
+    })
+  })
+
+  test("keeps two same-URI same-name MCP attachments bound to their selected servers", async () => {
+    const { api, requests } = setup("v2")
+    const uri = "evidence://shared/manual"
+    const parts = ["server-A", "server-B"].map((clientName, index) => ({
+      type: "file" as const,
+      url: uri,
+      filename: "manual",
+      mime: "text/plain",
+      source: {
+        type: "resource" as const,
+        clientName,
+        uri,
+        text: { value: "@manual", start: index * 8, end: index * 8 + 7 },
+      },
+    }))
+    await api.session.prompt({
+      sessionID: "ses_1",
+      id: "msg_two_resources",
+      text: "@manual @manual",
+      legacyParts: parts,
+      files: parts.map((part) => ({
+        uri,
+        name: part.filename,
+        mention: { text: part.source.text.value, start: part.source.text.start, end: part.source.text.end },
+      })),
+    })
+    const body = await requests[0].clone().json()
+    expect(body.prompt.files.map((file: { resource: { server: string; uri: string } }) => file.resource)).toEqual([
+      { server: "server-A", uri },
+      { server: "server-B", uri },
+    ])
+    expect(body.prompt.files.map((file: { source: { start: number } }) => file.source.start)).toEqual([0, 8])
+  })
+
+  test("rejects a mismatched legacy MCP target before HTTP admission", async () => {
+    const { api, requests } = setup("v2")
+    const uri = "evidence://displayed/manual"
+    await expect(
+      api.session.prompt({
+        sessionID: "ses_1",
+        id: "msg_bad_resource",
+        text: "@manual",
+        files: [{ uri, name: "manual", mention: { text: "@manual", start: 0, end: 7 } }],
+        legacyParts: [
+          {
+            type: "file",
+            url: uri,
+            filename: "manual",
+            mime: "text/plain",
+            source: {
+              type: "resource",
+              clientName: "server-B",
+              uri: "evidence://other/private",
+              text: { value: "@manual", start: 0, end: 7 },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("MCP attachment URI")
+    expect(requests).toHaveLength(0)
+  })
+
   test("keeps authentication on the canonical V2 prompt transport", async () => {
     const requests: Request[] = []
-    const fetcher = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
-      const request = new Request(input, init)
-      requests.push(request)
-      const body = await request.clone().json()
-      return Response.json({ data: {
-        admittedSeq: 9, id: "msg_authenticated", sessionID: "ses_1", timeCreated: 456,
-        prompt: body.prompt, delivery: "steer",
-      } })
-    }, { preconnect: globalThis.fetch.preconnect })
+    const fetcher = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init)
+        requests.push(request)
+        const body = await request.clone().json()
+        return Response.json({
+          data: {
+            admittedSeq: 9,
+            id: "msg_authenticated",
+            sessionID: "ses_1",
+            timeCreated: 456,
+            prompt: body.prompt,
+            delivery: "steer",
+          },
+        })
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    )
     const api = createApiForServer({
       server: { url: "http://localhost:4096", username: "test-user", password: "test-only-password" },
       fetch: fetcher,

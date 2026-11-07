@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent
+Working directory: %ARFORGE_REPO%
 Command: bun run typecheck --force
 Exit code: 0
 Raw captured output:

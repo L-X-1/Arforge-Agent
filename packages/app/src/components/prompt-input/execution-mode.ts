@@ -2,8 +2,9 @@ import type { SessionPermissionMode } from "@/context/permission-mode"
 
 export type NativeExecutionAgent = "build" | "plan"
 
-export function canUnifyAgentAndPermissionMode(options: readonly string[]) {
-  return options.length === 2 && options.includes("build") && options.includes("plan")
+export function canUnifyAgentAndPermissionMode(options: readonly string[], current?: string) {
+  return (current === undefined || current === "build" || current === "plan") &&
+    options.length === 2 && options.includes("build") && options.includes("plan")
 }
 
 export function agentForPermissionMode(mode: SessionPermissionMode): NativeExecutionAgent {

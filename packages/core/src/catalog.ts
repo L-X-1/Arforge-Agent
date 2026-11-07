@@ -17,12 +17,25 @@ export type ProviderRecord = {
 
 export type DefaultModel = { providerID: ProviderV2.ID; modelID: ModelV2.ID }
 
+/** The same effective adapter must drive catalog projection and variant generation. */
+export function resolveModelApi(model: ModelV2.Info, provider: ProviderV2.Info) {
+  return model.api.type === "native" && !model.api.url && Object.keys(model.api.settings).length === 0
+    ? { ...provider.api, id: model.api.id }
+    : model.api.type === "aisdk" && provider.api.type === "aisdk" && !model.api.url
+      ? { ...model.api, url: provider.api.url, settings: { ...provider.api.settings, ...model.api.settings } }
+      : model.api.type === "aisdk" && provider.api.type === "aisdk"
+        ? { ...model.api, settings: { ...provider.api.settings, ...model.api.settings } }
+        : model.api
+}
+
 export const PolicyActions = Schema.Literals(["provider.use"])
 
 export const Event = Catalog.Event
 
 type Data = {
   providers: Map<ProviderV2.ID, ProviderRecord>
+  optionalAuthentication: Set<ProviderV2.ID>
+  configuredVariants: Set<string>
   defaultModel?: DefaultModel
 }
 
@@ -32,8 +45,11 @@ export type Draft = {
     get: (providerID: ProviderV2.ID) => ProviderRecord | undefined
     update: (providerID: ProviderV2.ID, fn: (provider: ProviderV2.MutableInfo) => void) => void
     remove: (providerID: ProviderV2.ID) => void
+    optionalAuthentication: (providerID: ProviderV2.ID, optional: boolean) => void
   }
   model: {
+    variantsConfigured: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => boolean
+    configureVariants: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => void
     get: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => ModelV2.Info | undefined
     update: (providerID: ProviderV2.ID, modelID: ModelV2.ID, fn: (model: ModelV2.MutableInfo) => void) => void
     remove: (providerID: ProviderV2.ID, modelID: ModelV2.ID) => void
@@ -61,7 +77,7 @@ export interface Interface extends State.Transformable<Draft> {
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/Catalog") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2.Service
@@ -73,18 +89,12 @@ const layer = Layer.effect(
       if (typeof provider.request.body.apiKey === "string") return true
       if (typeof provider.api.settings?.apiKey === "string") return true
       if (integration?.connections.length) return true
+      if (state.get().optionalAuthentication.has(provider.id)) return true
       return provider.integrationID === undefined && !integration
     }
 
     const projectModel = (model: ModelV2.Info, provider: ProviderV2.Info) => {
-      const api =
-        model.api.type === "native" && !model.api.url && Object.keys(model.api.settings).length === 0
-          ? { ...provider.api, id: model.api.id }
-          : model.api.type === "aisdk" && provider.api.type === "aisdk" && !model.api.url
-            ? { ...model.api, url: provider.api.url, settings: { ...provider.api.settings, ...model.api.settings } }
-            : model.api.type === "aisdk" && provider.api.type === "aisdk"
-              ? { ...model.api, settings: { ...provider.api.settings, ...model.api.settings } }
-              : model.api
+      const api = resolveModelApi(model, provider)
       const request = {
         headers: { ...provider.request.headers, ...model.request.headers },
         body: { ...provider.request.body, ...model.request.body },
@@ -104,7 +114,7 @@ const layer = Layer.effect(
     }
 
     const state = State.create<Data, Draft>({
-      initial: () => ({ providers: new Map() }),
+      initial: () => ({ providers: new Map(), optionalAuthentication: new Set(), configuredVariants: new Set() }),
       draft: (draft) => {
         const result: Draft = {
           provider: {
@@ -123,10 +133,22 @@ const layer = Layer.effect(
               normalizeApi(current.provider)
             },
             remove: (providerID) => {
+              for (const modelID of draft.providers.get(providerID)?.models.keys() ?? [])
+                draft.configuredVariants.delete(JSON.stringify([providerID, modelID]))
               draft.providers.delete(providerID)
+              draft.optionalAuthentication.delete(providerID)
+            },
+            optionalAuthentication: (providerID, optional) => {
+              if (optional) draft.optionalAuthentication.add(providerID)
+              else draft.optionalAuthentication.delete(providerID)
             },
           },
           model: {
+            variantsConfigured: (providerID, modelID) =>
+              draft.configuredVariants.has(JSON.stringify([providerID, modelID])),
+            configureVariants: (providerID, modelID) => {
+              draft.configuredVariants.add(JSON.stringify([providerID, modelID]))
+            },
             get: (providerID, modelID) => draft.providers.get(providerID)?.models.get(modelID),
             update: (providerID, modelID, fn) => {
               let record = draft.providers.get(providerID)
@@ -146,6 +168,7 @@ const layer = Layer.effect(
               normalizeApi(model)
             },
             remove: (providerID, modelID) => {
+              draft.configuredVariants.delete(JSON.stringify([providerID, modelID]))
               draft.providers.get(providerID)?.models.delete(modelID)
             },
             default: {

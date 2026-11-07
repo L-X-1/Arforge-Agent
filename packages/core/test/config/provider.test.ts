@@ -5,6 +5,7 @@ import { Config } from "@arforge-ai/core/config"
 import { Billing } from "@arforge-ai/schema/billing"
 import { ConfigProviderPlugin } from "@arforge-ai/core/config/plugin/provider"
 import { Integration } from "@arforge-ai/core/integration"
+import { Credential } from "@arforge-ai/core/credential"
 import { ModelV2 } from "@arforge-ai/core/model"
 import { PluginV2 } from "@arforge-ai/core/plugin"
 import { PluginHost } from "@arforge-ai/core/plugin/host"
@@ -56,6 +57,80 @@ function request(headers: Record<string, string>, variant?: string) {
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect(
+    "explicit optional custom key method keeps no-key models available and stores provided keys separately",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service,
+          integrations = yield* Integration.Service,
+          credentials = yield* Credential.Service
+        const id = ProviderV2.ID.make("owned-optional-custom")
+        yield* addPlugin(
+          Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: {
+                      [id]: {
+                        name: "Owned optional",
+                        authentication: "optional",
+                        api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "http://127.0.0.1:1/v1" },
+                        models: { owned: { name: "Owned" } },
+                      },
+                    },
+                  }),
+                }),
+              ]),
+          }),
+        )
+        expect((yield* integrations.get(Integration.ID.make(id)))?.methods).toContainEqual({ type: "key" })
+        expect((yield* catalog.model.available()).some((model) => model.providerID === id)).toBe(true)
+        expect((yield* credentials.list(Integration.ID.make(id))).length).toBe(0)
+        yield* integrations.connection.key({ integrationID: Integration.ID.make(id), key: "owned-ephemeral-key" })
+        expect((yield* credentials.list(Integration.ID.make(id))).length).toBe(1)
+        expect(JSON.stringify(yield* catalog.provider.get(id))).not.toContain("owned-ephemeral-key")
+        expect((yield* catalog.model.available()).some((model) => model.providerID === id)).toBe(true)
+      }),
+  )
+
+  it.effect(
+    "required custom credentials and explicit disconnect remain unavailable without changing optional vendors",
+    () =>
+      Effect.gen(function* () {
+        const catalog = yield* Catalog.Service,
+          integrations = yield* Integration.Service
+        const id = ProviderV2.ID.make("owned-required-custom")
+        yield* addPlugin(
+          Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: {
+                      [id]: {
+                        authentication: "required",
+                        api: { type: "aisdk", package: "@ai-sdk/openai-compatible" },
+                        models: { owned: {} },
+                      },
+                      "owned-disabled-custom": { authentication: "optional", disabled: true, models: { owned: {} } },
+                    },
+                  }),
+                }),
+              ]),
+          }),
+        )
+        expect((yield* catalog.model.available()).some((model) => model.providerID === id)).toBe(false)
+        yield* integrations.connection.key({ integrationID: Integration.ID.make(id), key: "owned-required-key" })
+        expect((yield* catalog.model.available()).some((model) => model.providerID === id)).toBe(true)
+        expect((yield* catalog.provider.available()).some((provider) => provider.id === "owned-disabled-custom")).toBe(
+          false,
+        )
+      }),
+  )
+
   it.effect("preserves the canonical price catalog through the existing JSON plugin boundary", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

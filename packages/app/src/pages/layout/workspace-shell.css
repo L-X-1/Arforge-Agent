@@ -10,7 +10,7 @@
 [data-component="workspace-shell"] [data-slot="titlebar-v2"] button:focus-visible,
 [data-component="workspace-shell"] [data-titlebar-vertical-tabs] button:focus-visible {
   outline: 2px solid var(--v2-border-border-focus);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 [data-component="workspace-shell"] [data-component="home-launchpad"] { border-radius: 0; }
 .workspace-home__brand,

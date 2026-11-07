@@ -6,13 +6,14 @@ import { type LocalProject } from "@/context/layout"
 import { useLanguage } from "@/context/language"
 import { useNotification } from "@/context/notification"
 import { usePlatform } from "@/context/platform"
-import { ServerConnection } from "@/context/server"
+import { captureProjectMetadata } from "@/context/project-metadata"
+import { ServerConnection, useServer } from "@/context/server"
 import { closeHomeProject, errorMessage, homeProjectDirectories } from "@/pages/layout/helpers"
 import { Persist, persisted } from "@/utils/persist"
 import { showToast } from "@/utils/toast"
 import { feedbackUrl } from "@/utils/external-links"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
-import { createResource } from "solid-js"
+import { createResource, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { HomeController } from "./home-controller"
 
@@ -22,8 +23,12 @@ export function createHomeProjectsController(home: HomeController) {
   const dialog = useDialog()
   const language = useLanguage()
   const notification = useNotification()
+  const server = useServer()
   const openSettings = useSettingsCommand()
   const serverManagement = useServerManagementController({ navigateOnAdd: false })
+  let disposed = false
+  let editRun = 0
+  onCleanup(() => { disposed = true })
   const [_state, setState, _, ready] = persisted(
     Persist.global("home.servers", ["home.servers.v1"]),
     createStore({ collapsed: {} as Record<string, boolean> }),
@@ -73,8 +78,26 @@ export function createHomeProjectsController(home: HomeController) {
       add: home.project.add,
       openNewSession: home.project.openProjectNewSession,
       edit: (conn: ServerConnection.Any, project: LocalProject) => {
+        const key = ServerConnection.key(conn)
+        const source = home.server.context(conn)
+        const activeDialogID = dialog.active?.id
+        const { url, username, password } = conn.http
+        const origin = captureProjectMetadata(source, server.projects.forServer(key).list, project, () => {
+          if (disposed || dialog.active?.id !== activeDialogID) return false
+          const registered = server.list.find((item) => ServerConnection.key(item) === key)
+          return (
+            registered?.type === conn.type &&
+            registered.http.url === url &&
+            registered.http.username === username &&
+            registered.http.password === password &&
+            home.server.context(registered) === source
+          )
+        })
+        if (!origin?.current()) return
+        const run = ++editRun
         void import("@/components/dialog-edit-project-v2").then(({ DialogEditProjectV2 }) => {
-          void dialog.show(() => <DialogEditProjectV2 server={conn} project={project} />)
+          if (run !== editRun || !origin.current()) return
+          dialog.showScoped(() => <DialogEditProjectV2 server={conn} project={project} />)
         })
       },
       unseenCount: (conn: ServerConnection.Any, project: LocalProject) => {

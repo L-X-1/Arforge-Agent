@@ -214,6 +214,118 @@ async function waitFor(check: () => boolean) {
   throw new Error("Timed out waiting for condition")
 }
 
+test("application shutdown waits for ready owned WSL wrappers", async () => {
+  persistedServers = []
+  let release!: () => void
+  let stopped = false
+  const controller = createWslServersController(
+    "1.0.0",
+    async () => ({
+      listener: {
+        stop: async () => {
+          stopped = true
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        },
+        onExit() {},
+      },
+      url: "http://127.0.0.1:43210",
+      username: null,
+      password: "owned-fixture",
+    }),
+    { ...testControllerOptions(), resolveArforge: async () => null },
+  )
+  await controller.addServer("Debian")
+  await waitFor(() => controller.getState().servers[0]?.runtime.kind === "ready")
+  let finished = false
+  const stop = controller.stopAll().then(() => {
+    finished = true
+  })
+  await waitFor(() => stopped)
+  expect(finished).toBe(false)
+  release()
+  await stop
+  expect(finished).toBe(true)
+})
+
+test("application shutdown drains a late startup lease and refuses new starts", async () => {
+  persistedServers = []
+  let releaseSpawn!: () => void, releaseStop!: () => void
+  let spawned = 0,
+    stopped = false
+  const controller = createWslServersController(
+    "1.0.0",
+    async () => {
+      spawned++
+      await new Promise<void>((resolve) => {
+        releaseSpawn = resolve
+      })
+      return {
+        listener: {
+          stop: async () => {
+            stopped = true
+            await new Promise<void>((resolve) => {
+              releaseStop = resolve
+            })
+          },
+          onExit() {},
+        },
+        url: "owned",
+        username: null,
+        password: "fixture",
+      }
+    },
+    { ...testControllerOptions(), resolveArforge: async () => null },
+  )
+  await controller.addServer("Debian")
+  await waitFor(() => spawned === 1)
+  let finished = false
+  const stop = controller.stopAll().then(() => {
+    finished = true
+  })
+  releaseSpawn()
+  await waitFor(() => stopped)
+  expect(finished).toBe(false)
+  releaseStop()
+  await stop
+  await controller.startServer("wsl:Debian")
+  expect(spawned).toBe(1)
+})
+
+test("a failed late owned stop rejects shutdown and retains the wrapper for retry", async () => {
+  persistedServers = []
+  let releaseSpawn!: () => void
+  let stops = 0
+  const controller = createWslServersController(
+    "1.0.0",
+    async () => {
+      await new Promise<void>((resolve) => {
+        releaseSpawn = resolve
+      })
+      return {
+        listener: {
+          stop: async () => {
+            if (++stops === 1) throw new Error("wrapper still alive")
+          },
+          onExit() {},
+        },
+        url: "owned",
+        username: null,
+        password: "fixture",
+      }
+    },
+    { ...testControllerOptions(), resolveArforge: async () => null },
+  )
+  await controller.addServer("Debian")
+  await waitFor(() => !!releaseSpawn)
+  const stop = controller.stopAll()
+  releaseSpawn()
+  await expect(stop).rejects.toThrow("failed to stop")
+  await controller.stopAll()
+  expect(stops).toBe(2)
+})
+
 function testControllerOptions() {
   return {
     readServers: () => persistedServers,

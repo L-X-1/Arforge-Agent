@@ -68,8 +68,8 @@ export const workspaceCopy = (locale: Locale) => {
       recovery: traditional ? "個待恢復" : "个待恢复",
       delegatedChildren: traditional ? "委派子任務" : "委派子任务",
       delegatedChildrenHint: traditional
-        ? "顯示目前工作區快照中最近 12 個父執行的可讀直接子任務，包含已結束的執行；控制仍需有效授權。"
-        : "显示当前工作区快照中最近 12 个父执行的可读直接子任务，包含已结束的执行；控制仍需有效授权。",
+        ? "顯示來源與目前工作區完全相符的最近 12 個父執行的可讀直接子任務，包含已結束的執行；其他歷史記錄保留於清單，控制仍需有效授權。"
+        : "显示来源与当前工作区完全匹配的最近 12 个父执行的可读直接子任务，包含已结束的执行；其他历史记录保留在列表中，控制仍需有效授权。",
       noDelegatedChildren: traditional
         ? "目前範圍內沒有可顯示的直接子任務；也可能是查詢失敗或沒有讀取權限。"
         : "当前范围内没有可显示的直接子任务；也可能是查询失败或没有读取权限。",
@@ -156,7 +156,7 @@ export const workspaceCopy = (locale: Locale) => {
     recovery: "need recovery",
     delegatedChildren: "Delegated child runs",
     delegatedChildrenHint:
-      "Shows readable direct children from the latest 12 parent runs in this workspace snapshot, including ended runs. Control still requires valid authority.",
+      "Shows readable direct children from the latest 12 parent runs with an exact current workspace source, including ended runs. Other history stays in the list. Control still requires valid authority.",
     noDelegatedChildren:
       "No direct children can be shown in this range; the query may also have failed or access may be denied.",
     refreshChild: "Refresh status (read-only)",

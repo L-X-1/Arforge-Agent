@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createRoot } from "solid-js"
+import { createEffect, createMemo, createResource, createRoot, onCleanup } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
@@ -29,24 +29,38 @@ export function createTitlebarTabsController(dispose?: () => void) {
   const tabsStore = tabs.store
   const tabsStoreActions = tabs
 
-  const [session] = createResource(
+  const [loadedSession] = createResource(
     () => {
       const route = layout.route()
       if (route.type !== "session") return undefined
-      const conn = global.servers
-        .list()
-        .find((item) => ServerConnection.key(item) === (route.server ?? server.key))
-      return conn ? { route, sdk: global.ensureServerCtx(conn).sdk } : undefined
+      const conn = global.servers.list().find((item) => ServerConnection.key(item) === (route.server ?? server.key))
+      return conn ? { route, server: ServerConnection.key(conn), sdk: global.ensureServerCtx(conn).sdk } : undefined
     },
-    ({ route, sdk }) =>
+    async ({ route, server, sdk }) =>
       sdk.api.session
         .get({ sessionID: route.sessionId })
         .then(normalizeSessionInfo)
+        .then((session) => ({ session, server, sessionID: route.sessionId }))
         .catch(() => {}),
   )
+  const session = createMemo(() => {
+    const route = layout.route()
+    const loaded = loadedSession()
+    if (
+      route.type !== "session" ||
+      !loaded ||
+      loaded.server !== (route.server ?? server.key) ||
+      loaded.sessionID !== route.sessionId
+    )
+      return
+    return loaded.session
+  })
 
   const matchRoute = (route: LayoutRoute) => {
-    if (route.type === "home") return
+    if (route.type === "home" && !route.draftID) return
+    if (route.type === "home" && route.draftID) {
+      return tabsStore.find((item) => item.type === "draft" && item.draftID === route.draftID)
+    }
     if (route.type === "draft") {
       return tabsStore.find((item) => item.type === "draft" && item.draftID === route.draftID)
     }
@@ -73,7 +87,9 @@ export function createTitlebarTabsController(dispose?: () => void) {
     if (!tabs.ready()) return
     const tab = currentTab()
     if (tab) {
-      tabs.remember(tab)
+      // Home has a real draft, but the sessions switch still restores the
+      // previous conversation rather than remembering home as its own target.
+      if (route.type !== "home") tabs.remember(tab)
       return
     }
 
@@ -110,6 +126,15 @@ export function createTitlebarTabsController(dispose?: () => void) {
     if (activeTab?.type === "draft") {
       const model = tabs.stateValue<import("@/context/prompt").PromptSession>(activeTab, "prompt")?.model.current()
       tabs.newDraft({ server: activeTab.server, directory: activeTab.directory }, "", model)
+      return
+    }
+
+    if (route.type === "session") {
+      // While the current session is cold, stay on its server rather than
+      // taking a directory from the previous session or global default server.
+      const conn = global.servers.list().find((item) => ServerConnection.key(item) === (route.server ?? server.key))
+      const project = conn ? global.ensureServerCtx(conn).projects.list()[0] : undefined
+      if (conn && project) tabs.newDraft({ server: ServerConnection.key(conn), directory: project.worktree }, "")
       return
     }
 
@@ -150,7 +175,7 @@ export function createTitlebarTabsController(dispose?: () => void) {
       id: "home.toggle",
       title: language.t("home.title"),
       category: language.t("command.category.view"),
-      keybind: "mod+b",
+      keybind: "mod+shift+h",
       hidden: true,
       onSelect: toggleHome,
     },
@@ -225,8 +250,28 @@ export function createTitlebarTabsController(dispose?: () => void) {
   return { session, currentTab, openNewTab, toggleHome }
 }
 
-let controller: ReturnType<typeof createTitlebarTabsController> | undefined
+const controllers = new WeakMap<
+  ReturnType<typeof useLayout>,
+  {
+    value: ReturnType<typeof createTitlebarTabsController>
+    dispose: () => void
+    consumers: number
+  }
+>()
 
 export function useTitlebarTabs() {
-  return (controller ??= createRoot((dispose) => createTitlebarTabsController(dispose)))
+  const layout = useLayout()
+  let current = controllers.get(layout)
+  if (!current) {
+    current = createRoot((dispose) => ({ value: createTitlebarTabsController(dispose), dispose, consumers: 0 }))
+    controllers.set(layout, current)
+  }
+  const entry = current
+  entry.consumers++
+  onCleanup(() => {
+    if (--entry.consumers > 0) return
+    entry.dispose()
+    controllers.delete(layout)
+  })
+  return entry.value
 }

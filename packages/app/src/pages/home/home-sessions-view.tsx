@@ -111,50 +111,55 @@ export function HomeSessionsView(props: HomeSessionsViewProps) {
         />
       </div>
       <div class="-mr-3 min-h-[calc(100cqh-64px)] lg:min-h-[calc(100cqh-72px)]">
-        <Show when={!props.error?.()} fallback={
-          <div class="workspace-sidebar__notice" role="alert">
-            <span>{props.language.t("common.requestFailed")}</span>
-            <button type="button" onClick={props.onRetry}>{props.language.t("common.retry")}</button>
-          </div>
-        }>
         <Show
-          when={!props.loading()}
+          when={!props.error?.()}
           fallback={
-            <div class="pt-3">
-              <HomeSessionSkeleton label={props.language.t("common.loading")} />
+            <div class="workspace-sidebar__notice" role="alert">
+              <span>{props.language.t("common.requestFailed")}</span>
+              <button type="button" onClick={props.onRetry}>
+                {props.language.t("common.retry")}
+              </button>
             </div>
           }
         >
           <Show
-            when={props.groups().length > 0}
+            when={!props.loading()}
             fallback={
-              <HomeSessionsEmpty
-                onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
-                language={props.language}
-              />
+              <div class="pt-3">
+                <HomeSessionSkeleton label={props.language.t("common.loading")} />
+              </div>
             }
           >
-            <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
-              <For each={props.groups()}>
-                {(group, index) => (
-                  <>
-                    <HomeSessionGroupHeader
-                      title={group.title}
-                      titleOpacity={props.titleOpacity(group.id)}
-                      onSetRef={(element) => props.onSetHeader(group.id, element)}
-                      elevated={index() === 0}
-                    />
-                    <div
-                      class={`flex min-w-0 flex-col gap-1 pt-5 ${index() === props.groups().length - 1 ? "" : "mb-8"}`}
-                    >
-                      <For each={group.sessions}>{(record) => <HomeSessionRow {...props} record={record} />}</For>
-                    </div>
-                  </>
-                )}
-              </For>
-            </div>
+            <Show
+              when={props.groups().length > 0}
+              fallback={
+                <HomeSessionsEmpty
+                  onNewSession={props.canCreateSession() ? props.onCreateSession : undefined}
+                  language={props.language}
+                />
+              }
+            >
+              <div ref={props.onSetContent} class="flex flex-col pt-3 pr-3 pb-16">
+                <For each={props.groups()}>
+                  {(group, index) => (
+                    <>
+                      <HomeSessionGroupHeader
+                        title={group.title}
+                        titleOpacity={props.titleOpacity(group.id)}
+                        onSetRef={(element) => props.onSetHeader(group.id, element)}
+                        elevated={index() === 0}
+                      />
+                      <div
+                        class={`flex min-w-0 flex-col gap-1 pt-5 ${index() === props.groups().length - 1 ? "" : "mb-8"}`}
+                      >
+                        <For each={group.sessions}>{(record) => <HomeSessionRow {...props} record={record} />}</For>
+                      </div>
+                    </>
+                  )}
+                </For>
+              </div>
+            </Show>
           </Show>
-        </Show>
         </Show>
       </div>
     </section>
@@ -443,7 +448,12 @@ function HomeSessionGroupHeader(props: {
   )
 }
 
-function HomeSessionRow(props: HomeSessionsViewProps & { record: HomeSessionRecord }) {
+export function HomeSessionRow(
+  props: Pick<
+    HomeSessionsViewProps,
+    "language" | "showProjectName" | "server" | "isOpenTab" | "onOpenSession" | "onArchiveSession"
+  > & { record: HomeSessionRecord },
+) {
   const title = createMemo(() => sessionTitle(props.record.session.title) || props.record.session.id)
   const showProjectName = () => props.showProjectName() && props.record.projectName
 

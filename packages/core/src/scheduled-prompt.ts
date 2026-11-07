@@ -357,7 +357,7 @@ const layer = Layer.effect(
         sessionID: row.session_id,
         prompt: PromptInput.Prompt.make({ text: row.prompt }),
         delivery: "queue",
-      })
+      }).pipe(Effect.catchTag("SessionExecution.OperationError", () => Effect.fail(new InvalidStateError({ scheduleID: row.id, status: row.status, action: "run" }))))
       const next =
         row.recurring && now < row.expires
           ? yield* nextRunEffect(Cron.make(row.cron), now, row.id, row.expires)

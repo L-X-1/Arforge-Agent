@@ -11,11 +11,16 @@ import { ModelSelectorPopoverV2 } from "@/components/dialog-select-model"
 import { useLocal } from "@/context/local"
 import { DialogSelectModelUnpaidV2 } from "@/components/dialog-select-model-unpaid-v2"
 import type { PromptInputProps } from "@/components/prompt-input/contracts"
-import { captureModelComposerFocus, captureModelEntry, resolveModelBinding } from "@/components/prompt-input/model-binding"
+import {
+  captureModelComposerFocus,
+  captureModelEntry,
+  resolveModelBinding,
+} from "@/components/prompt-input/model-binding"
 import { normalizePromptHistoryEntry, promptLength, type PromptHistoryComment } from "@/components/prompt-input/history"
 import { createPersistedPromptInputHistory } from "@/components/prompt-input/history-store"
 import { promptDesignPlaceholder, promptPlaceholder } from "@/components/prompt-input/placeholder"
 import { createPromptSubmit } from "@/components/prompt-input/submit"
+import { guardDraftSubmission } from "@/pages/home-compose/home-draft-state"
 import {
   agentForPermissionMode,
   canUnifyAgentAndPermissionMode,
@@ -29,6 +34,7 @@ import { useLayout } from "@/context/layout"
 import { usePermission } from "@/context/permission"
 import type { SessionPermissionMode } from "@/context/permission-mode"
 import { type ImageAttachmentPart, usePrompt } from "@/context/prompt"
+import { hasPromptContent } from "@/context/prompt-state"
 import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -47,8 +53,10 @@ import {
 import { useControlCenterText } from "@/components/control-center/control-center-text"
 import {
   deprecatedReasoningVariant,
+  reasoningControlKey,
   reasoningControlOptions,
 } from "@/components/prompt-input/reasoning-options"
+import { agentMenuOptions } from "@/components/prompt-input/agent-options"
 
 export type PromptInputV2ComposerProps = {
   class?: string
@@ -62,6 +70,7 @@ export type PromptInputV2ControllerProps = Omit<PromptInputProps, "class" | "edi
 export type PromptInputV2ComposerController = PromptInputV2Interaction & {
   readonly model: PromptInputProps["controls"]["model"]
   readonly goal?: PromptInputProps["goal"]
+  readonly agentUnavailable: () => string | undefined
   readonly permissionMode: {
     readonly current: () => SessionPermissionMode
     readonly select: (mode: SessionPermissionMode) => Promise<void>
@@ -74,6 +83,7 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
   const command = useCommand()
   const language = useLanguage()
   const controlCenterText = useControlCenterText()
+  const describe = (zh: string, en: string) => (language.locale().startsWith("zh") ? zh : en)
   const local = useLocal()
   const modelBinding = () => resolveModelBinding(props.controller.model.selection, local.model, local.modelSelection)
   const openUnpaidModel = () => {
@@ -86,7 +96,9 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
     )
     return dialog.show(
       () => <DialogSelectModelUnpaidV2 model={entry.model} binding={entry.binding} />,
-      () => { requestAnimationFrame(restoreFocus) },
+      () => {
+        requestAnimationFrame(restoreFocus)
+      },
     )
   }
 
@@ -95,8 +107,23 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
 
   return (
     <div class="flex flex-col gap-3">
+      <Show when={props.controller.agentUnavailable()}>
+        {(reason) => (
+          <div class="px-3 pb-2 text-13-regular text-text-base" role="status">
+            {reason()}
+          </div>
+        )}
+      </Show>
       <PromptInputV2
         controller={props.controller}
+        labels={{
+          removeAttachment: language.t("prompt.attachment.remove"),
+          agent: describe("选择代理", "Choose agent"),
+          model: language.t("command.model.choose"),
+          variant: describe("选择模型变体", "Choose model variant"),
+          dropFiles: language.t("prompt.dropzone.label"),
+          editor: describe("输入消息", "Prompt"),
+        }}
         hideAgentControl={props.controller.permissionMode.unifiesAgent()}
         borderUnderlay={props.borderUnderlay}
         class={props.class}
@@ -109,6 +136,10 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
           commands: language.t("palette.group.commands"),
           context: language.t("command.category.context"),
           shell: language.t("command.prompt.mode.shell"),
+          filesDescription: describe("添加图片、文档或代码文件", "Attach images, documents or code files"),
+          commandsDescription: describe("查找并运行已有命令", "Find and run available commands"),
+          contextDescription: describe("引用文件、代理和已有上下文", "Reference files, agents and available context"),
+          shellDescription: describe("切换到 Shell 命令输入", "Switch to shell command input"),
         }}
         modelControl={
           <PromptInputV2ModelControl
@@ -118,18 +149,44 @@ export function PromptInputV2Composer(props: PromptInputV2ComposerProps) {
             keybind={command.keybindParts("model.choose")}
             model={props.controller.model.selection}
             binding={modelBinding()}
-            modelName={props.controller.model.selection.current()?.name ?? modelBinding()?.key()?.modelID ?? language.t("dialog.model.select.title")}
+            modelName={
+              props.controller.model.selection.current()?.name ??
+              modelBinding()?.key()?.modelID ??
+              language.t("dialog.model.select.title")
+            }
             onClose={props.controller.restoreFocus}
             onUnpaidClick={openUnpaidModel}
           />
         }
         permissionControl={
           <PromptInputV2Select
+            menuWidth={320}
             title={controlCenterText("Permission mode")}
             options={[
-              { id: "plan", label: controlCenterText("Plan / read-only") },
-              { id: "acceptEdits", label: controlCenterText("Accept edits") },
-              { id: "fullAccess", label: controlCenterText("Full access") },
+              {
+                id: "plan",
+                label: controlCenterText("Plan / read-only"),
+                description: describe(
+                  "读取与规划；禁止文件修改和命令执行",
+                  "Read and plan; file edits and commands are blocked",
+                ),
+              },
+              {
+                id: "acceptEdits",
+                label: controlCenterText("Accept edits"),
+                description: describe(
+                  "允许文件修改，其他操作按需确认",
+                  "Allow file edits; ask before other operations",
+                ),
+              },
+              {
+                id: "fullAccess",
+                label: controlCenterText("Full access"),
+                description: describe(
+                  "自动允许一般操作；保留强制人工确认",
+                  "Allow general operations; mandatory human confirmations remain",
+                ),
+              },
             ]}
             current={props.controller.permissionMode.current()}
             onSelect={(value) => void props.controller.permissionMode.select(value as SessionPermissionMode)}
@@ -249,13 +306,7 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     if (mode() === "shell") return 0
     return prompt.context.items().filter((item) => !!item.comment?.trim()).length
   })
-  const blank = createMemo(() => {
-    const text = prompt
-      .current()
-      .map((part) => ("content" in part ? part.content : ""))
-      .join("")
-    return text.trim().length === 0 && attachments().length === 0 && commentCount() === 0
-  })
+  const blank = createMemo(() => !hasPromptContent(prompt.current()) && commentCount() === 0)
   const stopping = createMemo(() => working() && blank())
   const placeholder = createMemo(() =>
     promptPlaceholder({
@@ -266,12 +317,15 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       t: (key, params) => language.t(key as Parameters<typeof language.t>[0], params as never),
     }),
   )
-  const designPlaceholder = () => promptDesignPlaceholder(mode(), placeholder())
+  const designPlaceholder = () =>
+    promptDesignPlaceholder(mode(), placeholder(), (key) => language.t(key as Parameters<typeof language.t>[0]))
   const currentPermissionMode = () => {
     const id = props.controls.session.id
     return id ? permission.mode(id, sdk().directory) : permissionControl.draft
   }
-  const unifiesAgent = () => canUnifyAgentAndPermissionMode(props.controls.agents.options)
+  const unifiesAgent = () =>
+    !props.controls.agents.loading &&
+    canUnifyAgentAndPermissionMode(props.controls.agents.options, props.controls.agents.current)
   const setPermissionMode = async (next: SessionPermissionMode) => {
     const id = props.controls.session.id
     if (!id) {
@@ -378,33 +432,38 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     if (!id) return permission.isAutoAcceptingDirectory(sdk().directory)
     return permission.isAutoAccepting(id, sdk().directory)
   })
-  const submission = createPromptSubmit({
-    prompt,
-    info,
-    imageAttachments: attachments,
-    commentCount,
-    autoAccept: accepting,
-    permissionMode: currentPermissionMode,
-    mode,
-    working,
-    editor: () => editor,
-    queueScroll: () => requestAnimationFrame(() => editor?.scrollIntoView({ block: "nearest" })),
-    promptLength,
-    addToHistory: (value, mode) => controller.addHistory(value, mode),
-    resetHistoryNavigation: () => controller.resetHistory(),
-    setMode: (next) => controller.dispatch({ type: next === "shell" ? "mode.shell" : "mode.normal" }),
-    setPopover: (popover) => {
-      if (!popover) controller.dispatch({ type: "popover.close" })
-    },
-    newSessionWorktree: () => props.newSessionWorktree,
-    onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
-    shouldQueue: props.shouldQueue,
-    onQueue: props.onQueue,
-    onAbort: props.onAbort,
-    onSubmit: props.onSubmit,
-    model: props.controls.model.selection,
-    goal: props.goal,
-  })
+  const submission = guardDraftSubmission(
+    createPromptSubmit({
+      prompt,
+      info,
+      imageAttachments: attachments,
+      commentCount,
+      autoAccept: accepting,
+      permissionMode: currentPermissionMode,
+      mode,
+      working,
+      editor: () => editor,
+      queueScroll: () => requestAnimationFrame(() => editor?.scrollIntoView({ block: "nearest" })),
+      promptLength,
+      addToHistory: (value, mode) => controller.addHistory(value, mode),
+      resetHistoryNavigation: () => controller.resetHistory(),
+      setMode: (next) => controller.dispatch({ type: next === "shell" ? "mode.shell" : "mode.normal" }),
+      setPopover: (popover) => {
+        if (!popover) controller.dispatch({ type: "popover.close" })
+      },
+      newSessionWorktree: () => props.newSessionWorktree,
+      onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
+      shouldQueue: props.shouldQueue,
+      onQueue: props.onQueue,
+      captureQueue: props.captureQueue,
+      onAbort: props.onAbort,
+      onSubmit: props.onSubmit,
+      model: props.controls.model.selection,
+      agentUnavailable: () => props.controls.agents.unavailable,
+      goal: props.goal,
+    }),
+    () => props.controls.session.canSubmit?.() !== false,
+  )
 
   const referenceDescription = (reference: ReferenceInfo) =>
     reference.source.type === "git" ? reference.source.repository : reference.source.path
@@ -503,17 +562,25 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       keybind: command.keybindParts(item.id),
     })),
   )
-  const reportModelWriteError = (error: unknown) => showToast({
-    title: language.t("common.requestFailed"),
-    description: error instanceof Error ? error.message : String(error),
-  })
+  const reportModelWriteError = (error: unknown) =>
+    showToast({
+      title: language.t("common.requestFailed"),
+      description: error instanceof Error ? error.message : String(error),
+    })
   const setVariant = (value: string | undefined) => {
     void Promise.resolve(props.controls.model.selection.variant.set(value)).catch(reportModelWriteError)
   }
-  const variants = createMemo(() => reasoningControlOptions(props.controls.model.selection.variant.list()))
+  const variants = createMemo(() =>
+    reasoningControlOptions(
+      props.controls.model.selection.variant.list(),
+      props.controls.model.selection.current()?.variants,
+      language.locale(),
+    ),
+  )
   createEffect(() => {
+    if (!props.controls.model.selection.ready()) return
     const current = props.controls.model.selection.variant.current()
-    if (deprecatedReasoningVariant(current)) setVariant(undefined)
+    if (deprecatedReasoningVariant(current, props.controls.model.selection.variant.list())) setVariant(undefined)
   })
   const controller = createPromptInputV2Controller({
     store: () => prompt.capture().store,
@@ -532,12 +599,19 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
     commands,
     context,
     searchContextFiles: async (query) =>
-      (await files.searchFilesAndDirectories(query)).map((path) => ({
+      (await files.searchFileAndDirectoryEntries(query)).map(({ path, type }) => ({
         id: `file:${path}`,
         kind: "file",
         label: path,
         path,
-        mention: { type: "file", path, content: `@${path}`, start: 0, end: 0 },
+        mention: {
+          type: "file",
+          path,
+          content: `@${path}`,
+          start: 0,
+          end: 0,
+          mime: type === "directory" ? "application/x-directory" : undefined,
+        },
       })),
     onContextRemove(item) {
       if (item?.commentID) comments.remove(item.path, item.commentID)
@@ -581,17 +655,26 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       get agent() {
         return props.controls.agents.visible && props.controls.agents.options.length > 0
           ? {
-              options: () => props.controls.agents.options.map((name) => ({ id: name, label: name })),
+              options: () =>
+                agentMenuOptions(props.controls.agents.options, props.controls.agents.available, language.locale()),
               current: () => props.controls.agents.current,
               onSelect: (value: string) => props.controls.agents.select(value),
               keybind: () => command.keybindParts("agent.cycle"),
+              scope: () => JSON.stringify([sdk().scope, sdk().directory, props.controls.session.id ?? ""]),
+              configure: {
+                label: () => (language.locale().startsWith("zh") ? "代理可见性设置" : "Agent visibility settings"),
+                run: () => command.trigger("settings.open"),
+              },
             }
           : undefined
       },
       variant: {
         options: () => variants().map(({ id, label }) => ({ id, label })),
-        current: () => props.controls.model.selection.variant.current() ?? "default",
-        onSelect: (value) => setVariant(value === "default" ? undefined : value),
+        current: () => reasoningControlKey(props.controls.model.selection.variant.current()),
+        onSelect: (value) => {
+          const option = variants().find((item) => item.id === value)
+          if (option) setVariant(option.value)
+        },
         keybind: () => command.keybindParts("model.variant.cycle"),
       },
       submit: {
@@ -602,8 +685,11 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       },
     },
   })
+  const canSubmitContent = controller.canSubmit
+  controller.canSubmit = () => props.controls.session.canSubmit?.() !== false && canSubmitContent()
   Object.defineProperty(controller, "model", { get: () => props.controls.model })
   Object.defineProperty(controller, "goal", { get: () => props.goal })
+  Object.defineProperty(controller, "agentUnavailable", { value: () => props.controls.agents.unavailable })
   Object.defineProperty(controller, "permissionMode", {
     get: () => ({ current: currentPermissionMode, select: selectPermissionMode, unifiesAgent }),
   })
@@ -642,43 +728,26 @@ function PromptInputV2ModelControl(props: {
           </>
         }
       >
-        <Show
-          when={props.paid}
-          fallback={
-            <ButtonV2
-              data-action="prompt-model"
-              type="button"
-              aria-label={props.title + ": " + props.modelName}
-              variant="ghost-muted"
-              size="normal"
-              class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
-              classList={{ "animate-in fade-in": shouldAnimate() }}
-              style={{ height: "28px" }}
-              onClick={props.onUnpaidClick}
-            >
-              {content()}
-            </ButtonV2>
-          }
+        <ModelSelectorPopoverV2
+          model={props.model}
+          binding={props.binding}
+          canOpen={props.paid || props.model.list().length === 0}
+          onOpenBlocked={props.onUnpaidClick}
+          triggerAs={ButtonV2}
+          triggerProps={{
+            variant: "ghost-muted",
+            size: "normal",
+            style: { height: "32px" },
+            class: "min-w-0 max-w-[245px] justify-start ![font-weight:400] group",
+            classList: { "animate-in fade-in": shouldAnimate() },
+            "data-action": "prompt-model",
+            type: "button",
+            "aria-label": props.title + ": " + props.modelName,
+          }}
+          onClose={props.onClose}
         >
-          <ModelSelectorPopoverV2
-            model={props.model}
-            binding={props.binding}
-            triggerAs={ButtonV2}
-            triggerProps={{
-              variant: "ghost-muted",
-              size: "normal",
-              style: { height: "28px" },
-              class: "min-w-0 max-w-[220px] justify-start ![font-weight:440] group",
-              classList: { "animate-in fade-in": shouldAnimate() },
-              "data-action": "prompt-model",
-              type: "button",
-              "aria-label": props.title + ": " + props.modelName,
-            }}
-            onClose={props.onClose}
-          >
-            {content()}
-          </ModelSelectorPopoverV2>
-        </Show>
+          {content()}
+        </ModelSelectorPopoverV2>
       </TooltipV2>
     </Show>
   )

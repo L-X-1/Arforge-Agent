@@ -1,4 +1,5 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
 import { DragDropProvider, PointerSensor } from "@dnd-kit/solid"
 import { isSortable, useSortable } from "@dnd-kit/solid/sortable"
@@ -32,7 +33,7 @@ function VerticalTabItem(props: {
   index: () => number
   active: () => boolean
   onNavigate: () => void
-  onClose: () => void
+  onClose: (restoreFocus?: boolean) => void
   expandedTab: () => string | null
   onExpand: (id: string | null) => void
 }) {
@@ -50,10 +51,13 @@ function VerticalTabItem(props: {
   })
   const [renaming, setRenaming] = createSignal(false)
   const [renameValue, setRenameValue] = createSignal("")
-  const [floatPosition, setFloatPosition] = createSignal({ left: 0, top: 0 })
+  const [floatPosition, setFloatPosition] = createStore({ left: 0, top: 0 })
+  const previewID = createUniqueId()
+  let focusOnOpen = false
   let clickTimer: ReturnType<typeof setTimeout> | undefined
   let renameInput!: HTMLInputElement
   let tabButton!: HTMLButtonElement
+  let floatPanel: HTMLDivElement | undefined
 
   const serverCtx = createMemo(() => {
     if (props.tab.type !== "session") return
@@ -88,7 +92,27 @@ function VerticalTabItem(props: {
   const updateFloatPosition = () => {
     if (!tabButton || !isExpanded()) return
     const rect = tabButton.getBoundingClientRect()
-    setFloatPosition({ left: rect.right + 8, top: rect.top })
+    const viewport = window.visualViewport
+    const left = (viewport?.offsetLeft ?? 0) + 8
+    const top = (viewport?.offsetTop ?? 0) + 8
+    const right = left + (viewport?.width ?? window.innerWidth) - 16
+    const bottom = top + (viewport?.height ?? window.innerHeight) - 16
+    const width = floatPanel?.offsetWidth ?? 200
+    const height = floatPanel?.offsetHeight ?? 0
+    const preferredLeft = rect.right + 8 + width <= right ? rect.right + 8 : rect.left - width - 8
+    setFloatPosition({
+      left: Math.max(left, Math.min(preferredLeft, right - width)),
+      top: Math.max(top, Math.min(rect.top, bottom - height)),
+    })
+  }
+  const dismissPreview = (restoreFocus = true) => {
+    if (clickTimer) clearTimeout(clickTimer)
+    clickTimer = undefined
+    setRenaming(false)
+    props.onExpand(null)
+    if (restoreFocus) queueMicrotask(() => {
+      if (tabButton?.isConnected) tabButton.focus({ preventScroll: true })
+    })
   }
   const copy = createMemo(() => {
     const chinese = language.locale() === "zh" || language.locale() === "zht"
@@ -115,14 +139,23 @@ function VerticalTabItem(props: {
         }
   })
 
-  const handleClick = () => {
+  const handleClick = (event: MouseEvent) => {
     if (sortable.isDragSource()) return
+    if (event.detail === 0) {
+      if (clickTimer) clearTimeout(clickTimer)
+      clickTimer = undefined
+      focusOnOpen = true
+      if (isExpanded()) dismissPreview()
+      else props.onExpand(props.id)
+      return
+    }
+    focusOnOpen = false
     if (clickTimer) {
       clearTimeout(clickTimer)
       clickTimer = undefined
       // Double click → navigate
       props.onNavigate()
-      props.onExpand(null)
+      dismissPreview(false)
       return
     }
     // Single click → show/hide floating panel
@@ -136,7 +169,7 @@ function VerticalTabItem(props: {
     if (event.button !== 1) return
     event.preventDefault()
     event.stopPropagation()
-    props.onClose()
+    props.onClose(false)
   }
 
   const beginRename = () => {
@@ -180,14 +213,43 @@ function VerticalTabItem(props: {
   })
 
   createEffect(() => {
-    if (!isExpanded()) return
+    if (!isExpanded()) {
+      setRenaming(false)
+      return
+    }
     updateFloatPosition()
+    queueMicrotask(() => {
+      if (!isExpanded() || !floatPanel) return
+      updateFloatPosition()
+      resize.observe(floatPanel)
+      if (focusOnOpen) floatPanel.querySelector<HTMLButtonElement>("[data-vertical-tab-open]")?.focus({ preventScroll: true })
+    })
     const handleViewportChange = () => updateFloatPosition()
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (renaming()) {
+        setRenaming(false)
+        queueMicrotask(() => floatPanel?.querySelector<HTMLButtonElement>("[data-vertical-tab-rename]")?.focus({ preventScroll: true }))
+        return
+      }
+      dismissPreview()
+    }
+    const resize = new ResizeObserver(handleViewportChange)
+    if (floatPanel) resize.observe(floatPanel)
     window.addEventListener("resize", handleViewportChange)
+    window.visualViewport?.addEventListener("resize", handleViewportChange)
+    window.visualViewport?.addEventListener("scroll", handleViewportChange)
     document.addEventListener("scroll", handleViewportChange, true)
+    document.addEventListener("keydown", handleKeyDown)
     onCleanup(() => {
+      resize.disconnect()
       window.removeEventListener("resize", handleViewportChange)
+      window.visualViewport?.removeEventListener("resize", handleViewportChange)
+      window.visualViewport?.removeEventListener("scroll", handleViewportChange)
       document.removeEventListener("scroll", handleViewportChange, true)
+      document.removeEventListener("keydown", handleKeyDown)
     })
   })
 
@@ -217,6 +279,9 @@ function VerticalTabItem(props: {
         onAuxClick={closeWithMiddleClick}
         onClick={handleClick}
         aria-label={title()}
+        aria-haspopup="dialog"
+        aria-expanded={isExpanded()}
+        aria-controls={isExpanded() ? previewID : undefined}
       >
         <Show
           when={props.tab.type === "session" && session()}
@@ -241,12 +306,22 @@ function VerticalTabItem(props: {
       <Show when={isExpanded()}>
         <Portal>
           <div
+            id={previewID}
+            ref={(element) => { floatPanel = element; queueMicrotask(updateFloatPosition) }}
             data-vertical-tab-float
             role="dialog"
             aria-label={title()}
             class="fixed z-50 flex min-w-[200px] max-w-[280px] flex-col gap-2 rounded-[12px] border border-v2-border-border-muted bg-v2-background-bg-layer-01 p-3 shadow-[var(--v2-elevation-floating)]"
-            style={{ left: `${floatPosition().left}px`, top: `${floatPosition().top}px` }}
+            style={{ left: `${floatPosition.left}px`, top: `${floatPosition.top}px` }}
             onClick={(e: MouseEvent) => e.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== "Tab" || event.isComposing) return
+              const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"))
+              const edge = event.shiftKey ? controls[0] : controls.at(-1)
+              if (document.activeElement !== edge) return
+              event.preventDefault()
+              ;(event.shiftKey ? controls.at(-1) : controls[0])?.focus()
+            }}
           >
             <div class="flex items-start justify-between gap-2">
               <div class="min-w-0 flex-1">
@@ -260,10 +335,7 @@ function VerticalTabItem(props: {
                 variant="ghost-muted"
                 size="small"
                 class="shrink-0"
-                onClick={() => {
-                  setRenaming(false)
-                  props.onExpand(null)
-                }}
+                onClick={() => dismissPreview()}
                 icon={<IconV2 name="xmark-small" />}
                 aria-label={copy().dismiss}
               />
@@ -273,11 +345,12 @@ function VerticalTabItem(props: {
               fallback={
                 <div class="flex gap-2">
                   <button
+                    data-vertical-tab-open
                     type="button"
                     class="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[8px] bg-v2-icon-icon-accent/10 px-3 text-[12px] font-[530] text-v2-icon-icon-accent transition-colors hover:bg-v2-icon-icon-accent/20"
                     onClick={() => {
                       props.onNavigate()
-                      props.onExpand(null)
+                      dismissPreview(false)
                     }}
                   >
                     <IconV2 name="edit" size="small" />
@@ -288,8 +361,9 @@ function VerticalTabItem(props: {
                       type="button"
                       variant="ghost-muted"
                       size="small"
+                      data-vertical-tab-rename
                       onClick={beginRename}
-                      icon={<IconV2 name="pencil-line" />}
+                      icon={<IconV2 name="edit" />}
                       aria-label={copy().rename}
                     />
                   </Show>
@@ -298,8 +372,8 @@ function VerticalTabItem(props: {
                     data-slot="tab-close"
                     class="flex h-7 items-center justify-center rounded-[8px] px-3 text-[12px] font-[530] text-v2-text-text-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover"
                     onClick={() => {
-                      props.onClose()
-                      props.onExpand(null)
+                      props.onClose(true)
+                      dismissPreview(false)
                     }}
                   >
                     {copy().closeTab}
@@ -360,8 +434,11 @@ export function TitlebarVerticalTabs() {
 
   // Close floating panel when clicking outside
   const handleDocumentClick = (e: MouseEvent) => {
-    const target = e.target as HTMLElement
-    if (!target.closest("[data-titlebar-vertical-tabs]")) {
+    // Rename/save replace the clicked node before Solid's delegated click
+    // reaches document. The original event path still identifies the portal.
+    const inside = e.composedPath().some((target) => target instanceof Element &&
+      target.matches("[data-titlebar-vertical-tabs], [data-vertical-tab-float]"))
+    if (!inside) {
       setExpandedTab(null)
     }
   }
@@ -377,9 +454,16 @@ export function TitlebarVerticalTabs() {
     tabs.select(tab)
   }
 
-  const closeTab = (tab: Tab) => {
+  const closeTab = (tab: Tab, restoreFocus = false) => {
     const index = tabs.store.findIndex((item) => tabKey(item) === tabKey(tab))
     if (index !== -1) tabs.closeTab(index)
+    if (!restoreFocus) return
+    requestAnimationFrame(() => {
+      if (!listRef?.isConnected) return
+      const candidates = listRef.querySelectorAll<HTMLButtonElement>("[data-titlebar-tab]")
+      const next = candidates[Math.min(Math.max(index, 0), candidates.length - 1)]
+      ;(next ?? listRef.closest("[data-titlebar-vertical-tabs]")?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true })
+    })
   }
 
   const tabIds = () => tabs.store.map(tabKey)
@@ -388,6 +472,7 @@ export function TitlebarVerticalTabs() {
     <Show when={desktop()}>
       <div
         data-titlebar-vertical-tabs
+        style={{ "padding-top": platform.os === "macos" ? `${44 / (platform.webviewZoom?.() ?? 1)}px` : undefined }}
         data-arforge-material="titlebar"
         class="relative z-10 flex h-full min-h-0 w-[52px] flex-col overflow-visible border-r border-v2-border-border-muted"
       >
@@ -400,7 +485,7 @@ export function TitlebarVerticalTabs() {
               size="normal"
               class="!size-9 shrink-0"
               icon={<IconV2 name="menu" />}
-              onClick={() => narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle()}
+              onClick={() => (narrow() ? layout.mobileSidebar.toggle() : layout.sidebar.toggle())}
               aria-label={language.t("command.sidebar.toggle")}
               aria-controls="workspace-navigation"
               aria-expanded={narrow() ? layout.mobileSidebar.opened() : layout.sidebar.opened()}
@@ -513,7 +598,7 @@ export function TitlebarVerticalTabs() {
                       index={index}
                       active={() => controller.currentTab() === tab}
                       onNavigate={() => navigateTab(tab)}
-                      onClose={() => closeTab(tab)}
+                      onClose={(restoreFocus) => closeTab(tab, restoreFocus)}
                       expandedTab={expandedTab}
                       onExpand={setExpandedTab}
                     />

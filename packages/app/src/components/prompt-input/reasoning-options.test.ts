@@ -1,23 +1,40 @@
 import { describe, expect, test } from "bun:test"
-import { deprecatedReasoningVariant, reasoningControlOptions } from "./reasoning-options"
+import { deprecatedReasoningVariant, reasoningControlKey, reasoningControlOptions } from "./reasoning-options"
 
-describe("reasoning control options", () => {
-  test("exposes only Default, High and Max for a three-tier reasoning model", () => {
-    expect(reasoningControlOptions(["none", "high", "max"])).toEqual([
-      { id: "default", level: "default", label: "Default" },
-      { id: "high", level: "high", label: "High" },
-      { id: "max", level: "max", label: "Max" },
-    ])
+describe("actual supported variant controls", () => {
+  test("keeps reset, an actual default ID, off, automatic and custom presets distinct", () => {
+    const options = reasoningControlOptions(
+      ["none", "auto", "default", "high", "json"],
+      {
+        none: { thinking: { type: "disabled" } },
+        auto: { reasoning_effort: "auto" },
+        default: { reasoning_effort: "medium" },
+        high: { temperature: 0.1 },
+        json: { response_format: { type: "json_object" } },
+      },
+      "zht",
+    )
+    expect(options.map((item) => item.value)).toEqual([undefined, "none", "auto", "default", "high", "json"])
+    expect(options.map((item) => item.label)).toEqual(["預設", "關閉", "自動", "模型預設", "high", "json"])
+    expect(new Set(options.map((item) => item.id)).size).toBe(options.length)
+    for (const option of options) expect(reasoningControlKey(option.value)).toBe(option.id)
   })
 
-  test("maps provider max aliases while hiding retired shallow modes", () => {
-    expect(reasoningControlOptions(["low", "medium", "high", "xhigh"]).map((item) => item.id)).toEqual([
-      "default",
+  test("retains supported shallow and off choices; only unsupported deprecated IDs are retired", () => {
+    for (const value of ["none", "off", "low", "medium", "minimal"]) {
+      expect(deprecatedReasoningVariant(value, [value])).toBe(false)
+      expect(deprecatedReasoningVariant(value, [])).toBe(true)
+    }
+    expect(deprecatedReasoningVariant("provider-specific", [])).toBe(false)
+  })
+
+  test("does not infer thinking from high/max IDs and preserves unknown custom labels", () => {
+    expect(reasoningControlOptions(["high", "max", "relay-opaque"], {}, "zh").map((item) => item.label)).toEqual([
+      "默认",
       "high",
-      "xhigh",
+      "max",
+      "relay-opaque",
     ])
-    expect(deprecatedReasoningVariant("none")).toBe(true)
-    expect(deprecatedReasoningVariant("medium")).toBe(true)
-    expect(deprecatedReasoningVariant("provider-specific")).toBe(false)
+    expect(reasoningControlOptions([], {}, "de")).toEqual([{ id: "reset", value: undefined, label: "Default" }])
   })
 })

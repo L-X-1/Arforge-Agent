@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { pendingPostgresMigrations, POSTGRES_SCHEMA_MIGRATION_LOCK } from "@arforge-ai/core/database/database"
+import { pendingPostgresMigrations, POSTGRES_SCHEMA_MIGRATION_LOCK, POSTGRES_SCHEMA_RECOVERY_HINT } from "@arforge-ai/core/database/database"
 import { PostgresSchemaMigrations } from "@arforge-ai/core/database/postgres-schema.gen"
 
 const migration = (id: string) => {
@@ -9,6 +9,11 @@ const migration = (id: string) => {
 }
 
 describe("PostgreSQL migration/recovery contract", () => {
+  test("schema recovery offers a packaged command without credentials or a required Bun installation", () => {
+    expect(POSTGRES_SCHEMA_RECOVERY_HINT).toContain('Arforge.exe --migrate-postgres')
+    expect(POSTGRES_SCHEMA_RECOVERY_HINT).toContain('Source checkout only:')
+    expect(POSTGRES_SCHEMA_RECOVERY_HINT).not.toContain('postgresql://')
+  })
   test("projects a deterministic pending plan for every ledger prefix", () => {
     const ids = PostgresSchemaMigrations.map((item) => item.id)
     expect(new Set(ids).size).toBe(ids.length)

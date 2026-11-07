@@ -35,6 +35,8 @@ import { reviewTooltipKeybind } from "../command-tooltip-keybind"
 import { useTitlebarRightMount } from "../titlebar"
 import { useSettingsDialog } from "../settings-dialog"
 import { useSessionOperationsText } from "./session-operations-text"
+import { openSessionContext } from "../session-context-usage"
+import { closeSessionDetails, SessionDetailDrawerHost } from "./session-detail-drawer"
 
 const OPEN_APPS = [
   "vscode",
@@ -154,9 +156,63 @@ export function SessionHeader(
   const language = useLanguage()
   const settings = useSettings()
   const sync = useSync()
+  const { params, view, tabs, sessionKey } = useSessionLayout()
   const openOperations = useSettingsDialog("session-goal-task", { sync })
+  const sessionLabel = (zh: string, en: string) => (language.locale().startsWith("zh") ? zh : en)
+  const sessionMenus = [
+    {
+      group: "run" as const,
+      get label() { return sessionLabel("上下文与用量", "Context and usage") },
+      open: () => {
+        if (!params.id) return
+        closeSessionDetails()
+        openSessionContext({ view: view(), layout, tabs: tabs() })
+      },
+    },
+    {
+      group: "planning" as const,
+      get label() {
+        return sessionLabel("目标与任务", "Goals and tasks")
+      },
+      open: openOperations,
+    },
+    {
+      group: "planning" as const,
+      get label() {
+        return sessionLabel("待发送消息", "Queued messages")
+      },
+      open: useSettingsDialog("session-prompt-queue", { sync }),
+    },
+    {
+      group: "planning" as const,
+      get label() {
+        return sessionLabel("定时、触发器与协作等待", "Schedules, triggers and waits")
+      },
+      open: useSettingsDialog("session-automation", { sync }),
+    },
+    {
+      group: "records" as const,
+      get label() {
+        return sessionLabel("团队与子代理", "Team and subagents")
+      },
+      open: useSettingsDialog("session-team", { sync }),
+    },
+    {
+      group: "records" as const,
+      get label() {
+        return sessionLabel("检查点与对话回退", "Checkpoints and rewind")
+      },
+      open: useSettingsDialog("session-checkpoint", { sync }),
+    },
+    {
+      group: "records" as const,
+      get label() {
+        return sessionLabel("会话反馈", "Session feedback")
+      },
+      open: useSettingsDialog("session-feedback", { sync }),
+    },
+  ]
   const terminal = useTerminal()
-  const { params, view } = useSessionLayout()
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
   const project = createMemo(() => {
@@ -245,6 +301,11 @@ export function SessionHeader(
     messageAgentColor(params.id ? sync().data.message[params.id] : undefined, sync().data.agent),
   )
   const v2ActionsState = createMemo<SessionHeaderV2ActionsState>(() => ({
+    sessionMenus,
+    sessionScope: sessionKey(),
+    terminalOpened: view().terminal.opened(),
+    terminalLabel: language.t("command.terminal.toggle"),
+    onTerminalToggle: toggleTerminal,
     statusVisible: status(),
     statusLabel: language.t("status.popover.trigger"),
     reviewLabel: language.t("command.review.toggle"),
@@ -312,6 +373,7 @@ export function SessionHeader(
 
   return (
     <>
+      <Show when={isV2() && params.id}><SessionDetailDrawerHost /></Show>
       <Show when={search() && centerMount()}>
         {(mount) => (
           <Portal mount={mount()}>
@@ -346,7 +408,7 @@ export function SessionHeader(
         {(mount) => (
           <Portal mount={mount()}>
             <Show
-              when={isV2}
+              when={isV2()}
               fallback={
                 <div class="flex items-center gap-2">
                   <Show when={projectDirectory()}>
@@ -553,6 +615,11 @@ export function SessionHeader(
 }
 
 type SessionHeaderV2ActionsState = {
+  sessionMenus: { label: string; group: "run" | "planning" | "records"; open: () => void }[]
+  sessionScope: string
+  terminalOpened: boolean
+  terminalLabel: string
+  onTerminalToggle: () => void
   statusVisible: boolean
   statusLabel: string
   reviewLabel: string
@@ -572,9 +639,20 @@ type SessionHeaderV2ActionsState = {
 
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
   const language = useLanguage()
+  const [menu, setMenu] = createStore({ open: false, scope: "" })
+  const groups = ["run", "planning", "records"] as const
+  const groupLabel = (group: (typeof groups)[number]) => language.locale().startsWith("zh")
+    ? { run: "执行与上下文", planning: "目标与调度", records: "协作与记录" }[group]
+    : { run: "Execution and context", planning: "Goals and scheduling", records: "Collaboration and records" }[group]
+  createEffect(() => {
+    if (menu.open && menu.scope !== props.state.sessionScope) setMenu("open", false)
+  })
+  const select = (action: () => void) => {
+    if (menu.scope === props.state.sessionScope) action()
+  }
 
   return (
-    <div class="flex items-center gap-2">
+    <div data-component="session-titlebar-actions" class="flex items-center gap-1">
       <Show when={props.state.executionVisible}>
         <TooltipV2 class="shrink-0" placement="bottom" value={props.state.executionLabel}>
           <IconButtonV2
@@ -592,30 +670,58 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
                   classList={{ "animate-pulse !bg-v2-icon-icon-accent": props.state.executionRunning }}
                   aria-hidden="true"
                 />
-                <span class="text-[11px] font-[530]">{props.state.executionStepCount}</span>
+                <Show when={props.state.executionStepCount > 0}>
+                  <span class="text-[11px] font-[530]">{props.state.executionStepCount}</span>
+                </Show>
               </span>
             }
           />
         </TooltipV2>
       </Show>
       <Show when={props.state.operationsVisible}>
-        <TooltipV2 class="shrink-0" placement="bottom" value={props.state.operationsLabel}>
-          <IconButtonV2
-            type="button"
-            variant="ghost-muted"
-            size="large"
-            class="!w-auto min-w-9 shrink-0 gap-1.5 px-2"
-            onClick={props.state.onOperationsOpen}
-            aria-label={props.state.operationsLabel}
-            icon={
-              <span class="flex items-center gap-1.5">
-                <IconV2 name="settings-gear" />
-                <span class="hidden xl:inline text-[11px] font-[530]">{props.state.operationsLabel}</span>
-              </span>
-            }
-          />
-        </TooltipV2>
+        <DropdownMenu gutter={4} placement="bottom-end" modal={false} open={menu.open}
+          onOpenChange={(open) => setMenu(open ? { open, scope: props.state.sessionScope } : { open })}>
+          <DropdownMenu.Trigger class="session-titlebar-menu" aria-label={props.state.operationsLabel}>
+            <span>{language.locale().startsWith("zh") ? "会话" : "Session"}</span>
+            <IconV2 name="chevron-down" size="small" />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content>
+              <For each={groups}>
+                {(group, index) => <>
+                  <Show when={index() > 0}><DropdownMenu.Separator /></Show>
+                  <DropdownMenu.Group>
+                    <DropdownMenu.GroupLabel>{groupLabel(group)}</DropdownMenu.GroupLabel>
+                    <Show when={group === "run"}>
+                      <DropdownMenu.Item onSelect={() => select(props.state.onExecutionOpen)}>
+                        <DropdownMenu.ItemLabel>{props.state.executionLabel}</DropdownMenu.ItemLabel>
+                      </DropdownMenu.Item>
+                    </Show>
+                    <For each={props.state.sessionMenus.filter((entry) => entry.group === group)}>
+                      {(entry) => <DropdownMenu.Item onSelect={() => select(entry.open)}>
+                        <DropdownMenu.ItemLabel>{entry.label}</DropdownMenu.ItemLabel>
+                      </DropdownMenu.Item>}
+                    </For>
+                  </DropdownMenu.Group>
+                </>}
+              </For>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu>
       </Show>
+      <TooltipV2 placement="bottom" value={props.state.terminalLabel}>
+        <IconButtonV2
+          type="button"
+          variant="ghost-muted"
+          size="normal"
+          state={props.state.terminalOpened ? "pressed" : undefined}
+          onClick={props.state.onTerminalToggle}
+          aria-label={props.state.terminalLabel}
+          aria-expanded={props.state.terminalOpened}
+          aria-controls="terminal-panel"
+          icon={<IconV2 name="terminal" />}
+        />
+      </TooltipV2>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />

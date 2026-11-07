@@ -12,25 +12,32 @@ import type { OperationsApi } from "../../../src/utils/server"
 
 type Workspace = "workspace-a" | "workspace-b"
 type Resolve = () => void
+const fixtureQuery = new URLSearchParams(window.location.search)
+const fixtureLocale = fixtureQuery.get("locale") === "zh" ? "zh" : "en"
+const includeMovedSource = fixtureQuery.has("sourceMoved")
 
 const [workspace, setWorkspace] = createSignal<Workspace>("workspace-a")
 const calls: string[] = []
 const pending = new Map<Workspace, Resolve[]>()
+const directoryFor = (current: Workspace) => current === "workspace-a"
+  ? "C:/Arforge/PersonalWorkspaceScopeFixture"
+  : "D:/Arforge/PersonalWorkspaceHistoryFixture"
+const sourceJumps: string[] = []
 
 const snapshotFor = (current: Workspace) => ({
   asOf: 0,
-  project: { id: "project-" + current, directory: "C:/Arforge/PersonalWorkspaceScopeFixture" },
+  project: { id: "global", directory: "C:/" },
   location: {
-    directory: "C:/Arforge/PersonalWorkspaceScopeFixture",
+    directory: directoryFor(current),
     workspaceID: current,
-    projectID: "project-" + current,
-    projectDirectory: "C:/Arforge/PersonalWorkspaceScopeFixture",
+    projectID: "global",
+    projectDirectory: "C:/",
   },
   sessions: [
     {
       id: "ses_" + current,
       title: current + " session",
-      projectID: "project-" + current,
+      projectID: "global",
       state: "human_visible" as const,
       createdAt: 0,
       updatedAt: 0,
@@ -45,6 +52,7 @@ const snapshotFor = (current: Workspace) => ({
     {
       runID: "run_history_" + current,
       sessionID: "ses_" + current,
+      source: { inspectability: "current", projectID: "global", directory: directoryFor(current) },
       status: "completed" as const,
       initiator: "agent" as const,
       authority: "automatic" as const,
@@ -62,6 +70,19 @@ const snapshotFor = (current: Workspace) => ({
       createdAt: 0,
       updatedAt: 0,
     },
+    ...["foreign", "legacy", ...(includeMovedSource ? ["moved"] : [])].map((kind) => ({
+      runID: "run_" + kind + "_" + current,
+      sessionID: "ses_" + (current === "workspace-a" ? "workspace-b" : "workspace-a"),
+      source: kind === "legacy"
+        ? { inspectability: "missing-binding" }
+        : kind === "moved"
+          ? { inspectability: "session-moved", projectID: "global", directory: "D:/Arforge/PreviousWorkspace" }
+        : { inspectability: "requires-navigation", projectID: "global", directory: directoryFor(current === "workspace-a" ? "workspace-b" : "workspace-a") },
+      status: "completed", initiator: "agent", authority: "automatic", riskTier: "L0",
+      state: "settled", recoveryRequired: false,
+      budget: { attemptsUsed: 0, maxAttempts: 1, durationMsUsed: 0, maxDurationMs: 1000, costMicrosUsed: 0, maxCostMicros: 100 },
+      createdAt: 0, updatedAt: 0,
+    })),
   ],
   personalJobs: [],
   memoryCandidates: [],
@@ -103,16 +124,20 @@ const resolveWorkspace = (current: Workspace) => {
     __personalWorkspaceScopeFixture: {
       calls: string[]
       resolve: (workspace: Workspace) => void
+      historyReads: string[]
+      sourceJumps: string[]
     }
   }
-).__personalWorkspaceScopeFixture = { calls, resolve: resolveWorkspace }
+).__personalWorkspaceScopeFixture = { calls, resolve: resolveWorkspace, get historyReads() { return historyReads }, sourceJumps }
 
 const historyReads: string[] = []
 const api = {
   personalWorkspace: { snapshot },
   subagentControl: {
-    children: async (input: { parentRunID: string }) => {
+    children: async (input: { parentRunID: string; location: { directory: string; workspace?: string } }) => {
       historyReads.push(input.parentRunID)
+      if (input.parentRunID !== "run_history_" + workspace() || input.location.directory !== directoryFor(workspace()) || input.location.workspace !== workspace())
+        throw new Error("409: fixture parent source mismatch")
       return {
         parentRunID: input.parentRunID,
         controlAvailable: false,
@@ -130,7 +155,7 @@ const api = {
     },
   },
 } as unknown as OperationsApi
-const location = () => ({ location: { directory: "C:/Arforge/PersonalWorkspaceScopeFixture", workspace: workspace() } })
+const location = () => ({ location: { directory: directoryFor(workspace()), workspace: workspace() } })
 function ReceiptFixture() {
   const [state, setState] = createStore<{
     receipt?: "missing" | "present"
@@ -193,7 +218,13 @@ const RoutedPage = () => (
           workspace-b
         </button>
       </div>
-      <PersonalWorkspace api={() => api} location={location} ready={() => true} />
+      <div class="arforge-control-center-body">
+      <PersonalWorkspace api={() => api} location={location} ready={() => true} serverName={fixtureLocale === "zh" ? "隔离测试服务器" : "Isolated fixture server"}
+        onOpenSource={async (run) => {
+          sourceJumps.push(run.source.directory!)
+          setWorkspace(run.source.directory === directoryFor("workspace-a") ? "workspace-a" : "workspace-b")
+        }} />
+      </div>
       <ReceiptFixture />
     </div>
   </DialogProvider>
@@ -211,7 +242,7 @@ render(
         notify: async () => undefined,
       }}
     >
-      <LanguageProvider locale="en">
+      <LanguageProvider locale={fixtureLocale}>
         <Router>
           <Route path="*" component={RoutedPage} />
         </Router>

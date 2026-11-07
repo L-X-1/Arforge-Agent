@@ -1,17 +1,33 @@
 import { getFilename } from "@arforge-ai/core/util/path"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
 import { useMutation } from "@tanstack/solid-query"
-import { normalizeProjectInfo } from "@/context/global-sync/utils"
 import { createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useGlobal } from "@/context/global"
 import { type LocalProject } from "@/context/layout"
-import { ServerConnection } from "@/context/server"
+import { captureProjectMetadata, resolveProjectMetadataID, updateProjectMetadata } from "@/context/project-metadata"
+import { ServerConnection, useServer } from "@/context/server"
+import { useServerSDK } from "@/context/server-sdk"
 
 export function createEditProjectModel(props: { project: LocalProject; server: ServerConnection.Any }) {
   const dialog = useDialog()
   const global = useGlobal()
-  const serverCtx = createMemo(() => global.ensureServerCtx(props.server))
+  const server = useServer()
+  const ownerSDK = useServerSDK()
+  const selectedSDK = ownerSDK()
+  const conn = props.server
+  const key = ServerConnection.key(conn)
+  const source = global.ensureServerCtx(conn)
+  const origin = captureProjectMetadata(
+    source,
+    server.projects.forServer(key).list,
+    props.project,
+    () =>
+      ownerSDK.isAlive() &&
+      ownerSDK() === selectedSDK &&
+      global.servers.list().some((item) => ServerConnection.key(item) === key) &&
+      global.ensureServerCtx(conn) === source,
+  )
   const folderName = createMemo(() => getFilename(props.project.worktree))
   const defaultName = createMemo(() => props.project.name || folderName())
   const [store, setStore] = createStore({
@@ -66,38 +82,61 @@ export function createEditProjectModel(props: { project: LocalProject; server: S
   }
 
   const save = useMutation(() => ({
-    mutationFn: async () => {
-      const name = store.name.trim() === folderName() ? "" : store.name.trim()
-      const start = store.startup.trim()
+    mutationFn: async (input: {
+      dialogID: string
+      name: string
+      start: string
+      color: string | undefined
+      override: string | undefined
+    }) => {
+      if (!origin) return
+      const { dialogID, name, start, color, override } = input
+      const current = () => dialog.active?.id === dialogID && origin.current()
+      if (!current()) return
+      const request = { ...origin, current }
+      const id = request.id ?? (await resolveProjectMetadataID(request))
+      if (!id || !current()) return
 
-      if (props.project.id && props.project.id !== "global") {
-        const project = await serverCtx().sdk.api.project.update({
-          projectID: props.project.id,
-          name,
-          icon: { color: store.color || "", override: store.iconOverride || "" },
-          commands: { start },
-        })
-        serverCtx().sync.set("project", (items) =>
-          items.map((item) => (item.id === project.id ? normalizeProjectInfo(project) : item)),
+      if (id !== "global") {
+        const result = await updateProjectMetadata(
+          { ...request, id },
+          {
+            name,
+            icon: { color: color || "", override: override || "" },
+            commands: { start },
+          },
         )
-        serverCtx().sync.project.icon(props.project.worktree, store.iconOverride || undefined)
-        dialog.close()
+        if (!result || !current()) return
+        if (result === "saved") {
+          const cached = origin.sync.data.project.find((item) => item.id === id)
+          const savedOverride = cached ? cached.icon?.override : override
+          origin.sync.project.icon(origin.worktree, savedOverride || undefined)
+        }
+        if (current()) dialog.close()
         return
       }
 
-      serverCtx().sync.project.meta(props.project.worktree, {
+      origin.sync.project.meta(origin.worktree, {
         name,
-        icon: { color: store.color || undefined, override: store.iconOverride || undefined },
+        icon: { color: color || undefined, override: override || undefined },
         commands: { start: start || undefined },
       })
-      dialog.close()
+      if (current()) dialog.close()
     },
   }))
 
   function submit(event: SubmitEvent) {
     event.preventDefault()
-    if (save.isPending) return
-    save.mutate()
+    const active = dialog.active
+    if (save.isPending || !active || !origin?.current()) return
+    const name = store.name.trim()
+    save.mutate({
+      dialogID: active.id,
+      name: name === folderName() ? "" : name,
+      start: store.startup.trim(),
+      color: store.color,
+      override: store.iconOverride,
+    })
   }
 
   return {

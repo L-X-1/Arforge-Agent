@@ -8,6 +8,7 @@ type Inline =
       end: number
       value: string
       path: string
+      resource?: Pick<FilePart, "mime" | "filename" | "url" | "source">
       selection?: {
         startLine: number
         endLine: number
@@ -95,8 +96,18 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
           start,
           end,
           value,
-          path: toRelative(path),
+          path: filePart.source?.type === "resource" ? filePart.source.uri : toRelative(path),
           selection: selectionFromFileUrl(filePart.url),
+          ...(filePart.source?.type === "resource"
+            ? {
+                resource: {
+                  mime: filePart.mime,
+                  filename: filePart.filename,
+                  url: filePart.url,
+                  source: filePart.source,
+                },
+              }
+            : {}),
         })
         continue
       }
@@ -155,6 +166,17 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
       start: position,
       end: position + content.length,
       selection: item.selection,
+      ...(item.resource
+        ? {
+            ...item.resource,
+            source: item.resource.source
+              ? {
+                  ...item.resource.source,
+                  text: { value: content, start: position, end: position + content.length },
+                }
+              : undefined,
+          }
+        : {}),
     }
     result.push(attachment)
     position += content.length
@@ -177,11 +199,17 @@ export function extractPromptFromParts(parts: Part[], opts?: { directory?: strin
     if (item.start < 0 || item.end < item.start) continue
 
     const expected = item.value
-    if (!expected) continue
+    if (!expected) {
+      if (item.type === "file" && item.resource && item.start === item.end) pushFile(item)
+      continue
+    }
 
     const mismatch = item.end > text.length || item.start < cursor || text.slice(item.start, item.end) !== expected
     const start = mismatch ? text.indexOf(expected, cursor) : item.start
-    if (start === -1) continue
+    if (start === -1) {
+      if (item.type === "file" && item.resource) pushFile({ ...item, value: "" })
+      continue
+    }
     const end = mismatch ? start + expected.length : item.end
 
     pushText(text.slice(cursor, start))

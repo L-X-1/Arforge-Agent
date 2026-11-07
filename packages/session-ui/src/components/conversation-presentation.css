@@ -198,7 +198,7 @@ body [data-component="user-message"][data-component] {
 }
 body [data-component="user-message"][data-component] [data-slot="user-message-text"],
 [data-color-scheme] body[data-new-layout] [data-component="user-message"] [data-slot="user-message-text"] {
-  padding: 12px 16px;
+  padding: 12px 18px;
   border: 0;
   border-radius: 16px;
   background: var(--arforge-review-user-background, var(--v2-background-bg-layer-02));
@@ -215,15 +215,105 @@ body [data-component] [data-slot="user-message-copy-wrapper"],
 body [data-component] [data-slot="text-part-copy-wrapper"] {
   opacity: 1;
   pointer-events: auto;
+  min-height: 32px;
+  margin-top: 12px;
+  gap: 4px;
+  flex-wrap: wrap;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+  line-height: 20px;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+body [data-component="text-part"] [data-slot="text-part-meta"] {
+  min-width: 0;
+  flex: 1 1 10rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+/* U02 A / F10: the actual actions and model/time metadata share a reserved
+   toolbar. Opacity preserves geometry and keyboard reachability. Menus keep
+   their origin visible while focus moves into a portal. Error/retry-only
+   footers outside an assistant text part remain directly available. */
+@media (hover: hover) and (pointer: fine) {
+  body [data-component="text-part"][data-message-role="assistant"] > [data-slot="text-part-copy-wrapper"],
+  body [data-component="user-message"] [data-slot="user-message-copy-wrapper"] {
+    opacity: 0;
+    pointer-events: none;
+  }
+  body [data-component="text-part"][data-message-role="assistant"]:is(:hover, :focus-within) > [data-slot="text-part-copy-wrapper"],
+  body [data-component="assistant-message"]:is(:hover, :focus-within) [data-component="text-part"][data-message-role="assistant"] > [data-slot="text-part-copy-wrapper"],
+  body [data-component="user-message"]:is(:hover, :focus-within) [data-slot="user-message-copy-wrapper"],
+  body [data-component="text-part"][data-message-role="assistant"] > [data-slot="text-part-copy-wrapper"]:has([aria-expanded="true"]),
+  body [data-component="user-message"] [data-slot="user-message-copy-wrapper"]:has([aria-expanded="true"]) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* F09–F10: the bubble, reply and actions share one stable reading rhythm. */
+body [data-component="user-message"] :is([data-slot="user-message-body"], [data-slot="user-message-attachments"]) {
+  max-width: 85%;
+}
+body [data-slot="session-turn-list"] { gap: 32px; }
+body [data-slot="session-turn-message-content"] + [data-slot="session-turn-assistant-content"] { margin-top: 32px; }
+/* Virtualized turns use explicit spacer rows instead of session-turn-list. */
+body [data-timeline-row="TurnGap"] { height: 32px !important; }
+body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) button {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--v2-text-text-muted);
+}
+body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) button:is(:hover, :focus-visible) {
+  color: var(--v2-text-text-base);
+}
+body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) :is([data-slot="icon-svg"], svg) {
+  width: 16px;
+  height: 16px;
+}
+body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) button:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
+}
+body [data-component="markdown"] :is(table, pre, [data-component="markdown-code"]) {
+  min-width: 0;
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+body [data-component="markdown"] :is(table, pre) { overflow-x: auto; }
+
+/* F15: disclosure rows retain their original tool/result handlers. */
+body [data-component="session-turn"] :is([data-component="tool-trigger"], [data-slot="basic-tool-v2-trigger"]) {
+  min-height: 32px;
+  border-radius: 8px;
+}
+body [data-component="session-turn"] :is([data-component="tool-trigger"], [data-slot="basic-tool-v2-trigger"]):focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 2px;
 }
 @media (pointer: coarse) {
   body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) button {
     min-width: 44px;
     min-height: 44px;
   }
+  body [data-component="session-turn"] :is([data-component="tool-trigger"], [data-slot="basic-tool-v2-trigger"]) { min-height: 44px; }
+}
+@media (max-width: 639px) {
+  body [data-component="user-message"] :is([data-slot="user-message-body"], [data-slot="user-message-attachments"]) { max-width: 92%; }
 }
 @media (prefers-reduced-motion: reduce) {
   body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"], [data-slot="markdown-copy-button"]) {
     transition: none;
+  }
+}
+@media (forced-colors: active) {
+  body :is([data-slot="user-message-copy-wrapper"], [data-slot="text-part-copy-wrapper"]) button:focus-visible,
+  body [data-component="session-turn"] :is([data-component="tool-trigger"], [data-slot="basic-tool-v2-trigger"]):focus-visible {
+    outline-color: Highlight;
   }
 }

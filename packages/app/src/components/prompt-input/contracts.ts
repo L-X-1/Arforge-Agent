@@ -3,6 +3,7 @@ import type { Prompt, usePrompt } from "@/context/prompt"
 import type { PromptInputHistory } from "./history-store"
 import type { FollowupDraft } from "./submit"
 import type { Accessor } from "solid-js"
+import type { AgentMenuCatalogEntry } from "./agent-options"
 
 export type PromptInputState = ReturnType<typeof usePrompt>
 
@@ -25,9 +26,10 @@ export type PromptInputGoalControl = {
 
 export type PromptInputControls = {
   agents: {
-    available: { name: string; hidden?: boolean; mode: string }[]
+    available: AgentMenuCatalogEntry[]
     options: string[]
     current: string
+    unavailable?: string
     loading: boolean
     visible: boolean
     select: (name: string | undefined) => void
@@ -39,6 +41,7 @@ export type PromptInputControls = {
   }
   session: {
     id?: string
+    canSubmit?: Accessor<boolean>
     tabs: {
       active: () => string | undefined
       all: () => string[]
@@ -65,7 +68,8 @@ export interface PromptInputProps {
   edit?: { id: string; prompt: Prompt; context: FollowupDraft["context"] }
   onEditLoaded?: () => void
   shouldQueue?: () => boolean
-  onQueue?: (draft: FollowupDraft) => void
+  onQueue?: (draft: FollowupDraft) => void | Promise<void>
+  captureQueue?: () => ((draft: FollowupDraft) => void | Promise<void>) | undefined
   onAbort?: () => void
   onSubmit?: () => void
 }

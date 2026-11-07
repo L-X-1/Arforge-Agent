@@ -1,5 +1,7 @@
+import { useConfirmAction, confirmationSnapshot } from "@/components/confirm-action"
 import { bindManagementApi, createManagementScope, loadManagementPartition, runManagementMutation } from "@/components/settings-v2/management-async"
 import { ManagementStatus } from "@/components/settings-v2/management-status"
+import { managementErrorText } from "@/components/settings-v2/management-state"
 import "@/components/settings-v2/management-review.css"
 import { Button } from "@arforge-ai/ui/button"
 import { Checkbox } from "@arforge-ai/ui/checkbox"
@@ -18,6 +20,12 @@ type Goal = GoalPage["items"][number]
 
 export function SessionGoalControl(props: { sessionID: string; disabled?: boolean }) {
   const serverSDK = useServerSDK()
+  const confirmAction = useConfirmAction()
+  const confirmCurrent = (message: string) => {
+    const snapshot = confirmationSnapshot(state)
+    if (snapshot === undefined) return Promise.resolve(false)
+    return confirmAction(message, { isCurrent: () => !blocked() && confirmationSnapshot(state) === snapshot })
+  }
   const language = useLanguage()
   const c = useSessionOperationsText()
   const aux = useSessionOperationsAuxText()
@@ -32,8 +40,8 @@ export function SessionGoalControl(props: { sessionID: string; disabled?: boolea
     blockReason: "",
     page: { queued: [], history: [], items: [] } as unknown as GoalPage,
     fresh: false,
-    readError: "",
-    error: "",
+    readError: undefined as unknown,
+    error: undefined as unknown,
     notice: "",
   })
   const source = serverSDK()
@@ -48,20 +56,19 @@ export function SessionGoalControl(props: { sessionID: string; disabled?: boolea
     if (language.locale() === "zht") return zht
     return en
   }
-  const message = (error: unknown) => {
-    if (error instanceof Error) return error.message
-    if (typeof error === "string") return error
-    try {
-      return JSON.stringify(error)
-    } catch {
-      return ui("Unknown goal error", "未知目标错误", "未知目標錯誤")
-    }
-  }
-  const refresh = () => loadManagementPartition(scope, "goals",
+  const refresh = (rebaseEditor = false) => loadManagementPartition(scope, "goals",
     () => api().list({ sessionID, history: "true" }), {
       start: () => setState({ loading: true, fresh: false, readError: "" }),
-      commit: (page) => { setState("page", reconcile(page)); setState("fresh", true) },
-      fail: (error) => setState("readError", message(error)),
+      commit: (page) => {
+        setState("page", reconcile(page))
+        // Only an explicit refresh adopts a new edit base; automatic reads keep the original CAS guard.
+        if (rebaseEditor && state.editingGoalID) {
+          const current = [page.active, ...page.queued].find((goal) => goal?.id === state.editingGoalID)
+          if (current) setState("editingGoalRevision", current.revision)
+        }
+        setState("fresh", true)
+      },
+      fail: (error) => setState("readError", error),
       finish: () => setState("loading", false),
     })
   const mutate = async (action: () => Promise<unknown>, notice: string) => {
@@ -70,10 +77,10 @@ export function SessionGoalControl(props: { sessionID: string; disabled?: boolea
     const result = await runManagementMutation(scope, action, async () => {
       const refreshed = await refresh()
       scope.assert()
-      if (!refreshed) throw new Error(state.readError)
+      if (!refreshed) throw new Error(managementErrorText(state.readError))
     })
     if (!scope.live()) return
-    if (result.status === "failed") setState({ error: message(result.error), fresh: false })
+    if (result.status === "failed") setState({ error: result.error, fresh: false })
     if (result.status === "confirmed" || result.status === "confirmed-refresh-failed") {
       setState("notice", notice + (result.status === "confirmed-refresh-failed"
         ? ui(" Refresh failed; retry only refresh, not the write.", " 刷新失败；请仅重试刷新，不要重复提交。") : ""))
@@ -103,25 +110,28 @@ export function SessionGoalControl(props: { sessionID: string; disabled?: boolea
       ui("Goal objective replaced.", "目标内容已更新。", "目標內容已更新。"),
     )
   }
-  const remove = (goal: Goal) => {
+  const remove = async (goal: Goal) => {
     const prompt = ui(
       "Delete queued goal “" + goal.objective + "”?",
       "删除排队目标“" + goal.objective + "”？",
       "刪除排隊目標「" + goal.objective + "」？",
     )
-    if (!window.confirm(prompt)) return
+    if (!await confirmCurrent(prompt)) return
     void mutate(
-      () => api().deleteQueued(revision(goal)),
+      async () => {
+        await api().deleteQueued(revision(goal))
+        if (state.editingGoalID === goal.id) cancelEdit()
+      },
       ui("Queued goal deleted.", "排队目标已删除。", "排隊目標已刪除。"),
     )
   }
-  const cancel = (goal: Goal) => {
+  const cancel = async (goal: Goal) => {
     const prompt = ui(
       "Cancel goal “" + goal.objective + "”?",
       "取消目标“" + goal.objective + "”？",
       "取消目標「" + goal.objective + "」？",
     )
-    if (!window.confirm(prompt)) return
+    if (!await confirmCurrent(prompt)) return
     void mutate(() => api().cancel(revision(goal)), ui("Goal cancelled.", "目标已取消。", "目標已取消。"))
   }
   const reorder = (goal: Goal, direction: -1 | 1) => {
@@ -148,13 +158,13 @@ export function SessionGoalControl(props: { sessionID: string; disabled?: boolea
         <h2 id="operations-goal-title" class="text-14-medium text-text-strong">
           {c().goalTitle}
         </h2>
-        <Button size="small" variant="ghost" disabled={state.loading || state.saving} onClick={() => void refresh()}>
+        <Button size="small" variant="ghost" disabled={state.loading || state.saving} onClick={() => void refresh(true)}>
           {language.t("controlCenter.m020")}
         </Button>
       </div>
       <p class="text-12-regular text-text-weak">{c().goalDescription}</p>
       <ManagementStatus saving={state.saving} error={state.error} notice={state.notice} />
-      <ManagementStatus loading={state.loading} saving={state.saving} error={state.readError} onRetry={() => void refresh()} />
+      <ManagementStatus loading={state.loading} saving={state.saving} error={state.readError} onRetry={() => void refresh(true)} />
       <TextField
         label={goalText().editLabel}
         multiline

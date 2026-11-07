@@ -178,3 +178,29 @@
     transform: scale(0.98);
   }
 }
+[data-component="dialog"][data-presentation="workspace"] {
+  [data-slot="dialog-container"] {
+    max-width: calc(100vw - 32px);
+    max-height: 80dvh;
+    border-radius: 16px;
+  }
+  &[data-size="normal"] [data-slot="dialog-container"] {
+    width: 480px;
+    height: auto;
+    max-height: 80dvh;
+  }
+  &[data-size="large"] [data-slot="dialog-container"] {
+    width: 720px;
+    max-height: 80dvh;
+  }
+  [data-slot="dialog-body"] {
+    min-height: 0;
+    overflow-y: auto;
+  }
+  [data-slot="dialog-content"] {
+    max-height: 80dvh;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 16px;
+  }
+}

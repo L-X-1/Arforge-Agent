@@ -32,6 +32,16 @@ export const candidateReviewCopy = (locale: Locale) => ({
   dedup: choose(locale, ["Duplicate check", "重复检查", "重複檢查"]),
   retention: choose(locale, ["Retention", "保留策略", "保留策略"]),
   evidence: choose(locale, ["Source evidence", "来源证据", "來源證據"]),
+  noSourceEvidence: choose(locale, [
+    "No source evidence is attached. An explicit approval records your decision; it does not verify an external source.",
+    "未附加来源证据。明确批准会记录你的决定，不代表外部来源已经核验。",
+    "未附加來源證據。明確批准會記錄你的決定，不代表外部來源已經核驗。",
+  ]),
+  sourcePreviewUnavailable: choose(locale, [
+    "Source references only. Content preview is unavailable in this review.",
+    "这里只读展示来源标识，当前审查无法预览来源内容。",
+    "這裡唯讀顯示來源標識，目前審查無法預覽來源內容。",
+  ]),
   approved: choose(locale, [
     "Candidate approved. Review it once more before activation.",
     "候选已批准。激活前请再次确认内容。",

@@ -1,4 +1,5 @@
 import { useFile } from "@/context/file"
+import { createMediaQuery } from "@solid-primitives/media"
 import { FileIcon } from "@arforge-ai/ui/file-icon"
 import "@arforge-ai/ui/v2/file-tree-v2.css"
 import {
@@ -6,6 +7,7 @@ import {
   createMemo,
   createSignal,
   For,
+  on,
   Show,
   splitProps,
   type ComponentProps,
@@ -83,6 +85,8 @@ const FileTreeNodeV2 = (
       data-path={local.node.path}
       data-selected={local.node.path === local.active ? "" : undefined}
       data-ignored={local.node.ignored ? "" : undefined}
+      title={local.node.path}
+      aria-current={local.node.path === local.active ? "true" : undefined}
       classList={{
         ...local.classList,
         [local.class ?? ""]: !!local.class,
@@ -126,7 +130,7 @@ export default function FileTreeV2(props: {
   allowed?: readonly string[]
   kinds?: ReadonlyMap<string, Kind>
   draggable?: boolean
-  onFileClick?: (file: FileNode) => void
+  onFileClick?: (file: FileNode, event?: MouseEvent) => void
   onFileDoubleClick?: (file: FileNode) => void
 }) {
   const file = useFile()
@@ -139,6 +143,8 @@ export default function FileTreeV2(props: {
     if (live()) return flattenLiveFileTreeV2((path) => file.tree.children(path), expanded)
     return flattenFileTreeV2(model()!, expanded)
   })
+  const touch = createMediaQuery("(pointer: coarse)")
+  const rowHeight = () => (touch() ? 44 : 36)
   const [root, setRoot] = createSignal<HTMLDivElement>()
   const [focused, setFocused] = createSignal<string>()
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
@@ -147,7 +153,7 @@ export default function FileTreeV2(props: {
     },
     getScrollElement: () => virtualScrollElement(root()),
     initialRect: { width: 0, height: 600 },
-    estimateSize: () => 28,
+    estimateSize: rowHeight,
     gap: 2,
     overscan: 10,
     get getItemKey() {
@@ -162,6 +168,9 @@ export default function FileTreeV2(props: {
       return [...indexes, index].sort((a, b) => a - b)
     },
   })
+
+  // The virtual geometry must follow the actual hit target, including pointer changes.
+  createEffect(on(rowHeight, () => virtualizer.measure(), { defer: true }))
 
   createEffect(() => {
     if (!live()) return
@@ -189,12 +198,19 @@ export default function FileTreeV2(props: {
     })
   })
 
-  const selectFile = (node: FileTreeV2Node, action?: (file: FileNode) => void) => {
-    action?.({
-      ...node,
-      path: node.originalPath,
-      absolute: node.originalPath,
-    })
+  const selectFile = (
+    node: FileTreeV2Node,
+    action?: (file: FileNode, event?: MouseEvent) => void,
+    event?: MouseEvent,
+  ) => {
+    action?.(
+      {
+        ...node,
+        path: node.originalPath,
+        absolute: node.originalPath,
+      },
+      event,
+    )
   }
 
   const toggleDirectory = (path: string, originalPath: string) => {
@@ -217,7 +233,11 @@ export default function FileTreeV2(props: {
       data-component="file-tree-v2"
       data-total-rows={live() ? rows().length : model()!.total}
       class="group/file-tree-v2"
-      style={{ position: "relative", height: `${virtualizer.getTotalSize()}px` }}
+      style={{
+        position: "relative",
+        height: `${virtualizer.getTotalSize()}px`,
+        "--file-tree-row-size": `${rowHeight()}px`,
+      }}
     >
       <For each={virtualRowKeys()}>
         {(key) => (
@@ -249,7 +269,7 @@ export default function FileTreeV2(props: {
                           class="relative"
                           onFocus={() => setFocused(row().node.path)}
                           onBlur={() => setFocused(undefined)}
-                          onClick={() => selectFile(row().node, props.onFileClick)}
+                          onClick={(event: MouseEvent) => selectFile(row().node, props.onFileClick, event)}
                           onDblClick={() => selectFile(row().node, props.onFileDoubleClick)}
                         >
                           <GuideLines level={row().level} />

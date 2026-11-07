@@ -29,6 +29,21 @@ export function createPromptInputV2Store(input: PromptInputV2StoreInput) {
     get state() {
       return store()
     },
+    capture() {
+      // Resolve both halves now: an async attachment must never follow the active tab.
+      const captured = store()
+      const setCaptured = setStore()
+      return {
+        current: () => captured.prompt,
+        cursor: () => captured.cursor,
+        set(prompt: PromptInputV2Prompt, cursor?: number) {
+          batch(() => {
+            setCaptured("prompt", prompt)
+            if (cursor !== undefined) setCaptured("cursor", cursor)
+          })
+        },
+      }
+    },
     setPrompt(prompt: PromptInputV2Prompt, cursor?: number) {
       batch(() => {
         setStore()("prompt", prompt)

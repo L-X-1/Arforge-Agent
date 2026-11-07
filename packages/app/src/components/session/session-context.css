@@ -1,0 +1,32 @@
+.arforge-context-panel { padding: 16px 16px 32px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.arforge-context-section { border: 1px solid var(--v2-border-border-base, var(--border-base)); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.arforge-context-section h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--v2-text-text-strong, var(--text-strong)); }
+.arforge-context-note { margin: 0; font-size: 12px; line-height: 1.65; color: var(--v2-text-text-muted, var(--text-weak)); overflow-wrap: anywhere; }
+.arforge-context-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
+.arforge-context-fact { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.arforge-context-fact > span { color: var(--v2-text-text-muted, var(--text-weak)); }
+.arforge-context-fact > strong { font-weight: 500; color: var(--v2-text-text-strong, var(--text-strong)); }
+.arforge-context-panel [data-slot="context-stat"] { min-width: 0; overflow-wrap: anywhere; }
+.arforge-context-source { display: grid; gap: 8px; min-width: 0; }
+.arforge-context-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.arforge-context-action { min-height: 36px; padding: 6px 12px; border: 1px solid var(--v2-border-border-base, var(--border-base)); border-radius: 8px; font-size: 12px; background: var(--v2-background-bg-layer-01, var(--surface-base)); color: var(--v2-text-text-base, var(--text-base)); }
+.arforge-context-action:disabled { opacity: .5; cursor: not-allowed; }
+.arforge-context-action:focus-visible { outline: 2px solid var(--v2-border-border-selected, var(--border-strong)); outline-offset: 2px; }
+.arforge-context-candidates { max-height: 240px; overflow: auto; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.arforge-context-candidates li { min-height: 44px; padding: 8px 0; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--v2-border-border-base, var(--border-base)); font-size: 12px; overflow-wrap: anywhere; }
+.arforge-context-input-json { min-width: 0; font-size: 12px; line-height: 1.65; }
+.arforge-context-input-json summary { cursor: pointer; min-height: 36px; }
+.arforge-context-input-json pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.arforge-context-tooltip { width: min(340px, calc(100vw - 48px)); display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.arforge-context-tooltip [data-context-value] { white-space: normal; overflow-wrap: anywhere; }
+.arforge-context-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.arforge-context-summary-grid [data-slot="context-stat"] { padding: 16px; border: 1px solid var(--v2-border-border-base, var(--border-base)); border-radius: 10px; background: var(--v2-background-bg-layer-01, var(--surface-base)); }
+.arforge-context-summary-grid [data-slot="context-stat"] > div:last-child { font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.4; }
+.arforge-context-owner-budget { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
+.arforge-context-accounting-detail > summary { min-height: 36px; cursor: pointer; }
+.arforge-context-accounting-detail > summary h2 { display: inline; margin-inline-start: 6px; }
+.arforge-context-accounting-detail > summary:focus-visible { outline: 2px solid var(--v2-border-border-selected, var(--border-strong)); outline-offset: 4px; border-radius: 4px; }
+.arforge-context-accounting-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; margin-top: 12px; }
+@container (min-width: 32rem) { .arforge-context-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (min-width: 44rem) { .arforge-context-owner-budget { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 24rem) { .arforge-context-grid { grid-template-columns: minmax(0, 1fr); } }

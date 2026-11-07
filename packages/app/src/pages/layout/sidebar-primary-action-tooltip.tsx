@@ -51,6 +51,7 @@ export function SidebarPrimaryActionTooltip(props: ParentProps<{ value: string }
     <div ref={overflow.ref} data-sidebar-primary-action-tooltip>
       <TooltipV2
         value={props.value}
+        openDelay={400}
         inactive={!overflow.truncated()}
         placement="right"
         flip

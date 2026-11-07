@@ -5,9 +5,13 @@ import { app } from "electron"
 import { checkHealth } from "../server"
 import { type WslCommandLine, resolveWslArforge, shellEscape, wslArgs } from "./runtime"
 import { pollWslHealth } from "./startup"
+import { createOwnedProcessStop } from "../lifecycle"
 
 export type WslSidecar = {
-  listener: { stop: () => void; onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void }
+  listener: {
+    stop: () => Promise<void>
+    onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void
+  }
   url: string
   username: string | null
   password: string
@@ -41,6 +45,23 @@ export async function spawnWslSidecar(
     windowsHide: true,
   })
   child.stdin.end(script)
+  let exited = false
+  const closed = new Promise<void>((resolve) =>
+    child.once("exit", () => {
+      exited = true
+      resolve()
+    }),
+  )
+  const stop = createOwnedProcessStop({
+    exited: () => exited,
+    exit: closed,
+    requestStop: () => {
+      child.kill()
+    },
+    kill: () => {
+      child.kill("SIGKILL")
+    },
+  })
 
   const recentOutput: string[] = []
   const emit = (line: WslCommandLine) => {
@@ -58,7 +79,7 @@ export async function spawnWslSidecar(
   })
   const url = `http://127.0.0.1:${port}`
   const startup = new AbortController()
-  const health = pollWslHealth(() => checkHealth(url, password), startup.signal)
+  const health = pollWslHealth(() => checkHealth(url, username, password), startup.signal)
   const timeoutMs = opts.healthTimeoutMs ?? 30_000
   let timeout: ReturnType<typeof setTimeout>
   const timedOut = new Promise<never>(
@@ -70,8 +91,8 @@ export async function spawnWslSidecar(
   )
 
   await Promise.race([health, exit, timedOut])
-    .catch((error) => {
-      child.kill()
+    .catch(async (error) => {
+      await stop()
       throw error
     })
     .finally(() => {
@@ -80,7 +101,7 @@ export async function spawnWslSidecar(
     })
   return {
     listener: {
-      stop: () => child.kill(),
+      stop,
       onExit: (cb) => child.once("exit", cb),
     },
     url,

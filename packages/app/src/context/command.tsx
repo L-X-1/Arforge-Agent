@@ -378,6 +378,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
 
     const run = (id: string, source?: CommandSource) => {
       const option = optionMap().get(id)
+      if (option?.disabled) return
       option?.onSelect?.(source)
     }
 
@@ -386,6 +387,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
       if (suspended() || dialog.active) return
 
       const sig = signatureFromEvent(event)

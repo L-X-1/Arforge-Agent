@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test"
 import { base64Encode } from "@arforge-ai/core/util/encode"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 import { officeFixture } from "../../fixtures/office-documents"
 
@@ -53,6 +54,7 @@ async function setup(page: Page, fileName: string) {
   }, { directory, server, sessionID })
   await page.goto("/server/" + base64Encode(server) + "/session/" + sessionID)
   await expectSessionTitle(page, "Workbench V2 test")
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: fileName, exact: true }).click()

@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import path from "node:path"
 import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
@@ -19,7 +20,7 @@ import { Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
-const directory = AbsolutePath.make("C:/workspaces/personal-workspace-core")
+const directory = AbsolutePath.make(path.resolve("C:/workspaces/personal-workspace-core"))
 const sessionID = SessionV2.ID.make("ses_personal_workspace_authorization")
 const current = Layer.succeed(
   Location.Service,
@@ -53,6 +54,54 @@ const budget = AgentRuntime.Budget.make({
 })
 
 describe("PersonalWorkspaceV2", () => {
+  it.effect("retains global-project history with authoritative per-parent sources and explicit inspectability", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: directory, sandboxes: [] }).run().pipe(Effect.orDie)
+      const foreign = AbsolutePath.make(path.resolve("D:/workspaces/personal-workspace-history"))
+      const fixtures = [
+        { name: "current", sessionDirectory: directory, project: Project.ID.global, location: directory },
+        { name: "foreign", sessionDirectory: foreign, project: Project.ID.global, location: foreign },
+        { name: "legacy", sessionDirectory: directory },
+        { name: "partial", sessionDirectory: foreign, project: Project.ID.global },
+        { name: "moved", sessionDirectory: directory, project: Project.ID.global, location: foreign },
+      ]
+      const runs = yield* DurableRun.Service
+      const ids = new Map<string, AgentRuntime.RunID>()
+      for (const fixture of fixtures) {
+        const id = SessionV2.ID.make(`ses_personal_workspace_source_${fixture.name}`)
+        yield* db.insert(SessionTable).values({
+          id, project_id: Project.ID.global, slug: fixture.name, directory: fixture.sessionDirectory,
+          title: fixture.name, version: "test",
+        }).run().pipe(Effect.orDie)
+        const created = yield* runs.create({
+          sessionID: id, project: fixture.project, location: fixture.location,
+          initiator: "user", authority: "human", riskTier: "L0", budget,
+          reasonSummary: "PRIVATE_REASON_NOT_A_SOURCE_LABEL", visibility: "details",
+          traceID: `trace-personal-workspace-source-${fixture.name}`,
+        })
+        ids.set(fixture.name, created.run.id)
+      }
+      const snapshot = yield* (yield* PersonalWorkspaceV2.Service).snapshot({ limit: 10 })
+      expect(snapshot.runs).toHaveLength(5)
+      for (const [name, source] of [
+        ["current", { inspectability: "current", projectID: Project.ID.global, directory }],
+        ["foreign", { inspectability: "requires-navigation", projectID: Project.ID.global, directory: foreign }],
+        ["legacy", { inspectability: "missing-binding" }],
+        ["partial", { inspectability: "missing-binding", projectID: Project.ID.global }],
+        ["moved", { inspectability: "session-moved", projectID: Project.ID.global, directory: foreign }],
+      ] as const) {
+        expect(snapshot.runs).toContainEqual(expect.objectContaining({ runID: ids.get(name), source }))
+      }
+      expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_REASON_NOT_A_SOURCE_LABEL")
+      // Projection never repairs old durable history with the currently selected directory.
+      const legacy = yield* runs.load(ids.get("legacy")!)
+      if (!("sessionID" in legacy.run)) throw new Error("Expected a historical SessionRun")
+      expect(legacy.run.project).toBeUndefined()
+      expect(legacy.run.location).toBeUndefined()
+    }),
+  )
+
   it.effect("projects a run awaiting authorization as explicit human attention", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

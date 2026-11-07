@@ -1,24 +1,35 @@
-import { reasoningLevel } from "@arforge-ai/core/reasoning-profile"
+import { chooserVariantGroups } from "../dialog-select-model-presentation"
+import { chooserVariantLabel } from "../dialog-select-model-copy"
 
 export type ReasoningControlOption = {
   id: string
-  level: "default" | "high" | "max"
+  value: string | undefined
   label: string
 }
 
-export function reasoningControlOptions(variants: readonly string[]): ReasoningControlOption[] {
-  const pick = (level: "high" | "max") => variants.find((variant) => reasoningLevel(variant) === level)
-  const high = pick("high")
-  const max = pick("max")
-  return [option("default", "default"), ...(high ? [option(high, "high")] : []), ...(max ? [option(max, "max")] : [])]
+export function reasoningControlKey(value: string | undefined) {
+  return value === undefined ? "reset" : JSON.stringify(["variant", value])
 }
 
-export function deprecatedReasoningVariant(variant: string | undefined) {
+export function reasoningControlOptions(
+  variants: readonly string[],
+  metadata?: Record<string, unknown>,
+  locale = "en",
+): ReasoningControlOption[] {
+  const groups = chooserVariantGroups(variants, metadata)
+  return [groups.reset, ...groups.reasoning, ...groups.other].map((item) => ({
+    id: item.key,
+    value: item.value,
+    label: chooserVariantLabel(
+      item.value,
+      locale,
+      groups.reasoning.some((entry) => entry.key === item.key),
+      item.value === undefined ? undefined : metadata?.[item.value],
+    ),
+  }))
+}
+
+export function deprecatedReasoningVariant(variant: string | undefined, supported: readonly string[] = []) {
   if (!variant) return false
-  return /^(?:none|off|low|medium|med|minimal)$/i.test(variant.trim())
-}
-
-function option(id: string, level: ReasoningControlOption["level"]): ReasoningControlOption {
-  const name = level === "default" ? "Default" : level === "high" ? "High" : "Max"
-  return { id, level, label: name }
+  return !supported.includes(variant) && /^(?:none|off|low|medium|med|minimal)$/i.test(variant.trim())
 }

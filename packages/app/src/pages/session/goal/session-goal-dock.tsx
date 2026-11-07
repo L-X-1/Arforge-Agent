@@ -1,7 +1,9 @@
+import { useConfirmAction } from "@/components/confirm-action"
 import { ButtonV2 } from "@arforge-ai/ui/v2/button-v2"
 import { Icon } from "@arforge-ai/ui/icon"
 import { Show, createComputed, createEffect, createMemo, createSignal, on, onCleanup, type Accessor } from "solid-js"
 import { useLanguage } from "@/context/language"
+import { useServerSDK } from "@/context/server-sdk"
 import type { SessionGoal, SessionGoalController } from "./session-goal-controller"
 import { useSessionGoalText } from "./session-goal-text"
 
@@ -35,6 +37,8 @@ export function createSessionGoalDockViewState(goal: Accessor<GoalDockIdentity |
 }
 
 export function SessionGoalDock(props: { controller: SessionGoalController }) {
+  const confirmAction = useConfirmAction()
+  const serverSDK = useServerSDK()
   const language = useLanguage()
   const text = useSessionGoalText()
   const [now, setNow] = createSignal(Date.now())
@@ -94,9 +98,13 @@ export function SessionGoalDock(props: { controller: SessionGoalController }) {
   const cancel = async () => {
     const current = goal()
     if (!current) return
-    if (!window.confirm(text().cancelConfirm.replace("{{objective}}", current.objective))) return
+    const controller = props.controller
+    const source = serverSDK()
+    const revision = current.revision
+    if (!await confirmAction(text().cancelConfirm.replace("{{objective}}", current.objective), { isCurrent: () => serverSDK() === source && props.controller === controller && goal()?.id === current.id && goal()?.revision === revision })) return
+    if (serverSDK() !== source || props.controller !== controller || goal()?.id !== current.id || goal()?.revision !== revision) return
     try {
-      await props.controller.cancel(current)
+      await controller.cancel(current)
     } catch {
       // The controller owns user-facing error reporting.
     }

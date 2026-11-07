@@ -1,3 +1,6 @@
+import { ManagementTasks, type ManagementTask } from "./management-tasks"
+import { ManagementStatus } from "../settings-v2/management-status"
+import { useLanguage } from "@/context/language"
 import { useControlCenterText } from "@/components/control-center/control-center-text"
 import { Button } from "@arforge-ai/ui/button"
 import { TextField } from "@arforge-ai/ui/text-field"
@@ -22,6 +25,7 @@ export function AgentExtensionInsights(props: {
   ready: () => boolean
 }) {
   const t = useControlCenterText()
+  const language = useLanguage()
   const [state, setState] = createStore({
     loading: false,
     error: "",
@@ -136,34 +140,20 @@ export function AgentExtensionInsights(props: {
       },
     ),
   )
-  return (
-    <section
-      class="flex flex-col gap-4 rounded-lg border border-border-weak-base p-4"
-      data-testid="agent-extension-insights"
-      aria-busy={state.loading}
-    >
-      <header>
-        <h2 class="text-14-medium text-text-strong">{t("Agent \u6269\u5C55\u8BED\u4E49\u5C42")}</h2>
-        <p class="mt-1 text-12-regular text-text-weak">
-          {t(
-            "Skill \u5185\u5BB9\u4E0E\u8DEF\u7531\u3001\u81EA\u5B9A\u4E49\u547D\u4EE4\u4EE5\u53CA Workflow \u4E8B\u4EF6\u5747\u7ECF\u8FC7 typed Server API\uFF1B\u8FD9\u91CC\u4E0D\u4F1A\u66B4\u9732\u539F\u59CB Bridge \u8C03\u7528\u5668\u3002",
-          )}
-        </p>
-      </header>
-
-      <Show when={state.error}>
-        <div role="alert" class="rounded-md border border-border-danger p-3 text-12-regular text-text-danger">
-          {state.error}
-        </div>
-      </Show>
-      <Show when={state.notice}>
-        <div role="status" class="rounded-md border border-border-weak-base p-3 text-12-regular text-text-weak">
-          {state.notice}
-        </div>
-      </Show>
-
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+  const taskCopy = () =>
+    language.locale().startsWith("zh")
+      ? { loaded: "已读取当前来源的结果", readonly: "只读查询与预览；保留原权限与来源" }
+      : {
+          loaded: "Results from the current source",
+          readonly: "Read-only query and preview; existing permission and source rules apply",
+        }
+  const tasks: ManagementTask[] = [
+    {
+      id: "read-skill",
+      title: () => t("读取 Skill"),
+      description: () => (state.skill ? taskCopy().loaded : taskCopy().readonly),
+      render: () => (
+        <div class="arforge-management-task-form">
           <h3 class="text-13-medium text-text-strong">{t("\u8BFB\u53D6 Skill")}</h3>
           <TextField
             label={t("Skill ID")}
@@ -191,8 +181,14 @@ export function AgentExtensionInsights(props: {
             )}
           </Show>
         </div>
-
-        <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+      ),
+    },
+    {
+      id: "route-skills",
+      title: () => t("Skill 路由预览"),
+      description: () => (state.route ? taskCopy().loaded : taskCopy().readonly),
+      render: () => (
+        <div class="arforge-management-task-form">
           <h3 class="text-13-medium text-text-strong">{t("Skill \u8DEF\u7531\u9884\u89C8")}</h3>
           <textarea
             class="min-h-24 resize-y rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular text-text-strong"
@@ -214,8 +210,14 @@ export function AgentExtensionInsights(props: {
           </div>
           <Show when={state.route}>{(value) => <JsonPreview value={value()} />}</Show>
         </div>
-
-        <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+      ),
+    },
+    {
+      id: "commands",
+      title: () => t("自定义命令 / Hook"),
+      description: () => (state.customizations ? taskCopy().loaded : taskCopy().readonly),
+      render: () => (
+        <div class="arforge-management-task-form">
           <div class="flex items-center justify-between gap-3">
             <h3 class="text-13-medium text-text-strong">{t("\u81EA\u5B9A\u4E49\u547D\u4EE4 / Hook")}</h3>
             <Button size="small" variant="ghost" disabled={state.loading} onClick={loadCustomizations}>
@@ -271,8 +273,14 @@ export function AgentExtensionInsights(props: {
             </pre>
           </Show>
         </div>
-
-        <div class="flex flex-col gap-3 rounded-md border border-border-weak-base p-3">
+      ),
+    },
+    {
+      id: "workflow-events",
+      title: () => t("Workflow 事件"),
+      description: () => (state.workflowEvents ? taskCopy().loaded : taskCopy().readonly),
+      render: () => (
+        <div class="arforge-management-task-form">
           <h3 class="text-13-medium text-text-strong">{t("Workflow \u4E8B\u4EF6")}</h3>
           <TextField
             label={t("Workflow Run ID")}
@@ -292,16 +300,33 @@ export function AgentExtensionInsights(props: {
           </div>
           <Show when={state.workflowEvents}>{(value) => <JsonPreview value={value()} />}</Show>
         </div>
-      </div>
+      ),
+    },
+  ]
+  return (
+    <section class="flex flex-col gap-4" data-testid="agent-extension-insights" aria-busy={state.loading}>
+      <ManagementStatus
+        loading={state.loading}
+        initialLoading={!state.customizations}
+        error={state.error}
+        notice={state.notice}
+      />
+      <ManagementTasks
+        label={t("Agent 扩展语义层")}
+        scope={locationScopeKey()}
+        scopeLabel={props.location().location.directory}
+        tasks={tasks}
+      />
     </section>
   )
 }
 function JsonPreview(props: { value: unknown }) {
-  const t = useControlCenterText()
+  const language = useLanguage()
   return (
-    <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-background-stronger p-3 text-11-regular">
-      {JSON.stringify(props.value, null, 2)}
-    </pre>
+    <details class="arforge-management-raw-details">
+      <summary>{language.t("controlApproval.technicalDetails")}</summary>
+      <pre>{JSON.stringify(props.value, null, 2)}</pre>
+    </details>
   )
 }
 function skillContent(value: SkillRead) {

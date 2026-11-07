@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseCustomAgentAdmission } from "./custom-agent-admission-presentation"
+import { parseCustomAgentAdmission, parseCustomAgentAdmissionSection } from "./custom-agent-admission-presentation"
 
 const admitted = {
   schema_version: 1,
@@ -25,6 +25,21 @@ const admitted = {
 }
 
 describe("custom-agent admission presentation", () => {
+  test("reads the real section envelope independently of builtin role items", () => {
+    const section = {
+      count: 1,
+      items: [{ role: "builtin-reviewer", system_prompt: "private role payload" }],
+      custom_agents: { ...admitted, errors: [{ file: "broken-profile.json", error: "Invalid JSON" }] },
+    }
+    const result = parseCustomAgentAdmissionSection(section)
+    expect(result?.items[0]?.role).toBe("CustomAgent.review")
+    expect(result?.errors).toEqual([{ file: "broken-profile.json", error: "Invalid JSON" }])
+    expect(JSON.stringify(result)).not.toContain("private role payload")
+    for (const malformed of [null, "bad", [], { custom_agents: null }, { items: [] }]) {
+      expect(parseCustomAgentAdmissionSection(malformed)).toBeUndefined()
+    }
+  })
+
   test("keeps the bounded, payload-free receipt projection", () => {
     expect(parseCustomAgentAdmission(admitted)).toEqual({
       schema_version: 1,

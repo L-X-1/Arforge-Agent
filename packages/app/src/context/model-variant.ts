@@ -18,6 +18,26 @@ type VariantInput = {
   configured: string | undefined
 }
 
+/** Restore an unselected preset when editing its existing queued model. */
+export function queuedVariantRestore(input: {
+  queued: AgentModel & { variant?: string }
+  current: AgentModel | undefined
+  currentVariant: string | undefined
+  supported: readonly string[]
+  explicit: boolean
+}): { status: "unchanged" } | { status: "restore" | "retain"; variant: string } {
+  if (
+    !input.queued.variant ||
+    input.current?.providerID !== input.queued.providerID ||
+    input.current.modelID !== input.queued.modelID ||
+    input.currentVariant !== undefined ||
+    input.explicit
+  )
+    return { status: "unchanged" }
+  if (!input.supported.includes(input.queued.variant)) return { status: "retain", variant: input.queued.variant }
+  return { status: "restore", variant: input.queued.variant }
+}
+
 export function getConfiguredAgentVariant(input: { agent: Agent | undefined; model: Model | undefined }) {
   if (!input.agent?.variant) return undefined
   if (!input.agent.model) return undefined

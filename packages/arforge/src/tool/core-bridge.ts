@@ -4,6 +4,10 @@ import { Plugin } from "@/plugin"
 import { permissionPreflight } from "@/session/legacy-tool-authorization"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
+import { MCP } from "@/mcp"
+import { McpResourceProjection } from "@/mcp/resource-projection"
+import { Truncate } from "@/tool/truncate"
+import { resourceToolName } from "@arforge-ai/core/session/runner/resource-attachments"
 import { Tool as MatureTool } from "@/tool/tool"
 import { ToolRegistry as MatureToolRegistry } from "@/tool/registry"
 import type { TaskExecutionContext, TaskNativeParent, TaskPromptOps, TaskRuntimeValue } from "@/tool/task"
@@ -588,6 +592,8 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const plugin = yield* Plugin.Service
+    const mcp = yield* MCP.Service
+    const truncate = yield* Truncate.Service
 
     const snapshot: Interface["snapshot"] = Effect.fn("ToolCoreBridge.snapshot")(function* (input) {
       const session = yield* sessions.get(SessionID.make(String(input.sessionID))).pipe(Effect.orDie)
@@ -618,6 +624,36 @@ const layer = Layer.effect(
           worktree: instance.worktree,
         })
       }
+      if (input.resources?.length && mcp.capabilities) {
+        const capabilities = yield* mcp.capabilities()
+        for (const reference of input.resources) {
+          const capability = capabilities.find(
+            (entry) =>
+              entry.kind === "resource" && entry.server === reference.server && entry.reference === reference.uri,
+          )
+          if (!capability || capability.reference === undefined) continue
+          const key = resourceToolName(reference)
+          canonical[key] = adaptExternalTool(
+            McpResourceProjection.makeResource({
+              key,
+              capabilityID: capability.id,
+              server: capability.server,
+              generation: capability.generation,
+              entry: {
+                name: capability.name,
+                uri: capability.reference,
+                client: capability.server,
+                generation: capability.generation,
+              },
+              mcp,
+              plugin,
+              agents,
+              truncate,
+            }),
+            { plugin, directory: instance.directory, worktree: instance.worktree },
+          )
+        }
+      }
       return canonical
     })
 
@@ -628,7 +664,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [MatureToolRegistry.node, Session.node, Agent.node, Plugin.node],
+  deps: [MatureToolRegistry.node, Session.node, Agent.node, Plugin.node, MCP.node, Truncate.node],
 })
 
 export * as ToolCoreBridge from "./core-bridge"

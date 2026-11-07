@@ -1,5 +1,6 @@
 import { Project } from "@/project/project"
 import { ProjectV2 } from "@arforge-ai/core/project"
+import { LocationQuery, locationQueryOpenApi } from "@arforge-ai/protocol/groups/location"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { ProjectNotFoundError } from "../errors"
@@ -81,6 +82,22 @@ export const ProjectApi = HttpApi.make("project")
         }),
       )
       .middleware(InstanceContextMiddleware)
+      .middleware(WorkspaceRoutingMiddleware)
+      .middleware(Authorization),
+  )
+  .add(
+    HttpApiGroup.make("projectMetadata")
+      .add(
+        HttpApiEndpoint.patch("update", "/api/project/:projectID", {
+          params: { projectID: ProjectV2.ID },
+          query: Schema.Struct({ ...LocationQuery.fields, ...WorkspaceRoutingQuery.fields }),
+          payload: Project.UpdatePayload,
+          success: Project.Info,
+          error: [HttpApiError.BadRequest, ProjectNotFoundError],
+        })
+          .annotateMerge(locationQueryOpenApi)
+          .annotateMerge(OpenApi.annotations({ identifier: "v2.project.update", summary: "Update project metadata" })),
+      )
       .middleware(WorkspaceRoutingMiddleware)
       .middleware(Authorization),
   )

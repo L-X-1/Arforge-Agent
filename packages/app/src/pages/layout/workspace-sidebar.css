@@ -1,5 +1,5 @@
 [data-component="workspace-sidebar"] {
-  max-width: min(40vw, 480px);
+  max-width: var(--workspace-sidebar-max-width, none);
   color: var(--v2-text-text-base);
   border-right: 1px solid var(--v2-border-border-muted);
 }
@@ -59,13 +59,27 @@
 }
 
 .workspace-sidebar__projects { padding: 0 6px 8px; overflow-y: auto; }
-.workspace-sidebar__projects [data-component="home-project-row"] {
-  padding-right: 56px;
-  gap: 8px;
-  border-radius: 8px;
-  font-size: 12px;
+.workspace-sidebar__project-header {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
-.workspace-sidebar__projects [data-component="project-avatar-v2"] { width: 26px; height: 26px; }
+.workspace-sidebar__project-header [data-component="home-project-row"] {
+  flex: 1 1 0;
+  gap: 6px;
+  min-height: 36px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.workspace-sidebar__project-header [data-project-disclosure] { flex-shrink: 0; }
+.workspace-sidebar__project-actions { display: flex; flex-shrink: 0; gap: 2px; }
+.workspace-sidebar__project-actions [data-component="icon-button-v2"] {
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+.workspace-sidebar__project-actions [data-action="home-project-new-session"] { color: var(--v2-text-text-base); }
 .workspace-sidebar__projects [data-slot="home-projects-scroll"] { overflow: visible; }
 
 .workspace-sidebar__utilities {
@@ -129,7 +143,7 @@
 
 [data-component="workspace-sidebar"] :is(button, [role="separator"]):focus-visible {
   outline: 2px solid var(--v2-border-border-focus);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
 .workspace-sidebar__action[aria-current="page"],
@@ -157,7 +171,13 @@
 }
 
 .workspace-sidebar__session-row { display: flex; align-items: center; position: relative; min-width: 0; }
-.workspace-sidebar__session-row .workspace-sidebar__session { padding-right: 32px; font-size: 12px; }
+.workspace-sidebar__session-row:has(.workspace-sidebar__session-actions) .workspace-sidebar__session { padding-right: 32px; }
+.workspace-sidebar__draft { padding-inline-start: 30px; }
+.workspace-sidebar__project-empty {
+  padding: 4px 10px 4px 30px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px;
+}
 .workspace-sidebar__session-actions {
   position: absolute;
   right: 0;
@@ -224,10 +244,11 @@
   .workspace-sidebar__session-actions { opacity: 1; }
   [data-component="workspace-sidebar"] .hover-reveal { opacity: 1; pointer-events: auto; }
   [data-component="workspace-sidebar"] :is(button, .workspace-sidebar__action, .workspace-sidebar__session) { min-height: 44px; }
-  [data-component="workspace-sidebar"] [data-action="home-project-menu"],
-  [data-component="workspace-sidebar"] [data-action="home-project-new-session"] { min-width: 36px; }
+  .workspace-sidebar__project-header,
+  .workspace-sidebar__project-actions { gap: 4px; }
+  .workspace-sidebar__project-actions [data-component="icon-button-v2"] { min-width: 44px; }
   .workspace-sidebar__search { min-height: 44px; }
-  .workspace-sidebar__session-row .workspace-sidebar__session { padding-right: 44px; }
+  .workspace-sidebar__session-row:has(.workspace-sidebar__session-actions) .workspace-sidebar__session { padding-right: 44px; }
   .workspace-sidebar__session-actions button { min-width: 44px; }
 }
 
@@ -238,3 +259,10 @@
   .workspace-sidebar__status[data-running]::before { animation: none; }
 }
 @keyframes workspace-sidebar-spin { to { transform: rotate(360deg); } }
+
+/* Z01/Z24–Z28: keep navigation quiet and preserve all existing actions. */
+.workspace-sidebar__new-session{background:var(--v2-background-bg-layer-02);color:var(--v2-text-text-base)}
+.workspace-sidebar__session-row,.workspace-sidebar__session{min-height:36px}
+@media(pointer:coarse){.workspace-sidebar__session-actions{opacity:1}.workspace-sidebar__action,.workspace-sidebar__session,.workspace-sidebar__rail-btn{min-height:44px}.workspace-sidebar__session-actions button{min-width:44px;min-height:44px}}
+
+.workspace-sidebar__session-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.workspace-sidebar__session-time{flex:0 0 auto;margin-left:auto;color:var(--v2-text-text-muted);font-size:10px;line-height:16px;white-space:nowrap}

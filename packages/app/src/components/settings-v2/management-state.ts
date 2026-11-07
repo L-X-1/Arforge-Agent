@@ -1,4 +1,18 @@
-export type ManagementState = "loading" | "saving" | "permission" | "conflict" | "error" | "notice" | "empty" | "ready"
+export type ManagementState = "loading" | "refreshing" | "saving" | "permission" | "conflict" | "error" | "partial" | "offline" | "readonly" | "ack" | "notice" | "empty" | "noresults" | "ready"
+
+export type ManagementFeedback = {
+  loading?: boolean
+  refreshing?: boolean
+  saving?: boolean
+  error?: unknown
+  notice?: string
+  empty?: boolean
+  noResults?: boolean
+  partial?: boolean
+  offline?: boolean
+  readOnly?: string
+  acknowledged?: boolean
+}
 
 export function managementErrorText(error: unknown, fallback = "The operation failed.") {
   const message = typeof error === "string" ? error
@@ -13,18 +27,24 @@ export function managementErrorText(error: unknown, fallback = "The operation fa
     .replace(/((?:authorization|api[_-]?key|access[_-]?token|token|client[_-]?secret|secret|password)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|(?:Bearer|Basic)\s+[^\s,;]+|[^\s,;]+)/gi, "$1[redacted]")
 }
 
-export function managementState(input: { loading?: boolean; saving?: boolean; error?: unknown; notice?: string; empty?: boolean }): ManagementState {
+export function managementState(input: ManagementFeedback): ManagementState {
   if (input.error) {
     const error = managementErrorText(input.error)
     const status = typeof input.error === "object" && input.error !== null && "status" in input.error
       ? input.error.status : undefined
     if (status === 401 || status === 403 || /\b(?:401|403|unauthorized|forbidden|permission denied)\b|无权限|权限不足|未授权|無權限|權限不足/i.test(error)) return "permission"
     if (status === 409 || /\b409\b|revision.{0,24}(?:conflict|mismatch|stale)|版本冲突|修订冲突|版本衝突/i.test(error)) return "conflict"
-    return "error"
+    if (input.acknowledged) return "ack"
+    if (input.offline || (input.error instanceof TypeError && /fetch|network|load failed/i.test(error))) return "offline"
+    return input.partial ? "partial" : "error"
   }
   if (input.saving) return "saving"
+  if (input.refreshing) return "refreshing"
   if (input.loading) return "loading"
+  if (input.offline) return "offline"
   if (input.notice) return "notice"
+  if (input.readOnly) return "readonly"
+  if (input.noResults) return "noresults"
   if (input.empty) return "empty"
   return "ready"
 }
@@ -32,13 +52,26 @@ export function managementState(input: { loading?: boolean; saving?: boolean; er
 export function managementCopy(locale: string) {
   if (locale === "zh" || locale === "zht") return {
     loading: "正在加载，请稍候。",
+    refreshing: "正在刷新，已有内容与草稿保留。",
+    lastRead: "上次读取",
+    partial: "部分内容暂时不可用",
+    partialHint: "已取得的内容继续显示；重试只读取当前失败区域。",
+    offline: "连接已断开",
+    offlineHint: "保留最近读取的内容，恢复连接后重新读取。",
+    readOnly: "当前范围为只读",
+    noResults: "没有匹配的结果。",
+    retryRead: "重试读取",
+    ack: "更改已确认，列表暂未更新",
+    ackHint: "只需重新读取，无需重复提交。",
     saving: "正在提交，请勿重复操作。",
     permission: "当前权限不足",
     permissionHint: "请检查当前服务器、工作区和会话的访问权限，然后重试。",
     conflict: "内容已发生变化",
-    conflictHint: "请刷新最新版本并核对后，再提交修改。",
+    conflictHint: "本地输入保留。请读取最新版本并核对后，再提交修改。",
     error: "操作未完成",
     retry: "重试",
+    details: "查看错误详情",
+    refresh: "刷新列表",
     saved: "已保存。",
     empty: "当前没有记录。",
     clearSearch: "清除搜索",
@@ -48,13 +81,26 @@ export function managementCopy(locale: string) {
   }
   return {
     loading: "Loading. Please wait.",
+    refreshing: "Refreshing. Existing content and drafts are retained.",
+    lastRead: "Last read",
+    partial: "Some content is unavailable",
+    partialHint: "Loaded content remains visible. Retry only reads the failed section.",
+    offline: "Connection lost",
+    offlineHint: "Previously read content is retained. Read again after reconnecting.",
+    readOnly: "This scope is read-only",
+    noResults: "No matching results.",
+    retryRead: "Retry read",
+    ack: "Changes confirmed; the list has not refreshed",
+    ackHint: "Read again without repeating the confirmed action.",
     saving: "Submitting. Please wait before trying again.",
     permission: "Access is unavailable",
     permissionHint: "Check access to the current server, workspace, and Session, then retry.",
     conflict: "This record has changed",
-    conflictHint: "Refresh and review the current revision before submitting again.",
+    conflictHint: "Your input is retained. Read and review the current revision before submitting again.",
     error: "The operation did not complete",
     retry: "Retry",
+    details: "View error details",
+    refresh: "Refresh list",
     saved: "Saved.",
     empty: "No records yet.",
     clearSearch: "Clear search",

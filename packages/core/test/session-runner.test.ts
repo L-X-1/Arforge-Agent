@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect } from "bun:test"
+import { createServer } from "node:http"
+import { HttpClientRequest } from "effect/unstable/http"
+import { RequestExecutor } from "@arforge-ai/llm/route"
+import { LearningOutcomeTable, LearningOutcomePatternTable, LearningPatternTable } from "@arforge-ai/core/learning/sql"
+import { publicProviderFailure } from "@arforge-ai/core/session/runner/publish-llm-event"
 import {
   LLMClient,
   LLMError,
@@ -42,6 +47,9 @@ import { SessionOrganization } from "@arforge-ai/core/session/organization"
 import { Prompt, RequestSystem } from "@arforge-ai/core/session/prompt"
 import { SessionProjector } from "@arforge-ai/core/session/projector"
 import { SessionExecution } from "@arforge-ai/core/session/execution"
+import { reportDrainFailure } from "@arforge-ai/core/session/execution/failure"
+import { EventManifest } from "@arforge-ai/schema/event-manifest"
+import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { SessionRunCoordinator } from "@arforge-ai/core/session/run-coordinator"
 import { SessionRunner } from "@arforge-ai/core/session/runner"
 import {
@@ -95,7 +103,7 @@ import { Billing } from "@arforge-ai/schema/billing"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Schema, Stream } from "effect"
 import { fileURLToPath } from "node:url"
 import * as TestClock from "effect/testing/TestClock"
-import { asc, eq, sql } from "drizzle-orm"
+import { asc, eq, inArray, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const requests: LLMRequest[] = []
@@ -305,6 +313,7 @@ let systemRemoved = false
 let systemUnavailable = false
 let systemLoadHook = Effect.void
 const skillBaselines = new Map<AgentV2.ID, string>()
+const unavailableSkillAgents = new Set<AgentV2.ID>()
 const systemContext = Layer.effectDiscard(
   SystemContextRegistry.Service.pipe(
     Effect.flatMap((registry) =>
@@ -338,11 +347,13 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
   route: () => Effect.succeed(undefined),
   load: (agent) =>
     Effect.succeed(
-      skillBaselines.has(agent.id)
+      skillBaselines.has(agent.id) || unavailableSkillAgents.has(agent.id)
         ? SystemContext.make({
             key: SystemContext.Key.make("test/skill-guidance"),
             codec: Schema.toCodecJson(Schema.String),
-            load: Effect.succeed(skillBaselines.get(agent.id)!),
+            load: Effect.sync(() =>
+              unavailableSkillAgents.has(agent.id) ? SystemContext.unavailable : skillBaselines.get(agent.id)!,
+            ),
             baseline: String,
             update: (_previous, current) => current,
             removed: () => "Skill guidance removed",
@@ -524,6 +535,7 @@ const setup = Effect.gen(function* () {
   currentModel = model
   fallbackModel = undefined
   skillBaselines.clear()
+  unavailableSkillAgents.clear()
   responses = undefined
   streamFailure = undefined
   responseStream = undefined
@@ -1373,6 +1385,112 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const [code, status, tag, attempts] of [
+    ["invalid_api_key", 401, "Authentication", 1],
+    ["insufficient_quota", 429, "QuotaExceeded", 1],
+    ["rate_limit_exceeded", 429, "RateLimit", 3],
+  ] as const) for (const retained of [false, true]) it.live(`provider learning privacy ${tag} ${retained ? "retained" : "fresh"}: real HTTP failure cannot enter recovery request events`, () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const marker = "owned-private-provider-body-learning"
+      const privateHeader = "owned-private-provider-header-learning"
+      const privateToken = "sk-owned-provider-learning-private-1234567890"
+      let calls = 0
+      const server = yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          const listener = createServer((_request, reply) => {
+            calls++
+            reply.writeHead(status, { "content-type": "application/json", "retry-after-ms": "0", "x-owned-private": privateHeader })
+            reply.end(JSON.stringify({ error: { code, message: "Owned provider failure", internal: marker, token: privateToken } }))
+          })
+          await new Promise<void>(done => listener.listen(0, "127.0.0.1", done))
+          return listener
+        }),
+        listener => Effect.promise(async () => {
+          listener.closeAllConnections()
+          await new Promise<void>(done => listener.close(() => done()))
+        }),
+      )
+      const address = server.address()
+      if (!address || typeof address === "string") return yield* Effect.die("Missing owned provider listener")
+      const failure = yield* RequestExecutor.Service.use(executor => executor.execute(HttpClientRequest.post(`http://127.0.0.1:${address.port}/v1/chat/completions`))).pipe(Effect.flip, Effect.provide(RequestExecutor.fetchLayer))
+      expect(failure).toBeInstanceOf(LLMError)
+      expect(failure.reason._tag).toBe(tag)
+      expect(failure.reason.message).toContain(marker)
+      expect(calls).toBe(attempts)
+      const session = yield* SessionV2.Service
+      const learning = yield* LearningV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const text = "Recover the owned provider learning privacy request"
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text }), resume: false })
+      streamFailure = failure
+      const failed = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(Exit.isFailure(failed) && Cause.squash(failed.cause)).toBe(failure)
+      const outcomes = yield* db.select().from(LearningOutcomeTable).where(eq(LearningOutcomeTable.session_id, sessionID)).all()
+      expect(outcomes).toHaveLength(1)
+      const originalOutcome = outcomes[0]
+      let retainedOutcome: typeof originalOutcome | undefined
+      let retainedPatterns: Array<typeof LearningPatternTable.$inferSelect> = []
+      const unrelatedText = "User-owned migration note: preserve this exact non-provider learning text."
+      if (retained) {
+        // Owned in-memory representative of the existing Native14 raw outcome;
+        // only the fixture is changed, never user data or old request archives.
+        yield* db.update(LearningOutcomeTable).set({ error_message: failure.message }).where(eq(LearningOutcomeTable.id, originalOutcome.id)).run()
+        const links = yield* db.select().from(LearningOutcomePatternTable).where(eq(LearningOutcomePatternTable.outcome_id, originalOutcome.id)).all()
+        yield* db.update(LearningPatternTable).set({ description: `Error: ${failure.message.slice(0, 200)} | Input: ${text.slice(0, 100)}` }).where(inArray(LearningPatternTable.id, links.map(link => link.pattern_id))).run()
+        retainedOutcome = yield* db.select().from(LearningOutcomeTable).where(eq(LearningOutcomeTable.id, originalOutcome.id)).get()
+        retainedPatterns = yield* db.select().from(LearningPatternTable).where(inArray(LearningPatternTable.id, links.map(link => link.pattern_id))).all()
+        yield* learning.record({ userInput: text, success: false, errorType: "IntegrityError", errorMessage: unrelatedText, userFeedback: "Keep the user's independent note.", fixStrategy: "Keep this unrelated repair strategy." })
+      }
+      const publishedFailure = yield* db.select().from(EventTable).where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Step.Failed.type, SessionEvent.Step.Failed.durable!.version))).all()
+      expect(publishedFailure).toHaveLength(1)
+      expect(publishedFailure[0]?.data).toMatchObject({ error: { reason: tag, statusCode: status, retryable: tag === "RateLimit" } })
+      const firstPrompt = (yield* session.messages({ sessionID })).find(message => message.type === "user")
+      if (!firstPrompt) return yield* Effect.die("Missing failed original prompt")
+      const target = { sessionID, messageID: firstPrompt.id, expectedDirectory: testProjectDirectory }
+      const preview = yield* session.rewind.preview(target)
+      yield* session.rewind.apply({ ...target, expectedLastSequence: preview.expectedLastSequence, expectedRevision: preview.expectedRevision })
+      streamFailure = undefined
+      response = fragmentFixture("text", "provider-learning-recovered", ["Recovered safely"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text }), resume: false })
+      yield* session.resume(sessionID)
+      const envelopes = yield* db.select().from(EventTable).where(eq(EventTable.type, EventV2.versionedType(SessionEvent.RequestEnvelopePrepared.type, SessionEvent.RequestEnvelopePrepared.durable!.version))).orderBy(asc(EventTable.seq)).all()
+      expect(envelopes).toHaveLength(2)
+      const streamedEnvelopes = yield* events.durable({ aggregateID: sessionID }).pipe(
+        Stream.filter(event => event.type === SessionEvent.RequestEnvelopePrepared.type), Stream.take(2), Stream.runCollect,
+      )
+      expect(streamedEnvelopes).toHaveLength(2)
+      const recovery = parseRequestEnvelopeJson(Schema.decodeUnknownSync(SessionEvent.RequestEnvelopePrepared.data)(envelopes[1].data).envelope)
+      const recoverySystem = recovery.request.system
+      expect(Array.isArray(recoverySystem)).toBe(true)
+      if (!Array.isArray(recoverySystem)) return yield* Effect.die("Recovery system messages were not encoded as an array")
+      expect(recoverySystem.some((part: unknown) => typeof part === "object" && part !== null && "text" in part && typeof part.text === "string" && part.text.includes("Learning System Context"))).toBe(true)
+      // Preserve the real private Cause, but sanitize the learned/public derivative.
+      const readContext = yield* learning.context(text)
+      const publicStatus = yield* learning.status()
+      if (retained) {
+        expect(yield* db.select().from(LearningOutcomeTable).where(eq(LearningOutcomeTable.id, originalOutcome.id)).get()).toEqual(retainedOutcome)
+        expect(yield* db.select().from(LearningPatternTable).where(inArray(LearningPatternTable.id, retainedPatterns.map(pattern => pattern.id))).all()).toEqual(retainedPatterns)
+        expect(readContext).toContain(unrelatedText)
+        expect(readContext).toContain(`HTTP ${status}`)
+        expect(publicStatus.recent.find(outcome => outcome.id === originalOutcome.id)?.errorMessage).toContain(`HTTP ${status}`)
+      } else expect(outcomes[0]?.error_message).toBe(publicProviderFailure(failure).message)
+      for (const privateValue of [marker, privateHeader, privateToken]) {
+        if (!retained) expect(JSON.stringify(outcomes)).not.toContain(privateValue)
+        expect(readContext).not.toContain(privateValue)
+        expect(JSON.stringify(publicStatus)).not.toContain(privateValue)
+        expect(JSON.stringify(envelopes)).not.toContain(privateValue)
+        expect(JSON.stringify(streamedEnvelopes)).not.toContain(privateValue)
+        expect(JSON.stringify(requests.at(-1))).not.toContain(privateValue)
+      }
+      expect(JSON.stringify(recovery.request)).toContain(retained ? `HTTP ${status}` : publicProviderFailure(failure).message)
+      return undefined
+    }),
+  )
+
   it.effect("turns a third repeated failure into a review-only Evolution proposal sync", () =>
     Effect.gen(function* () {
       yield* setup
@@ -1386,7 +1504,9 @@ describe("SessionRunnerLLM", () => {
           userInput: "Retry the unavailable provider",
           success: false,
           errorType: failure.constructor.name,
-          errorMessage: failure.message,
+          // Seed the same public format written by the runner; keep the
+          // three-occurrence review-only proposal threshold unchanged.
+          errorMessage: publicProviderFailure(failure).message,
         })
       const session = yield* SessionV2.Service
       yield* session.prompt({
@@ -3635,6 +3755,83 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("retains routed pending inputs when the newly admitted agent context blocks initialization", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const oldID = SessionMessage.ID.create()
+      const newID = SessionMessage.ID.create()
+      skillBaselines.set(AgentV2.ID.make("build"), "Available build context")
+      skillBaselines.set(AgentV2.ID.make("plan"), "Available plan context")
+      unavailableSkillAgents.add(AgentV2.ID.make("plan"))
+      yield* session.prompt({
+        id: oldID,
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "Old pending input",
+          route: {
+            agent: "build",
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      yield* session.prompt({
+        id: newID,
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "New routed input",
+          route: {
+            agent: "plan",
+            model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      requests.length = 0
+      const before = yield* session.get(sessionID)
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SystemContext.InitializationBlocked)
+      expect(requests).toHaveLength(0)
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(true)
+      expect((yield* SessionInput.listPending(db, sessionID, "steer")).map((input) => String(input.id))).toEqual([
+        String(oldID),
+        String(newID),
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .get(),
+      ).toBeUndefined()
+      const blocked = yield* session.get(sessionID)
+      expect({ agent: blocked.agent, model: blocked.model }).toEqual({ agent: before.agent, model: before.model })
+      expect(yield* session.context(sessionID)).toEqual([])
+
+      unavailableSkillAgents.delete(AgentV2.ID.make("plan"))
+      response = fragmentFixture("text", "text-retried-route", ["Routed answer"]).completeEvents
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(String(requests[0]?.model.id)).toBe("replacement")
+      expect(requests[0].system.map((part) => part.text)).toEqual(["Initial context\n\nAvailable plan context"])
+      expect(userTexts(requests[0])).toEqual(["Old pending input", "New routed input"])
+      const context = yield* session.context(sessionID)
+      expect(context.filter((message) => message.type === "user").map((message) => String(message.id))).toEqual([
+        String(oldID),
+        String(newID),
+      ])
+      expect(context.filter((message) => message.type === "assistant")).toMatchObject([
+        { agent: "plan", model: { id: "replacement" } },
+      ])
+      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(false)
+    }),
+  )
+
   it.effect("interrupts a source Location runner after a Session moves", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3690,6 +3887,88 @@ describe("SessionRunnerLLM", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(ContextSnapshotDecodeError)
       expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("reports a real compile failure after promotion without retrying the fresh input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const events = yield* EventV2.Service
+      const runs = yield* DurableRun.Service
+      const { db } = yield* Database.Service
+      const oldID = SessionMessage.ID.create()
+      const freshID = SessionMessage.ID.create()
+      yield* session.prompt({ id: oldID, sessionID, prompt: Prompt.make({ text: "Completed old turn" }), resume: false })
+      response = fragmentFixture("text", "old-context-answer", ["Old answer"]).completeEvents
+      yield* session.resume(sessionID)
+      currentModel = Model.make({
+        id: "fake-model",
+        provider: "fake",
+        route: OpenAIChat.route.with({ http: { body: { thinking: { type: "enabled" } } } }),
+      })
+      const errors: Array<{ data: unknown; directory?: string; event: EventV2.Payload }> = []
+      const off = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === "session.error") errors.push({ data: event.data, directory: event.location?.directory, event })
+        }),
+      )
+      yield* session.prompt({
+        id: freshID,
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "Fresh routed input",
+          route: {
+            agent: "plan",
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      requests.length = 0
+      const exit = yield* reportDrainFailure(session.resume(sessionID), {
+        sessionID,
+        events,
+        location: { directory: testProjectDirectory },
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBeInstanceOf(LLMError)
+      if (Exit.isFailure(exit))
+        expect(Cause.pretty(exit.cause)).toContain("http.body cannot overlay protocol-owned field(s): thinking")
+      expect(requests).toHaveLength(0)
+      expect(errors).toHaveLength(1)
+      expect(errors[0].directory).toBe(testProjectDirectory)
+      const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+      expect(errors[0].data).toEqual({
+        sessionID,
+        error: { name: "UnknownError", data: { message: failure instanceof Error ? failure.message : undefined } },
+      })
+      // The native SSE route encodes this exact inventory. An error emitted
+      // before Step.Started must survive that transport without an assistant.
+      expect(() => Schema.encodeUnknownSync(SessionV1.Event.Error)(errors[0].event)).not.toThrow()
+      expect(() =>
+        Schema.encodeUnknownSync(Schema.Union(EventManifest.ServerDefinitions))(errors[0].event),
+      ).not.toThrow()
+      const input = yield* SessionInput.find(db, freshID)
+      expect(input?.promotedSeq).toBeDefined()
+      const terminal = yield* runs.list({ sessionID })
+      expect(terminal.map((item) => item.run.status).sort()).toEqual(["completed", "failed"])
+      expect(String((yield* session.get(sessionID)).model?.id)).toBe("fake-model")
+      const context = yield* session.context(sessionID)
+      expect(context.filter((message) => message.type === "user").map((message) => String(message.id))).toEqual([
+        String(oldID),
+        String(freshID),
+      ])
+      expect(context.filter((message) => message.type === "assistant")).toHaveLength(1)
+
+      yield* execution.wakeAndWait(sessionID)
+      expect(yield* SessionInput.find(db, freshID)).toEqual(input)
+      expect((yield* runs.list({ sessionID })).map((item) => ({ id: item.run.id, status: item.run.status }))).toEqual(
+        terminal.map((item) => ({ id: item.run.id, status: item.run.status })),
+      )
+      expect(errors).toHaveLength(1)
+      expect(requests).toHaveLength(0)
+      yield* off
     }),
   )
 
@@ -5467,6 +5746,109 @@ describe("SessionRunnerLLM", () => {
       ])
       expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("Temporary")
       expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("Duplicate continuation")
+    }),
+  )
+
+  it.effect("binds the actual request and agent context after promoting old and new routed steers", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("plan"), (agent) => {
+          agent.system = "Latest admitted plan instructions"
+        }),
+      )
+      yield* session.prompt({
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "Old pending input",
+          route: {
+            agent: "build",
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      yield* session.prompt({
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "New routed input",
+          route: {
+            agent: "plan",
+            model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      requests.length = 0
+      response = fragmentFixture("text", "text-route", ["Routed answer"]).completeEvents
+      yield* session.resume(sessionID)
+      const context = yield* session.context(sessionID)
+      const assistant = context.find((message) => message.type === "assistant")
+      expect({
+        requestModel: String(requests[0]?.model.id),
+        assistantModel: assistant?.type === "assistant" ? String(assistant.model.id) : undefined,
+        agent: assistant?.type === "assistant" ? assistant.agent : undefined,
+      }).toEqual({ requestModel: "replacement", assistantModel: "replacement", agent: "plan" })
+      expect(requests).toHaveLength(1)
+      expect(requests[0].system.map((part) => part.text).join("\n")).toContain("Latest admitted plan instructions")
+      expect(userTexts(requests[0])).toEqual(["Old pending input", "New routed input"])
+      expect(String((yield* session.get(sessionID)).model?.id)).toBe("replacement")
+    }),
+  )
+
+  it.effect("keeps an in-flight model while a newly queued routed input uses its own next model", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        resume: false,
+        prompt: Prompt.make({
+          text: "Current reply",
+          route: {
+            agent: "build",
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-current", ["Current answer"]).completeEvents,
+        fragmentFixture("text", "text-queued", ["Queued answer"]).completeEvents,
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* session.prompt({
+        sessionID,
+        delivery: "queue",
+        resume: false,
+        prompt: Prompt.make({
+          text: "Next routed reply",
+          route: {
+            agent: "plan",
+            model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+          },
+        }),
+      })
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model"])
+      expect(userTexts(requests[0])).toEqual(["Current reply"])
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(run)
+      expect(requests.map((request) => String(request.model.id))).toEqual(["fake-model", "replacement"])
+      expect(userTexts(requests[1])).toEqual(["Current reply", "Next routed reply"])
+      const context = yield* session.context(sessionID)
+      expect(
+        context
+          .filter((message) => message.type === "assistant")
+          .map((message) => ({ model: String(message.model.id), agent: message.agent })),
+      ).toEqual([
+        { model: "fake-model", agent: "build" },
+        { model: "replacement", agent: "plan" },
+      ])
     }),
   )
 

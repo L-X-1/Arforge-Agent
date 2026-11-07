@@ -185,11 +185,11 @@ function MenuV2Content(props: ComponentProps<typeof DropdownMenu.Content>) {
 }
 
 function MenuV2Root(props: ComponentProps<typeof DropdownMenu>) {
-  return <DropdownMenu {...props} />
+  return <DropdownMenu gutter={4} overflowPadding={8} {...props} />
 }
 
 function MenuV2ContextRoot(props: ComponentProps<typeof ContextMenu>) {
-  return <ContextMenu {...props} />
+  return <ContextMenu gutter={4} overflowPadding={8} {...props} />
 }
 
 function MenuV2ContextContent(props: ComponentProps<typeof ContextMenu.Content>) {
@@ -202,6 +202,10 @@ function MenuV2ContextContent(props: ComponentProps<typeof ContextMenu.Content>)
       classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}
     />
   )
+}
+
+function MenuV2SubRoot(props: ComponentProps<typeof DropdownMenu.Sub>) {
+  return <DropdownMenu.Sub gutter={4} overflowPadding={8} {...props} />
 }
 
 const MenuV2Context = Object.assign(MenuV2ContextRoot, {
@@ -221,7 +225,7 @@ export const MenuV2 = Object.assign(MenuV2Root, {
   Group: DropdownMenu.Group,
   GroupLabel: MenuV2GroupLabel,
   Separator: MenuV2Separator,
-  Sub: DropdownMenu.Sub,
+  Sub: MenuV2SubRoot,
   SubTrigger: MenuV2SubTrigger,
   SubContent: MenuV2SubContent,
   Context: MenuV2Context,

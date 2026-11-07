@@ -17,6 +17,8 @@ import type { Tool } from "../../tool/tool"
 import type { RunnerSettlementCollector, RunnerSettlementObserver } from "./history"
 import type { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import type { SubagentChildExecutor } from "../../runtime/subagent-child-executor"
+import type { McpResourceReference } from "@arforge-ai/schema/prompt"
+import type { ResourceAttachmentError } from "./resource-attachments"
 
 export type RunError =
   | LLMError
@@ -37,6 +39,7 @@ export type RunError =
   | TurnToolCarrier.InvalidCarrierError
   | Tool.RegistrationError
   | RunnerInvariants.InvariantError
+  | ResourceAttachmentError
 
 /** Request-scoped external context participates in the existing semantic epoch. */
 export const ExternalContext = Context.Reference<
@@ -81,6 +84,8 @@ export type ExternalToolResolver = (input: {
   readonly agent: string
   readonly modelID: string
   readonly providerID: string
+  /** Exact admitted references; the product adapter binds current mature projections. */
+  readonly resources?: ReadonlyArray<McpResourceReference>
 }) => Effect.Effect<Readonly<Record<string, Tool.AnyTool>>>
 
 export const ExternalTools = Context.Reference<ExternalToolResolver | undefined>(

@@ -1,26 +1,61 @@
-export function workbenchBrowserStartPage(nonce: string): string {
+import { browserStartCopy, browserStartLanguage, browserStartLocales } from "./browser-start-page-copy"
+import type { WorkbenchBrowserAppearance } from "./browser-appearance"
+import { normalizeWorkbenchBrowserUrl } from "@arforge-ai/app/browser-workbench"
+
+function escapeHTML(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;")
+}
+
+function scriptValue(value: unknown) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c")
+}
+
+export function workbenchBrowserStartPage(
+  nonce: string,
+  appearance: WorkbenchBrowserAppearance = { mode: "light", locale: "en" },
+): string {
   if (!/^[a-zA-Z0-9]+$/.test(nonce)) throw new TypeError("Invalid browser start-page nonce")
+  const mode = appearance.mode === "dark" ? "dark" : "light"
+  const locale = browserStartLocales.includes(appearance.locale) ? appearance.locale : "en"
+  const copy = browserStartCopy[locale]
+  const languages = Object.fromEntries(browserStartLocales.map((value) => [value, browserStartLanguage(value)]))
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="${browserStartLanguage(locale)}" dir="${locale === "ar" ? "rtl" : "ltr"}" data-color-scheme="${mode}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'">
 <title>Arforge Browser</title><style>
-:root{color-scheme:light dark;--bg:#f4f5f6;--panel:#fff;--ink:#202328;--muted:#535d68;--line:#ccd2d9;--accent:#1763b5;--error:#aa2537}
-*{box-sizing:border-box}body{margin:0;min-height:100vh;color:var(--ink);font:16px/1.6 "Segoe UI",sans-serif;background:radial-gradient(ellipse at 15% 0%,#e2ebf5,transparent 65%),var(--bg)}
-main{width:min(720px,calc(100% - 48px));margin:12vh auto;padding:32px;border:1px solid var(--line);border-radius:16px;background:var(--panel)}
-.eyebrow{font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}h1{font-size:32px;line-height:1.2;font-weight:600;margin:12px 0 16px}p{color:var(--muted);margin:0 0 24px}label{display:block;font-weight:600;margin-bottom:8px}.row{display:flex;gap:10px}
-input{min-width:0;flex:1;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font:inherit;min-height:46px}button{min-height:46px;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:white;font:inherit;font-weight:600;cursor:pointer}button:hover{filter:brightness(1.1)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-#error{min-height:26px;color:var(--error);margin:10px 0 0}.notes{margin:20px 0 0;padding:18px 0 0;border-top:1px solid var(--line);font-size:14px}.notes p{margin:0 0 8px}
-@media(max-width:500px){main{width:calc(100% - 24px);padding:22px;margin:5vh auto}.row{flex-direction:column}h1{font-size:27px}}
-@media(prefers-color-scheme:dark){:root{--bg:#16191d;--panel:#22262c;--ink:#f2f4f6;--muted:#b7c0ca;--line:#4b555f;--accent:#3279c9;--error:#ff9aab}body{background:radial-gradient(ellipse at 15% 0%,#263441,transparent 65%),var(--bg)}}
+:root{color-scheme:light;--bg:#FAFAF7;--panel:#FFFFFF;--ink:#292B2B;--muted:#6F726A;--line:#DEDED8;--accent:#292B2B;--on-accent:#FFFFFF;--error:#A93838;--wash:#FFFFFF}
+:root[data-color-scheme=dark]{color-scheme:dark;--bg:#1D1F1D;--panel:#252723;--ink:#F3F3ED;--muted:#B2B5AB;--line:#41443C;--accent:#F3F3ED;--on-accent:#252723;--error:#E7A3A0;--wash:#252723}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;min-height:100svh;display:grid;place-items:center;padding:clamp(24px,6vh,64px) 24px;color:var(--ink);font:17px/1.8 "Noto Sans SC","PingFang SC","Microsoft YaHei UI",sans-serif;background:radial-gradient(ellipse at 50% 0%,var(--wash),transparent 70%),var(--bg)}
+main{width:min(720px,100%);padding:32px;border:1px solid var(--line);border-radius:16px;background:var(--panel);box-shadow:0 8px 32px #181A1808}
+.eyebrow{font-size:12px;letter-spacing:.12em;color:var(--muted)}h1{font-size:28px;line-height:1.5;font-weight:500;margin:12px 0}p{color:var(--muted);margin:0 0 24px}label{display:block;font-size:14px;font-weight:500;margin-bottom:8px}.row{display:flex;gap:12px}
+input{min-width:0;flex:1;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;min-height:46px}input::placeholder{color:var(--muted)}button{min-height:46px;padding:10px 20px;border:1px solid transparent;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-weight:500;cursor:pointer}button:hover{opacity:.88}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#error{min-height:26px;color:var(--error);font-size:14px;margin:8px 0 0}.notes{margin:16px 0 0;padding:16px 0 0;border-top:1px solid var(--line);font-size:14px;line-height:1.7}.notes p{margin:0 0 8px}.notes p:last-child{margin-bottom:0}
+@media(max-width:500px){body{padding:16px}main{padding:22px}.row{flex-direction:column}h1{font-size:24px}}
+@media(forced-colors:active){main,input,button{border:1px solid CanvasText}}
 </style></head><body><main>
-<div class="eyebrow">Arforge / Web workspace</div><h1>Isolated browser</h1>
-<p>Browse in a separate, temporary session. Arforge cookies and local files are not shared with this window.</p>
-<form id="address-form"><label for="address">Website address</label><div class="row"><input id="address" type="url" required maxlength="8192" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-describedby="error scope"><button type="submit">Open</button></div><p id="error" role="alert"></p></form>
-<div class="notes" id="scope"><p>Use the Browser menu for Address, Back, Forward and Reload. New origins must be entered here explicitly.</p><p>Permissions, popups, downloads and non-HTTP(S) resources are blocked. Manual browsing only; workbench embedding and AI control are not enabled.</p></div>
+<div class="eyebrow" id="eyebrow">${escapeHTML(copy.eyebrow)}</div><h1 id="browser-title">${escapeHTML(copy.title)}</h1>
+<p id="intro">${escapeHTML(copy.intro)}</p>
+<form id="address-form"><label for="address" id="address-label">${escapeHTML(copy.address)}</label><div class="row"><input id="address" type="text" inputmode="url" dir="ltr" required maxlength="8192" placeholder="https://example.com" autocomplete="off" spellcheck="false" aria-describedby="error scope"><button type="submit" id="open-label">${escapeHTML(copy.open)}</button></div><p id="error" role="alert"></p></form>
+<div class="notes" id="scope"><p id="controls">${escapeHTML(copy.controls)}</p><p id="security">${escapeHTML(copy.security)}</p></div>
 </main><script nonce="${nonce}">
+const copies=${scriptValue(browserStartCopy)};
+const languages=${scriptValue(languages)};
+let currentLocale=${scriptValue(locale)};
+let invalid=false;
+function applyAppearance(next){
+  currentLocale=Object.prototype.hasOwnProperty.call(copies,next.locale)?next.locale:'en';
+  const copy=copies[currentLocale];
+  document.documentElement.lang=languages[currentLocale];
+  document.documentElement.dir=currentLocale==='ar'?'rtl':'ltr';
+  document.documentElement.dataset.colorScheme=next.mode==='dark'?'dark':'light';
+  for(const [id,key] of [['eyebrow','eyebrow'],['browser-title','title'],['intro','intro'],['address-label','address'],['open-label','open'],['controls','controls'],['security','security']])document.getElementById(id).textContent=copy[key];
+  document.getElementById('error').textContent=invalid?copy.invalid:'';
+}
+globalThis.__arforgeBrowserAppearance=applyAppearance;
 const form=document.getElementById('address-form');
-form.addEventListener('submit',event=>{event.preventDefault();const error=document.getElementById('error');try{const url=new URL(document.getElementById('address').value.trim());if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw new Error('Enter an HTTP(S) address without inline credentials.');error.textContent='';location.assign(url.href)}catch(failure){error.textContent=failure.message||'Invalid website address.'}});
+const normalizeAddress=(${normalizeWorkbenchBrowserUrl.toString()});
+form.addEventListener('submit',event=>{event.preventDefault();try{const url=normalizeAddress(document.getElementById('address').value);invalid=false;document.getElementById('error').textContent='';location.assign(url)}catch{invalid=true;document.getElementById('error').textContent=copies[currentLocale].invalid}});
 document.getElementById('address').focus();
 </script></body></html>`
 }

@@ -1,3 +1,4 @@
+import { useConfirmAction, confirmationSnapshot } from "@/components/confirm-action"
 import { bindManagementApi, createManagementScope, loadManagementPartition, managementWriteBlocked, ManagementRefreshFailure, createManagementReadRecovery, runManagementMutation, type ManagementPartition } from "@/components/settings-v2/management-async"
 import { ManagementStatus } from "@/components/settings-v2/management-status"
 import "@/components/settings-v2/management-review.css"
@@ -13,7 +14,10 @@ import type { useSync } from "@/context/sync"
 import type { OperationsApi } from "@/utils/server"
 import { SessionGoalControl } from "./session-goal-control"
 import { SessionPromptQueueControl } from "./session-prompt-queue-control"
+import { SessionWaitSourcesPanel } from "./session-wait-sources-panel"
 import { isMissingTeam } from "./session-operation-boundary"
+import { sessionOperationConfirmation, type SessionConfirmationObject } from "./session-operation-confirmation"
+import { ServerConnection } from "@/context/server"
 import { SessionFeedbackControl } from "./session-feedback-control"
 import { SessionPersonalJobsControl } from "./session-personal-jobs-control"
 import { useSessionOperationsText } from "./session-operations-text"
@@ -30,6 +34,8 @@ type Checkpoint = Awaited<ReturnType<OperationsApi["sessions"]["checkpointList"]
 type RewindPreview = Awaited<ReturnType<OperationsApi["sessions"]["rewindPreview"]>>
 type TriggerProfile = Awaited<ReturnType<OperationsApi["triggers"]["profiles"]>>["items"][number]
 type ActiveWait = Exclude<Awaited<ReturnType<OperationsApi["waits"]["active"]>>, null>
+
+type SessionLocation = Awaited<ReturnType<OperationsApi["sessions"]["get"]>>["location"]
 type TriggerItem = Readonly<Record<string, unknown>>
 
 const sessionSections = ["identity", "activity", "schedules", "tasks", "team", "checkpoints", "triggers", "wait"] as const
@@ -71,6 +77,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     saving: false,
     active: false,
     sessionTitle: "",
+    sessionLocation: undefined as SessionLocation | undefined,
     error: "",
     notice: "",
     refreshError: "",
@@ -81,6 +88,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     scheduleCron: "0 9 * * *",
     schedulePrompt: "",
     scheduleEditingID: "",
+    scheduleEditingRevision: 0,
     scheduleEnabled: true,
     recurring: false,
     durable: true,
@@ -113,6 +121,28 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
   })
 
   const sessionID = props.sessionID
+  const confirmAction = useConfirmAction()
+  const confirmCurrent = (message: string, object: SessionConfirmationObject) => {
+    const snapshot = confirmationSnapshot(state)
+    const directory = state.sessionLocation?.directory
+    if (snapshot === undefined || !directory || !scope.live()) return Promise.resolve(false)
+    const source = props.sdk
+    const confirmation = sessionOperationConfirmation({
+      message, object: { ...object }, server: ServerConnection.key(source.server), directory, sessionID,
+    }, language.locale())
+    return confirmAction(confirmation.message, { danger: confirmation.danger,
+      isCurrent: () => scope.live() && serverSDK() === source && props.sessionID === sessionID && !state.saving && confirmationSnapshot(state) === snapshot })
+  }
+  const defaultTriggerBody = state.triggerBody
+  const triggerDrafts = new Map<string, { id: string; body: string }>()
+  const acceptTriggerResult = <T extends { ok: boolean; profile: string; action: string; status: number }>(result: T) => {
+    if (!result.ok) throw new Error(ui(
+      `Trigger ${result.action} failed for profile “${result.profile}” (${result.status}).`,
+      `Profile“${result.profile}”的 Trigger ${result.action} 失败（${result.status}）。`,
+      `Profile「${result.profile}」的 Trigger ${result.action} 失敗（${result.status}）。`,
+    ))
+    return result
+  }
   const scope = createManagementScope(props.sdk, sessionID, () => ({ source: serverSDK(), sessionID: props.sessionID }))
   onCleanup(scope.dispose)
   const scopedAPI = bindManagementApi(props.sdk.operationsApi, scope)
@@ -155,19 +185,25 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
         setState("loading", sessionSections.some((key) => state.sections[key].loading))
       },
     })
-  const refreshSection = (section: SessionSection): Promise<boolean> => {
+  const refreshSection = (section: SessionSection, rebaseEditor = false): Promise<boolean> => {
     switch (section) {
       case "identity":
         return load(section, () => api().sessions.get({ sessionID }), (session) => {
           if (!state.ready) setState("tags", (session.tags ?? []).join(", "))
-          setState({ ready: true, sessionTitle: session.title })
+          setState({ ready: true, sessionTitle: session.title, sessionLocation: session.location })
         })
       case "activity":
         return load(section, () => api().sessions.active(), (active) => setState("active", sessionID in active))
       case "schedules":
         return load(section, () => api().scheduledPrompts.list({ sessionID }), (items) => setState("schedules", [...items]))
       case "tasks":
-        return load(section, () => api().tasks.list({ sessionID }), (page) => setState("tasks", [...page.items]))
+        return load(section, () => api().tasks.list({ sessionID }), (page) => {
+          setState("tasks", [...page.items])
+          if (rebaseEditor && state.taskEditingID) {
+            const current = page.items.find((task) => task.id === state.taskEditingID)
+            if (current) setState("taskEditingRevision", current.revision)
+          }
+        })
       case "team":
         return load(section, async () => {
           const team = await loadTeam()
@@ -182,7 +218,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
           const [profiles, list] = await Promise.all([
             api().triggers.profiles(), api().triggers.list({ sessionID, profile }),
           ])
-          return { profiles, list }
+          return { profiles, list: acceptTriggerResult(list) }
         }, ({ profiles, list }) => setState({
           triggerProfiles: [...profiles.items], triggerProfile: profile, triggerItems: triggerItemsFrom(list.data),
         }))
@@ -217,10 +253,10 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     }
     setState("saving", false)
   }
-  const refresh = async () => {
+  const refresh = async (rebaseEditor = false) => {
     if (state.saving || !scope.live()) return
     setState({ error: "", refreshError: "", refreshErrorSection: undefined })
-    await Promise.allSettled(sessionSections.map(refreshSection))
+    await Promise.allSettled(sessionSections.map((section) => refreshSection(section, rebaseEditor)))
   }
 
   onMount(() => void refresh())
@@ -300,8 +336,10 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
           sessionID: sessionID,
           scheduleID: schedule.id,
         })
+        setState("schedules", (items) => items.map((item) => item.id === current.id ? current : item))
         setState({
           scheduleEditingID: current.id,
+          scheduleEditingRevision: current.revision,
           scheduleName: current.name,
           scheduleCron: current.cron,
           schedulePrompt: current.prompt,
@@ -311,15 +349,16 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
         })
       },
       ui(
-        `Loaded current Schedule revision ${schedule.revision}.`,
-        `已加载 Schedule 修订 ${schedule.revision}。`,
-        `已載入 Schedule 修訂 ${schedule.revision}。`,
+        "Loaded current Schedule.",
+        "已加载当前 Schedule。",
+        "已載入目前 Schedule。",
       ),
     )
 
   const cancelScheduleEdit = () =>
     setState({
       scheduleEditingID: "",
+      scheduleEditingRevision: 0,
       scheduleName: "",
       scheduleCron: "0 9 * * *",
       schedulePrompt: "",
@@ -336,7 +375,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
         const updated = await api().scheduledPrompts.update({
           sessionID: sessionID,
           scheduleID: current.id,
-          expectedRevision: current.revision,
+          expectedRevision: state.scheduleEditingRevision,
           name: state.scheduleName,
           cron: state.scheduleCron,
           prompt: state.schedulePrompt,
@@ -350,15 +389,13 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     )
   }
 
-  const runSchedule = (schedule: Schedule) => {
+  const runSchedule = async (schedule: Schedule) => {
     if (
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Run scheduled Prompt “${schedule.name}” now through the normal Prompt Queue?`,
           `立即通过常规 Prompt Queue 运行计划 Prompt“${schedule.name}”？`,
           `立即透過一般 Prompt Queue 執行排程 Prompt「${schedule.name}」？`,
-        ),
-      )
+        ), { kind: "schedule-run", id: schedule.id, revision: schedule.revision })
     )
       return
     void mutate("schedules",
@@ -378,15 +415,13 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     )
   }
 
-  const deleteSchedule = (schedule: Schedule) => {
+  const deleteSchedule = async (schedule: Schedule) => {
     if (
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Delete scheduled Prompt “${schedule.name}”?`,
           `删除计划 Prompt“${schedule.name}”？`,
           `刪除排程 Prompt「${schedule.name}」？`,
-        ),
-      )
+        ), { kind: "schedule-delete", id: schedule.id, revision: schedule.revision })
     )
       return
     void mutate("schedules",
@@ -397,20 +432,19 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
           expectedRevision: schedule.revision,
         })
         setState("schedules", (items) => items.filter((item) => item.id !== schedule.id))
+        if (state.scheduleEditingID === schedule.id) cancelScheduleEdit()
       },
       ui("Scheduled Prompt deleted.", "计划 Prompt 已删除。", "排程 Prompt 已刪除。"),
     )
   }
 
-  const runMissed = (schedule: Schedule) => {
+  const runMissed = async (schedule: Schedule) => {
     if (
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Run missed Prompt “${schedule.name}” now? It will enter the normal Session Queue.`,
           `立即运行错过的 Prompt“${schedule.name}”？它将进入常规 Session Queue。`,
           `立即執行錯過的 Prompt「${schedule.name}」？它將進入一般 Session Queue。`,
-        ),
-      )
+        ), { kind: "schedule-missed", id: schedule.id, revision: schedule.revision })
     )
       return
     void mutate("schedules",
@@ -443,14 +477,22 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       ui("Checkpoint created.", "Checkpoint 已创建。", "Checkpoint 已建立。"),
     )
 
-  const refreshTriggers = (profile = state.triggerProfile) =>
-    mutate("triggers",
+  const refreshTriggers = (profile = state.triggerProfile) => {
+    const previousProfile = state.triggerProfile
+    const previousDraft = { id: state.triggerID, body: state.triggerBody }
+    return mutate("triggers",
       async () => {
-        const result = await api().triggers.list({ sessionID: sessionID, profile })
+        const result = acceptTriggerResult(await api().triggers.list({ sessionID: sessionID, profile }))
+        if (profile !== previousProfile) {
+          triggerDrafts.set(previousProfile, previousDraft)
+          const draft = triggerDrafts.get(profile) ?? { id: "", body: defaultTriggerBody }
+          setState({ triggerID: draft.id, triggerBody: draft.body })
+        }
         setState({ triggerProfile: profile, triggerItems: triggerItemsFrom(result.data) })
       },
       ui(`Triggers refreshed from ${profile}.`, `已从 ${profile} 刷新 Trigger。`, `已從 ${profile} 重新整理 Trigger。`),
     )
+  }
 
   const parseTriggerBody = () => {
     const value: unknown = JSON.parse(state.triggerBody)
@@ -465,29 +507,44 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     return value
   }
 
-  const createTrigger = () =>
-    mutate("triggers",
+  const triggerBodyForWrite = () => {
+    try {
+      return parseTriggerBody()
+    } catch (error) {
+      // Local form validation cannot make a successfully read Host stale.
+      // Remote write failures still invalidate the partition in mutate().
+      fail(error)
+      return undefined
+    }
+  }
+
+  const createTrigger = () => {
+    if (blocked("triggers")) return
+    const body = triggerBodyForWrite()
+    if (!body) return
+    return mutate("triggers",
       async () => {
-        const result = await api().triggers.create({
+        const result = acceptTriggerResult(await api().triggers.create({
           sessionID: sessionID,
           profile: state.triggerProfile,
-          body: parseTriggerBody(),
-        })
+          body,
+        }))
         const item = resultItem(result.data)
         if (item && typeof item.id === "string") setState("triggerID", item.id)
         await refreshWrittenSection("triggers")
       },
       ui("Trigger created.", "Trigger 已创建。", "Trigger 已建立。"),
     )
+  }
 
   const openTrigger = (triggerID: string) =>
     mutate("triggers",
       async () => {
-        const result = await api().triggers.get({
+        const result = acceptTriggerResult(await api().triggers.get({
           sessionID: sessionID,
           profile: state.triggerProfile,
           triggerID,
-        })
+        }))
         const item = resultItem(result.data)
         setState({
           triggerID,
@@ -501,24 +558,27 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       ),
     )
 
-  const updateTrigger = () =>
-    mutate("triggers",
+  const updateTrigger = () => {
+    if (blocked("triggers")) return
+    const body = triggerBodyForWrite()
+    if (!body) return
+    return mutate("triggers",
       async () => {
-        await api().triggers.update({
+        acceptTriggerResult(await api().triggers.update({
           sessionID: sessionID,
           profile: state.triggerProfile,
           triggerID: state.triggerID,
-          body: parseTriggerBody(),
-        })
+          body,
+        }))
         await refreshWrittenSection("triggers")
       },
       ui("Trigger updated.", "Trigger 已更新。"),
     )
+  }
 
-  const runTrigger = () => {
+  const runTrigger = async () => {
     if (
-      !window.confirm(
-        state.triggerProfile === "local"
+      !await confirmCurrent(state.triggerProfile === "local"
           ? ui(
               "Run this Trigger now through the normal Session Queue?",
               "立即通过常规 Session Queue 运行此 Trigger？",
@@ -528,17 +588,16 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
               `Run this Trigger now through Host Profile “${state.triggerProfile}”? This can cause an external side effect.`,
               `立即通过 Host Profile“${state.triggerProfile}”运行此 Trigger？这可能产生外部副作用。`,
               `立即透過 Host Profile「${state.triggerProfile}」執行此 Trigger？這可能產生外部副作用。`,
-            ),
-      )
+            ), { kind: "trigger-run", id: state.triggerID, profile: state.triggerProfile })
     )
       return
     void mutate("triggers",
       async () => {
-        await api().triggers.run({
+        acceptTriggerResult(await api().triggers.run({
           sessionID: sessionID,
           profile: state.triggerProfile,
           triggerID: state.triggerID,
-        })
+        }))
         await refreshWrittenSection("triggers")
       },
       ui("Trigger run requested.", "已请求运行 Trigger。", "已要求執行 Trigger。"),
@@ -553,17 +612,15 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       ui("Wait state refreshed.", "Wait 状态已刷新。", "Wait 狀態已重新整理。"),
     )
 
-  const wakeWait = () => {
+  const wakeWait = async () => {
     const activeWait = state.activeWait
     if (
       !activeWait ||
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Wake the active Wait “${activeWait.reason || activeWait.waitID}”?`,
           `唤醒活动 Wait“${activeWait.reason || activeWait.waitID}”？`,
           `喚醒活動 Wait「${activeWait.reason || activeWait.waitID}」？`,
-        ),
-      )
+        ), { kind: "wait-wake", id: activeWait.waitID })
     )
       return
     void mutate("wait",
@@ -629,15 +686,13 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       ui("Team message sent.", "团队消息已发送。", "團隊訊息已傳送。"),
     )
 
-  const requestMemberShutdown = (member: Team["members"][number]) => {
+  const requestMemberShutdown = async (member: Team["members"][number]) => {
     if (
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Ask “${member.name}” to stop gracefully? The member must explicitly approve.`,
           `请求“${member.name}”优雅停止？该成员必须明确批准。`,
           `要求「${member.name}」正常停止？該成員必須明確核准。`,
-        ),
-      )
+        ), { kind: "member-shutdown", id: member.name })
     )
       return
     void mutate("team", async () => {
@@ -650,15 +705,13 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     }, ui("Shutdown requested. Wait for the member's response.", "已请求停止，请等待该成员回应。", "已要求停止，請等待該成員回應。"))
   }
 
-  const removeTeamMember = (member: Team["members"][number]) => {
+  const removeTeamMember = async (member: Team["members"][number]) => {
     if (
-      !window.confirm(
-        ui(
+      !await confirmCurrent(ui(
           `Remove stopped member “${member.name}” from this team?`,
           `从此团队移除已停止成员“${member.name}”？`,
           `從此團隊移除已停止成員「${member.name}」？`,
-        ),
-      )
+        ), { kind: "member-remove", id: member.name })
     )
       return
     void mutate("team",
@@ -673,12 +726,12 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     )
   }
 
-  const deleteTeam = () => {
-    if (!window.confirm(ui(
+  const deleteTeam = async () => {
+    if (!await confirmCurrent(ui(
       "Delete this team, its complete mailbox, and all shutdown metadata?",
       "删除此团队、完整消息箱和全部停止记录？",
       "刪除此團隊、完整訊息箱和全部停止記錄？",
-    ))) return
+    ), { kind: "team-delete", id: state.team?.name ?? sessionID })) return
     void mutate("team",
       async () => {
         await api().teams.delete({ sessionID: sessionID })
@@ -759,11 +812,15 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     )
   }
 
-  const clearTerminalTasks = () => {
-    const count = state.tasks.filter((task) => task.status === "completed" || task.status === "cancelled").length
-    if (!count || !window.confirm(`Delete ${count} completed or cancelled task(s)? Active tasks will remain.`)) return
+  const clearTerminalTasks = async () => {
+    const removed = state.tasks.filter((task) => task.status === "completed" || task.status === "cancelled").map((task) => task.id)
+    const count = removed.length
+    if (!count || !await confirmCurrent(ui(`Delete ${count} completed or cancelled task(s)? Active tasks will remain.`, `删除 ${count} 条已完成或已取消任务？活动任务将保留。`),
+      { kind: "tasks-clear", id: removed.join(", "), revision: state.tasks.filter(task => removed.includes(task.id)).map(task => `${task.id}@${task.revision}`).join(", ") })) return
     void mutate("tasks", async () => {
       await api().tasks.clear({ sessionID: sessionID, terminalOnly: true })
+      setState("taskBlockers", (ids) => ids.filter((id) => !removed.includes(id)))
+      if (removed.includes(state.taskEditingID)) cancelTaskEdit()
       await refreshWrittenSection("tasks")
     }, "Terminal tasks cleared.")
   }
@@ -803,8 +860,9 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       await refreshWrittenSection("tasks")
     }, "Task completed.")
 
-  const cancelTask = (task: Task) => {
-    if (!window.confirm(`Cancel task “${task.title}”? Tasks depending on it will remain blocked.`)) return
+  const cancelTask = async (task: Task) => {
+    if (!await confirmCurrent(ui(`Cancel task “${task.title}”? Tasks depending on it will remain blocked.`, `取消任务“${task.title}”？依赖它的任务仍将阻塞。`),
+      { kind: "task-cancel", id: task.id, revision: task.revision })) return
     void mutate("tasks", async () => {
       await api().tasks.cancel({
         sessionID: sessionID,
@@ -815,14 +873,17 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
     }, "Task cancelled; dependent tasks remain blocked.")
   }
 
-  const deleteTask = (task: Task) => {
-    if (!window.confirm(`Delete task “${task.title}” and all of its dependency links?`)) return
+  const deleteTask = async (task: Task) => {
+    if (!await confirmCurrent(ui(`Delete task “${task.title}” and all of its dependency links?`, `删除任务“${task.title}”及其全部依赖链接？`),
+      { kind: "task-delete", id: task.id, revision: task.revision })) return
     void mutate("tasks", async () => {
       await api().tasks.delete({
         sessionID: sessionID,
         taskID: task.id,
         expectedRevision: task.revision,
       })
+      setState("taskBlockers", (ids) => ids.filter((id) => id !== task.id))
+      if (state.taskEditingID === task.id) cancelTaskEdit()
       await refreshWrittenSection("tasks")
     }, "Task and dependency links deleted.")
   }
@@ -835,7 +896,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       )
     }, "Rewind preview ready. Review it before applying.")
 
-  const applyRewind = () => {
+  const applyRewind = async () => {
     const preview = state.preview
     if (!preview) return
     const sync = props.sync
@@ -852,9 +913,8 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
       return
     }
     if (
-      !window.confirm(
-        `Archive ${preview.affectedMessages} conversation message(s)? Files, commands, Git history, and external side effects will not be changed.`,
-      )
+      !await confirmCurrent(ui(`Archive ${preview.affectedMessages} conversation message(s)? Files, commands, Git history, and external side effects will not be changed.`, `归档 ${preview.affectedMessages} 条会话消息？文件、命令、Git 历史和外部副作用不会改变。`),
+        { kind: "rewind", id: preview.checkpoint.id, revision: preview.expectedLastSequence })
     )
       return
     void mutate("checkpoints", async () => {
@@ -899,7 +959,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
               size="small"
               variant="ghost"
               disabled={state.loading || state.saving}
-              onClick={refresh}
+              onClick={() => void refresh(true)}
             >
               {controlText("刷新")}
             </Button>
@@ -916,13 +976,13 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
           error={state.error}
           notice={state.notice}
         />
-        <ManagementStatus error={state.refreshError} loading={state.loading} saving={state.saving} onRetry={() => void refresh()} />
+        <ManagementStatus error={state.refreshError} loading={state.loading} saving={state.saving} onRetry={() => void refresh(true)} />
         <For each={sessionSections.filter((key) => state.sections[key].loading || !!state.sections[key].error)}>
           {(section) => <div class="flex flex-col gap-1" data-section={section}>
             <strong class="text-12-medium">{sectionLabel(section)}</strong>
             <ManagementStatus loading={state.sections[section].loading} saving={state.saving}
               error={state.sections[section].error}
-              onRetry={() => { if (!state.saving) void refreshSection(section) }} />
+              onRetry={() => { if (!state.saving) void refreshSection(section, true) }} />
             <Show when={state.sections[section].error}>
               <p class="text-11-regular text-text-weak">{ui(
                 "Unavailable or stale data. Dependent actions are disabled until refresh succeeds.",
@@ -962,7 +1022,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
             <SessionPromptQueueControl sessionID={sessionID} disabled={blocked("identity")} />
           </Show>
           <Show when={props.value === "session-feedback"}>
-            <SessionFeedbackControl api={api} sessionID={sessionID} disabled={blocked("identity")} />
+            <SessionFeedbackControl api={api} sessionID={sessionID} location={state.sessionLocation} disabled={blocked("identity")} />
           </Show>
 
           <Show when={props.value === "session-automation"}>
@@ -998,14 +1058,16 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                 disabled={blocked("schedules")}
               />
               <div class="flex flex-wrap gap-4">
-                <Checkbox checked={state.recurring} onChange={(value) => setState("recurring", value)}>
+                <Checkbox checked={state.recurring} onChange={(value) => setState("recurring", value)} disabled={blocked("schedules")}>
                   {ui("Recurring within seven-day lifetime", "在七天生命周期内重复", "在七天生命週期內重複")}
                 </Checkbox>
-                <Checkbox checked={state.durable} onChange={(value) => setState("durable", value)}>
-                  {ui("Restore after restart", "重启后恢复", "重新啟動後恢復")}
+                <Checkbox checked={state.durable} onChange={(value) => setState("durable", value)} disabled={blocked("schedules") || !!state.scheduleEditingID}>
+                  {state.scheduleEditingID
+                    ? ui("Restore after restart (fixed at creation)", "重启后恢复（创建时确定）", "重新啟動後恢復（建立時決定）")
+                    : ui("Restore after restart", "重启后恢复", "重新啟動後恢復")}
                 </Checkbox>
                 <Show when={state.scheduleEditingID}>
-                  <Checkbox checked={state.scheduleEnabled} onChange={(value) => setState("scheduleEnabled", value)}>
+                  <Checkbox checked={state.scheduleEnabled} onChange={(value) => setState("scheduleEnabled", value)} disabled={blocked("schedules")}>
                     {controlText("enabled")}
                   </Checkbox>
                 </Show>
@@ -1200,7 +1262,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                   size="small"
                   variant="secondary"
                   disabled={
-                    state.saving || !state.triggerID.trim() || (state.triggerProfile === "local" && state.active)
+                    blocked("triggers") || !state.triggerID.trim() || (state.triggerProfile === "local" && state.active)
                   }
                   onClick={runTrigger}
                 >
@@ -1295,6 +1357,9 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                     </div>
                   </article>
                 )}
+              </Show>
+              <Show when={state.sessionLocation}>
+                {(location) => <SessionWaitSourcesPanel api={scopedAPI} sessionID={sessionID} location={{ directory: location().directory, workspace: location().workspaceID }} />}
               </Show>
             </section>
           </Show>
@@ -1401,7 +1466,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                         size="small"
                         variant="secondary"
                         disabled={
-                          state.saving ||
+                          blocked("team") ||
                           team().memberCount >= 8 ||
                           !props.sync ||
                           !state.teamMemberName.trim() ||
@@ -1419,7 +1484,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                             <div>
                               <div class="text-13-medium text-text-strong">{member.name}</div>
                               <div class="text-11-regular text-text-weak">
-                                {ui("Subagent", "子代理", "子代理")} {member.agentID} · {member.status === "active" ? ui("Active", "工作中", "工作中") : ui("Stopped", "已停止", "已停止")}
+                                {ui("Subagent", "子代理", "子代理")} {member.agentID} · {member.status === "active" ? ui("Active", "工作中", "工作中") : member.status === "shutdown_requested" ? ui("Waiting for shutdown approval", "等待成员批准停止", "等待成員核准停止") : ui("Stopped", "已停止", "已停止")}
                               </div>
                             </div>
                             <div class="flex flex-wrap gap-2">
@@ -1530,7 +1595,7 @@ function SessionSettingsContent(props: SessionSettingsProps & { sdk: ServerSDK }
                         size="small"
                         variant="ghost"
                         disabled={
-                          state.saving ||
+                          blocked("team") ||
                           team().members.some((member) => member.name !== "lead" && member.status !== "stopped")
                         }
                         onClick={deleteTeam}

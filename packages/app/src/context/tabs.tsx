@@ -3,7 +3,16 @@ import { createSimpleContext } from "@arforge-ai/ui/context"
 import { createStore, produce } from "solid-js/store"
 import { Persist, persisted, removePersisted, draftPersistedKeys } from "@/utils/persist"
 import { ServerConnection, useServer } from "./server"
-import { batch, createEffect, getOwner, onCleanup, startTransition } from "solid-js"
+import {
+  batch,
+  createContext,
+  createEffect,
+  getOwner,
+  onCleanup,
+  startTransition,
+  useContext,
+  type ParentProps,
+} from "solid-js"
 import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { usePlatform } from "./platform"
 import { uuid } from "@/utils/uuid"
@@ -13,6 +22,13 @@ import { createTabMemory } from "./tab-memory"
 import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
 import { createDraftPromptSession, type PromptModel } from "./prompt-state"
 import { preloadNewSessionRoute } from "@/utils/new-session-route"
+import {
+  activeDraftID,
+  bindDraftActions,
+  createHomeDraftOwner,
+  sameDraftSource,
+  type DraftSource,
+} from "@/pages/home-compose/home-draft-state"
 
 export type SessionTab = {
   type: "session"
@@ -26,6 +42,7 @@ export type DraftTab = {
   server: ServerConnection.Key
   directory: string
   worktree?: string
+  home?: boolean
 }
 
 export type Tab = SessionTab | DraftTab
@@ -42,7 +59,11 @@ type RecentTab = {
 export const draftHref = (draftID: string) => `/new-session?draftId=${encodeURIComponent(draftID)}`
 
 export const tabHref = (tab: Tab) =>
-  tab.type === "draft" ? draftHref(tab.draftID) : sessionHref(tab.server, tab.sessionId)
+  tab.type === "draft"
+    ? tab.home
+      ? `/?draftId=${encodeURIComponent(tab.draftID)}`
+      : draftHref(tab.draftID)
+    : sessionHref(tab.server, tab.sessionId)
 
 export const tabKey = (tab: Tab) => (tab.type === "draft" ? `draft:${tab.draftID}` : `${tab.server}\n${tabHref(tab)}`)
 
@@ -50,12 +71,13 @@ export function sessionHasOpenTab(tabs: Tab[], server: ServerConnection.Key, ses
   return tabs.some((tab) => tab.type === "session" && tab.server === server && tab.sessionId === session.id)
 }
 
-export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
+const { use: useBaseTabs, provider: TabsProvider } = createSimpleContext({
   name: "Tabs",
   gate: false,
   init: () => {
     const textDraftLanguage = useTextDraftLanguage()
-    const confirmFileDrafts = () => textDocumentCloseGuard.confirm(undefined, textDraftLanguage.locale().startsWith("zh"))
+    const confirmFileDrafts = () =>
+      textDocumentCloseGuard.confirm(undefined, textDraftLanguage.locale().startsWith("zh"))
     const server = useServer()
     const platform = usePlatform()
     const fallback = server.key
@@ -162,7 +184,8 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       if (!tab) return
       const key = tabKey(tab)
       const draftID = tab.type === "draft" ? tab.draftID : undefined
-      const nextTab = nextTabAfterClose(store, index, recentKey() === key && location.pathname !== "/")
+      const activeDraft = tab.type === "draft" && activeDraftID(location.pathname, location.search) === tab.draftID
+      const nextTab = nextTabAfterClose(store, index, activeDraft || (recentKey() === key && location.pathname !== "/"))
       closing.add(key)
       batch(() => {
         setStore(
@@ -182,26 +205,44 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       if (draftID) removeDraftPersisted(draftID)
     }
 
+    function addSessionTab(tab: Omit<SessionTab, "type">): Tab
+    function addSessionTab(tab: Omit<SessionTab, "type">, expectedDraft: DraftTab | undefined): Tab | undefined
+    function addSessionTab(tab: Omit<SessionTab, "type">, expectedDraft?: DraftTab): Tab | undefined {
+      const next = { type: "session" as const, ...tab }
+      const key = tabKey(next),
+        guarded = arguments.length > 1
+      const current = () =>
+        !guarded ||
+        (server.list.some((connection) => ServerConnection.key(connection) === tab.server) &&
+          !closed.some((entry) => tabKey(entry.tab) === key) &&
+          (!expectedDraft ||
+            store.some(
+              (entry) =>
+                entry.type === "draft" &&
+                entry.draftID === expectedDraft.draftID &&
+                sameDraftSource(entry, expectedDraft),
+            )))
+      if (!current()) return
+      if (closing.has(key)) return guarded ? undefined : next
+      const existing = store.find((item) => tabKey(item) === key)
+      if (existing) return existing
+      void startTransition(() => {
+        setStore(
+          produce((tabs) => {
+            if (!current() || closing.has(key) || tabs.some((item) => tabKey(item) === key)) return
+            tabs.push(next)
+          }),
+        )
+      })
+      return next
+    }
+
     const actions = {
-      addSessionTab: (tab: Omit<SessionTab, "type">) => {
-        const next = { type: "session" as const, ...tab }
-        const key = tabKey(next)
-        if (closing.has(key)) return next
-        const existing = store.find((item) => tabKey(item) === key)
-        if (existing) return existing
-        void startTransition(() => {
-          setStore(
-            produce((tabs) => {
-              if (closing.has(key) || tabs.some((item) => tabKey(item) === key)) return
-              tabs.push(next)
-            }),
-          )
-        })
-        return next
-      },
+      addSessionTab,
       reorder(keys: string[]) {
         setStore(
           produce((tabs) => {
+            if (keys.length !== tabs.length || new Set(keys).size !== tabs.length) return
             const byKey = new Map(tabs.map((tab) => [tabKey(tab), tab]))
             const next = keys.map((key) => byKey.get(key)).filter((tab): tab is Tab => !!tab)
             if (next.length !== tabs.length) return
@@ -214,18 +255,26 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
         if (!tab || tab.type !== "draft") throw new Error(`Draft not found: ${draftID}`)
         return tab
       },
-      async newDraft(draft: Omit<DraftTab, "type" | "draftID">, prompt?: string, model?: PromptModel) {
+      async newDraft(
+        draft: Omit<DraftTab, "type" | "draftID">,
+        prompt?: string,
+        model?: PromptModel,
+        options?: { navigate?: boolean },
+      ) {
+        await ready.promise
+        await preloadNewSessionRoute()
+        if (!server.list.some((conn) => ServerConnection.key(conn) === draft.server))
+          throw new Error("Draft server was removed")
         const draftID = uuid()
         const tab = { type: "draft" as const, draftID, ...draft }
         memory.ensure(tabKey(tab), "prompt", () => createDraftPromptSession(draftID, { prompt, model }))
-        await preloadNewSessionRoute()
         await startTransition(() => {
           setStore(
             produce((tabs) => {
               tabs.push(tab)
             }),
           )
-          navigate(draftHref(draftID))
+          if (options?.navigate !== false) navigate(tabHref(tab))
         })
         return tab
       },
@@ -237,21 +286,46 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
           )
         })
       },
-      promoteDraft(draftID: string, session: Omit<SessionTab, "type">) {
+      promoteDraft(
+        draftID: string,
+        session: Omit<SessionTab, "type">,
+        expected?: DraftSource,
+        canNavigate?: () => boolean,
+        canConsume?: () => boolean,
+      ) {
         // Keep the replacement and navigation atomic so /new-session never renders
         // after its backing draft tab has been removed from the store.
-        const active = location.pathname === "/new-session" && location.query.draftId === draftID
         const next = { type: "session" as const, ...session }
-        void startTransition(() => {
+        let promoted = false
+        return startTransition(() => {
+          const original = store.find((tab): tab is DraftTab => tab.type === "draft" && tab.draftID === draftID)
+          if (!original || original.server !== session.server || (expected && !sameDraftSource(original, expected)))
+            return
+          if (
+            canConsume &&
+            (!server.list.some((connection) => ServerConnection.key(connection) === next.server) ||
+              closing.has(tabKey(next)) ||
+              closed.some((entry) => tabKey(entry.tab) === tabKey(next)))
+          )
+            return
+          if (canConsume && !canConsume()) return
+          const active = activeDraftID(location.pathname, location.search) === draftID && (canNavigate?.() ?? true)
           setStore(
             produce((tabs) => {
+              for (let i = tabs.length - 1; i >= 0; i--) {
+                const tab = tabs[i]
+                if (tab.type === "session" && tab.server === next.server && tab.sessionId === next.sessionId)
+                  tabs.splice(i, 1)
+              }
               const index = tabs.findIndex((tab) => tab.type === "draft" && tab.draftID === draftID)
               if (index !== -1) tabs[index] = next
             }),
           )
+          promoted = true
           if (recent.key === `draft:${draftID}`) setRecentKey(tabKey(next))
           if (active) navigateTab(next)
         }).finally(() => {
+          if (!promoted) return
           memory.remove(`draft:${draftID}`)
           removeDraftPersisted(draftID)
         })
@@ -328,11 +402,12 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
                       sessionId: params.id,
                     })
                   : undefined
-              const currentIndex = currentHref
-                ? tabs.findIndex(
-                    (tab) => tab.type === "session" && tab.server === targetServer && tabHref(tab) === currentHref,
-                  )
-                : -1
+              const currentIndex = tabs.findIndex(
+                (tab) =>
+                  tab.type === "session" &&
+                  tab.server === targetServer &&
+                  (tabHref(tab) === location.pathname || (!!currentHref && tabHref(tab) === currentHref)),
+              )
               const currentTab = tabs[currentIndex]
               const removedCurrent =
                 currentTab?.type === "session" &&
@@ -394,8 +469,34 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
     }
 
-    return { ...actions, store, info, ready, recentReady }
+    const ensureHomeDraft = createHomeDraftOwner({
+      ready: async () => {
+        await ready.promise
+      },
+      list: () => store,
+      create: (source) => actions.newDraft({ ...source, home: true }, undefined, undefined, { navigate: false }),
+    })
+    return { ...actions, ensureHomeDraft, store, info, ready, recentReady }
   },
 })
+
+export { TabsProvider }
+type TabsContext = ReturnType<typeof useBaseTabs>
+const DraftTabsContext = createContext<TabsContext>()
+export function useTabs(): TabsContext {
+  return useContext(DraftTabsContext) ?? useBaseTabs()
+}
+
+export function DraftTabsScopeProvider(
+  props: ParentProps<{
+    draft: DraftTab
+    active: () => boolean
+    retarget?: (source: DraftSource) => void
+  }>,
+) {
+  const tabs = useTabs()
+  const bound = bindDraftActions({ tabs, draft: props.draft, active: props.active, retarget: props.retarget })
+  return <DraftTabsContext.Provider value={{ ...tabs, ...bound }}>{props.children}</DraftTabsContext.Provider>
+}
 import { textDocumentCloseGuard } from "@/components/preview/text-document-close-guard"
 import { useLanguage as useTextDraftLanguage } from "./language"

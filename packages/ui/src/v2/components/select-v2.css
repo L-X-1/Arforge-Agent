@@ -287,3 +287,12 @@
   svg {
   visibility: hidden;
 }
+
+/* C10 and shared menu geometry; keep the existing selected/disabled semantics. */
+[data-component="select-v2"],[data-component="select-v2"][data-appearance="large"]{height:auto;min-height:36px;border-radius:8px;background:var(--v2-background-bg-base);box-shadow:none;outline-offset:2px}
+[data-component="select-v2"]:focus-within{outline-width:2px}
+[data-component="menu-v2-content"][data-slot="select-v2-content"]{padding:8px;border:1px solid var(--v2-border-border-muted);border-radius:16px;background:var(--v2-background-bg-base);box-shadow:0 10px 28px light-dark(rgb(0 0 0 / 8%),rgb(0 0 0 / 24%));backdrop-filter:none;-webkit-backdrop-filter:none}
+@media(pointer:coarse){[data-component="select-v2"]{min-height:44px}}
+
+/* A closed portal must release pointer interaction even when animations pause. */
+[data-component="menu-v2-content"][data-slot="select-v2-content"][data-closed]{animation:none;pointer-events:none;visibility:hidden}

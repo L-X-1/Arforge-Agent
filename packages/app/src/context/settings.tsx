@@ -2,6 +2,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { persisted } from "@/utils/persist"
+import { resolveSoundPreference, type SoundID } from "@/utils/sound"
 import { usePlatform } from "@/context/platform"
 
 export interface NotificationSettings {
@@ -57,6 +58,7 @@ export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
 // Empty is an explicit system-font choice; only an absent preference adopts V2.
 export const sansUnsetDefault = "Noto Sans SC"
+export const monoUnsetDefault = "JetBrains Mono"
 export const terminalDefault = "JetBrainsMono Nerd Font Mono"
 const legacyNewLayoutDesignsDefault = import.meta.env.VITE_ARFORGE_CHANNEL !== "prod"
 export const newLayoutDesignsDefault = true
@@ -161,7 +163,7 @@ export function sansInput(font: string | undefined) {
 }
 
 export function monoFontFamily(font: string | undefined) {
-  return stack(font, monoBase)
+  return stack(font === undefined ? monoUnsetDefault : font, monoBase)
 }
 
 export function sansFontFamily(font: string | undefined) {
@@ -175,6 +177,12 @@ export function terminalInput(font: string | undefined) {
 export function terminalFontFamily(font: string | undefined) {
   return stack(font, terminalBase)
 }
+
+const defaultSounds = {
+  agent: "soft-glass-complete.wav",
+  permissions: "soft-glass-permission.wav",
+  errors: "soft-glass-error.wav",
+} satisfies Record<keyof NotificationSettings, SoundID>
 
 const defaultSettings: Settings = {
   general: {
@@ -194,7 +202,7 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
-    mono: "",
+    mono: monoUnsetDefault,
     sans: sansUnsetDefault,
     terminal: "",
   },
@@ -209,11 +217,9 @@ const defaultSettings: Settings = {
   },
   sounds: {
     agentEnabled: true,
-    agent: "staplebops-01",
     permissionsEnabled: true,
-    permissions: "staplebops-02",
     errorsEnabled: true,
-    errors: "nope-03",
+    ...defaultSounds,
   },
 }
 
@@ -226,7 +232,13 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
   gate: false,
   init: () => {
     const platform = usePlatform()
-    const [store, setStore, settingsInit, ready] = persisted("settings.v3", createStore<Settings>(defaultSettings))
+    const [persistence, setPersistence] = createStore({ failed: false, retrying: false })
+    let live = true
+    onCleanup(() => { live = false })
+    const [store, setStore, settingsInit, ready, controls] = persisted("settings.v3", createStore<Settings>(defaultSettings), {
+      preserveOnFailure: true,
+      onWrite(saved) { if (live) setPersistence("failed", !saved) },
+    })
     const [launch, setLaunch, , launchReady] = persisted(
       "app-version.v1",
       createStore<{ version?: string }>({ version: undefined }),
@@ -344,6 +356,16 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
 
     return {
       ready,
+      persistence: {
+        failed: () => persistence.failed,
+        retrying: () => persistence.retrying,
+        async retry() {
+          if (!live || persistence.retrying || !controls) return false
+          setPersistence("retrying", true)
+          try { return await controls.retry() }
+          finally { if (live) setPersistence("retrying", false) }
+        },
+      },
       get current() {
         return store
       },
@@ -504,7 +526,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setAgentEnabled(value: boolean) {
           setStore("sounds", "agentEnabled", value)
         },
-        agent: withFallback(() => store.sounds?.agent, defaultSettings.sounds.agent),
+        agent: createMemo(() => resolveSoundPreference(store.sounds?.agent, defaultSounds.agent)),
         setAgent(value: string) {
           setStore("sounds", "agent", value)
         },
@@ -515,7 +537,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setPermissionsEnabled(value: boolean) {
           setStore("sounds", "permissionsEnabled", value)
         },
-        permissions: withFallback(() => store.sounds?.permissions, defaultSettings.sounds.permissions),
+        permissions: createMemo(() => resolveSoundPreference(store.sounds?.permissions, defaultSounds.permissions)),
         setPermissions(value: string) {
           setStore("sounds", "permissions", value)
         },
@@ -523,7 +545,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setErrorsEnabled(value: boolean) {
           setStore("sounds", "errorsEnabled", value)
         },
-        errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
+        errors: createMemo(() => resolveSoundPreference(store.sounds?.errors, defaultSounds.errors)),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
         },

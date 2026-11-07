@@ -1,3 +1,8 @@
+import { BoundedToolOutput } from "./bounded-tool-output"
+import { MessageReplyActions, type MessageReplyActionSet } from "./message-reply-actions"
+export type { MessageReplyActionSet } from "./message-reply-actions"
+export { MessageReplyActionFooter } from "./message-reply-actions"
+export { branchMessageReply, captureReplyPrompt, retryMessageReply } from "./message-reply-action-run"
 import {
   Component,
   createEffect,
@@ -64,7 +69,7 @@ import { patchFiles } from "./apply-patch-file"
 import { animate } from "motion"
 import { useLocation } from "@solidjs/router"
 import { attached, inline, kind, typeLabel } from "./message-file"
-import { readPartText } from "./message-part-text"
+import { readPartSource, readPartText } from "./message-part-text"
 import { REASONING_SUMMARY_DEFAULT_OPEN } from "./reasoning-summary"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
 import { groupParts, isCommandGroupTool, isContextGroupTool, sameGroups, type PartGroup } from "./message-part-groups"
@@ -207,6 +212,7 @@ export interface MessagePartProps {
   showAssistantCopyPartID?: string | null
   turnDurationMs?: number
   useV2Actions?: boolean
+  replyActions?: MessageReplyActionSet
 }
 
 function MessageActionButton(
@@ -221,7 +227,7 @@ function MessageActionButton(
     <Show
       when={props.useV2}
       fallback={
-        <Tooltip value={props.label} placement="top" gutter={4}>
+        <Tooltip value={props.label} placement="top" gutter={4} openDelay={300}>
           <IconButton
             icon={props.icon}
             size="normal"
@@ -234,7 +240,7 @@ function MessageActionButton(
         </Tooltip>
       }
     >
-      <TooltipV2 value={props.label} placement="top" gutter={4}>
+      <TooltipV2 value={props.label} placement="top" gutter={4} openDelay={300}>
         <IconButtonV2
           icon={<IconV2 name={icon()} size="small" />}
           size="normal"
@@ -1202,7 +1208,11 @@ export function CommandToolGroup(props: {
               return (
                 <div data-slot="command-tool-group-item">
                   <div data-slot="command-tool-group-command">{commandText(partAccessor())}</div>
-                  <Show when={output()}>{(value) => <pre data-slot="command-tool-group-output">{value()}</pre>}</Show>
+                  <Show when={output()}>
+                    {(value) => (
+                      <BoundedToolOutput text={value()} slot="command-tool-group-output" pending={pending()} />
+                    )}
+                  </Show>
                 </div>
               )
             }}
@@ -1232,9 +1242,15 @@ function UserMessageComments(props: { comments: UserMessageComment[]; bounded: b
           />
         )}
       </For>
-      <Show when={props.bounded && props.comments.length > 5 && !state.expanded}>
-        <ButtonV2 size="small" variant="ghost-muted" onClick={() => setState("expanded", true)}>
-          {i18n.t("ui.common.showMore")}
+      <Show when={props.bounded && props.comments.length > 5}>
+        <ButtonV2
+          size="small"
+          variant="ghost-muted"
+          aria-expanded={state.expanded}
+          onClick={() => setState("expanded", !state.expanded)}
+        >
+          {state.expanded ? i18n.t("ui.sessionTurn.diffs.showLess") : i18n.t("ui.common.showMore")}
+          {` (1–${state.expanded ? props.comments.length : 5} / ${props.comments.length})`}
         </ButtonV2>
       </Show>
     </div>
@@ -1397,21 +1413,21 @@ export function UserMessageDisplay(props: {
       </Show>
       <Show when={props.useV2Actions}>{renderAttachments()}</Show>
       <Show when={text() || (props.useV2Actions && messageComments().length > 0)}>
-        <div data-slot="user-message-copy-wrapper">
+        <div data-slot="user-message-copy-wrapper" aria-busy={!!busy() || undefined}>
           <Show when={metaHead() || metaTail()}>
             <span data-slot="user-message-meta-wrap">
               <Show when={metaHead()}>
-                <span data-slot="user-message-meta" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta" class="text-text-weak cursor-default">
                   {metaHead()}
                 </span>
               </Show>
               <Show when={metaHead() && metaTail()}>
-                <span data-slot="user-message-meta-sep" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta-sep" class="text-text-weak cursor-default">
                   {"\u00A0\u00B7\u00A0"}
                 </span>
               </Show>
               <Show when={metaTail()}>
-                <span data-slot="user-message-meta-tail" class="text-12-regular text-text-weak cursor-default">
+                <span data-slot="user-message-meta-tail" class="text-text-weak cursor-default">
                   {metaTail()}
                 </span>
               </Show>
@@ -1430,6 +1446,11 @@ export function UserMessageDisplay(props: {
               }}
               aria-label={i18n.t("ui.message.revertMessage")}
             />
+          </Show>
+          <Show when={busy()}>
+            <span data-slot="message-action-status" role="status" class="text-text-weak">
+              {i18n.locale().startsWith("zh") ? "正在重置…" : "Reverting…"}
+            </span>
           </Show>
           <Show when={text()}>
             <MessageActionButton
@@ -1493,21 +1514,7 @@ export function Part(props: MessagePartProps) {
   const component = createMemo(() => PART_MAPPING[props.part.type])
   return (
     <Show when={component()}>
-      <Dynamic
-        component={component()}
-        part={props.part}
-        message={props.message}
-        hideDetails={props.hideDetails}
-        defaultOpen={props.defaultOpen}
-        toolOpen={props.toolOpen}
-        onToolOpenChange={props.onToolOpenChange}
-        deferToolContent={props.deferToolContent}
-        virtualizeDiff={props.virtualizeDiff}
-        onContentRendered={props.onContentRendered}
-        showAssistantCopyPartID={props.showAssistantCopyPartID}
-        turnDurationMs={props.turnDurationMs}
-        useV2Actions={props.useV2Actions}
-      />
+      <Dynamic {...props} component={component()} />
     </Show>
   )
 }
@@ -1755,6 +1762,7 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
   const text = () => readPartText(data.store.part_text_accum_delta, part())
+  const source = () => readPartSource(data.store.part_text_accum_delta, part())
   const isLastTextPart = createMemo(() => {
     const last = (data.store.part?.[props.message.id] ?? [])
       .filter((item): item is TextPart => item?.type === "text" && !!item.text?.trim())
@@ -1780,10 +1788,10 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
 
   return (
     <Show when={text()}>
-      <div data-component="text-part" data-timeline-part-id={part().id}>
+      <div data-component="text-part" data-message-role={props.message.role} data-timeline-part-id={part().id}>
         <div data-slot="text-part-body">
-          <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-            <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+          <Show when={streaming()} fallback={<Markdown text={source()} cacheKey={part().id} streaming={false} />}>
+            <PacedMarkdown text={source()} cacheKey={part().id} streaming={streaming()} />
           </Show>
         </div>
         <Show when={showCopy()}>
@@ -1796,11 +1804,26 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
               onClick={handleCopy}
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
             />
+            <Show when={props.replyActions}>{(actions) => <MessageReplyActions actions={actions()} />}</Show>
             <Show when={meta()}>
-              <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
+              <span data-slot="text-part-meta" class="text-text-weak cursor-default" title={meta()}>
                 {meta()}
               </span>
             </Show>
+          </div>
+        </Show>
+        <Show
+          when={
+            showCopy() &&
+            (props.replyActions?.notice || props.replyActions?.error || props.replyActions?.retry.disabledReason)
+          }
+        >
+          <div
+            data-slot="message-reply-action-status"
+            class="text-text-weak"
+            role={props.replyActions?.error ? "alert" : "status"}
+          >
+            {props.replyActions?.error || props.replyActions?.notice || props.replyActions?.retry.disabledReason}
           </div>
         </Show>
       </div>
@@ -1816,6 +1839,7 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
   const text = () => readPartText(data.store.part_text_accum_delta, part())
+  const source = () => readPartSource(data.store.part_text_accum_delta, part())
 
   return (
     <Show when={text()}>
@@ -1834,8 +1858,8 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
         </Collapsible.Trigger>
         <Collapsible.Content>
           <div data-component="reasoning-part">
-            <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-              <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+            <Show when={streaming()} fallback={<Markdown text={source()} cacheKey={part().id} streaming={false} />}>
+              <PacedMarkdown text={source()} cacheKey={part().id} streaming={streaming()} />
             </Show>
           </div>
         </Collapsible.Content>
@@ -2218,9 +2242,7 @@ ToolRegistry.register({
             role="region"
             aria-label={i18n.t("ui.scrollView.ariaLabel")}
           >
-            <pre data-slot="bash-pre">
-              <code>{text()}</code>
-            </pre>
+            <BoundedToolOutput text={text()} slot="bash-pre" pending={pending()} code />
           </div>
         </div>
       </BasicTool>

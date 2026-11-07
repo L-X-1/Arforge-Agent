@@ -2,6 +2,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { expect, test, type Page } from "@playwright/test"
 import { mockArforgeServer } from "../../utils/mock-server"
 import { expectSessionTitle } from "../../utils/waits"
+import { expandWorkbench } from "../../utils/workbench"
 import { playwrightScenarioServer } from "../playwright-server"
 
 const directory = "C:/Arforge/HtmlEditRefresh"
@@ -54,6 +55,7 @@ test("HTML edit refresh reloads committed source from the scoped event and prese
   const state = await setup(page)
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).click()
@@ -76,6 +78,7 @@ test("HTML edit refresh reloads committed source from the scoped event and prese
   await expect(cards).toHaveText(captured!)
   await page.reload()
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   await expect(panel.getByRole("tab", { name: "page.html", exact: true })).toBeVisible()
   await expect(html.frameLocator("iframe").getByRole("heading", { name: "After", exact: true })).toBeVisible()
   await expect(cards).toHaveText(captured!)
@@ -85,6 +88,7 @@ test("HTML preview modes and file tabs survive reload without leaking between fi
   await setup(page)
   await page.goto(`/server/${base64Encode(server)}/session/${sessionID}`)
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   const panel = page.locator("#review-panel")
   await panel.getByRole("button", { name: "Open file", exact: true }).click()
   await panel.getByRole("button", { name: "page.html", exact: true }).dblclick()
@@ -99,6 +103,7 @@ test("HTML preview modes and file tabs survive reload without leaking between fi
   await expect(preview.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true")
   await page.reload()
   await expectSessionTitle(page, title)
+  await expandWorkbench(page)
   await expect(panel.getByRole("tab", { name: "page.html", exact: true })).toHaveAttribute("data-selected", "")
   await expect(preview.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true")
   await expect(preview.locator('[data-component="html-split-preview"]')).toBeVisible()

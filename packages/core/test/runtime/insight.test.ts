@@ -272,3 +272,57 @@ describe("RuntimeInsight audit chain", () => {
     expect(RuntimeInsight.memoryRecalls(1)[0]?.hits[0]?.score).toBe(0.9)
   })
 })
+
+describe("RuntimeInsight principal visibility", () => {
+  const visibility = { tenantID: "ten_a", userID: "usr_a", sessionIDs: new Set(["ses_a"]) }
+  beforeEach(() => { RuntimeInsight.reset(); RuntimeInsight.attachPersistence({}) })
+
+  it("filters every session telemetry surface before applying its limit", () => {
+    for (const sessionID of ["ses_a", "ses_b", "orphan"]) {
+      RuntimeInsight.recordContextLayers({ sessionID, timestamp: 1, model: "owned", totalTokens: 1, layers: [] })
+      RuntimeInsight.recordRoutingDecision({ sessionID, timestamp: 1, task: "owned", providerID: "local", modelID: "owned", inputCost: 0, outputCost: 0, reason: "owned", candidates: [] })
+      RuntimeInsight.recordVerification({ sessionID, timestamp: 1, toolCallID: "call", claim: "owned", commands: [], results: [], passed: true, durationMs: 0 })
+      RuntimeInsight.runBegin(sessionID, "run_" + sessionID)
+      RuntimeInsight.recordMemoryRecall({ sessionID, timestamp: 1, scopeHash: "owned", queryFingerprint: "owned", algorithm: "owned", algorithmRevision: "1", latencyMs: 0, hits: [] })
+    }
+    for (const rows of [RuntimeInsight.contextLayers(1, visibility), RuntimeInsight.routingDecisions(1, visibility), RuntimeInsight.verifications(1, visibility), RuntimeInsight.runs(1, visibility), RuntimeInsight.memoryRecalls(1, visibility)]) {
+      expect(rows.map((row) => row.sessionID)).toEqual(["ses_a"])
+    }
+    expect(RuntimeInsight.contextLayers(1)[0]?.sessionID).toBe("orphan")
+  })
+
+  it("uses explicit owner pairs or canonical Session visibility, never actor guessing", () => {
+    RuntimeInsight.auditRecord({ actor: "other", action: "owned-pair", resource: "owned", tenantID: "ten_a", ownerUserID: "usr_a", metadata: { sessionID: "ses_b" } })
+    RuntimeInsight.auditRecord({ actor: "usr_a", action: "foreign-pair", resource: "foreign", tenantID: "ten_b", ownerUserID: "usr_a", metadata: { sessionID: "ses_a" } })
+    RuntimeInsight.auditRecord({ actor: "usr_a", action: "partial-pair", resource: "unknown", tenantID: "ten_a", metadata: { sessionID: "ses_a" } })
+    RuntimeInsight.auditRecord({ actor: "other", action: "owned-session", resource: "owned", metadata: { sessionID: "ses_a" } })
+    RuntimeInsight.auditRecord({ actor: "user:usr_a", action: "unknown", resource: "ses_a" })
+    expect(RuntimeInsight.auditList(10, undefined, visibility).entries.map((row) => row.action)).toEqual(["owned-session", "owned-pair"])
+  })
+
+  it("verifies only visible original digests and withholds foreign verdicts and retention counters", () => {
+    const first = RuntimeInsight.auditRecord({ actor: "a", action: "a1", resource: "a", metadata: { sessionID: "ses_a" } })
+    RuntimeInsight.auditRecord({ actor: "b", action: "b1", resource: "b", metadata: { sessionID: "ses_b" } })
+    const last = RuntimeInsight.auditRecord({ actor: "a", action: "a2", resource: "a", metadata: { sessionID: "ses_a" } })
+    const original = RuntimeInsight.auditList(10).entries
+    const expected: ReturnType<typeof RuntimeInsight.auditVerify> = { valid: true, count: 2, headHash: last.recordHash, issue: null, scope: "principal-records" }
+    expect(RuntimeInsight.auditVerify(visibility)).toEqual(expected)
+    expect(RuntimeInsight.auditList(10).entries).toEqual(original)
+    expect(last.previousHash).not.toBe(first.recordHash)
+    const store = RuntimeInsight.__storeForTesting()
+    store.audit[1] = { ...store.audit[1]!, resource: "foreign-corruption" }
+    store.auditDropped = 77
+    expect(RuntimeInsight.auditVerify().valid).toBe(false)
+    expect(RuntimeInsight.auditVerify(visibility)).toEqual(expected)
+    expect(RuntimeInsight.auditList(10, undefined, visibility).dropped).toBe(0)
+    store.audit[0] = { ...store.audit[0]!, resource: "owned-corruption" }
+    expect(RuntimeInsight.auditVerify(visibility)).toEqual({ ...expected, valid: false, issue: "A visible audit record failed digest verification." })
+    expect(RuntimeInsight.auditVerify({ ...visibility, sessionIDs: new Set() })).toEqual({ valid: true, count: 0, headHash: "genesis", issue: null, scope: "principal-records" })
+  })
+
+  it("preserves the exact local legacy verification shape", () => {
+    RuntimeInsight.auditRecord({ actor: "local", action: "local", resource: "local" })
+    expect(Object.keys(RuntimeInsight.auditVerify()).sort()).toEqual(["count", "headHash", "issue", "valid"])
+    expect(RuntimeInsight.auditVerify()).toMatchObject({ valid: true, count: 1, issue: null })
+  })
+})

@@ -188,7 +188,11 @@ const layer = Layer.effect(
         args,
         cwd,
         status: "running",
-        pid: proc.pid,
+        // Windows ConPTY publishes its PID after the data pipe becomes ready.
+        // Keep list/get/JSON reads attached to that live native value.
+        get pid() {
+          return proc.pid
+        },
       }
       const session: Active = {
         info,

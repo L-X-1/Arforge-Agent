@@ -13,6 +13,12 @@ import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useServerSDK } from "@/context/server-sdk"
 import { ScopedKey } from "@/utils/server-scope"
+import { useParams } from "@solidjs/router"
+import { ServerConnection } from "@/context/server"
+import { safeControlServerLabel } from "@/context/control-approval"
+import { publicErrorMessage } from "@/utils/public-error"
+import { managementErrorText } from "@/components/settings-v2/management-state"
+import { requestFeedbackCopy, SessionRequestFeedback, SessionRequestOrigin } from "./session-request-feedback"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
 
@@ -65,7 +71,30 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   const sdk = useSDK()
   const serverSDK = useServerSDK()
   const language = useLanguage()
-  const cacheKey = ScopedKey.from(serverSDK().scope, props.request.id)
+  const params = useParams()
+  const api = sdk().api
+  const sourceScope = serverSDK().scope
+  const rootSessionID = params.id
+  const origin = {
+    server: safeControlServerLabel(ServerConnection.key(serverSDK().server)),
+    directory: sdk().directory,
+    sessionID: props.request.sessionID,
+    requestID: props.request.id,
+  }
+  const cacheKey = ScopedKey.from(sourceScope, origin.directory, origin.sessionID, origin.requestID)
+  let disposed = false
+  let submitting = false
+  const current = () =>
+    !disposed &&
+    serverSDK().scope === sourceScope &&
+    sdk().api === api &&
+    sdk().directory === origin.directory &&
+    params.id === rootSessionID &&
+    props.request.id === origin.requestID &&
+    props.request.sessionID === origin.sessionID
+  onCleanup(() => {
+    disposed = true
+  })
 
   const questions = createMemo(() => props.request.questions)
   const total = createMemo(() => questions().length)
@@ -80,6 +109,8 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     focus: 0,
     minimized: false,
     optionsHeight: 180,
+    error: "",
+    lastAction: "reply" as "reply" | "reject",
   })
 
   let root: HTMLDivElement | undefined
@@ -218,14 +249,18 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   })
 
   const fail = (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err)
+    if (!current()) return
+    const message = publicErrorMessage(managementErrorText(err, language.t("common.requestFailed"))).slice(0, 500)
+    setStore("error", message)
     showToast({ title: language.t("common.requestFailed"), description: message })
   }
 
   const replyMutation = useMutation(() => ({
     mutationFn: (answers: QuestionAnswer[]) =>
-      sdk().api.question.reply({ sessionID: props.request.sessionID, requestID: props.request.id, answers }),
+      api.question.reply({ sessionID: origin.sessionID, requestID: origin.requestID, answers }),
     onMutate: () => {
+      if (!current()) return
+      setStore({ error: "", lastAction: "reply" })
       props.onSubmit()
     },
     onSuccess: () => {
@@ -236,8 +271,10 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => sdk().api.question.reject({ sessionID: props.request.sessionID, requestID: props.request.id }),
+    mutationFn: () => api.question.reject({ sessionID: origin.sessionID, requestID: origin.requestID }),
     onMutate: () => {
+      if (!current()) return
+      setStore({ error: "", lastAction: "reject" })
       props.onSubmit()
     },
     onSuccess: () => {
@@ -250,13 +287,27 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   const sending = createMemo(() => replyMutation.isPending || rejectMutation.isPending)
 
   const reply = async (answers: QuestionAnswer[]) => {
-    if (sending()) return
-    await replyMutation.mutateAsync(answers)
+    if (submitting || sending() || !current()) return
+    submitting = true
+    try {
+      await replyMutation.mutateAsync(answers)
+    } catch {
+      /* onError owns the scoped, persistent failure feedback. */
+    } finally {
+      submitting = false
+    }
   }
 
   const reject = async () => {
-    if (sending()) return
-    await rejectMutation.mutateAsync()
+    if (submitting || sending() || !current()) return
+    submitting = true
+    try {
+      await rejectMutation.mutateAsync()
+    } catch {
+      /* onError owns the scoped, persistent failure feedback. */
+    } finally {
+      submitting = false
+    }
   }
 
   const submit = () => void reply(questions().map((_, i) => store.answers[i] ?? []))
@@ -455,6 +506,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     <div data-component="session-question-dock">
       <DockPrompt
         kind="question"
+        busy={sending()}
         ref={(el) => (root = el)}
         onKeyDown={nav}
         header={
@@ -497,7 +549,9 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
         footer={
           <>
             <Button variant="ghost" size="large" disabled={sending()} onClick={reject} aria-keyshortcuts="Escape">
-              {language.t("ui.common.dismiss")}
+              {rejectMutation.isPending
+                ? requestFeedbackCopy(language.locale()).dismiss
+                : language.t("ui.common.dismiss")}
             </Button>
             <div data-slot="question-footer-actions">
               <Show when={store.tab > 0}>
@@ -512,12 +566,28 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
                 onClick={next}
                 aria-keyshortcuts="Meta+Enter Control+Enter"
               >
-                {last() ? language.t("ui.common.submit") : language.t("ui.common.next")}
+                {replyMutation.isPending
+                  ? requestFeedbackCopy(language.locale()).answer
+                  : last()
+                    ? language.t("ui.common.submit")
+                    : language.t("ui.common.next")}
               </Button>
             </div>
           </>
         }
       >
+        <SessionRequestOrigin origin={origin} />
+        <SessionRequestFeedback
+          busy={
+            sending()
+              ? store.lastAction === "reject"
+                ? requestFeedbackCopy(language.locale()).dismiss
+                : requestFeedbackCopy(language.locale()).answer
+              : undefined
+          }
+          error={store.error}
+          onRetry={() => (store.lastAction === "reject" ? void reject() : submit())}
+        />
         <div
           data-slot="question-text"
           style={{

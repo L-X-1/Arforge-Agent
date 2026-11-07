@@ -259,9 +259,13 @@ export function SessionReviewFilePreviewV2(props: SessionReviewFilePreviewV2Prop
             {statusLabel(view().status)}
           </div>
           <FileIcon node={{ path: props.file, type: "file" }} />
-          <span data-slot="session-review-v2-file-name">{getFilename(props.file)}</span>
+          <span data-slot="session-review-v2-file-name" title={props.file}>
+            {getFilename(props.file)}
+          </span>
           <Show when={props.file.includes("/")}>
-            <span data-slot="session-review-v2-file-path">{getDirectory(props.file)}</span>
+            <span data-slot="session-review-v2-file-path" title={props.file}>
+              {getDirectory(props.file)}
+            </span>
           </Show>
         </div>
         <div data-slot="session-review-v2-file-diff">
@@ -273,6 +277,9 @@ export function SessionReviewFilePreviewV2(props: SessionReviewFilePreviewV2Prop
           scrollRef = el
         }}
         data-slot="session-review-v2-diff-scroll"
+        role="region"
+        aria-label={props.file}
+        tabIndex={0}
       >
         <Show
           when={diffCanRender() || mediaKind()}

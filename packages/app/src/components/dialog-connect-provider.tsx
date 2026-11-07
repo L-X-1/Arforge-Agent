@@ -360,16 +360,42 @@ function ProviderConnection(props: {
   onBack: () => void
   setBack: (handler: () => void) => void
 }) {
-  const dialog = useDialog()
-  const serverSync = useServerSync()
   const serverSDK = useServerSDK()
+  const params = useParams()
+  const source = createMemo(() => ({
+    sdk: serverSDK(),
+    directory: props.directory?.() ?? decode64(params.dir),
+    provider: props.provider,
+  }))
+  return <Show when={source()} keyed>{(requested) => (
+    <ProviderConnectionContent
+      provider={requested.provider}
+      directory={() => requested.directory}
+      onBack={props.onBack}
+      setBack={props.setBack}
+    />
+  )}</Show>
+}
+
+function ProviderConnectionContent(props: {
+  provider: string
+  directory?: Accessor<string | undefined>
+  onBack: () => void
+  setBack: (handler: () => void) => void
+}) {
+  const dialog = useDialog()
+  const requestedSync = useServerSync()()
+  const requestedSDK = useServerSDK()()
+  const serverSync = () => requestedSync
+  const serverSDK = () => requestedSDK
   const queryClient = useQueryClient()
   const params = useParams()
   const language = useLanguage()
   const settings = useSettings()
   const newLayout = settings.general.newLayoutDesigns
   const providers = useProviders(props.directory)
-  const directory = () => props.directory?.() ?? decode64(params.dir)
+  const requestedDirectory = props.directory?.() ?? decode64(params.dir)
+  const directory = () => requestedDirectory
   const location = () => {
     const value = directory()
     return value ? { directory: value } : undefined
@@ -703,11 +729,13 @@ function ProviderConnection(props: {
   })
 
   async function complete() {
+    if (!alive.value) return
     oauthLifecycle.finished = true
     const value = directory()
     await queryClient
       .refetchQueries(serverSync().queryOptions.providers(value ? pathKey(value) : null))
       .catch(() => undefined)
+    if (!alive.value) return
     dialog.close()
     showToast({
       variant: "success",
@@ -795,9 +823,12 @@ function ProviderConnection(props: {
 
   function ApiAuthView() {
     let apiKey: HTMLInputElement | undefined
+    let active = true
+    onCleanup(() => { active = false })
     const errorID = createUniqueId()
     const [formStore, setFormStore] = createStore({
       value: "",
+      busy: false,
       error: undefined as string | undefined,
     })
 
@@ -808,6 +839,7 @@ function ProviderConnection(props: {
 
     async function handleSubmit(e: SubmitEvent) {
       e.preventDefault()
+      if (formStore.busy || !active) return
 
       const form = e.currentTarget as HTMLFormElement
       const formData = new FormData(form)
@@ -818,13 +850,19 @@ function ProviderConnection(props: {
         return
       }
 
-      setFormStore("error", undefined)
-      await serverSDK().api.integration.connect.key({
-        integrationID: props.provider,
-        location: location(),
-        key: apiKey,
-      })
-      await complete()
+      setFormStore({ error: undefined, busy: true })
+      try {
+        await serverSDK().api.integration.connect.key({
+          integrationID: props.provider,
+          location: location(),
+          key: apiKey,
+        })
+        if (active && alive.value) await complete()
+      } catch (error) {
+        if (active && alive.value) setFormStore("error", formatError(error, language.t("common.requestFailed")))
+      } finally {
+        if (active) setFormStore("busy", false)
+      }
     }
 
     if (newLayout())
@@ -838,6 +876,7 @@ function ProviderConnection(props: {
                 ref={apiKey}
                 class="!w-full"
                 name="apiKey"
+                type="password"
                 placeholder={language.t("provider.connect.apiKey.placeholder")}
                 value={formStore.value}
                 invalid={formStore.error !== undefined}
@@ -854,7 +893,7 @@ function ProviderConnection(props: {
                 </div>
               )}
             </Show>
-            <ButtonV2 type="submit" variant="contrast">
+            <ButtonV2 type="submit" variant="contrast" disabled={formStore.busy} aria-busy={formStore.busy}>
               {language.t("common.continue")}
             </ButtonV2>
           </form>
@@ -870,7 +909,7 @@ function ProviderConnection(props: {
           <TextField
             autofocus={!newLayout()}
             ref={apiKey}
-            type="text"
+            type="password"
             label={language.t("provider.connect.apiKey.label", { provider: provider().name })}
             placeholder={language.t("provider.connect.apiKey.placeholder")}
             name="apiKey"
@@ -879,7 +918,7 @@ function ProviderConnection(props: {
             validationState={formStore.error ? "invalid" : undefined}
             error={formStore.error}
           />
-          <Button class="w-auto" type="submit" size="large" variant="primary">
+          <Button class="w-auto" type="submit" size="large" variant="primary" disabled={formStore.busy} aria-busy={formStore.busy}>
             {language.t("common.continue")}
           </Button>
         </form>

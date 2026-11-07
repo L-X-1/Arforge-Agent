@@ -1,5 +1,5 @@
 R08 native Task owner / receipt evidence, 2026-09-13
-Working directory: E:/Arforge-Agent/packages/core
+Working directory: %ARFORGE_REPO%/packages/core
 Command: bun test --rerun-every --timeout 60000 test/action-gateway.test.ts test/session-runner.test.ts -t 'receipt.*preserves the original effect|repairs a scheduled.*write failure'
 FIXTURE CAVEAT: early failure/defect matrix included an invalid typed-error projector; the defect cancellation also independently failed. Final matrix uses valid defect/interrupt projectors.
 Exit code: 1

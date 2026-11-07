@@ -3,7 +3,7 @@ import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@ar
 import { DividerV2 } from "@arforge-ai/ui/v2/divider-v2"
 import { TextInputV2 } from "@arforge-ai/ui/v2/text-input-v2"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
-import { type Component, Show, createEffect, createSignal, createUniqueId, onCleanup, onMount } from "solid-js"
+import { type Component, Show, createEffect, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { type ServerConnection } from "@/context/server"
 import { useServerManagementController } from "../dialog-select-server"
@@ -21,7 +21,17 @@ export const DialogServerV2: Component<{
     navigateOnAdd: false,
   })
   const [opened, setOpened] = createSignal(false)
+  const [submitted, setSubmitted] = createSignal(false)
   const formID = createUniqueId()
+  const formError = createMemo(() => controller.formError() || (submitted() && !controller.formValue().trim()
+    ? language.locale().startsWith("zh") ? "请输入服务器地址。" : "Enter a server address."
+    : ""))
+  const submit = () => {
+    if (controller.formBusy()) return
+    setSubmitted(true)
+    if (!controller.formValue().trim()) return
+    controller.submitForm()
+  }
 
   onMount(() => {
     if (props.mode === "add") controller.startAdd()
@@ -40,9 +50,9 @@ export const DialogServerV2: Component<{
   })
 
   const keyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.isComposing || controller.formBusy()) return
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || controller.formBusy()) return
     event.preventDefault()
-    controller.submitForm()
+    submit()
   }
 
   const title = () =>
@@ -55,7 +65,7 @@ export const DialogServerV2: Component<{
   }
 
   return (
-    <Dialog fit class="settings-v2-server-dialog">
+    <Dialog fit class="settings-v2-server-dialog" containerClass="settings-v2-server-dialog-container">
       <DialogHeader hideClose={true}>
         <DialogTitle>{title()}</DialogTitle>
       </DialogHeader>
@@ -70,17 +80,17 @@ export const DialogServerV2: Component<{
               class="!w-full self-stretch"
               id={`${formID}-url`}
               aria-label={language.t("dialog.server.add.url")}
-              aria-describedby={controller.formError() ? `${formID}-error` : undefined}
+              aria-describedby={formError() ? `${formID}-error` : undefined}
               value={controller.formValue()}
               placeholder={language.t("dialog.server.add.placeholder")}
-              invalid={!!controller.formError()}
+              invalid={!!formError()}
               disabled={controller.formBusy()}
               autofocus
               onInput={(event) => controller.handleFormChange()(event.currentTarget.value)}
               onKeyDown={keyDown}
             />
-            <Show when={controller.formError()}>
-              <span id={`${formID}-error`} role="alert" class="settings-v2-server-dialog-error">{controller.formError()}</span>
+            <Show when={formError()}>
+              <span id={`${formID}-error`} role="alert" class="settings-v2-server-dialog-error">{formError()}</span>
             </Show>
           </div>
           <div class="flex w-full min-w-0 flex-col gap-2">
@@ -136,7 +146,7 @@ export const DialogServerV2: Component<{
         <ButtonV2 variant="neutral" disabled={controller.formBusy()} onClick={() => dialog.close()}>
           {language.t("common.cancel")}
         </ButtonV2>
-        <ButtonV2 variant="contrast" disabled={controller.formBusy()} onClick={controller.submitForm}>
+        <ButtonV2 variant="contrast" disabled={controller.formBusy()} onClick={submit}>
           {submitLabel()}
         </ButtonV2>
       </DialogFooter>

@@ -3,7 +3,7 @@
 日期：2026-09-22
 状态：完整待审稿，不是实施批准。
 范围：桌面端与 Web；CLI/TUI 不变。
-入口：[全部预览](C:/Users/14181/.codex/visualizations/2026/09/09/01a08447-eb04-7ba0-acac-ee4885be7f75/arforge-ui-review-v2-20260922/gallery.html) · [完整计划](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-review-plan.md) · [页面与功能清单](E:/Arforge-Agent/docs/ui-redesign/2026-09-22-ui-redesign-v2-page-state-inventory.md)
+入口：[全部预览] · [完整计划](2026-09-22-ui-redesign-v2-review-plan.md) · [页面与功能清单](2026-09-22-ui-redesign-v2-page-state-inventory.md)
 
 ## 1. 如何理解这次“全部设计好”
 

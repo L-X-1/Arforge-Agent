@@ -6,8 +6,9 @@ import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
   LLMError,
+  LLMRequest,
+  Message,
   type ContentPart,
-  type LLMRequest,
   type MediaPart,
   type ToolFileContent,
   type TextPart,
@@ -175,6 +176,7 @@ export const validateMedia = Effect.fn("ProviderShared.validateMedia")(function*
   route: string,
   part: MediaPart,
   supportedMimes: ReadonlySet<string>,
+  options?: { readonly allowEmpty?: boolean },
 ) {
   const mime = part.mediaType.toLowerCase()
   if (!supportedMimes.has(mime)) return yield* invalidRequest(`${route} does not support media type ${part.mediaType}`)
@@ -196,13 +198,52 @@ export const validateMedia = Effect.fn("ProviderShared.validateMedia")(function*
 
   if (Buffer.byteLength(base64, "utf8") > MAX_MEDIA_ENCODED_BYTES)
     return yield* invalidRequest(`${route} media exceeds the ${MAX_MEDIA_ENCODED_BYTES} byte encoded limit`)
-  if (!base64 || base64.length % 4 !== 0 || !base64Pattern.test(base64))
+  if ((!base64 && !options?.allowEmpty) || base64.length % 4 !== 0 || !base64Pattern.test(base64))
     return yield* invalidRequest(`${route} media must contain valid base64`)
   const bytes = Buffer.from(base64, "base64")
   if (bytes.byteLength > MAX_MEDIA_DECODED_BYTES)
     return yield* invalidRequest(`${route} media exceeds the ${MAX_MEDIA_DECODED_BYTES} byte decoded limit`)
   if (bytes.toString("base64") !== base64) return yield* invalidRequest(`${route} media must contain canonical base64`)
   return { mime, base64, dataUrl: `data:${mime};base64,${base64}`, bytes } satisfies ValidatedMedia
+})
+
+/** Text files are ordinary untrusted user context, not provider-native media.
+ * Decode inline bytes only; unresolved URIs still fail validation without IO.
+ */
+export const lowerTextFiles = Effect.fn("ProviderShared.lowerTextFiles")(function* (request: LLMRequest) {
+  let changed = false
+  const messages = yield* Effect.forEach(request.messages, (message) =>
+    Effect.gen(function* () {
+      if (
+        message.role !== "user" ||
+        !message.content.some((part) => part.type === "media" && part.mediaType.toLowerCase() === "text/plain")
+      )
+        return message
+      const content = yield* Effect.forEach(message.content, (part) =>
+        Effect.gen(function* () {
+          if (part.type !== "media" || part.mediaType.toLowerCase() !== "text/plain") return part
+          const media = yield* validateMedia("Text attachment", part, new Set(["text/plain"]), { allowEmpty: true })
+          let text: string
+          try {
+            text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(media.bytes)
+          } catch {
+            return yield* invalidRequest("Text attachment must contain valid UTF-8")
+          }
+          changed = true
+          const name = part.filename === undefined ? "" : ` ${encodeJson(part.filename)}`
+          return { type: "text" as const, text: `Attached file${name} (text/plain):\n${text}`, metadata: part.metadata }
+        }),
+      )
+      return Message.make({
+        id: message.id,
+        role: message.role,
+        content,
+        metadata: message.metadata,
+        native: message.native,
+      })
+    }),
+  )
+  return changed ? LLMRequest.update(request, { messages }) : request
 })
 
 export const validateToolFile = (route: string, part: ToolFileContent, supportedMimes: ReadonlySet<string>) =>

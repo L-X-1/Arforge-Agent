@@ -1,4 +1,78 @@
+import type { AgentPart, FileAttachmentPart } from "@/context/prompt"
+
 const MAX_BREAKS = 200
+
+export function createPromptPill(
+  part: FileAttachmentPart | AgentPart,
+  removal?: { removeLabel: string; onRemove: (pill: HTMLElement) => void },
+) {
+  const pill = document.createElement("span")
+  pill.textContent = part.content
+  pill.setAttribute("data-type", part.type)
+  if (part.type === "file") {
+    pill.setAttribute("data-path", part.path)
+    if (part.mime) pill.setAttribute("data-mime", part.mime)
+    if (part.filename) pill.setAttribute("data-filename", part.filename)
+    if (part.url) pill.setAttribute("data-url", part.url)
+    if (part.source?.type === "resource") {
+      pill.setAttribute("data-source-type", part.source.type)
+      pill.setAttribute("data-source-client-name", part.source.clientName)
+      pill.setAttribute("data-source-uri", part.source.uri)
+      if (!part.content) {
+        const label = `${part.source.clientName}: ${part.filename || part.source.uri}`
+        const target = `${label} (${part.source.uri})`
+        pill.dataset.resourceLabel = label
+        pill.setAttribute("aria-label", removal ? `${removal.removeLabel}: ${target}` : target)
+        pill.setAttribute("title", `${part.source.clientName}: ${part.source.uri}`)
+        pill.classList.add("before:content-[attr(data-resource-label)]")
+        if (removal) {
+          pill.setAttribute("role", "button")
+          pill.tabIndex = 0
+          pill.classList.add("inline-flex", "gap-1", "after:content-['×']")
+          const remove = (event: Event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            removal.onRemove(pill)
+          }
+          pill.addEventListener("click", remove)
+          pill.addEventListener("keydown", (event) => {
+            if (["Enter", " ", "Backspace", "Delete"].includes(event.key)) remove(event)
+          })
+        }
+      }
+    }
+  }
+  if (part.type === "agent") pill.setAttribute("data-name", part.name)
+  pill.setAttribute("contenteditable", "false")
+  pill.style.userSelect = "text"
+  pill.style.cursor =
+    removal && part.type === "file" && part.source?.type === "resource" && !part.content ? "pointer" : "default"
+  return pill
+}
+
+export function readFilePill(file: HTMLElement, position: number): FileAttachmentPart {
+  const content = file.textContent ?? ""
+  const source =
+    file.dataset.sourceType === "resource" && file.dataset.sourceClientName && file.dataset.sourceUri
+      ? {
+          type: "resource" as const,
+          text: { value: content, start: position, end: position + content.length },
+          clientName: file.dataset.sourceClientName,
+          uri: file.dataset.sourceUri,
+        }
+      : undefined
+  return {
+    type: "file",
+    path: file.dataset.path!,
+    content,
+    start: position,
+    end: position + content.length,
+    ...(file.dataset.mime ? { mime: file.dataset.mime } : {}),
+    ...(file.dataset.filename ? { filename: file.dataset.filename } : {}),
+    ...(file.dataset.url ? { url: file.dataset.url } : {}),
+    ...(source ? { source } : {}),
+  }
+}
 
 export function createTextFragment(content: string): DocumentFragment {
   const fragment = document.createDocumentFragment()

@@ -3,7 +3,7 @@ import { SessionInput } from "@arforge-ai/schema/session-input"
 import { PromptInput } from "@arforge-ai/schema/prompt-input"
 import { Session } from "@arforge-ai/schema/session"
 import { Project } from "@arforge-ai/schema/project"
-import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, statics } from "@arforge-ai/schema/schema"
+import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, optional, statics } from "@arforge-ai/schema/schema"
 import { Workspace } from "@arforge-ai/schema/workspace"
 import { Context, Effect, Encoding, Result, Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -175,6 +175,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.rename", "/api/session/:sessionID/rename", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ title: Schema.String }),
+        success: HttpApiSchema.NoContent,
+        error: [InvalidRequestError, SessionNotFoundError, ConflictError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.rename",
+            summary: "Rename session",
+            description: "Commit a manual title without changing other session metadata.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.put("session.tagsUpdate", "/api/session/:sessionID/tags", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ tags: SessionOrganization.Tags }),
@@ -222,9 +238,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.rewindPreview", "/api/session/:sessionID/rewind/preview", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({ checkpointID: SessionOrganization.CheckpointID }),
+        payload: SessionOrganization.RewindTarget,
         success: Schema.Struct({ data: SessionOrganization.RewindPreview }),
-        error: [CheckpointNotFoundError, SessionNotFoundError],
+        error: [CheckpointNotFoundError, MessageNotFoundError, ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -238,12 +254,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.rewindApply", "/api/session/:sessionID/rewind/apply", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({
-          checkpointID: SessionOrganization.CheckpointID,
-          expectedLastSequence: NonNegativeInt,
-        }),
+        payload: SessionOrganization.RewindApplyInput,
         success: Schema.Struct({ data: SessionOrganization.RewindResult }),
-        error: [CheckpointNotFoundError, ConflictError, SessionNotFoundError],
+        error: [CheckpointNotFoundError, MessageNotFoundError, ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -297,7 +310,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, ServiceUnavailableError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -307,6 +320,40 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.shell", "/api/session/:sessionID/shell", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          command: Schema.String,
+          agent: Schema.String.pipe(Schema.optional),
+          model: Model.Ref.pipe(Schema.optional),
+        }),
+        success: HttpApiSchema.NoContent,
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.shell", summary: "Run direct Shell", description: "Run a source-bound direct Shell command through the session execution owner and its permission gateway." })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.command", "/api/session/:sessionID/command", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          command: Schema.String,
+          arguments: Schema.String.pipe(Schema.optional),
+          agent: Schema.String.pipe(Schema.optional),
+          model: Model.Ref.pipe(Schema.optional),
+          files: Schema.Array(PromptInput.FileAttachment).pipe(Schema.optional),
+          delivery: SessionInput.Delivery.pipe(Schema.optional),
+          resume: Schema.Boolean.pipe(Schema.optional),
+        }),
+        success: Schema.Struct({ data: SessionInput.Admitted }),
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({ identifier: "v2.session.command", summary: "Send named command", description: "Resolve a named command before canonical durable admission; execution shares the existing session runner." })),
     )
     .add(
       HttpApiEndpoint.get("session.promptQueueList", "/api/session/:sessionID/prompt/queue", {
@@ -328,17 +375,18 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID, messageID: SessionMessage.ID },
         payload: Schema.Struct({
           expectedAdmittedSeq: NonNegativeInt,
+          expectedModel: Model.Ref.pipe(optional),
           prompt: PromptInput.Prompt,
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, MessageNotFoundError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, ServiceUnavailableError, MessageNotFoundError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.promptQueueUpdate",
             summary: "Update queued prompt",
-            description: "Replace one unpromoted queue entry without changing its FIFO position.",
+            description: "Replace one unpromoted queue entry without changing its FIFO position. If supplied, expectedModel must match the stored queued model route exactly.",
           }),
         ),
     )
@@ -361,15 +409,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
         params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          model: Model.Ref.pipe(Schema.optional),
+          expectedContext: Schema.String.pipe(Schema.optional),
+          expectedDirectory: AbsolutePath.pipe(Schema.optional),
+        }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.compact",
             summary: "Compact session",
-            description: "Compact a session conversation.",
+            description: "Compact a session conversation through its transaction/checkpoint owner. Returns empty 204 only after committed settlement; an expectedContext projection rejects a stale preview before provider work.",
           }),
         ),
     )

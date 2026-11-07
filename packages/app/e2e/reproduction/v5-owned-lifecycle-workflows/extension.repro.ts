@@ -1,0 +1,331 @@
+import { test,expect } from "./network-fixture"
+import { runRows, selectCatalogRecords, showCatalog } from "./selection"
+import type { Page,Locator } from "@playwright/test"
+import type { Call,Mode } from "./sdk-fixture"
+
+const panel=(page:Page)=>page.getByTestId("extension-management")
+const host=(page:Page)=>page.getByTestId("production-extensions-host")
+const snap=(page:Page)=>page.evaluate(()=>window.__extensionAcceptance.snapshot())
+async function labels(page:Page){const value=(await snap(page)).application?.labels;if(!value)throw new Error("Real parent labels unavailable");return value}
+async function open(page:Page,scenario="baseline",ready=true){
+ await page.goto("/?scenario="+scenario)
+ if(ready){await expect(panel(page)).toBeVisible();const l=await labels(page);await expect(panel(page).getByRole("button",{name:l.refreshAll,exact:true})).toBeEnabled();await selectCatalogRecords(page)}
+ return labels(page)
+}
+async function callsFor(page:Page,action:string){return (await snap(page)).calls.filter(c=>c.action===action)}
+async function pending(page:Page,action:string):Promise<Call>{
+ await expect.poll(async()=>(await callsFor(page,action)).filter(c=>!c.settled).length).toBe(1)
+ return (await callsFor(page,action)).find(c=>!c.settled)!
+}
+async function settle(page:Page,call:Call,outcome:"ok"|"error"|"approve"|"reject"="ok"){
+ await page.evaluate(({id,outcome})=>window.__extensionAcceptance.settle(id,outcome),{id:call.id,outcome})
+}
+async function refreshAll(page:Page){const l=await labels(page);await panel(page).getByRole("button",{name:l.refreshAll,exact:true}).click();await expect(panel(page).getByRole("button",{name:l.refreshAll,exact:true})).toBeEnabled()}
+async function confirmClick(page:Page,button:Locator,accept:boolean){await button.click();const modal=page.getByRole('dialog',{name:'Confirm action',exact:true});await expect(modal).toBeVisible();expect(await modal.locator('p').innerText()).toContain('Cancel Workflow Run');await modal.getByRole('button',{name:accept?'Confirm':'Cancel',exact:true}).click()}
+async function changeScope(page:Page,mode:Mode){
+ if(mode==="location-refresh"){
+  await page.evaluate(()=>window.__extensionAcceptance.holdNext("location.get"))
+  await page.evaluate(mode=>window.__extensionAcceptance.switchScope(mode),mode)
+  const l=await labels(page)
+  await host(page).locator(".arforge-control-center-header").getByRole("button",{name:l.refreshParent,exact:true}).click()
+  const location=await pending(page,"location.get")
+  await expect(panel(page)).toHaveCount(0)
+  await settle(page,location)
+ }else await page.evaluate(mode=>window.__extensionAcceptance.switchScope(mode),mode)
+ await expect(panel(page)).toBeVisible()
+ const l=await labels(page)
+ if(mode!=="session")await expect(panel(page).getByRole("button",{name:l.refreshAll,exact:true})).toBeEnabled()
+ const state=await snap(page)
+ await selectCatalogRecords(page)
+ await expect(runRows(page)).toContainText("Run "+state.active.source+"/"+state.active.location.workspaceID+"/"+state.active.sessionID)
+}
+async function openCurrentRun(page:Page){
+ await showCatalog(page,"Workflows")
+ await page.evaluate(()=>window.__extensionAcceptance.holdNext("workflowRunGet"))
+ await runRows(page).click()
+ const call=await pending(page,"workflowRunGet");await settle(page,call)
+ await expect(panel(page).getByTestId("workflow-run-detail")).toBeVisible()
+}
+test("[core] production parent baseline preserves bound SDK location and readonly sibling lifecycle",async({page},testInfo)=>{
+ const started=Date.now();await open(page)
+ const state=await snap(page),actions=state.calls.map(c=>c.action)
+ expect(actions.filter(a=>a==="location.get")).toHaveLength(1)
+ for(const action of state.childReads)expect(actions.filter(a=>a===action)).toHaveLength(1)
+ expect(state.calls.every(c=>c.method==="GET")).toBe(true)
+ expect(state.calls.filter(c=>c.action!=="location.get").every(c=>c.directory===state.active.location.directory)).toBe(true)
+ await expect(panel(page).getByTestId("workflow-definition")).toHaveCount(1)
+ await expect(panel(page).getByTestId("managed-skill-card")).toHaveCount(1)
+ await expect(panel(page).getByTestId("managed-plugin-card")).toHaveCount(1)
+ const baseline={mode:"production-static-preview",host:"ArforgeSettingsPanels value=arforge-extensions",readyMs:Date.now()-started,snapshot:state}
+ console.log("[extension-production-baseline] "+JSON.stringify(baseline))
+ await testInfo.attach("extension-production-baseline",{body:Buffer.from(JSON.stringify(baseline,null,2)),contentType:"application/json"})
+})
+test("[core] parent location gate prevents child calls until the real location read completes",async({page})=>{
+ await page.goto("/?scenario=location-gate")
+ const call=await pending(page,"location.get")
+ await expect(panel(page)).toHaveCount(0)
+ expect((await snap(page)).calls.map(c=>c.action)).toEqual(["location.get"])
+ await settle(page,call)
+ await selectCatalogRecords(page)
+ await expect(panel(page).getByTestId("workflow-definition")).toBeVisible()
+})
+test("[core] genuine empty lists show empty workflow skill plugin states",async({page})=>{
+ await open(page,"empty")
+ await expect(panel(page).getByTestId("workflow-definition")).toHaveCount(0)
+ await expect(runRows(page)).toHaveCount(0)
+ await expect(panel(page).getByTestId("managed-skill-card")).toHaveCount(0)
+ await expect(panel(page).getByTestId("managed-plugin-card")).toHaveCount(0)
+ await showCatalog(page,"Skills")
+ await expect(panel(page)).toContainText("No managed skills found.")
+ await showCatalog(page,"Plugins")
+ await expect(panel(page)).toContainText("No managed plugins installed.")
+ await showCatalog(page,"Workflows")
+ await expect(panel(page)).toContainText("This session has no workflow runs yet.")
+ await expect(panel(page).getByTestId("extension-management-error")).toHaveCount(0)
+})
+test("[core] one rejected Promise.all read remains visible and Refresh all recovers actual lists",async({page})=>{
+ await open(page,"read-error")
+ await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture pluginList read rejected")
+ expect((await snap(page)).calls.every(c=>c.method==="GET")).toBe(true)
+ await page.evaluate(()=>window.__extensionAcceptance.rejectRead("pluginList",false))
+ await refreshAll(page)
+ await selectCatalogRecords(page)
+ await expect(panel(page).getByTestId("workflow-definition")).toBeVisible()
+ await showCatalog(page,"Skills")
+ await expect(panel(page).getByTestId("managed-skill-card")).toBeVisible()
+ await showCatalog(page,"Plugins")
+ await expect(panel(page).getByTestId("managed-plugin-card")).toBeVisible()
+ await expect(panel(page).getByTestId("extension-management-error")).toHaveCount(0)
+})
+test("[core] a partial refresh failure must disable writes from stale extension lists",async({page})=>{
+ const l=await open(page)
+ await page.evaluate(()=>window.__extensionAcceptance.rejectRead("pluginList",true))
+ await refreshAll(page)
+ await expect(panel(page).getByTestId("extension-management-error")).toBeVisible()
+ const start=panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true})
+ expect({staleStartDisabled:await start.isDisabled(),errorVisible:await panel(page).getByTestId("extension-management-error").isVisible()})
+  .toEqual({staleStartDisabled:true,errorVisible:true})
+})
+test("[core] workflow preview uses original path location and no execution API",async({page})=>{
+ const l=await open(page)
+ await panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.preview,exact:true}).press("Enter")
+ const call=await pending(page,"workflowPreview"),state=await snap(page)
+ expect(call.body).toEqual({path:state.active.location.directory+"/.arforge/workflows/review.json"})
+ expect(call.directory).toBe(state.active.location.directory)
+ await expect(panel(page).getByRole("button",{name:l.refreshAll,exact:true})).toBeDisabled()
+ await settle(page,call)
+ await expect(panel(page).getByTestId("workflow-preview")).toContainText("Read-only preview step")
+ await expect(panel(page).getByTestId("workflow-preview")).toContainText("Preview only")
+ expect(await callsFor(page,"workflowStart")).toHaveLength(0)
+})
+
+test("[workflows-s06] workflow completed snapshot exposes settled node receipt and no pause resume cancel actions",async({page})=>{
+ const l=await open(page,"completed")
+ await openCurrentRun(page)
+ const detail=panel(page).getByTestId("workflow-run-detail")
+ await expect(detail).toContainText("completed")
+ await expect(detail).toContainText("Isolated completed node receipt")
+ for(const label of [l.pause,l.resume,l.cancel])await expect(detail.getByRole("button",{name:label,exact:true})).toHaveCount(0)
+ expect(await callsFor(page,"workflowControl")).toHaveLength(0)
+ expect(await callsFor(page,"workflowStart")).toHaveLength(0)
+})
+test("[core] failed workflow preview retains permission choices and supports explicit retry",async({page})=>{
+ const l=await open(page)
+ await panel(page).getByRole("combobox",{name:l.permission,exact:true}).selectOption("plan")
+ await panel(page).getByRole("combobox",{name:/^Requested parallel ceiling/}).selectOption("2")
+ const button=panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.preview,exact:true})
+ await button.click();const first=await pending(page,"workflowPreview");await settle(page,first,"error")
+ await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture extension request rejected")
+ await expect(panel(page).getByRole("combobox",{name:l.permission,exact:true})).toHaveValue("plan")
+ await expect(panel(page).getByRole("combobox",{name:/^Requested parallel ceiling/})).toHaveValue("2")
+ await button.click();const second=await pending(page,"workflowPreview");expect(second.body).toEqual(first.body);await settle(page,second)
+ await expect(panel(page).getByTestId("workflow-preview")).toBeVisible()
+})
+test("[core] workflow start pause resume and confirmed cancel use exact real handler payloads",async({page})=>{
+ const l=await open(page)
+ await panel(page).getByRole("combobox",{name:l.permission,exact:true}).selectOption("acceptEdits")
+ await panel(page).getByRole("combobox",{name:/^Requested parallel ceiling/}).selectOption("2")
+ await panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true}).click()
+ const start=await pending(page,"workflowStart"),state=await snap(page)
+ expect(start.body).toEqual({path:state.active.location.directory+"/.arforge/workflows/review.json",sessionID:"ses_extension_a",permissionMode:"acceptEdits",maxParallel:2})
+ await settle(page,start)
+ const detail=panel(page).getByTestId("workflow-run-detail")
+ await expect(detail).toBeVisible()
+ await detail.getByRole("button",{name:l.pause,exact:true}).click()
+ const pause=await pending(page,"workflowControl");expect(pause.body).toEqual({action:"pause"});await settle(page,pause)
+ await detail.getByRole("button",{name:l.resume,exact:true}).click()
+ const resume=await pending(page,"workflowControl");expect(resume.path).toBe(pause.path);expect(resume.body).toEqual({action:"resume"});await settle(page,resume)
+ await confirmClick(page,detail.getByRole("button",{name:l.cancel,exact:true}),false)
+ expect(await callsFor(page,"workflowControl")).toHaveLength(2)
+ await confirmClick(page,detail.getByRole("button",{name:l.cancel,exact:true}),true)
+ const cancel=await pending(page,"workflowControl");expect(cancel.body).toEqual({action:"cancel"});await settle(page,cancel)
+ await expect(detail.getByRole("button",{name:l.cancel,exact:true})).toHaveCount(0)
+})
+test("[core] pending workflow control must disable its button and reject duplicate native activation",async({page})=>{
+ const l=await open(page);await openCurrentRun(page)
+ const pause=panel(page).getByTestId("workflow-run-detail").getByRole("button",{name:l.pause,exact:true})
+ await pause.click();await pending(page,"workflowControl")
+ const disabled=await pause.isDisabled()
+ await pause.evaluate((button:HTMLButtonElement)=>button.click())
+ const controls=(await callsFor(page,"workflowControl")).filter(c=>!c.settled)
+ expect.soft({disabled,requests:controls.length}).toEqual({disabled:true,requests:1})
+ for(const call of controls)await settle(page,call)
+})
+for(const mode of ["session","different-server","same-url-instance","location-refresh"] as const satisfies readonly Mode[]){
+ test("[core] real parent discards an old child list after "+mode,async({page})=>{
+  const l=await open(page)
+  await page.evaluate(()=>window.__extensionAcceptance.holdNext("workflowRunList","ses_extension_a"))
+  await panel(page).getByRole("button",{name:l.refreshAll,exact:true}).click()
+  const old=await pending(page,"workflowRunList")
+  await changeScope(page,mode)
+  const state=await snap(page),expected="Run "+state.active.source+"/"+state.active.location.workspaceID+"/"+state.active.sessionID
+  const count=state.calls.length
+  await settle(page,old)
+  const current=runRows(page)
+  expect({displayed:await current.allTextContents(),newCalls:(await snap(page)).calls.slice(count)}).toEqual({displayed:[expect.stringContaining(expected)],newCalls:[]})
+ })
+ test("[core] real parent fences old workflow start completion after "+mode,async({page})=>{
+  const l=await open(page)
+  await panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true}).click()
+  const old=await pending(page,"workflowStart")
+  await changeScope(page,mode)
+  const state=await snap(page),count=state.calls.length
+  if(mode==="session")await page.evaluate(()=>window.__extensionAcceptance.holdNext("workflowRunList","ses_extension_b"))
+  await settle(page,old)
+  const after=await snap(page),detail=panel(page).getByTestId("workflow-run-detail")
+  const effects={followupCalls:after.calls.slice(count).map(c=>({action:c.action,directory:c.directory,sessionID:c.sessionID})),
+    oldDetailVisible:await detail.isVisible()}
+  expect.soft(effects).toEqual({followupCalls:[],oldDetailVisible:false})
+  for(const call of after.calls.filter(c=>!c.settled))await settle(page,call)
+ })
+}
+test("[core] unmounting real parent expires bound APIs before old mutation can refresh",async({page})=>{
+ const l=await open(page)
+ await panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true}).click()
+ const old=await pending(page,"workflowStart"),count=(await snap(page)).calls.length
+ await page.evaluate(()=>window.__extensionAcceptance.unmount())
+ await expect(panel(page)).toHaveCount(0)
+ await settle(page,old)
+ expect((await snap(page)).calls.slice(count)).toEqual([])
+})
+test("[extensions] skill disable and enable require distinct in-memory control approvals and receipts",async({page})=>{
+ await open(page)
+ await showCatalog(page,"Skills")
+ const card=panel(page).getByTestId("managed-skill-card")
+ await card.getByRole("button",{name:"Disable",exact:true}).click()
+ const off=await pending(page,"skillSetEnabled")
+ expect(off.body).toMatchObject({enabled:false,requestID:expect.stringMatching(/^cpr_/ )})
+ await expect(card.getByRole("button",{name:"Disable",exact:true})).toBeDisabled()
+ await settle(page,off,"approve");await expect(card).toHaveAttribute("data-enabled","false")
+ await card.getByRole("button",{name:"Enable",exact:true}).click()
+ const on=await pending(page,"skillSetEnabled");expect(on.body.enabled).toBe(true);expect(on.body.requestID).not.toBe(off.body.requestID)
+ await settle(page,on,"approve");await expect(card).toHaveAttribute("data-enabled","true")
+ expect((await snap(page)).approvals.map(a=>a.decision)).toEqual(["approve","approve"])
+})
+test("[extensions] skill rescan failure stays visible until an explicit successful rescan",async({page})=>{
+ const l=await open(page),button=panel(page).getByTestId("managed-skill-center").getByRole("button",{name:l.rescan,exact:true})
+ await showCatalog(page,"Skills")
+ await button.click();const first=await pending(page,"skillRefresh");await settle(page,first,"error")
+ await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture extension request rejected")
+ await button.click();const second=await pending(page,"skillRefresh");await settle(page,second)
+ await expect(panel(page).getByTestId("managed-skill-card")).toHaveCount(1)
+ expect(await callsFor(page,"skillRefresh")).toHaveLength(2)
+})
+test("[extensions] plugin inspection retains source on failure and blocked candidate cannot install",async({page})=>{
+ await open(page)
+ await showCatalog(page,"Plugins")
+ const center=panel(page).getByTestId("managed-plugin-center"),input=center.getByLabel("Plugin source (local path or public HTTPS URL)",{exact:true})
+ const source="C:/Arforge/ExtensionAcceptance/inspect-only"
+ await input.fill("  "+source+"  ")
+ const inspect=center.getByRole("button",{name:"Inspect package",exact:true})
+ await inspect.click();const first=await pending(page,"pluginInspect");expect(first.body).toEqual({source})
+ await settle(page,first,"error");await expect(input).toHaveValue("  "+source+"  ")
+ await inspect.click();const second=await pending(page,"pluginInspect");await settle(page,second)
+ const review=center.getByTestId("plugin-inspection")
+ await expect(review).toBeVisible()
+ await expect(review).toContainText("Fixture candidate is blocked")
+ await expect(review.getByRole("button",{name:"Install inspected plugin…",exact:true})).toBeDisabled()
+ expect((await snap(page)).calls.some(c=>/\/install\/apply|\/remove|\/restore/.test(c.path))).toBe(false)
+})
+test("[extensions] plugin rejected approval preserves state then explicit approved toggles return exact receipts",async({page})=>{
+ await open(page)
+ await showCatalog(page,"Plugins")
+ const card=panel(page).getByTestId("managed-plugin-card")
+ await card.getByRole("button",{name:"Disable",exact:true}).click()
+ const rejected=await pending(page,"pluginSetEnabled");expect(rejected.body.enabled).toBe(false)
+ await settle(page,rejected,"reject")
+ await expect(card).toHaveAttribute("data-enabled","true")
+ await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture control approval rejected")
+ await card.getByRole("button",{name:"Disable",exact:true}).click()
+ const off=await pending(page,"pluginSetEnabled");expect(off.body.requestID).not.toBe(rejected.body.requestID)
+ await expect(card.getByRole("button",{name:"Disable",exact:true})).toBeDisabled()
+ await settle(page,off,"approve");await expect(card).toHaveAttribute("data-enabled","false")
+ await card.getByRole("button",{name:"Enable",exact:true}).click()
+ const on=await pending(page,"pluginSetEnabled");expect(on.body.enabled).toBe(true);await settle(page,on,"approve")
+ await expect(card).toHaveAttribute("data-enabled","true")
+ expect((await snap(page)).approvals.map(a=>a.decision)).toEqual(["reject","approve","approve"])
+})
+
+test("[fix] rejected workflow start keeps inputs and has no false acknowledgement before explicit retry",async({page})=>{
+ const l=await open(page)
+ await panel(page).getByRole("combobox",{name:l.permission,exact:true}).selectOption("plan")
+ await panel(page).getByRole("combobox",{name:/^Requested parallel ceiling/}).selectOption("2")
+ const source=panel(page).getByTestId("managed-plugin-center").getByLabel("Plugin source (local path or public HTTPS URL)",{exact:true})
+ await showCatalog(page,"Plugins")
+ await source.fill("C:/Arforge/ExtensionAcceptance/retained-draft")
+ await showCatalog(page,"Workflows")
+ const start=panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true})
+ await start.click();const first=await pending(page,"workflowStart")
+ await expect(panel(page).getByText(/^Started Workflow /)).toHaveCount(0)
+ await settle(page,first,"error")
+ await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture extension request rejected")
+ await expect(panel(page).getByTestId("workflow-run-detail")).toHaveCount(0)
+ await expect(panel(page).getByText(/^Started Workflow /)).toHaveCount(0)
+ await expect(panel(page).getByRole("combobox",{name:l.permission,exact:true})).toHaveValue("plan")
+ await expect(panel(page).getByRole("combobox",{name:/^Requested parallel ceiling/})).toHaveValue("2")
+ await expect(source).toHaveValue("C:/Arforge/ExtensionAcceptance/retained-draft")
+ expect(await callsFor(page,"workflowStart")).toHaveLength(1)
+ await refreshAll(page)
+ await start.click();const second=await pending(page,"workflowStart")
+ expect(second.body).toEqual(first.body);await settle(page,second)
+ await expect(panel(page).getByText(/^Started Workflow /)).toBeVisible()
+ expect(await callsFor(page,"workflowStart")).toHaveLength(2)
+})
+for(const action of ["workflowStart","workflowControl"] as const){
+ test("[fix] acknowledged "+action+" with failed refresh retries reads without repeating write",async({page})=>{
+  const l=await open(page)
+  if(action==="workflowControl")await openCurrentRun(page)
+  const button=action==="workflowStart"
+   ?panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true})
+   :panel(page).getByTestId("workflow-run-detail").getByRole("button",{name:l.pause,exact:true})
+  await button.click();const written=await pending(page,action)
+  await page.evaluate(()=>window.__extensionAcceptance.rejectRead("pluginList",true))
+  await settle(page,written)
+  await expect(panel(page).getByTestId("extension-management-error")).toContainText("Fixture pluginList read rejected")
+  await expect(panel(page).getByText(/The write was confirmed; refresh the lists without repeating the write\./)).toBeVisible()
+  expect(await callsFor(page,action)).toHaveLength(1)
+  await expect(panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true})).toBeDisabled()
+  await page.evaluate(()=>window.__extensionAcceptance.rejectRead("pluginList",false))
+  await refreshAll(page)
+  await expect(panel(page).getByTestId("extension-management-error")).toHaveCount(0)
+  if(action==="workflowStart")await expect(panel(page).getByTestId("workflow-run-detail")).toBeVisible()
+  else await expect(panel(page).getByTestId("workflow-run-detail").getByRole("button",{name:l.resume,exact:true})).toBeEnabled()
+  expect(await callsFor(page,action)).toHaveLength(1)
+ })
+}
+test("[fix] pending read disables each write control and native activation sends no mutation",async({page})=>{
+ const l=await open(page);await openCurrentRun(page)
+ await page.evaluate(()=>window.__extensionAcceptance.holdNext("workflowRunList","ses_extension_a"))
+ await panel(page).getByRole("button",{name:l.refreshAll,exact:true}).click()
+ const read=await pending(page,"workflowRunList"),before=(await snap(page)).calls.filter(c=>c.method!=="GET")
+ const buttons=[
+  panel(page).getByTestId("workflow-definition").getByRole("button",{name:l.start,exact:true}),
+  panel(page).getByTestId("workflow-run-detail").getByRole("button",{name:l.pause,exact:true}),
+  panel(page).getByTestId("managed-skill-card").getByRole("button",{name:"Disable",exact:true}),
+  panel(page).getByTestId("managed-plugin-card").getByRole("button",{name:"Disable",exact:true}),
+ ]
+ for(const [index,button] of buttons.entries()){await showCatalog(page,index<2?"Workflows":index===2?"Skills":"Plugins");await expect(button).toBeDisabled();await button.evaluate((element:HTMLButtonElement)=>element.click())}
+ expect((await snap(page)).calls.filter(c=>c.method!=="GET")).toEqual(before)
+ await settle(page,read)
+ for(const [index,button] of buttons.entries()){await showCatalog(page,index<2?"Workflows":index===2?"Skills":"Plugins");await expect(button).toBeEnabled()}
+})

@@ -33,6 +33,7 @@ describe("WorktreeControlExecutor", () => {
       actionID: AgentRuntime.ActionID.make("act_control_executor"),
       controlLease: {} as DurableRun.RunLeaseCapability,
       authorization: {} as ActionGateway.AuthorizationGrantCapability,
+      checkpointControl: () => Effect.die("This forwarding test does not execute checkpoints"),
       controlLeaseValidated: () => Effect.void,
     }
 
@@ -41,6 +42,7 @@ describe("WorktreeControlExecutor", () => {
     expect(Object.keys(received as object).sort()).toEqual([
       "actionID",
       "authorization",
+      "checkpointControl",
       "controlLease",
       "controlLeaseValidated",
       "durable",

@@ -1,5 +1,6 @@
 import { ConfigV1 } from "@arforge-ai/core/v1/config/config"
 import { Config as CoreConfig } from "@arforge-ai/core/config"
+import { CommandV2 as CoreCommand } from "@arforge-ai/core/command"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { Database } from "@arforge-ai/core/database/database"
 import { ToolOutputStore } from "@arforge-ai/core/tool-output-store"
@@ -37,6 +38,7 @@ import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable, SessionTable } from "@arforge-ai/core/session/sql"
+import { SessionStore } from "@arforge-ai/core/session/store"
 import { SessionRunUsageTable } from "@arforge-ai/core/runtime/sql"
 import * as RuntimeBilling from "@arforge-ai/core/runtime/billing"
 import { LLM } from "../../src/session/llm"
@@ -105,6 +107,7 @@ import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project
 import { InstanceStore } from "../../src/project/instance-store"
 import { SessionExecutionFormal } from "../../src/session/execution-formal"
 import { ToolCoreBridge } from "../../src/tool/core-bridge"
+import { resourceAssistantID } from "@arforge-ai/core/session/runner/resource-attachments"
 import {
   compare as compareSessionParity,
   fromCoreMessages as fromFormalParity,
@@ -331,6 +334,26 @@ const formalIntegrationLocationServiceMapNode = makeGlobalNode({
   layer: formalIntegrationLocationServiceMapLayer,
   deps: [Database.node],
 })
+const failedDurableAdmission = Layer.effect(
+  DurableRun.Service,
+  Effect.gen(function* () {
+    const original = yield* DurableRun.Service
+    return DurableRun.Service.of({
+      ...original,
+      create: () => Effect.die(new Error("isolated getSQL in durable admission")),
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(DurableRun.globalNode)))
+const failedSessionContext = Layer.effect(
+  SessionStore.Service,
+  Effect.gen(function* () {
+    const original = yield* SessionStore.Service
+    return SessionStore.Service.of({
+      ...original,
+      context: () => Effect.die(new Error("isolated getSQL in drain preparation")),
+    })
+  }),
+).pipe(Layer.provide(LayerNode.compile(SessionStore.node)))
 
 function makeFormalIntegrationHttp(input?: {
   mcpInstructions?: MCP.ServerInstructions[]
@@ -339,6 +362,7 @@ function makeFormalIntegrationHttp(input?: {
   realSummary?: boolean
   realModels?: boolean
   personalJobs?: boolean
+  drainFailure?: "context" | "admission"
 }) {
   const root = LayerNode.group([
     promptRoot,
@@ -357,7 +381,7 @@ function makeFormalIntegrationHttp(input?: {
     ...(input?.realModels ? [Credential.node] : []),
     ...(input?.realSummary ? [SessionSummary.node] : []),
   ])
-  return LayerNode.compile(root, [
+  const replacements = [
     [
       SessionProcessor.node,
       Layer.mock(SessionProcessor.Service, {
@@ -370,19 +394,27 @@ function makeFormalIntegrationHttp(input?: {
     [RuntimeFlags.node, runtimeFlags],
     [
       LocationServiceMap.node,
-      input?.beforeModelResolve || input?.realModels
+      input?.beforeModelResolve || input?.realModels || input?.drainFailure === "admission"
         ? makeGlobalNode({
             service: LocationServiceMap.Service,
-            layer: buildSharedLocationServiceMap(
-              input.realModels ? [] : [[SessionRunnerModel.node, formalIntegrationModels(input.beforeModelResolve)]],
-            ),
+            layer: buildSharedLocationServiceMap([
+              ...(input.realModels
+                ? []
+                : [[SessionRunnerModel.node, formalIntegrationModels(input.beforeModelResolve)] as const]),
+              ...(input.drainFailure === "admission" ? [[DurableRun.node, failedDurableAdmission] as const] : []),
+            ]),
             deps: [Database.node],
           })
         : formalIntegrationLocationServiceMapNode,
     ],
     [InstanceStore.bootstrapNode, noopBootstrapLayer],
     [SessionExecution.node, SessionExecutionFormal.node],
-  ])
+  ] as const
+  if (input?.drainFailure === "context")
+    return LayerNode.compile(root, [...replacements, [SessionStore.node, failedSessionContext]] as const)
+  if (input?.drainFailure === "admission")
+    return LayerNode.compile(root, [...replacements, [DurableRun.globalNode, failedDurableAdmission]] as const)
+  return LayerNode.compile(root, replacements)
 }
 
 // Config that registers a custom "test" provider with a "test-model" model
@@ -442,7 +474,132 @@ const httpInstance = {
 }
 const it = testEffect(makeHttp(), httpInstance)
 const formalIntegration = testEffect(makeFormalIntegrationHttp(), httpInstance)
+const drainFailureIntegration = testEffect(
+  makeFormalIntegrationHttp({
+    beforeModelResolve: Effect.die(new Error("isolated getSQL before the first assistant step")),
+  }),
+  httpInstance,
+)
+drainFailureIntegration.instance(
+  "Formal pre-step drain failure publishes the existing scoped error and preserves terminal queued input",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const events = yield* EventV2Bridge.Service
+      const database = yield* Database.Service
+      const execution = yield* SessionExecution.Service
+      const runs = yield* DurableRun.Service
+      const status = yield* SessionStatus.Service
+      const chat = yield* sessions.create({ title: "Drain failure fixture" })
+      const id = SessionV2.ID.make(chat.id)
+      const inputID = SessionMessage.ID.make(MessageID.ascending())
+      const observed: Array<{ type: string; data: unknown; directory?: string }> = []
+      const off = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (
+            typeof event.data === "object" &&
+            event.data !== null &&
+            "sessionID" in event.data &&
+            event.data.sessionID === id
+          )
+            observed.push({ type: event.type, data: event.data, directory: event.location?.directory })
+        }),
+      )
+      yield* SessionInput.admit(database.db, events, {
+        id: inputID,
+        sessionID: id,
+        delivery: "queue",
+        prompt: DurablePrompt.make({ text: "one original queued prompt", route: { agent: "build" } }),
+      })
+      const result = yield* execution.wakeAndWait(id).pipe(Effect.exit)
+      expect(Exit.isFailure(result) && Cause.pretty(result.cause)).toContain("isolated getSQL")
+      const errors = observed.filter((event) => event.type === SessionV1.Event.Error.type)
+      expect(errors).toHaveLength(1)
+      expect(errors[0].data).toMatchObject({
+        sessionID: id,
+        error: { name: "UnknownError", data: { message: "isolated getSQL before the first assistant step" } },
+      })
+      expect(errors[0].directory).toBe(chat.directory)
+      expect(yield* status.get(chat.id)).toEqual({ type: "idle" })
+      expect(yield* llm.hits).toHaveLength(0)
+      const stored = yield* SessionInput.find(database.db, inputID)
+      expect(stored?.promotedSeq).toBeDefined()
+      const terminal = yield* runs.list({ sessionID: id, limit: 10 })
+      expect(terminal).toHaveLength(1)
+      expect(terminal[0].run.status).toBe("failed")
+      const context = yield* (yield* SessionV2.Service).context(id)
+      expect(context.filter((message) => message.type === "user").map((message) => message.id)).toEqual([inputID])
+      expect(context.filter((message) => message.type === "assistant")).toEqual([])
+      yield* execution.wakeAndWait(id)
+      expect(yield* SessionInput.find(database.db, inputID)).toEqual(stored)
+      expect(
+        (yield* runs.list({ sessionID: id, limit: 10 })).map((item) => ({ id: item.run.id, status: item.run.status })),
+      ).toEqual(terminal.map((item) => ({ id: item.run.id, status: item.run.status })))
+      expect(observed.filter((event) => event.type === SessionV1.Event.Error.type)).toHaveLength(1)
+      expect(yield* llm.hits).toHaveLength(0)
+      yield* off
+    }),
+)
 const credentialIntegration = testEffect(makeFormalIntegrationHttp({ realModels: true }), httpInstance)
+
+for (const phase of ["context", "admission"] as const) {
+  testEffect(makeFormalIntegrationHttp({ drainFailure: phase }), httpInstance).instance(
+    `Formal ${phase} drain failure preserves the pending queue and reports one scoped error`,
+    () =>
+      Effect.gen(function* () {
+        const { llm } = yield* useServerConfig(providerCfg)
+        const sessions = yield* Session.Service
+        const events = yield* EventV2Bridge.Service
+        const database = yield* Database.Service
+        const execution = yield* SessionExecution.Service
+        const runs = yield* DurableRun.Service
+        const status = yield* SessionStatus.Service
+        const chat = yield* sessions.create({ title: "Preparation failure fixture" })
+        const id = SessionV2.ID.make(chat.id)
+        const inputID = SessionMessage.ID.make(MessageID.ascending())
+        const errors: Array<{ data: unknown; directory?: string }> = []
+        const off = yield* events.listen((event) =>
+          Effect.sync(() => {
+            if (
+              event.type === SessionV1.Event.Error.type &&
+              typeof event.data === "object" &&
+              event.data !== null &&
+              "sessionID" in event.data &&
+              event.data.sessionID === id
+            )
+              errors.push({ data: event.data, directory: event.location?.directory })
+          }),
+        )
+        yield* SessionInput.admit(database.db, events, {
+          id: inputID,
+          sessionID: id,
+          delivery: "queue",
+          prompt: DurablePrompt.make({ text: "original queued message", route: { agent: "build" } }),
+        })
+        const queued = yield* SessionInput.find(database.db, inputID)
+        const originalRuns = yield* runs.list({ sessionID: id, limit: 10 })
+        const result = yield* execution.wakeAndWait(id).pipe(Effect.exit)
+        expect(Exit.isFailure(result) && Cause.pretty(result.cause)).toContain("isolated getSQL")
+        expect(errors).toHaveLength(1)
+        expect(errors[0].directory).toBe(chat.directory)
+        expect(errors[0].data).toMatchObject({
+          sessionID: id,
+          error: {
+            name: "UnknownError",
+            data: { message: `isolated getSQL in ${phase === "context" ? "drain preparation" : "durable admission"}` },
+          },
+        })
+        expect(yield* status.get(chat.id)).toEqual({ type: "idle" })
+        expect(yield* SessionInput.find(database.db, inputID)).toEqual(queued)
+        expect((yield* SessionInput.listQueued(database.db, id)).map((input) => input.id)).toEqual([inputID])
+        expect(yield* runs.list({ sessionID: id, limit: 10 })).toEqual(originalRuns)
+        expect((yield* execution.active).size).toBe(0)
+        expect(yield* llm.hits).toHaveLength(0)
+        yield* off
+      }),
+  )
+}
 
 for (const target of ["root", "child"] as const)
   for (const approved of [true, false, null]) {
@@ -586,6 +743,9 @@ const withMcpInstructions = testEffect(
 )
 const mcpAttachmentResourceUri = "mcp://fixture/resource/readme"
 let mcpAttachmentReads = 0
+let mcpAttachmentGeneration = 7
+let mcpAttachmentRevoked = false
+const mcpAttachmentServers: string[] = []
 let mcpAttachmentDeniedReads = 0
 const withMcpAttachment = testEffect(
   makeFormalIntegrationHttp({
@@ -596,27 +756,45 @@ const withMcpAttachment = testEffect(
             id: "fixture:mcp://fixture/resource/readme",
             server: "fixture-server",
             kind: "resource" as const,
-            generation: 7,
+            generation: mcpAttachmentGeneration,
             name: "readme",
             reference: mcpAttachmentResourceUri,
             permission: "read",
             patterns: [`mcp:fixture-server:${mcpAttachmentResourceUri}`],
           },
+          {
+            id: "fixture-other:mcp://fixture/resource/readme",
+            server: "fixture-other",
+            kind: "resource" as const,
+            generation: mcpAttachmentGeneration,
+            name: "readme",
+            reference: mcpAttachmentResourceUri,
+            permission: "read",
+            patterns: [`mcp:fixture-other:${mcpAttachmentResourceUri}`],
+          },
         ]),
-      declaredScope: () =>
+      declaredScope: (server) =>
         Effect.succeed({
           endpoint: "mcp://fixture",
           networkScope: [],
           secretScope: [],
-          externalServices: ["fixture-server"],
+          externalServices: [server],
+        }),
+      assertCapability: (lease) =>
+        Effect.sync(() => {
+          if (mcpAttachmentRevoked || lease.generation !== mcpAttachmentGeneration)
+            throw new Error("MCP attachment capability was revoked or its generation changed")
         }),
       readResource: (clientName, resourceUri) =>
         Effect.sync(() => {
           mcpAttachmentReads++
-          if (clientName !== "fixture-server" || resourceUri !== mcpAttachmentResourceUri)
+          mcpAttachmentServers.push(clientName)
+          if (!["fixture-server", "fixture-other"].includes(clientName) || resourceUri !== mcpAttachmentResourceUri)
             throw new Error("unexpected MCP attachment resource")
           return {
-            contents: [{ uri: resourceUri, mimeType: "text/plain", text: "resource routed through Core" }],
+            contents: [
+              { uri: resourceUri, mimeType: "text/plain", text: `resource routed through Core [${clientName}]` },
+            ],
           }
         }),
     },
@@ -2694,6 +2872,400 @@ formalIntegration.instance(
     }),
 )
 
+for (const delivery of ["steer", "queue"] as const)
+  formalIntegration.instance(
+    `current named command ${delivery} resolves before canonical admission and actual provider execution`,
+    () =>
+      Effect.gen(function* () {
+        const { llm } = yield* useServerConfig((url) => ({
+          ...providerCfg(url),
+          command: { review: { template: "Inspect $ARGUMENTS with pinned command semantics" } },
+        }))
+        const sessions = yield* Session.Service
+        const core = yield* SessionV2.Service
+        const chat = yield* sessions.create({ title: "Current command semantics" })
+        const sessionID = SessionV2.ID.make(chat.id)
+        const id = SessionMessage.ID.create()
+        const input = {
+          sessionID,
+          id,
+          prompt: {
+            text: "/review original.ts",
+            command: { name: "review", arguments: "original.ts" },
+            route: { agent: "build", model: { id: ref.modelID, providerID: ref.providerID } },
+          },
+          delivery,
+          resume: false,
+        } as const
+        const admitted = yield* core.prompt(input)
+        expect(admitted.prompt.text).toBe("Inspect original.ts with pinned command semantics")
+        expect(admitted.prompt.command).toMatchObject({ name: "review", arguments: "original.ts" })
+        expect(admitted.prompt.command?.requestDigest).toBeTruthy()
+        expect((yield* core.prompt(input)).admittedSeq).toBe(admitted.admittedSeq)
+        const conflict = yield* core
+          .prompt({ ...input, prompt: { ...input.prompt, command: { name: "review", arguments: "changed.ts" } } })
+          .pipe(Effect.flip)
+        expect(conflict).toBeInstanceOf(SessionExecution.OperationError)
+        yield* llm.text("Command semantics observed")
+        yield* (yield* SessionExecution.Service).wakeAndWait(sessionID)
+        const hits = yield* llm.hits
+        expect(hits).toHaveLength(1)
+        const request = JSON.stringify(hits[0]?.body)
+        expect(request).toContain("Inspect original.ts with pinned command semantics")
+        expect(request).not.toContain("/review original.ts")
+        expect(request).not.toContain("changed.ts")
+        const context = yield* core.context(sessionID)
+        expect(context.filter((message) => message.type === "user")).toHaveLength(1)
+      }),
+  )
+
+for (const delivery of ["steer", "queue"] as const)
+  formalIntegration.instance(
+    `canonical named command ${delivery} reaches real config preparation, admission and provider execution`,
+    () =>
+      Effect.gen(function* () {
+        const { directory } = yield* TestInstance
+        const llm = yield* TestLLMServer
+        yield* writeText(
+          path.join(directory, "arforge.json"),
+          JSON.stringify({
+            model: "test/test-model",
+            providers: {
+              test: {
+                name: "Canonical local fixture",
+                env: [],
+                api: {
+                  type: "aisdk",
+                  package: "@ai-sdk/openai-compatible",
+                  url: llm.url,
+                  settings: { apiKey: "synthetic-local-only" },
+                },
+                models: {
+                  "test-model": {
+                    name: "Canonical fixture model",
+                    limit: { context: 100_000, output: 10_000 },
+                    capabilities: { tools: true, input: ["text"], output: ["text"] },
+                  },
+                },
+              },
+            },
+            commands: { fmcheck: { template: "FM_CANONICAL $ARGUMENTS", model: "test/test-model", subtask: false } },
+          }),
+        )
+        const config = yield* Config.Service
+        yield* config.invalidate()
+        expect((yield* config.get()).command?.fmcheck?.template).toBe("FM_CANONICAL $ARGUMENTS")
+        const location = (yield* LocationServiceMap.Service).get(
+          Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        )
+        const catalogueCommand = yield* CoreCommand.Service.use((service) => service.get("fmcheck")).pipe(
+          Effect.provide(location),
+        )
+        expect(catalogueCommand).toMatchObject({
+          name: "fmcheck",
+          template: "FM_CANONICAL $ARGUMENTS",
+          model: { providerID: ref.providerID, id: ref.modelID },
+        })
+        const chat = yield* (yield* Session.Service).create({ title: "Canonical command source" })
+        const sessionID = SessionV2.ID.make(chat.id),
+          id = SessionMessage.ID.create()
+        const files = [
+          {
+            uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV1kAAAAASUVORK5CYII=",
+            name: "fixture.png",
+            source: { text: "fixture", start: 0, end: 7 },
+          },
+        ]
+        const route = {
+          agent: "build",
+          model: { id: ref.modelID, providerID: ref.providerID, variant: ModelV2.VariantID.make("selected-variant") },
+        }
+        const input = {
+          sessionID,
+          id,
+          prompt: { text: "/fmcheck owned", command: { name: "fmcheck", arguments: "owned" }, route, files },
+          delivery,
+          resume: false,
+        } as const
+        const prepared = yield* (yield* SessionPrompt.Service).prepareDurableCommand(input)
+        expect(prepared.text).toBe("FM_CANONICAL owned")
+        expect(prepared.route).toEqual(route)
+        expect(prepared.files).toEqual([{ ...files[0], mime: "image/png" }])
+        expect(yield* llm.hits).toHaveLength(0)
+        const core = yield* SessionV2.Service
+        const admitted = yield* core.prompt(input)
+        expect(admitted.prompt.text).toBe(prepared.text)
+        expect(admitted.prompt.files).toEqual(prepared.files)
+        expect(admitted.prompt.route).toEqual(route)
+        expect((yield* core.prompt(input)).admittedSeq).toBe(admitted.admittedSeq)
+        yield* llm.text("Canonical named command observed")
+        yield* (yield* SessionExecution.Service).wakeAndWait(sessionID)
+        const hits = yield* llm.hits
+        expect(hits).toHaveLength(1)
+        expect(JSON.stringify(hits[0]?.body)).toContain("FM_CANONICAL owned")
+        expect(JSON.stringify(hits[0]?.body)).not.toContain("/fmcheck owned")
+        const context = yield* core.context(sessionID)
+        expect(context.filter((message) => message.type === "user")).toHaveLength(1)
+      }),
+  )
+
+formalIntegration.instance(
+  "current named command preserves attachment MIME and source before canonical admission",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        command: { review: { template: "Inspect $ARGUMENTS" } },
+      }))
+      const sessions = yield* Session.Service
+      const core = yield* SessionV2.Service
+      const chat = yield* sessions.create({ title: "Current command attachments" })
+      const files = [
+        { uri: "data:image/png;base64,fixture", name: "clipboard" },
+        { uri: "data:application/pdf;base64,fixture" },
+        {
+          uri: pathToFileURL(path.join(chat.directory, "custom.bin")).href,
+          name: "custom.bin",
+          mime: "text/plain",
+          source: { text: "source", start: 1, end: 7 },
+        },
+        { uri: pathToFileURL(path.join(chat.directory, "folder")).href + "/" },
+      ] as const
+      const admitted = yield* core.prompt({
+        sessionID: SessionV2.ID.make(chat.id),
+        id: SessionMessage.ID.create(),
+        resume: false,
+        prompt: {
+          text: "/review files",
+          command: { name: "review", arguments: "files" },
+          files,
+          route: { agent: "build", model: { providerID: ref.providerID, id: ref.modelID } },
+        },
+      })
+      expect(admitted.prompt.files).toEqual([
+        { ...files[0], mime: "image/png" },
+        { ...files[1], mime: "application/pdf" },
+        files[2],
+        { ...files[3], mime: "application/x-directory" },
+      ])
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+)
+
+formalIntegration.instance(
+  "current manual compact rejects stale context and settles one real summary checkpoint without a second runner",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const core = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Manual current compaction" })
+      const sessionID = SessionV2.ID.make(chat.id)
+      yield* core.prompt({
+        sessionID,
+        prompt: {
+          text: "Preserve original work context and decisions. ".repeat(300),
+          route: { agent: "build", model: { providerID: ref.providerID, id: ref.modelID } },
+        },
+        resume: false,
+      })
+      yield* llm.text("Original reply")
+      yield* (yield* SessionExecution.Service).wakeAndWait(sessionID)
+      const context = yield* core.context(sessionID)
+      const staleResult = yield* core
+        .compact({ sessionID, expectedContext: "[]", model: { providerID: ref.providerID, id: ref.modelID } })
+        .pipe(Effect.flip)
+      expect(staleResult).toMatchObject({ reason: "conflict" })
+      expect(yield* llm.hits).toHaveLength(1)
+      yield* llm.text(
+        "## Objective\nContinue the original task.\n## Work State\nOriginal work context and decisions retained.",
+      )
+      const session = yield* core.get(sessionID)
+      yield* core.compact({
+        sessionID,
+        expectedDirectory: session.location.directory,
+        expectedContext: JSON.stringify(Schema.encodeSync(Schema.Array(SessionMessage.Message))(context)),
+        model: { providerID: ref.providerID, id: ref.modelID },
+      })
+      expect(yield* llm.hits).toHaveLength(2)
+      const summary = (yield* core.context(sessionID)).find((message) => message.type === "compaction")
+      expect(summary).toMatchObject({ reason: "manual", summary: expect.stringContaining("Original work context") })
+      const rows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(
+        rows.filter((row) => row.type === EventV2.versionedType(SessionEvent.Compaction.Ended.type, 1)),
+      ).toHaveLength(1)
+      const { SessionCompactionCheckpointTable } = yield* Effect.promise(() => import("@arforge-ai/core/session/sql"))
+      const checkpoints = yield* db
+        .select()
+        .from(SessionCompactionCheckpointTable)
+        .where(eq(SessionCompactionCheckpointTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(checkpoints.some((checkpoint) => checkpoint.phase === "closed")).toBe(true)
+      expect((yield* (yield* SessionExecution.Service).active).has(sessionID)).toBe(false)
+    }),
+)
+
+formalIntegration.instance(
+  "current manual compact rejects source changes while summarizing and never commits the stale result",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const core = yield* SessionV2.Service
+      const chat = yield* sessions.create({ title: "Compaction source race" })
+      const sessionID = SessionV2.ID.make(chat.id)
+      yield* core.prompt({
+        sessionID,
+        prompt: {
+          text: "Earlier work context. ".repeat(300),
+          route: { model: { providerID: ref.providerID, id: ref.modelID }, agent: "build" },
+        },
+        resume: false,
+      })
+      yield* llm.text("Original reply")
+      yield* (yield* SessionExecution.Service).wakeAndWait(sessionID)
+      const release = Promise.withResolvers<void>()
+      yield* llm.hold("An obsolete summary", release.promise)
+      const compact = yield* core
+        .compact({ sessionID, model: { providerID: ref.providerID, id: ref.modelID } })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(2)
+      expect(yield* core.compact({ sessionID }).pipe(Effect.flip)).toMatchObject({ reason: "busy" })
+      yield* core.prompt({
+        sessionID,
+        prompt: { text: "New context admitted during summary" },
+        delivery: "queue",
+        resume: false,
+      })
+      release.resolve()
+      const settled = yield* Fiber.await(compact)
+      expect(Exit.isFailure(settled)).toBe(true)
+      if (Exit.isFailure(settled))
+        expect(Cause.findErrorOption(settled.cause)).toMatchObject({ _tag: "Some", value: { reason: "conflict" } })
+      expect((yield* core.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+      expect(yield* llm.hits).toHaveLength(2)
+    }),
+)
+
+for (const terminal of ["provider-error", "truncated", "cancel"] as const)
+  formalIntegration.instance(`current manual compact never succeeds without a committed summary: ${terminal}`, () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const core = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Rejected manual summary" })
+      const sessionID = SessionV2.ID.make(chat.id)
+      yield* core.prompt({
+        sessionID,
+        prompt: {
+          text: "Earlier work context. ".repeat(300),
+          route: { model: { providerID: ref.providerID, id: ref.modelID }, agent: "build" },
+        },
+        resume: false,
+      })
+      yield* llm.text("Original reply")
+      yield* execution.wakeAndWait(sessionID)
+      const original = yield* core.context(sessionID)
+      const release = Promise.withResolvers<void>()
+      if (terminal === "cancel") yield* llm.hold("Uncommitted summary", release.promise)
+      else if (terminal === "provider-error") yield* llm.error(401, { error: { message: "Isolated provider failure" } })
+      else yield* llm.push(reply().text("Incomplete summary").contentFilter())
+      const compact = yield* core
+        .compact({ sessionID, model: { providerID: ref.providerID, id: ref.modelID } })
+        .pipe(Effect.forkChild)
+      if (terminal === "cancel") {
+        yield* llm.wait(2)
+        yield* execution.interrupt(sessionID).pipe(Effect.ensuring(Effect.sync(() => release.resolve())))
+      }
+      const result = yield* Fiber.await(compact)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (terminal !== "cancel" && Exit.isFailure(result))
+        expect(Cause.findErrorOption(result.cause)).toMatchObject({ _tag: "Some", value: { reason: "unavailable" } })
+      expect(yield* core.context(sessionID)).toEqual(original)
+      const rows = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(
+        rows.filter((row) => row.type === EventV2.versionedType(SessionEvent.Compaction.Ended.type, 1)),
+      ).toHaveLength(0)
+      expect((yield* execution.active).has(sessionID)).toBe(false)
+    }),
+  )
+
+credentialIntegration.instance(
+  "current manual compact rejects an unavailable selected model without provider work",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const chat = yield* (yield* Session.Service).create({ title: "Unavailable manual summary model" })
+      const core = yield* SessionV2.Service
+      const sessionID = SessionV2.ID.make(chat.id)
+      const result = yield* core
+        .compact({
+          sessionID,
+          model: { providerID: ProviderV2.ID.make("missing-provider"), id: ModelV2.ID.make("missing-model") },
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(Cause.findErrorOption(result.cause)).toMatchObject({ _tag: "Some", value: { reason: "unavailable" } })
+      expect(yield* llm.hits).toHaveLength(0)
+      expect(yield* core.context(sessionID)).toEqual([])
+      expect((yield* (yield* SessionExecution.Service).active).has(sessionID)).toBe(false)
+    }),
+)
+
+formalIntegration.instance(
+  "current Shell hook retains stable action identity, native output, permission and busy semantics",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const sessions = yield* Session.Service
+      const core = yield* SessionV2.Service
+      const chat = yield* sessions.create({ title: "Current Shell hook" })
+      const sessionID = SessionV2.ID.make(chat.id)
+      const id = SessionMessage.ID.create()
+      const command = `node -e "require('fs').appendFileSync('.current-shell-marker','x');process.stdout.write('current-shell-output')"`
+      const input = { sessionID, id, agent: "build", model: { providerID: ref.providerID, id: ref.modelID }, command }
+      const locations = yield* LocationServiceMap.Service
+      const permissions = yield* PermissionV2.Service.pipe(
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(chat.directory) }))),
+      )
+      const shell = yield* core.shell(input).pipe(Effect.forkChild)
+      const request = yield* pollWithTimeout(
+        permissions.list().pipe(Effect.map((items) => items.find((item) => item.sessionID === sessionID))),
+        "Current Shell approval missing",
+      )
+      expect(yield* core.shell({ ...input, id: SessionMessage.ID.create() }).pipe(Effect.flip)).toMatchObject({
+        reason: "busy",
+      })
+      yield* permissions.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(shell)
+      const assistantID = SessionMessage.ID.make(MessageID.ascending(`msg_shell_${id.slice("msg_".length)}`))
+      expect((yield* core.context(sessionID)).find((message) => message.id === assistantID)).toMatchObject({
+        type: "shell",
+        callID: `shell:${id}`,
+        output: "current-shell-output",
+      })
+      yield* core.shell(input)
+      expect(yield* Effect.promise(() => Bun.file(path.join(chat.directory, ".current-shell-marker")).text())).toBe("x")
+      expect((yield* core.context(sessionID)).filter((message) => message.type === "shell")).toHaveLength(1)
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+)
+
 it.instance("freezes slash-command admission with the resolved text and original command identity", () =>
   Effect.gen(function* () {
     yield* useServerConfig((url) => ({
@@ -3928,6 +4500,77 @@ formalIntegration.instance(
   30_000,
 )
 
+formalIntegration.instance("Formal routed pending inputs bind the actual HTTP model after the last promotion", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const core = yield* SessionV2.Service
+    const execution = yield* SessionExecution.Service
+    const database = yield* Database.Service
+    const events = yield* EventV2Bridge.Service
+    const chat = yield* sessions.create({ title: "Routed pending input fixture" })
+    const id = SessionV2.ID.make(chat.id)
+    yield* core.switchModel({
+      sessionID: id,
+      model: { id: ModelV2.ID.make("test-old-model"), providerID: ProviderV2.ID.make("test") },
+    })
+    const original = SessionMessage.ID.make(MessageID.ascending())
+    const latest = SessionMessage.ID.make(MessageID.ascending())
+    const starts: unknown[] = []
+    const off = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if (
+          event.type === SessionEvent.Step.Started.type &&
+          typeof event.data === "object" &&
+          event.data !== null &&
+          "sessionID" in event.data &&
+          event.data.sessionID === id
+        )
+          starts.push(event.data)
+      }),
+    )
+    for (const route of [
+      { inputID: original, text: "Old pending prompt", agent: "build", model: "test-old-model" },
+      { inputID: latest, text: "New prompt after selecting a model", agent: "plan", model: "test-new-model" },
+    ]) {
+      yield* SessionInput.admit(database.db, events, {
+        id: route.inputID,
+        sessionID: id,
+        delivery: "steer",
+        prompt: DurablePrompt.make({
+          text: route.text,
+          route: {
+            agent: route.agent,
+            model: { id: ModelV2.ID.make(route.model), providerID: ProviderV2.ID.make("test") },
+          },
+        }),
+      })
+    }
+    yield* llm.text("Routed response")
+    yield* execution.wakeAndWait(id)
+    const inputs = yield* llm.inputs
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0].model).toBe("test-new-model")
+    expect(starts).toEqual([
+      expect.objectContaining({
+        agent: "plan",
+        model: expect.objectContaining({ id: "test-new-model", providerID: "test" }),
+      }),
+    ])
+    const context = yield* core.context(id)
+    expect(context.filter((message) => message.type === "user").map((message) => message.id)).toEqual([
+      original,
+      latest,
+    ])
+    expect(context.filter((message) => message.type === "assistant")).toEqual([
+      expect.objectContaining({ agent: "plan", model: expect.objectContaining({ id: "test-new-model" }) }),
+    ])
+    expect(String((yield* core.get(id)).model?.id)).toBe("test-new-model")
+    expect(yield* SessionInput.listPending(database.db, id, "steer")).toEqual([])
+    yield* off
+  }),
+)
+
 formalIntegration.instance(
   "Formal drain consumes a durable steer once without legacy promotion",
   () =>
@@ -4102,6 +4745,253 @@ withMcpInstructions.instance(
       expect(yield* llm.calls).toBe(3)
     }),
   15_000,
+)
+
+for (const outcome of ["allow", "deny", "generation", "cancel"] as const)
+  withMcpAttachment.instance(
+    `canonical MCP attachment ${outcome} uses the Formal run and governed resource reader`,
+    () =>
+      Effect.gen(function* () {
+        mcpAttachmentReads = 0
+        mcpAttachmentServers.length = 0
+        mcpAttachmentGeneration = 7
+        mcpAttachmentRevoked = false
+        const llm = yield* TestLLMServer
+        yield* llm.text("canonical resource reply")
+        const sessions = yield* Session.Service
+        const core = yield* SessionV2.Service
+        const execution = yield* SessionExecution.Service
+        const database = yield* Database.Service
+        const chat = yield* sessions.create({
+          title: "Canonical MCP " + outcome,
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        const sessionID = SessionV2.ID.make(chat.id),
+          userID = SessionMessage.ID.create()
+        const location = (yield* LocationServiceMap.Service).get(
+          Location.Ref.make({ directory: AbsolutePath.make(chat.directory) }),
+        )
+        const permissions = yield* PermissionV2.Service.pipe(Effect.provide(location))
+        const original = {
+          text: "summarize @manual",
+          files: [
+            {
+              uri: mcpAttachmentResourceUri,
+              mime: "text/plain",
+              name: "manual",
+              resource: { server: "fixture-server", uri: mcpAttachmentResourceUri },
+            },
+          ],
+          route: { agent: "build", model: { providerID: ref.providerID, id: ref.modelID } },
+          system: { text: "MCP_SYSTEM_PRESERVED", source: "request" as const, scope: "turn" as const },
+        }
+        const admitted = yield* core.prompt({
+          sessionID,
+          id: userID,
+          prompt: original,
+          delivery: "steer",
+          resume: false,
+        })
+        expect(admitted.prompt.files?.[0]?.resource).toEqual(original.files[0]!.resource)
+        expect((yield* SessionInput.find(database.db, userID))?.prompt.files?.[0]?.resource).toEqual(
+          original.files[0]!.resource,
+        )
+        expect(mcpAttachmentReads).toBe(0)
+        const fiber = yield* execution.wakeAndWait(sessionID).pipe(Effect.forkChild)
+        const first = yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const projected = (yield* core.context(sessionID)).find((message) => message.id === userID)
+            if (projected?.type === "user") expect(projected.files?.[0]?.resource).toEqual(original.files[0]!.resource)
+            const pending = (yield* permissions.list()).find((item) => item.sessionID === sessionID)
+            if (pending) return pending
+            const settled = yield* Effect.sync(() => fiber.pollUnsafe())
+            if (settled !== undefined) {
+              const runs = yield* (yield* DurableRun.Service).list({ sessionID, limit: 3 })
+              const detail = JSON.stringify({
+                runs: runs.map((run) => ({ status: run.run.status })),
+                context: yield* core.context(sessionID),
+                hits: (yield* llm.hits).map((hit) => hit.body),
+                input: yield* SessionInput.find(database.db, userID),
+              }).slice(0, 6000)
+              return yield* Effect.die(
+                new Error(
+                  "Canonical MCP finished before approval: " +
+                    detail +
+                    (Exit.isFailure(settled) ? Cause.pretty(settled.cause) : ""),
+                ),
+              )
+            }
+            return undefined
+          }),
+          "canonical MCP outer permission",
+        )
+        expect(first.requiresHumanConfirmation).toBe(true)
+        expect(mcpAttachmentReads).toBe(0)
+        if (outcome === "cancel") yield* execution.interrupt(sessionID)
+        else if (outcome === "deny") yield* permissions.reply({ requestID: first.id, reply: "reject" })
+        else {
+          yield* permissions.reply({ requestID: first.id, reply: "once" })
+          const second = yield* pollWithTimeout(
+            permissions.list().pipe(Effect.map((items) => items.find((item) => item.sessionID === sessionID))),
+            "canonical MCP resource permission",
+          )
+          expect(mcpAttachmentReads).toBe(0)
+          if (outcome === "generation") mcpAttachmentGeneration++
+          yield* permissions.reply({ requestID: second.id, reply: "once" })
+        }
+        yield* awaitWithTimeout(Fiber.await(fiber), "canonical MCP did not settle", "15 seconds")
+        expect(yield* permissions.list()).toEqual([])
+        const context = yield* core.context(sessionID)
+        const attachmentID = resourceAssistantID(sessionID, userID)
+        const attachment = context.find((message) => message.id === attachmentID)
+        expect(attachment?.type).toBe("assistant")
+        if (attachment?.type !== "assistant") throw new Error("Missing governed attachment step")
+        expect(
+          attachment.content.some((part) => part.type === "tool" && ["pending", "running"].includes(part.state.status)),
+        ).toBe(false)
+        const rows = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all()
+        const started = rows.find(
+          (row) => row.type.startsWith("session.next.step.started") && row.data.assistantMessageID === attachmentID,
+        )
+        expect(started?.data.runID).toBeDefined()
+        const recordedRunID = started?.data.runID
+        if (typeof recordedRunID !== "string") throw new Error("Attachment step has no genuine Run ID")
+        const boundRunID = AgentRuntime.RunID.make(recordedRunID)
+        const action = yield* (yield* DurableAction.Service)
+          .load(
+            ActionGateway.stableActionID({
+              runID: boundRunID,
+              sessionID,
+              assistantMessageID: attachmentID,
+              toolCallID: `mcp-attachment:${userID}:0`,
+            }),
+          )
+          .pipe(Effect.orDie)
+        expect(action.action.runID).toBe(boundRunID)
+        if (outcome === "allow") {
+          expect(mcpAttachmentReads).toBe(1)
+          expect(mcpAttachmentServers).toEqual(["fixture-server"])
+          const body = JSON.stringify((yield* llm.hits)[0]?.body)
+          expect(body).toContain("resource routed through Core")
+          expect(body).toContain("MCP_SYSTEM_PRESERVED")
+          expect(body).not.toContain('"type":"image_url"')
+          const stored = yield* SessionInput.find(database.db, userID)
+          expect(stored?.prompt.files?.[0]?.resource).toEqual(original.files[0]!.resource)
+          expect(stored?.prompt.route).toEqual(original.route)
+          mcpAttachmentRevoked = true
+          // The completed input is retried after revocation: replay its receipt,
+          // never issue another remote read or permission request.
+          yield* core.prompt({ sessionID, id: userID, prompt: original, resume: false })
+          yield* execution.wakeAndWait(sessionID)
+          yield* llm.text("regenerated using the committed attachment receipt")
+          yield* execution.resume(sessionID)
+          expect(mcpAttachmentReads).toBe(1)
+          expect(yield* permissions.list()).toEqual([])
+          expect(JSON.stringify((yield* llm.hits).at(-1)?.body)).toContain("resource routed through Core")
+        } else {
+          expect(mcpAttachmentReads).toBe(0)
+          if (outcome !== "generation") expect(yield* llm.hits).toHaveLength(0)
+          expect(attachment.content.some((part) => part.type === "tool" && part.state.status === "error")).toBe(true)
+        }
+        mcpAttachmentRevoked = false
+        mcpAttachmentGeneration = 7
+      }),
+    30_000,
+  )
+
+withMcpAttachmentDenied.instance(
+  "canonical MCP unavailable catalog fails visibly before any provider or resource read",
+  () =>
+    Effect.gen(function* () {
+      mcpAttachmentDeniedReads = 0
+      const sessions = yield* Session.Service,
+        core = yield* SessionV2.Service
+      const chat = yield* sessions.create({ title: "Unavailable canonical attachment" })
+      const sessionID = SessionV2.ID.make(chat.id),
+        userID = SessionMessage.ID.create()
+      yield* core.prompt({
+        sessionID,
+        id: userID,
+        resume: false,
+        prompt: {
+          text: "@manual",
+          files: [
+            {
+              uri: mcpAttachmentResourceUri,
+              mime: "text/plain",
+              resource: { server: "fixture-server", uri: mcpAttachmentResourceUri },
+            },
+          ],
+          route: { agent: "build", model: { providerID: ref.providerID, id: ref.modelID } },
+        },
+      })
+      const failure = yield* (yield* SessionExecution.Service).wakeAndWait(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(failure)).toBe(true)
+      if (Exit.isFailure(failure)) expect(Cause.pretty(failure.cause)).toContain("MCP attachment is unavailable")
+      expect(mcpAttachmentDeniedReads).toBe(0)
+      expect(yield* (yield* TestLLMServer).hits).toHaveLength(0)
+      const context = yield* core.context(sessionID)
+      const step = context.find((message) => message.id === resourceAssistantID(sessionID, userID))
+      expect(step?.type).toBe("assistant")
+      if (step?.type === "assistant") {
+        expect(step.error?.message).toContain("unavailable")
+        expect(step.content.some((part) => part.type === "tool" && part.state.status === "error")).toBe(true)
+      }
+    }),
+  15_000,
+)
+
+withMcpAttachment.instance(
+  "canonical MCP same URI on two servers retains exact original source",
+  () =>
+    Effect.gen(function* () {
+      mcpAttachmentReads = 0
+      mcpAttachmentServers.length = 0
+      mcpAttachmentGeneration = 7
+      mcpAttachmentRevoked = false
+      const llm = yield* TestLLMServer
+      yield* llm.text("both original resources")
+      const sessions = yield* Session.Service,
+        core = yield* SessionV2.Service
+      const chat = yield* sessions.create({
+        title: "Two original servers",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const sessionID = SessionV2.ID.make(chat.id)
+      const location = (yield* LocationServiceMap.Service).get(
+        Location.Ref.make({ directory: AbsolutePath.make(chat.directory) }),
+      )
+      const permissions = yield* PermissionV2.Service.pipe(Effect.provide(location))
+      yield* core.prompt({
+        sessionID,
+        id: SessionMessage.ID.create(),
+        resume: false,
+        prompt: {
+          text: "@manual from both sources",
+          files: ["fixture-server", "fixture-other"].map((server) => ({
+            uri: mcpAttachmentResourceUri,
+            mime: "text/plain",
+            resource: { server, uri: mcpAttachmentResourceUri },
+          })),
+          route: { agent: "build", model: { providerID: ref.providerID, id: ref.modelID } },
+        },
+      })
+      const fiber = yield* (yield* SessionExecution.Service).wakeAndWait(sessionID).pipe(Effect.forkChild)
+      for (let i = 0; i < 4; i++) {
+        const pending = yield* pollWithTimeout(
+          permissions.list().pipe(Effect.map((items) => items.find((item) => item.sessionID === sessionID))),
+          "two-server resource permission",
+        )
+        expect(mcpAttachmentReads).toBe(Math.floor(i / 2))
+        yield* permissions.reply({ requestID: pending.id, reply: "once" })
+      }
+      yield* Fiber.join(fiber)
+      expect(mcpAttachmentServers).toEqual(["fixture-server", "fixture-other"])
+      const body = JSON.stringify((yield* llm.hits)[0]?.body)
+      expect(body).toContain("resource routed through Core [fixture-server]")
+      expect(body).toContain("resource routed through Core [fixture-other]")
+    }),
+  30_000,
 )
 
 withMcpAttachment.instance(

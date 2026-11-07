@@ -22,6 +22,8 @@ import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
 import { InstanceRef, WorkspaceRef } from "../../src/effect/instance-ref"
 import { Project } from "../../src/project/project"
+import { InstanceStore } from "../../src/project/instance-store"
+import { Vcs } from "../../src/project/vcs"
 import { Session } from "../../src/session/session"
 import {
   InstanceContextMiddleware,
@@ -74,12 +76,21 @@ const localAdapter = (directory: string): WorkspaceAdapter => ({
 const setupWorkspace = (kind: string) =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped({ git: true })
+    const instances = yield* InstanceStore.Service
+    const vcs = yield* Vcs.Service
+    // This test owns an isolated provider graph. Close its per-directory
+    // resources while both the providers and temp Git directory are alive;
+    // the global AppRuntime reset below cannot dispose this store's Vcs state.
+    yield* Effect.addFinalizer(() => instances.disposeDirectory(dir))
     yield* Project.use.fromDirectory(dir)
     const projectID = yield* Project.Service.use((svc) => svc.fromDirectory(dir).pipe(Effect.map((p) => p.project.id)))
     registerAdapter(projectID, kind, localAdapter(dir))
     const workspace = yield* Workspace.Service.use((svc) =>
       svc.create({ type: kind, branch: null, extra: null, projectID }),
     )
+    // Bootstrap starts Vcs initialization in its provider scope. This fixture
+    // must be ready before its short HTTP probes can finish and dispose it.
+    yield* instances.provide({ directory: dir }, vcs.branch())
     return { dir, workspace }
   })
 

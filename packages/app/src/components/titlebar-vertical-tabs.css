@@ -56,6 +56,10 @@
 
 /* Floating panel */
 [data-vertical-tab-float] {
+  min-width: min(200px, calc(100vw - 16px));
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
   animation: vertical-tab-float-in 150ms ease-out;
 }
 

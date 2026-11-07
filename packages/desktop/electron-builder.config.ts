@@ -13,6 +13,7 @@ const electronDist = configuredElectronDist
     ? installedElectronDist
     : undefined
 const nativeResources = path.join(packageDir, "native")
+const iconDirectory = process.env.ARFORGE_DESKTOP_ICON_DIR || "resources/icons"
 // The Electron 42 packaging update briefly installed Linux launchers/icons under
 // "arforge-desktop". Keep that hidden desktop entry around so existing GNOME/KDE
 // pins still resolve after the canonical app id changes back to ai.arforge.desktop.
@@ -22,6 +23,7 @@ const legacyDesktopEntryFpm = `${legacyDesktopEntry}=/usr/share/applications/arf
 const channel = (() => {
   const raw = process.env.ARFORGE_CHANNEL
   if (raw === "dev" || raw === "beta" || raw === "prod") return raw
+  if (raw === "latest") return "prod"
   return "dev"
 })()
 
@@ -52,7 +54,7 @@ const getBase = (appId: string): Configuration => ({
   ...(electronDist ? { electronDist } : {}),
   artifactName: "arforge-desktop-${os}-${arch}.${ext}",
   directories: {
-    output: "dist",
+    output: process.env.ARFORGE_DESKTOP_PACKAGE_OUT || "dist",
     buildResources: "resources",
   },
   // Native dependencies are pinned to their platform-specific N-API packages
@@ -65,11 +67,19 @@ const getBase = (appId: string): Configuration => ({
   // https://developer.gnome.org/documentation/guidelines/maintainer/integrating.html
   // https://www.electron.build/docs/linux/
   extraMetadata: {
+    version: process.env.ARFORGE_VERSION || "1.0.0",
     desktopName: `${appId}.desktop`,
   },
   files: [
-    "out/**/*",
+    // Keep the app-root matcher first after electron-builder normalizes mixed
+    // string/FileSet entries, so it retains/transforms the root manifest even
+    // when compiled output comes from a separate staging directory.
+    "package.json",
+    ...(process.env.ARFORGE_DESKTOP_OUT
+      ? [{ from: process.env.ARFORGE_DESKTOP_OUT, to: "out", filter: ["**/*", "!main/assets/plugin-sdk/**/*"] }]
+      : ["out/**/*", "!out/main/assets/plugin-sdk/**/*"]),
     "resources/**/*",
+    "!resources/icons/**/*",
     // These ignored directories can remain on a developer machine after the
     // retired Python bridge migration. Exclude them explicitly so a stale
     // local build can never leak the old runtime back into a desktop package.
@@ -83,7 +93,21 @@ const getBase = (appId: string): Configuration => ({
   ],
   extraResources: [
     {
-      from: "resources/icons/",
+      from: process.env.ARFORGE_DESKTOP_OUT
+        ? path.join(process.env.ARFORGE_DESKTOP_OUT, "main/assets/plugin-sdk")
+        : "out/main/assets/plugin-sdk",
+      to: "plugin-sdk",
+    },
+    // electron-builder filters a source's root node_modules even for extra
+    // resources; map the SDK dependency root explicitly to retain its closure.
+    {
+      from: process.env.ARFORGE_DESKTOP_OUT
+        ? path.join(process.env.ARFORGE_DESKTOP_OUT, "main/assets/plugin-sdk/node_modules")
+        : "out/main/assets/plugin-sdk/node_modules",
+      to: "plugin-sdk/node_modules",
+    },
+    {
+      from: `${iconDirectory}/`,
       to: "icons/",
     },
     ...(existsSync(nativeResources)
@@ -98,7 +122,7 @@ const getBase = (appId: string): Configuration => ({
   ],
   mac: {
     category: "public.app-category.developer-tools",
-    icon: `resources/icons/icon.icns`,
+    icon: path.join(iconDirectory, "icon.icns"),
     hardenedRuntime: true,
     gatekeeperAssess: false,
     entitlements: "resources/entitlements.plist",
@@ -114,7 +138,7 @@ const getBase = (appId: string): Configuration => ({
     schemes: ["arforge"],
   },
   win: {
-    icon: `resources/icons/icon.ico`,
+    icon: path.join(iconDirectory, "icon.ico"),
     target: ["nsis"],
     verifyUpdateCodeSignature: channel !== "dev",
     ...windowsSigning(),
@@ -122,11 +146,11 @@ const getBase = (appId: string): Configuration => ({
   nsis: {
     oneClick: true,
     perMachine: false,
-    installerIcon: `resources/icons/icon.ico`,
-    installerHeaderIcon: `resources/icons/icon.ico`,
+    installerIcon: path.join(iconDirectory, "icon.ico"),
+    installerHeaderIcon: path.join(iconDirectory, "icon.ico"),
   },
   linux: {
-    icon: `resources/icons`,
+    icon: iconDirectory,
     category: "Development",
     executableName: appId,
     desktop: {

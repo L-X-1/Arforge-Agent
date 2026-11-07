@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { DateTime } from "luxon"
 import { Agent as RuntimeAgent } from "@arforge-ai/schema/agent"
+import { Model as RuntimeModel } from "@arforge-ai/schema/model"
+import { Provider as RuntimeProvider } from "@arforge-ai/schema/provider"
+import { chooserCapabilityBadges, chooserVariantGroups } from "@/components/dialog-select-model-presentation"
+import { deprecatedReasoningVariant, reasoningControlOptions } from "@/components/prompt-input/reasoning-options"
 import type {
   AgentListOutput,
   ModelDefaultOutput,
@@ -47,21 +51,23 @@ describe("normalizeAgentList", () => {
   test("accepts the canonical empty agent request without settings", () => {
     const agent = RuntimeAgent.Info.empty(RuntimeAgent.ID.make("build"))
 
-    expect(normalizeAgentList([agent])).toEqual([{
-      name: "build",
-      description: undefined,
-      mode: "all",
-      hidden: false,
-      temperature: undefined,
-      topP: undefined,
-      color: undefined,
-      permission: [],
-      model: undefined,
-      variant: undefined,
-      prompt: undefined,
-      options: {},
-      steps: undefined,
-    }])
+    expect(normalizeAgentList([agent])).toEqual([
+      {
+        name: "build",
+        description: undefined,
+        mode: "all",
+        hidden: false,
+        temperature: undefined,
+        topP: undefined,
+        color: undefined,
+        permission: [],
+        model: undefined,
+        variant: undefined,
+        prompt: undefined,
+        options: {},
+        steps: undefined,
+      },
+    ])
   })
 
   for (const topPKey of ["topP", "top_p"] as const) {
@@ -186,23 +192,26 @@ describe("normalizeProviderList", () => {
 })
 
 describe("normalizeProviderList release dates", () => {
-  const catalog = (released: number) => normalizeProviderList(
-    [{ id: "test", name: "Custom provider", package: "@ai-sdk/openai-compatible" }] as ProviderListOutput["data"],
-    [{
-      id: "custom-model",
-      modelID: "custom-model",
-      providerID: "test",
-      name: "Custom model",
-      capabilities: { tools: true, input: ["text"], output: ["text"] },
-      variants: [],
-      time: { released },
-      cost: [],
-      status: "active",
-      enabled: true,
-      limit: { context: 100_000, output: 10_000 },
-    }] as ModelListOutput["data"],
-    { id: "custom-model", providerID: "test" } as ModelDefaultOutput["data"],
-  )
+  const catalog = (released: number) =>
+    normalizeProviderList(
+      [{ id: "test", name: "Custom provider", package: "@ai-sdk/openai-compatible" }] as ProviderListOutput["data"],
+      [
+        {
+          id: "custom-model",
+          modelID: "custom-model",
+          providerID: "test",
+          name: "Custom model",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [],
+          time: { released },
+          cost: [],
+          status: "active",
+          enabled: true,
+          limit: { context: 100_000, output: 10_000 },
+        },
+      ] as ModelListOutput["data"],
+      { id: "custom-model", providerID: "test" } as ModelDefaultOutput["data"],
+    )
 
   test.each([0, -1, NaN, Infinity, -Infinity, Number.MAX_VALUE])(
     "keeps unknown or invalid release timestamp %s out of the old-model filter",
@@ -238,6 +247,139 @@ describe("normalizeProviderList release dates", () => {
     })
     expect(result.all.get("test")?.models["custom-model"].release_date).toBe("")
     expect(result.default).toEqual({ test: "custom-model" })
+  })
+})
+
+describe("canonical available model to chooser controls", () => {
+  const provider = RuntimeProvider.Info.make({
+    ...RuntimeProvider.Info.empty(RuntimeProvider.ID.make("relay-original")),
+    name: "Configured relay",
+    api: { type: "aisdk", package: "@ai-sdk/openai-compatible", settings: { fixture: true } },
+  })
+  const base = () =>
+    RuntimeModel.Info.make({
+      ...RuntimeModel.Info.empty(provider.id, RuntimeModel.ID.make("opaque/local-wire")),
+      name: "Local fixture",
+      api: {
+        id: RuntimeModel.ID.make("relay/unchanged-wire"),
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "http://fixture.invalid",
+      },
+      capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+      limit: { context: 12_345, output: 678 },
+    })
+  const normalize = (model: RuntimeModel.Info) => {
+    const catalog = normalizeProviderList([provider], [model], model)
+    return { catalog, model: catalog.all.get(provider.id)!.models[model.id] }
+  }
+
+  test("preserves canonical request parameters and lowerer-shaped variants through the real normalizer", () => {
+    const input = RuntimeModel.Info.make({
+      ...base(),
+      request: { headers: { "x-fixture": "kept-as-header" }, body: { temperature: 0.3 } },
+      variants: [
+        { id: RuntimeModel.VariantID.make("off"), headers: {}, body: { thinking: { type: "disabled" } } },
+        { id: RuntimeModel.VariantID.make("auto"), headers: {}, body: { reasoning_effort: "auto" } },
+        { id: RuntimeModel.VariantID.make("relay-effort"), headers: {}, body: { reasoning: { effort: "high" } } },
+        { id: RuntimeModel.VariantID.make("high"), headers: {}, body: { temperature: 0.1 } },
+      ],
+    })
+    const { catalog, model } = normalize(input)
+    expect(catalog.connected).toEqual([provider.id])
+    expect(catalog.default).toEqual({ [provider.id]: input.id })
+    expect(model.api).toEqual({ id: input.api.id, url: "http://fixture.invalid", npm: "@ai-sdk/openai-compatible" })
+    expect(model.options).toEqual(input.request.body)
+    expect(model.headers).toEqual(input.request.headers)
+    expect(model.limit).toEqual(input.limit)
+    expect(chooserCapabilityBadges(model)).toEqual(["vision", "reasoning"])
+    const groups = chooserVariantGroups(Object.keys(model.variants!), model.variants)
+    expect(groups.reasoning.map((item) => item.value)).toEqual(["off", "auto", "relay-effort"])
+    expect(groups.other.map((item) => item.value)).toEqual(["high"])
+    expect(model.variants?.high).toEqual({ temperature: 0.1 })
+    const compact = reasoningControlOptions(Object.keys(model.variants!), model.variants)
+    expect(compact.map((item) => item.value)).toEqual([undefined, "off", "auto", "relay-effort", "high"])
+    expect(deprecatedReasoningVariant("off", Object.keys(model.variants!))).toBe(false)
+    expect(input.variants[0].body).toEqual({ thinking: { type: "disabled" } })
+  })
+
+  test("a high temperature preset and reasoning-looking headers do not fabricate a reasoning capability", () => {
+    const input = RuntimeModel.Info.make({
+      ...base(),
+      variants: [
+        { id: RuntimeModel.VariantID.make("high"), headers: { reasoning_effort: "high" }, body: { temperature: 0.1 } },
+      ],
+    })
+    const { model } = normalize(input)
+    expect(model.capabilities.reasoning).toBe(false)
+    expect(chooserCapabilityBadges(model)).toEqual(["vision"])
+    expect(chooserVariantGroups(Object.keys(model.variants!), model.variants).reasoning).toEqual([])
+    expect(model.variants?.high).toEqual({ temperature: 0.1 })
+  })
+
+  test("base request reasoning is evidence for a badge, not permission to invent selectable variants", () => {
+    const { model } = normalize(
+      RuntimeModel.Info.make({ ...base(), request: { headers: {}, body: { reasoning_effort: "high" } } }),
+    )
+    expect(model.capabilities.reasoning).toBe(true)
+    expect(model.variants).toEqual({})
+    expect(chooserVariantGroups(Object.keys(model.variants!), model.variants).reasoning).toEqual([])
+  })
+
+  test("uses a supplied complete profile without fabricating one or inferring controls from its support kind", () => {
+    const input = base()
+    const profile = RuntimeModel.Profile.make({
+      version: "v1",
+      providerID: input.providerID,
+      modelID: input.id,
+      modality: { input: ["text"], output: ["text"] },
+      limits: input.limit,
+      capabilities: { tools: "unknown", structured: "unknown", reasoning: "effort", cache: "unknown" },
+      tokenizer: "fixture",
+      estimator: "fixture",
+      priceCatalogRevision: "fixture-not-billing",
+      observations: [],
+      policy: {
+        region: { mode: "unknown", regions: [] },
+        egress: { mode: "unknown", origins: [] },
+        data: { retention: "unknown", training: "unknown" },
+      },
+    })
+    const { model } = normalize(RuntimeModel.Info.make({ ...input, profile }))
+    expect(model.capabilities.reasoning).toBe(true)
+    expect(chooserVariantGroups(Object.keys(model.variants!), model.variants).reasoning).toEqual([])
+    expect(input.profile).toBeUndefined()
+    expect(normalize(input).model.capabilities.reasoning).toBe(false)
+  })
+
+  test("keeps vendored settings compatibility while preserving an actual body and excluding variant headers", () => {
+    const legacy: ModelListOutput["data"][number] = {
+      id: "fixture",
+      modelID: "wire",
+      providerID: provider.id,
+      name: "Fixture",
+      capabilities: { tools: false, input: ["text"], output: ["text"] },
+      settings: { temperature: 0.7 },
+      body: { temperature: 0.2 },
+      variants: [
+        {
+          id: "low",
+          settings: { reasoningEffort: "low" },
+          body: { temperature: 0.4 },
+          headers: { "x-fixture": "excluded" },
+        },
+      ],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: { context: 0, output: 0 },
+    }
+    const model = normalizeProviderList([provider], [legacy]).all.get(provider.id)!.models.fixture
+    expect(model.options).toEqual({ temperature: 0.2 })
+    expect(model.variants?.low).toEqual({ reasoningEffort: "low", temperature: 0.4 })
+    expect(model.capabilities.reasoning).toBe(true)
+    expect(chooserVariantGroups(["low"], model.variants).reasoning.map((item) => item.value)).toEqual(["low"])
   })
 })
 

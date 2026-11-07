@@ -132,3 +132,27 @@
     }
   }
 }
+[data-component="input"][data-presentation="workspace"][data-variant="normal"] {
+  gap: 6px;
+  [data-slot="input-wrapper"] {
+    min-height: 36px;
+    border-radius: 8px;
+    box-shadow: none;
+    background: var(--v2-background-bg-base);
+    &:focus-within {
+      outline: 2px solid var(--v2-border-border-focus);
+      outline-offset: 2px;
+      box-shadow: none;
+    }
+    @media (pointer: coarse) {
+      min-height: 44px;
+    }
+  }
+  [data-slot="input-input"] {
+    min-height: 34px;
+    padding-inline: 12px;
+  }
+  textarea[data-slot="input-input"] {
+    min-height: 96px;
+  }
+}

@@ -88,6 +88,7 @@ const layer = Layer.effect(
           id: SessionTable.id,
           title: SessionTable.title,
           projectID: SessionTable.project_id,
+          directory: SessionTable.directory,
           timeCreated: SessionTable.time_created,
           timeUpdated: SessionTable.time_updated,
         })
@@ -140,10 +141,26 @@ const layer = Layer.effect(
             if (!("sessionID" in snapshot.run)) return []
             const run = snapshot.run
             const recoveryRequired = run.status === "recovering" || run.status === "failed"
+            const source: PersonalWorkspace.RunSource = run.project && run.location
+              ? {
+                  projectID: run.project,
+                  directory: run.location,
+                  inspectability: run.project !== session.projectID || String(run.location) !== String(session.directory)
+                    ? "session-moved"
+                    : run.project === location.project.id && String(run.location) === String(location.directory)
+                      ? "current"
+                      : "requires-navigation",
+                }
+              : {
+                  inspectability: "missing-binding",
+                  ...(run.project ? { projectID: run.project } : {}),
+                  ...(run.location ? { directory: run.location } : {}),
+                }
             return [
               {
                 runID: run.id,
                 sessionID: run.sessionID,
+                source,
                 status: run.status,
                 initiator: run.initiator,
                 authority: run.authority,

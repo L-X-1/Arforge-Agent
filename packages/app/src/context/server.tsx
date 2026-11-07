@@ -15,10 +15,10 @@ type ServerProjectState = {
   recentlyClosed: Record<string, string[]>
 }
 const HEALTH_POLL_INTERVAL_MS = 10_000
-// The store retains more history than is displayed. Consumers filter recently closed entries
-// against the live project list (dropping deleted projects) and then cap the visible count via
-// RECENTLY_CLOSED_DISPLAY_LIMIT. Retaining extra history ensures entries that are temporarily
-// filtered out do not evict still-visible ones from the persisted store.
+// Scoped close history is retained even when optional project metadata is absent.
+// Consumers cap the visible count via RECENTLY_CLOSED_DISPLAY_LIMIT and enrich when
+// metadata is available. A history entry does not guarantee the directory still exists.
+// Extra history keeps older entries available as more recent projects are reopened.
 const RECENTLY_CLOSED_HISTORY_LIMIT = 16
 export const RECENTLY_CLOSED_DISPLAY_LIMIT = 5
 
