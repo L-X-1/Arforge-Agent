@@ -150,6 +150,26 @@ describe("bounded Tool Scheduler", () => {
     expect(active).toBe(0)
   })
 
+  it("does not spend shared capacity on a waiter for the same resource", async () => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const scheduler = makeToolScheduler(2)
+      const started = yield* Deferred.make<void>()
+      const waiting = yield* Deferred.make<void>()
+      const heldResource = metadata("keyed", "shared")
+      yield* scheduler.run({
+        metadata: heldResource,
+        effect: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* Deferred.succeed(waiting, undefined).pipe(
+        Effect.andThen(scheduler.run({ metadata: heldResource, effect: Effect.void })),
+        Effect.forkScoped,
+      )
+      yield* Deferred.await(waiting)
+      yield* scheduler.run({ metadata: metadata("safe"), effect: Effect.void }).pipe(Effect.timeout(500))
+    })))
+  })
+
   it("releases a permit when a running call is cancelled so queued work can drain", async () => {
     const scheduler = makeToolScheduler(1)
     const started = await Effect.runPromise(Deferred.make<void>())
@@ -183,13 +203,16 @@ describe("bounded Tool Scheduler", () => {
       const running = yield* scheduler
         .run({
           metadata: metadata("safe"),
+          sessionID: "ses_owner",
           effect: Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
         })
         .pipe(Effect.forkChild)
       yield* Deferred.await(started)
       expect(yield* scheduler.active).toBe(1)
+      expect(yield* scheduler.quiesce(0, "ses_unrelated")).toEqual({ status: "quiescent", active: 0 })
       const pending = yield* scheduler.quiesce(25)
       expect(pending).toEqual({ status: "timed_out", active: 1 })
+      expect(yield* scheduler.quiesce(0, "ses_owner")).toEqual({ status: "timed_out", active: 1 })
       yield* Deferred.succeed(release, undefined)
       yield* Fiber.join(running)
       expect(yield* scheduler.quiesce(DEFAULT_TOOL_QUIESCENCE_TIMEOUT_MS)).toEqual({

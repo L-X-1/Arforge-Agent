@@ -35,6 +35,8 @@ import { shortArtifactIdentifier } from "./artifact-evidence"
 import { createScopeRequestGuard } from "@/utils/scope-request"
 
 type Snapshot = Awaited<ReturnType<OperationsApi["runtimeInsight"]["snapshot"]>>
+type AuditVerification = Awaited<ReturnType<OperationsApi["runtimeInsight"]["auditVerify"]>>
+type AuditVerificationReceipt = { readonly result: AuditVerification; readonly receivedAt: number }
 type ActionRecovery = Awaited<ReturnType<OperationsApi["runtimeInsight"]["actionRecovery"]>>
 type SettlementRecoverySweep = Awaited<ReturnType<OperationsApi["runtimeInsight"]["childSettlementRecoverySweep"]>>
 type McpReconciliation = Awaited<ReturnType<OperationsApi["mcp"]["actionReconciliation"]>>["data"]
@@ -120,7 +122,9 @@ export function RuntimeInsightWorkbench(props: {
     mcpRecordingActionID: "",
     error: "",
     data: undefined as Snapshot | undefined,
-    verifyResult: undefined as Awaited<ReturnType<OperationsApi["runtimeInsight"]["auditVerify"]>> | undefined,
+    // Result and the local receipt time are one atomic value: the time can never
+    // exist without the user-initiated result it belongs to.
+    verifyReceipt: undefined as AuditVerificationReceipt | undefined,
     artifactMaintenance: undefined as
       | Awaited<ReturnType<OperationsApi["runtimeInsight"]["artifactMaintenance"]>>
       | undefined,
@@ -132,7 +136,7 @@ export function RuntimeInsightWorkbench(props: {
     const value = props.location().location
     return `${value.directory}\u0000${value.workspace ?? ""}`
   }
-  const principalAudit = () => (state.verifyResult ?? state.data?.auditVerify)?.scope === "principal-records"
+  const principalAudit = () => (state.verifyReceipt?.result ?? state.data?.auditVerify)?.scope === "principal-records"
   const requestScopeKey = () => `${props.ready() ? "ready" : "not-ready"}\u0000${locationScopeKey()}`
   const scopeGuard = createScopeRequestGuard(requestScopeKey)
   let refreshQueued = false
@@ -167,10 +171,13 @@ export function RuntimeInsightWorkbench(props: {
     if (!props.ready() || state.verifying) return
     const request = scopeGuard.capture()
     const requestedLocation = props.location()
-    setState({ verifying: true, auditVerificationAttempted: true, verifyResult: undefined, error: "" })
+    setState({ verifying: true, auditVerificationAttempted: true, verifyReceipt: undefined, error: "" })
     try {
       const result = await props.api().runtimeInsight.auditVerify(requestedLocation)
-      if (scopeGuard.isCurrent(request)) setState("verifyResult", result)
+      // The result and its local receipt time are published by the same
+      // scope-checked update, so a stale/failed/retried response cannot carry
+      // the old result's timestamp.
+      if (scopeGuard.isCurrent(request)) setState("verifyReceipt", { result, receivedAt: Date.now() })
     } catch (error) {
       if (scopeGuard.isCurrent(request)) setState("error", String(error instanceof Error ? error.message : error))
     } finally {
@@ -410,7 +417,7 @@ export function RuntimeInsightWorkbench(props: {
           rollbackActionID: "",
           mcpInspectionActionID: "",
           mcpRecordingActionID: "",
-          verifyResult: undefined,
+          verifyReceipt: undefined,
           artifactMaintenance: undefined,
           settlementRecovery: undefined,
           artifactSweepArmed: false,
@@ -439,7 +446,7 @@ export function RuntimeInsightWorkbench(props: {
   })
   const auditVerification = createMemo(() => {
     if (state.verifying || state.error) return undefined
-    return state.auditVerificationAttempted ? state.verifyResult : state.data?.auditVerify
+    return state.auditVerificationAttempted ? state.verifyReceipt?.result : state.data?.auditVerify
   })
 
   const runtimeViews: ManagementView[] = [
@@ -1241,6 +1248,12 @@ export function RuntimeInsightWorkbench(props: {
                         ? (result().valid ? copy().principalAuditValid(result().count) : copy().principalAuditInvalid)
                         : (result().valid ? copy().validChain(result().count) : copy().invalidChain)}
                     </span>
+                    <span style="color:var(--v2-text-text-muted)">
+                      {" · "}
+                      {copy().auditResultSource(state.auditVerificationAttempted)}
+                      {" · "}
+                      {copy().auditScope(result().scope === "principal-records")}
+                    </span>
                   </p>
                 )}
               </Show>
@@ -1447,14 +1460,24 @@ export function RuntimeInsightWorkbench(props: {
           />
         </div>
       </Show>
-      <Show when={state.verifyResult}>
-        {(result) => (
+      <Show when={state.verifyReceipt}>
+        {(receipt) => (
           <p
-            style={`font-size:12px;padding:8px 12px;border-radius:8px;${result().valid ? "background:rgba(34,197,94,0.10);color:var(--v2-state-fg-success)" : "background:rgba(239,68,68,0.10);color:var(--v2-state-fg-danger)"}`}
+            style={`font-size:12px;padding:8px 12px;border-radius:8px;${receipt().result.valid ? "background:rgba(34,197,94,0.10);color:var(--v2-state-fg-success)" : "background:rgba(239,68,68,0.10);color:var(--v2-state-fg-danger)"}`}
           >
-            {result().scope === "principal-records"
-              ? (result().valid ? copy().principalAuditVerified(result().count) : copy().principalAuditFailed(result().issue ?? ""))
-              : (result().valid ? copy().auditVerified(result().count) : copy().auditFailed(result().issue ?? ""))}
+            {receipt().result.scope === "principal-records"
+              ? (receipt().result.valid
+                  ? copy().principalAuditVerified(receipt().result.count)
+                  : copy().principalAuditFailed(receipt().result.issue ?? ""))
+              : (receipt().result.valid
+                  ? copy().auditVerified(receipt().result.count)
+                  : copy().auditFailed(receipt().result.issue ?? ""))}
+            <span style="color:var(--v2-text-text-muted)">
+              {" · "}
+              {copy().auditScope(receipt().result.scope === "principal-records")}
+              {" · "}
+              {copy().verifyReceivedAt(formatRuntimeTime(receipt().receivedAt, language.locale()))}
+            </span>
           </p>
         )}
       </Show>

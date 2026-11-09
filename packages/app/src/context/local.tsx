@@ -3,7 +3,7 @@ import { base64Encode } from "@arforge-ai/core/util/encode"
 import { useParams } from "@solidjs/router"
 import { batch, createEffect, createMemo, startTransition, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
-import { useModels } from "@/context/models"
+import { providerModel, providerModelID, useModels } from "@/context/models"
 import { useSettings } from "@/context/settings"
 import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
@@ -126,7 +126,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const validModel = (model: ModelKey) => {
       const provider = providers.all().get(model.providerID)
-      return !!provider?.models[model.modelID] && connected().has(model.providerID)
+      return !!provider && !!providerModel(provider, model.modelID) && connected().has(model.providerID)
     }
 
     const pickAgent = (name: string | undefined) => {
@@ -265,6 +265,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const selectedModelKey = () => scope()?.model ?? agent.current()?.model ?? fallback()
+    const visibleModelKey = () => {
+      const selected = selectedModelKey()
+      if (!selected) return
+      const provider = providers.all().get(selected.providerID)
+      return provider ? { ...selected, modelID: providerModelID(provider, selected.modelID) } : selected
+    }
     const selectionScope = () => ScopedKey.from(serverSDK().scope, sdk().directory, id() ?? "__draft__")
     const current = () => resolveModelChoice(selectedModelKey(), validModel, models.find)
 
@@ -437,16 +443,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       // Local selection is a next-submit binding. It never edits an in-flight
       // request, durable queue entry, or the configured new-session default.
       modelSelection: {
-        key: selectedModelKey,
+        key: visibleModelKey,
         scope: selectionScope,
         ready: savedReady,
         unavailable() {
-          const key = selectedModelKey()
+          const key = visibleModelKey()
           if (!key) return
           const provider = providers.all().get(key.providerID)
           if (!provider) return "provider" as const
           if (!connected().has(key.providerID)) return "disconnected" as const
-          if (!provider.models[key.modelID]) return "removed" as const
+          if (!providerModel(provider, key.modelID)) return "removed" as const
         },
         select(item: ModelKey, expectedScope: string) {
           if (selectionScope() !== expectedScope) throw new ModelChoiceError("scope-changed")

@@ -17,6 +17,7 @@ import { providerCredentialTarget, providerCredentialTargetKey } from "../../pro
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { ModelRequestOptions } from "../../model-request-options"
+import { officialDeepSeekFlash } from "../../deepseek-flash"
 import { SessionSchema } from "../schema"
 import type * as RuntimeRetry from "../../runtime/retry"
 
@@ -82,12 +83,22 @@ export class CredentialScopeError extends Schema.TaggedErrorClass<CredentialScop
   }
 }
 
+export class CredentialUnavailableError extends Schema.TaggedErrorClass<CredentialUnavailableError>()(
+  "SessionRunnerModel.CredentialUnavailableError",
+  { providerID: ProviderV2.ID },
+) {
+  override get message() {
+    return `Reconnect provider ${this.providerID} to use this model`
+  }
+}
+
 export type Error =
   | ModelNotSelectedError
   | ModelUnavailableError
   | VariantUnavailableError
   | UnsupportedApiError
   | CredentialScopeError
+  | CredentialUnavailableError
   | Integration.AuthorizationError
 
 export interface Interface {
@@ -150,7 +161,7 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
     headers: model.request.headers,
     http: { body: options.httpBody },
     generation: options.generation,
-    limits: { context: model.limit.context, output: model.limit.output },
+    limits: { context: model.limit.context, input: model.limit.input, output: model.limit.output },
   })
 }
 
@@ -181,14 +192,20 @@ const withVariant = (
 const apiName = (model: ModelV2.Info) =>
   model.api.type === "aisdk" ? `${model.api.type}:${model.api.package}` : model.api.type
 
+function validEndpoint(endpoint: string | undefined) {
+  if (endpoint === undefined) return true
+  const url = URL.parse(endpoint)
+  return !!url && (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+}
+
 export const fromCatalogModel = (
   model: ModelV2.Info,
   credential?: Credential.Value,
-): Effect.Effect<Model, UnsupportedApiError> => {
+): Effect.Effect<Model, UnsupportedApiError | CredentialUnavailableError> => {
   const credentialMetadata = credential?.type === "key" ? credential.metadata : undefined
   const target = credentialMetadata?.[providerCredentialTargetKey]
   if (target !== undefined && target !== providerCredentialTarget(model.providerID, model.api))
-    return Effect.die(new Error("Provider credential target changed; reconnect this provider"))
+    return Effect.fail(new CredentialUnavailableError({ providerID: model.providerID }))
   const resolved =
     credentialMetadata === undefined
       ? model
@@ -205,25 +222,32 @@ export const fromCatalogModel = (
               if (typeof value === "string") draft.request.headers[name] = value
         })
   const key = apiKey(resolved, credential)
+  const id = officialDeepSeekFlash(resolved.providerID, resolved.api.id, resolved.api.url) ?? resolved.api.id
+  if (!validEndpoint(resolved.api.url))
+    return Effect.fail(new UnsupportedApiError({
+      providerID: resolved.providerID,
+      modelID: resolved.id,
+      api: apiName(resolved),
+    }))
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
     return Effect.succeed(
       withDefaults(resolved, OpenAIResponses.route)
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
-        .model({ id: resolved.api.id }),
+        .model({ id }),
     )
   }
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/anthropic") {
     return Effect.succeed(
       withDefaults(resolved, AnthropicMessages.route)
         .with({ auth: key === undefined ? Auth.none : Auth.header("x-api-key", key) })
-        .model({ id: resolved.api.id }),
+        .model({ id }),
     )
   }
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai-compatible" && resolved.api.url) {
     return Effect.succeed(
       withDefaults(resolved, OpenAICompatibleChat.route)
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
-        .model({ id: resolved.api.id }),
+        .model({ id }),
     )
   }
   return Effect.fail(
@@ -244,6 +268,7 @@ export const fromConfiguredModel = (model: ModelV2.Info, credential?: Credential
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&
+  validEndpoint(model.api.url) &&
   (model.api.package === "@ai-sdk/openai" ||
     model.api.package === "@ai-sdk/anthropic" ||
     (model.api.package === "@ai-sdk/openai-compatible" && model.api.url !== undefined))
@@ -261,14 +286,15 @@ export const locationLayer = Layer.effect(
       selected: ModelV2.Info,
       snapshot: Integration.ResolvedCredential | undefined,
     ) {
+      const unavailable = () => new CredentialUnavailableError({ providerID: selected.providerID })
       let value = snapshot?.value
       const env = value?.type === "key" ? value.metadata?.["arforge.provider.key-env.v1"] : undefined
       if (value?.type === "key" && !value.key && typeof env === "string") {
-        if (!secrets) return yield* Effect.die(new Error("Model credential environment is unavailable"))
+        if (!secrets) return yield* unavailable()
         const key = yield* secrets
           .resolve(env)
-          .pipe(Effect.catch(() => Effect.die(new Error("Model credential environment could not be resolved"))))
-        if (!key) return yield* Effect.die(new Error("Model credential environment is unavailable"))
+          .pipe(Effect.mapError(unavailable))
+        if (!key) return yield* unavailable()
         value = Credential.Key.make({ ...value, key })
       }
       const model = yield* resolve(session, selected, value)
@@ -279,7 +305,8 @@ export const locationLayer = Layer.effect(
           if (!current || current.version !== identity.version)
             return yield* Effect.die(new Error("Model credential changed or was removed; resolve the model again"))
         })
-        yield* validate
+        const current = yield* credentials.get(identity.id)
+        if (!current || current.version !== identity.version) return yield* unavailable()
         credentialBindings.set(model, { identity, validate })
       }
       return model
@@ -295,7 +322,7 @@ export const locationLayer = Layer.effect(
         const connection = yield* integrations.connection.active(integrationID)
         const snapshot = connection ? yield* integrations.connection.resolveSnapshot(connection) : undefined
         if (connection && !snapshot)
-          return yield* Effect.die(new Error("Selected model credential is no longer available"))
+          return yield* new CredentialUnavailableError({ providerID: selected.providerID })
         return yield* resolveBound(session, selected, snapshot)
       }
 
@@ -352,19 +379,15 @@ export const locationLayer = Layer.effect(
         )
       }),
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session) {
-        const defaultModel = session.model ? undefined : yield* catalog.model.default()
-        const selected = session.model
-          ? (yield* catalog.model.available()).find(
-              (model) => model.providerID === session.model?.providerID && model.id === session.model.id,
-            )
-          : defaultModel && supported(defaultModel)
-            ? defaultModel
-            : (yield* catalog.model.available()).find(supported)
-        if (!selected && session.model)
-          return yield* new ModelUnavailableError({
-            providerID: session.model.providerID,
-            modelID: session.model.id,
-          })
+        const ref = session.model
+        if (ref) {
+          const selected = yield* catalog.model.get(ref.providerID, ref.id)
+          if (!selected?.enabled || !(yield* catalog.provider.available()).some((provider) => provider.id === ref.providerID))
+            return yield* new ModelUnavailableError({ providerID: ref.providerID, modelID: ref.id })
+          return yield* resolveCandidate(session, selected)
+        }
+        const defaultModel = yield* catalog.model.default()
+        const selected = defaultModel && supported(defaultModel) ? defaultModel : (yield* catalog.model.available()).find(supported)
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         return yield* resolveCandidate(session, selected)
       }),

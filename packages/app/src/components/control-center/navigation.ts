@@ -18,7 +18,7 @@ export const ARFORGE_SETTINGS_TABS = [
     value: "arforge-integrations",
     icon: "providers",
     label: "模型与服务商（Provider）",
-    description: "管理模型服务连接和凭据；具体模型选择仍在“模型”设置中完成。",
+    description: "统一管理模型服务配置、连接与凭据，以及在聊天中显示的模型。",
   },
   {
     value: "arforge-permissions",
@@ -77,6 +77,68 @@ export const ARFORGE_SETTINGS_TABS = [
 
 export type ArforgeSettingsTab = (typeof ARFORGE_SETTINGS_TABS)[number]
 export type ArforgeSettingsValue = ArforgeSettingsTab["value"]
+
+/** Existing section anchors/views reused by focused navigation from the memory page. */
+export const PERSONAL_WORKSPACE_MEMORY_CANDIDATES_ID = "personal-workspace-memory-candidates"
+export const MEMORY_RECALL_EVIDENCE_VIEW_ID = "memory-2"
+
+/**
+ * A queued focused navigation is only valid for the workspace it was requested
+ * from. The settings dialog also remounts on server changes, so switching the
+ * project/workspace or the server discards a stale request.
+ */
+export interface NavigationScopeRequest {
+  readonly scope: string
+}
+
+export const settingsLocationScope = (location: {
+  readonly directory: string
+  readonly workspace?: string
+}) => `${location.directory}\u0000${location.workspace ?? ""}`
+
+export const createNavigationScopeRequest = (location: {
+  readonly directory: string
+  readonly workspace?: string
+}): NavigationScopeRequest => ({ scope: settingsLocationScope(location) })
+
+export function isNavigationScopeCurrent(
+  request: NavigationScopeRequest | undefined,
+  location: { readonly directory: string; readonly workspace?: string },
+): boolean {
+  return request !== undefined && request.scope === settingsLocationScope(location)
+}
+
+/** Only an existing view may be requested, so a stale/mistyped id cannot select a blank panel. */
+export function requestedNavigationView(
+  views: ReadonlyArray<{ readonly id: string }>,
+  requested: string | undefined,
+): string | undefined {
+  return requested !== undefined && views.some((view) => view.id === requested) ? requested : undefined
+}
+
+/**
+ * Only the memory page and Personal Workspace resolve their settings location
+ * from the current session. Sharing that source keeps a focused navigation
+ * queued on the memory page valid when it switches to Personal Workspace.
+ */
+export const SESSION_LOCATION_PAGES = ["arforge-memory", "arforge-workspace"] as const
+export type SessionLocationPage = (typeof SESSION_LOCATION_PAGES)[number]
+
+export const isSessionLocationPage = (value: string): value is SessionLocationPage =>
+  SESSION_LOCATION_PAGES.some((page) => page === value)
+
+/** The session whose location owns this settings page, if any. */
+export const sessionLocationSource = (value: string, sessionID: string | undefined) =>
+  sessionID !== undefined && sessionID !== "" && isSessionLocationPage(value) ? sessionID : undefined
+
+/**
+ * Source-derived settings pages are only ready when the latest location
+ * resolution succeeded. `error` must participate: after a failed source switch
+ * `state.location` can still hold the previous workspace, and it must not stay
+ * actionable or trigger new queries for that stale directory.
+ */
+export const settingsLocationReady = (loading: boolean, error: string, hasLocation: boolean) =>
+  !loading && error === "" && hasLocation
 
 /** Presentation groups only. The eleven existing values still own their panels. */
 export const ARFORGE_SETTINGS_GROUPS = [

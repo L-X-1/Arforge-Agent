@@ -246,7 +246,7 @@ export interface Interface {
   readonly updateGlobal: (
     config: Info,
     locations: LocationMap,
-  ) => Effect.Effect<{ info: Info; changed: boolean; path: string }>
+  ) => Effect.Effect<{ info: Info; changed: boolean; path: string; liveUpdate?: boolean }>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
@@ -772,6 +772,7 @@ const layer = Layer.effect(
     })
 
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info, locations: LocationMap) {
+      const liveUpdate = typeof config.session_run_token_limit === "boolean" && Object.keys(config).length === 1
       const savedInfo = (document: { path: string; text: string }) =>
         ConfigParse.schema(
           ConfigV1.Info,
@@ -786,10 +787,12 @@ const layer = Layer.effect(
       const info = savedInfo(result)
       if (result.changed) {
         yield* invalidate()
-        yield* ScopedCache.invalidateAll(state.cache).pipe(Effect.provide(constructionContext))
-        yield* invalidateLocations(locations)
+        if (!liveUpdate) {
+          yield* ScopedCache.invalidateAll(state.cache).pipe(Effect.provide(constructionContext))
+          yield* invalidateLocations(locations)
+        }
       }
-      return { info, changed: result.changed, path: result.path }
+      return { info, changed: result.changed, path: result.path, liveUpdate }
     })
 
     return Service.of({

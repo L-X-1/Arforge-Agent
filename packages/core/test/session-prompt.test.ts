@@ -1,9 +1,13 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, LayerMap, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@arforge-ai/core/database/database"
 import { AppNodeBuilder } from "@arforge-ai/core/effect/app-node-builder"
+import { AgentV2 } from "@arforge-ai/core/agent"
 import { LayerNode } from "@arforge-ai/core/effect/layer-node"
+import { LocationServiceMap } from "@arforge-ai/core/location-service-map"
+import type { LocationError, LocationServices } from "../src/location-services"
+import type { Location } from "@arforge-ai/core/location"
 import { EventV2 } from "@arforge-ai/core/event"
 import { EventSequenceTable, EventTable } from "@arforge-ai/core/event/sql"
 import { SessionEvent } from "@arforge-ai/core/session/event"
@@ -50,10 +54,21 @@ const execution = Layer.succeed(
       }),
   }),
 )
+const recordingLocations = Layer.effect(LocationServiceMap.Service, Effect.gen(function* () {
+  const agents = Layer.effect(AgentV2.Service, AgentV2.Service.use((service) => Effect.gen(function* () {
+    yield* service.transform((draft) => {
+      draft.update(AgentV2.ID.make("build"), () => {})
+      draft.update(AgentV2.ID.make("review"), () => {})
+    })
+    return service
+  }))).pipe(Layer.provide(AgentV2.locationLayer))
+  const map = yield* LayerMap.make((_ref: Location.Ref) => agents)
+  return map as unknown as LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>
+}))
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
-    [[SessionExecution.node, execution]],
+    [[SessionExecution.node, execution], [LocationServiceMap.node, recordingLocations]],
   ),
 )
 const sessionID = SessionV2.ID.make("ses_prompt_test")
@@ -107,6 +122,72 @@ const eventCount = (type: string) =>
   )
 
 describe("SessionV2.prompt", () => {
+  it.effect("wakes an exact Guide retry after its original commit missed the wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      wakeCalls.length = 0
+      interruptCalls.length = 0
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const original = yield* session.prompt({
+        sessionID, delivery: "queue", resume: false,
+        prompt: {
+          text: "Guide this exact prompt",
+          files: [{ uri: "evidence://same", mime: "text/plain", resource: { server: "original", uri: "evidence://same" } }],
+          route: { agent: "build", model: { id: ModelV2.ID.make("selected"), providerID: ProviderV2.ID.make("test") } },
+        },
+      })
+      const input = { sessionID, messageID: original.id, expectedAdmittedSeq: original.admittedSeq }
+      const steered = yield* SessionInput.steerQueued(db, events, input)
+      expect(steered).toEqual({ ...original, delivery: "steer" })
+      expect(wakeCalls).toEqual([])
+      expect(yield* session.promptQueue.steer(input)).toEqual(steered)
+      expect(wakeCalls).toEqual([sessionID])
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.promptQueue.steer(input)).promotedSeq).toBeDefined()
+      expect(wakeCalls).toEqual([sessionID])
+      expect(interruptCalls).toEqual([])
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptQueueSteered.type, 1))).toBe(1)
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.Prompted.type, 1))).toBe(1)
+    }),
+  )
+
+  for (const operation of ["edit", "remove"] as const)
+    it.effect(`rejects stale promotion without publishing its routes when a queue ${operation} wins`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const events = yield* EventV2.Service
+        const { db } = yield* Database.Service
+        const queued = yield* session.prompt({
+          sessionID, delivery: "queue", resume: false,
+          prompt: { text: "Old text", route: { agent: "build" } },
+        })
+        const selected = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, queued.id)).all().pipe(Effect.orDie)
+        const input = { sessionID, messageID: queued.id, expectedAdmittedSeq: queued.admittedSeq }
+        if (operation === "edit")
+          yield* session.promptQueue.update({ ...input, prompt: { text: "Edited text", route: { agent: "review" } } })
+        else yield* session.promptQueue.remove(input)
+        expect(yield* SessionInput.promoteSelected(db, events, sessionID, selected)).toBe(0)
+        expect(yield* eventCount(EventV2.versionedType(SessionEvent.AgentSwitched.type, 1))).toBe(0)
+        expect(yield* eventCount(EventV2.versionedType(SessionEvent.Prompted.type, 1))).toBe(0)
+        if (operation === "edit") {
+          const steered = yield* session.promptQueue.steer(input)
+          expect(steered.prompt).toMatchObject({ text: "Edited text", route: { agent: "review" } })
+          const retry = (text: string) => session.prompt({
+            sessionID, id: queued.id, delivery: "queue", resume: false,
+            prompt: { text, route: { agent: "build" } },
+          })
+          expect(yield* retry("Old text")).toEqual(steered)
+          expect((yield* retry("Different text").pipe(Effect.flip))._tag).toBe("Session.PromptConflictError")
+          expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1))).toBe(1)
+        } else {
+          expect((yield* session.promptQueue.steer(input).pipe(Effect.flip))._tag).toBe("SessionInput.QueuedPromptNotFoundError")
+        }
+      }),
+    )
+
   it.effect("rejects queued resource retargeting without changing its row, sequence or events", () =>
     Effect.gen(function* () {
       yield* setup

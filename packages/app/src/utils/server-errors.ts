@@ -29,10 +29,23 @@ export function formatServerError(error: unknown, translate?: Translator, fallba
   const unwrapped = unwrapNamedError(error)
   if (isConfigInvalidErrorLike(unwrapped)) return parseReadableConfigInvalidError(unwrapped, translate)
   if (isProviderModelNotFoundErrorLike(unwrapped)) return parseReadableProviderModelNotFoundError(unwrapped, translate)
+  const modelMessage = promptModelErrorMessage(unwrapped)
+  if (modelMessage) return modelMessage
   if (error instanceof Error && error.message) return error.message
   if (typeof error === "string" && error) return error
   if (fallback) return fallback
   return tr(translate, "error.chain.unknown", "Unknown error")
+}
+
+export function promptModelErrorMessage(error: unknown) {
+  const value = unwrapNamedError(error)
+  if (typeof value !== "object" || value === null) return
+  if (
+    "_tag" in value && value._tag === "InvalidRequestError" &&
+    "kind" in value && value.kind === "session.prompt.model" &&
+    "message" in value && typeof value.message === "string"
+  )
+    return value.message
 }
 
 /**

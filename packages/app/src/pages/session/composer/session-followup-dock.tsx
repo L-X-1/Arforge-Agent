@@ -5,12 +5,17 @@ import { DockTray } from "@arforge-ai/ui/dock-surface"
 import { IconButton } from "@arforge-ai/ui/icon-button"
 import { useLanguage } from "@/context/language"
 
-export function SessionFollowupDock(props: {
-  items: { id: string; text: string }[]
+export type SessionFollowupDockProps = {
+  items: { id: string; text: string; admittedSeq?: number }[]
   sending?: string
-  onSend: (id: string) => void
+  disabled?: boolean
+  onSend?: (id: string) => void
+  onGuide?: (id: string, expectedAdmittedSeq: number) => void
   onEdit: (id: string) => void
-}) {
+  onDelete?: (id: string, expectedAdmittedSeq: number) => void
+}
+
+export function SessionFollowupDock(props: SessionFollowupDockProps) {
   const language = useLanguage()
   const [store, setStore] = createStore({
     collapsed: false,
@@ -24,6 +29,7 @@ export function SessionFollowupDock(props: {
     }),
   )
   const preview = createMemo(() => props.items[0]?.text ?? "")
+  const actionDisabled = () => props.disabled || !!props.sending
 
   return (
     <DockTray
@@ -79,26 +85,67 @@ export function SessionFollowupDock(props: {
         <div class="px-3 pb-7 flex flex-col gap-1.5 max-h-42 overflow-y-auto no-scrollbar">
           <For each={props.items}>
             {(item) => (
-              <div class="flex items-center gap-2 min-w-0 py-1">
+              <div class="flex items-center gap-2 min-w-0 py-1" aria-busy={props.sending === item.id}>
                 <span class="min-w-0 flex-1 truncate text-13-regular text-text-strong">{item.text}</span>
-                <Button
-                  size="small"
-                  variant="secondary"
-                  class="shrink-0"
-                  disabled={!!props.sending}
-                  onClick={() => props.onSend(item.id)}
+                <Show
+                  when={item.admittedSeq !== undefined && props.onGuide}
+                  fallback={
+                    <Show when={props.onSend}>
+                      {(send) => (
+                        <Button
+                          type="button"
+                          size="small"
+                          variant="secondary"
+                          class="shrink-0"
+                          disabled={actionDisabled()}
+                          onClick={() => send()(item.id)}
+                        >
+                          {language.t("session.followupDock.sendNow")}
+                        </Button>
+                      )}
+                    </Show>
+                  }
                 >
-                  {language.t("session.followupDock.sendNow")}
-                </Button>
+                  {(guide) => (
+                    <Button
+                      type="button"
+                      size="small"
+                      variant="secondary"
+                      class="shrink-0"
+                      data-action="followup-guide"
+                      disabled={actionDisabled()}
+                      aria-label={language.t("session.followupDock.guide")}
+                      onClick={() => guide()(item.id, item.admittedSeq!)}
+                    >
+                      {language.t("session.followupDock.guide")}
+                    </Button>
+                  )}
+                </Show>
                 <Button
+                  type="button"
                   size="small"
                   variant="ghost"
                   class="shrink-0"
-                  disabled={!!props.sending}
+                  disabled={actionDisabled()}
                   onClick={() => props.onEdit(item.id)}
                 >
                   {language.t("session.followupDock.edit")}
                 </Button>
+                <Show when={item.admittedSeq !== undefined && props.onDelete}>
+                  {(remove) => (
+                    <IconButton
+                      type="button"
+                      icon="trash"
+                      variant="ghost"
+                      size="small"
+                      class="shrink-0"
+                      data-action="followup-delete"
+                      aria-label={language.t("common.delete")}
+                      disabled={actionDisabled()}
+                      onClick={() => remove()(item.id, item.admittedSeq!)}
+                    />
+                  )}
+                </Show>
               </div>
             )}
           </For>

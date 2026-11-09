@@ -3,7 +3,7 @@ import { TextField } from "@arforge-ai/ui/text-field"
 import { Dialog } from "@arforge-ai/ui/dialog"
 import { IconButton } from "@arforge-ai/ui/icon-button"
 import { Switch } from "@arforge-ai/ui/v2/switch-v2"
-import { createEffect, createMemo, createResource, For, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useServerSDK, useServerProtocol } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -30,6 +30,8 @@ import {
   type WorkspaceDetail,
   type WorkspaceTestResult,
 } from "./provider-workspace-operations"
+
+const narrowWorkspaceWidth = 720
 
 export function ProviderWorkspace() {
   const sdk = useServerSDK(),
@@ -92,7 +94,13 @@ export function ProviderWorkspaceSource(props: {
   let active = true,
     readController: AbortController | undefined,
     accessController: AbortController | undefined,
-    accessGeneration = 0
+    accessGeneration = 0,
+    workspaceElement: HTMLElement | undefined,
+    listElement: HTMLElement | undefined,
+    lastProviderButton: HTMLButtonElement | undefined,
+    resizeObserver: ResizeObserver | undefined
+  const [narrow, setNarrow] = createSignal(false)
+  const [showDetail, setShowDetail] = createSignal(false)
   const copy = () => providerWorkspaceCopy(props.locale)
   const readCopy = () => {
     const locale = props.locale.toLowerCase()
@@ -121,6 +129,32 @@ export function ProviderWorkspaceSource(props: {
     active = false
     readController?.abort()
     accessController?.abort()
+    resizeObserver?.disconnect()
+  })
+  const applyWorkspaceWidth = (width: number) => {
+    if (!active || width <= 0) return
+    const next = width < narrowWorkspaceWidth
+    if (next === narrow()) return
+    // Entering the compact layout always starts from the connection list.
+    if (next) setShowDetail(false)
+    setNarrow(next)
+  }
+  onMount(() => {
+    if (!workspaceElement) return
+    applyWorkspaceWidth(workspaceElement.getBoundingClientRect().width)
+    if (typeof ResizeObserver === "undefined") {
+      const apply = () => {
+        if (workspaceElement) applyWorkspaceWidth(workspaceElement.getBoundingClientRect().width)
+      }
+      window.addEventListener("resize", apply)
+      onCleanup(() => window.removeEventListener("resize", apply))
+      return
+    }
+    resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) applyWorkspaceWidth(entry.contentRect.width)
+    })
+    resizeObserver.observe(workspaceElement)
   })
   const [access, { refetch: refreshAccess }] = createResource(async () => {
     accessController?.abort()
@@ -146,6 +180,41 @@ export function ProviderWorkspaceSource(props: {
   const selected = createMemo(
     () => access()?.providers.find((item) => item.id === selection.id)?.id ?? access()?.providers[0]?.id,
   )
+  const focusNarrowDetail = () => {
+    queueMicrotask(() => {
+      if (!active || !narrow() || !showDetail()) return
+      workspaceElement
+        ?.querySelector<HTMLButtonElement>(".arforge-provider-workspace-detail-bar button")
+        ?.focus({ preventScroll: true })
+    })
+  }
+  const selectProvider = (providerID: string, origin?: HTMLButtonElement) => {
+    lastProviderButton = origin
+    if (selected() === providerID) {
+      // A completed read keeps the draft; an in-flight or failed read restarts and replaces it.
+      if (readErrors.detail || detail.loading) setSelection("readEpoch", selection.readEpoch + 1)
+    } else {
+      setSelection({ id: providerID, readEpoch: selection.readEpoch + 1 })
+    }
+    if (!narrow()) return
+    setShowDetail(true)
+    focusNarrowDetail()
+  }
+  const backToProviders = () => {
+    setShowDetail(false)
+    queueMicrotask(() => {
+      if (!active || !narrow() || showDetail()) return
+      const selectedID = selected()
+      const buttons = Array.from(
+        listElement?.querySelectorAll<HTMLButtonElement>("[data-provider-config-id]") ?? [],
+      )
+      const target =
+        buttons.find((button) => button.dataset.providerConfigId === selectedID) ??
+        (lastProviderButton?.isConnected ? lastProviderButton : undefined)
+      if (target) target.focus({ preventScroll: true })
+      else listElement?.focus({ preventScroll: true })
+    })
+  }
   const guard = createScopeRequestGuard(() =>
     JSON.stringify([props.scope, props.directory, selected(), selection.readEpoch]),
   )
@@ -206,6 +275,10 @@ export function ProviderWorkspaceSource(props: {
     setSelection("id", providerID)
     await refreshAccess()
     if (!current() || !access()?.providers.some((provider) => provider.id === providerID)) return
+    if (narrow() && selected() === providerID) {
+      setShowDetail(true)
+      focusNarrowDetail()
+    }
     // A changed selection starts its own detail read; do not duplicate it or hide its failure.
     if (previous === providerID) await refreshDetail()
   }
@@ -220,30 +293,48 @@ export function ProviderWorkspaceSource(props: {
     if (access()?.canWrite === true && !selected()) return "empty"
     return "loading"
   })
+  const listState = createMemo(() => {
+    if (!current()) return "retired"
+    if (access.loading) return "loading"
+    if (readErrors.access) return "failed"
+    if (!access()?.providers.length) return access()?.canWrite === false ? "readonly" : "empty"
+    return "ready"
+  })
+  createEffect(() => {
+    if (narrow() && showDetail() && access()?.providers.length === 0) setShowDetail(false)
+  })
   return (
-    <section class="arforge-provider-workspace" data-provider-workspace>
-      <header>
+    <section
+      ref={workspaceElement}
+      class="arforge-provider-workspace"
+      data-provider-workspace
+      data-provider-narrow={narrow() ? "true" : "false"}
+      data-provider-view={narrow() ? (showDetail() ? "detail" : "list") : "wide"}
+    >
+      <header class="arforge-provider-workspace-header">
         <h3>{copy().title}</h3>
-        <Button
-          type="button"
-          onClick={() => {
-            if (current()) {
-              void refresh()
-              void refreshPresets()
-            }
-          }}
-        >
-          {copy().refresh}
-        </Button>
-        <Button
-          type="button"
-          disabled={!access()?.canWrite}
-          onClick={() => {
-            if (current()) props.onCreate((providerID) => void created(providerID))
-          }}
-        >
-          {copy().addProvider}
-        </Button>
+        <div class="arforge-provider-workspace-header-actions">
+          <Button
+            type="button"
+            onClick={() => {
+              if (current()) {
+                void refresh()
+                void refreshPresets()
+              }
+            }}
+          >
+            {copy().refresh}
+          </Button>
+          <Button
+            type="button"
+            disabled={!access()?.canWrite}
+            onClick={() => {
+              if (current()) props.onCreate((providerID) => void created(providerID))
+            }}
+          >
+            {copy().addProvider}
+          </Button>
+        </div>
       </header>
       <Show when={presets()?.unavailable}>
         <p role="status" data-model-metadata-state="unavailable">
@@ -259,30 +350,71 @@ export function ProviderWorkspaceSource(props: {
         </Button>
       </Show>
       <div class="arforge-provider-workspace-columns">
-        <nav aria-label={copy().title}>
-          <For each={access()?.providers}>
-            {(provider) => (
-              <button
-                type="button"
-                data-provider-config-id={provider.id}
-                aria-current={selected() === provider.id ? "page" : undefined}
-                onClick={() => setSelection({ id: provider.id, readEpoch: selection.readEpoch + 1 })}
-              >
-                <span>{props.names?.[provider.id] ?? selection.names[provider.id] ?? provider.id}</span>
-                <Show
-                  when={
-                    (props.names?.[provider.id] ?? selection.names[provider.id]) &&
-                    (props.names?.[provider.id] ?? selection.names[provider.id]) !== provider.id
-                  }
+        <nav
+          ref={listElement}
+          class="arforge-provider-workspace-list"
+          aria-label={copy().title}
+          aria-busy={listState() === "loading"}
+          tabIndex={-1}
+        >
+          <Show when={narrow() && listState() !== "ready" && listState() !== "retired"}>
+            <div class="arforge-provider-workspace-list-status">
+              <p role="status">
+                {listState() === "loading"
+                  ? copy().loading
+                  : listState() === "failed"
+                    ? readCopy().failed
+                    : listState() === "readonly"
+                      ? copy().readOnly
+                      : readCopy().empty}
+              </p>
+              <Show when={listState() === "failed"}>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void retryRead()
+                  }}
                 >
-                  <code>{provider.id}</code>
-                </Show>
-                <small>{provider.disabled ? copy().disabled : copy().enabled}</small>
-              </button>
-            )}
+                  {readCopy().retry}
+                </Button>
+              </Show>
+            </div>
+          </Show>
+          <For each={access()?.providers}>
+            {(provider) => {
+              const name = () => props.names?.[provider.id] ?? selection.names[provider.id] ?? provider.id
+              return (
+                <button
+                  type="button"
+                  class="arforge-provider-workspace-list-item"
+                  data-provider-config-id={provider.id}
+                  data-provider-state={provider.disabled ? "disabled" : "enabled"}
+                  aria-current={selected() === provider.id ? "page" : undefined}
+                  onClick={(event) => selectProvider(provider.id, event.currentTarget)}
+                >
+                  <span class="arforge-provider-workspace-list-copy">
+                    <strong>{name()}</strong>
+                    <Show when={Boolean(name()) && name() !== provider.id}>
+                      <code>{provider.id}</code>
+                    </Show>
+                  </span>
+                  <small class="arforge-provider-workspace-status">
+                    <span class="arforge-provider-workspace-status-dot" aria-hidden="true" />
+                    {provider.disabled ? copy().disabled : copy().enabled}
+                  </small>
+                </button>
+              )
+            }}
           </For>
         </nav>
         <div class="arforge-provider-workspace-detail" aria-busy={readState() === "loading"}>
+          <Show when={narrow()}>
+            <div class="arforge-provider-workspace-detail-bar">
+              <Button type="button" onClick={backToProviders}>
+                {copy().backToProviders}
+              </Button>
+            </div>
+          </Show>
           <Show
             when={readState() === "ready" ? detail() : undefined}
             keyed

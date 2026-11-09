@@ -39,6 +39,8 @@ import type {
   SessionsPromptQueueUpdateOutput,
   SessionsPromptQueueRemoveInput,
   SessionsPromptQueueRemoveOutput,
+  SessionsPromptQueueSteerInput,
+  SessionsPromptQueueSteerOutput,
   SessionsCompactInput,
   SessionsCompactOutput,
   SessionsWaitInput,
@@ -988,7 +990,11 @@ export function make(options: ClientOptions) {
           {
             method: "PATCH",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt/queue/${encodeURIComponent(input.messageID)}`,
-            body: { expectedAdmittedSeq: input["expectedAdmittedSeq"], prompt: input["prompt"] },
+            body: {
+              expectedAdmittedSeq: input["expectedAdmittedSeq"],
+              expectedModel: input["expectedModel"],
+              prompt: input["prompt"],
+            },
             successStatus: 200,
             declaredStatuses: [409, 400, 503, 404, 401],
             empty: false,
@@ -1009,6 +1015,19 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      promptQueueSteer: (input: SessionsPromptQueueSteerInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsPromptQueueSteerOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt/queue/${encodeURIComponent(input.messageID)}/steer`,
+            body: { expectedAdmittedSeq: input["expectedAdmittedSeq"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+            binary: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       compact: (input: SessionsCompactInput, requestOptions?: RequestOptions) =>
         request<SessionsCompactOutput>(
           {

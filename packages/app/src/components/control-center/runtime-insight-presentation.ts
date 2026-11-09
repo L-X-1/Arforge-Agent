@@ -596,6 +596,24 @@ export const runtimeInsightCopy = (locale: Locale) => {
       principalAuditFailed: (issue: string) => traditional
         ? `我的稽核記錄驗證失敗：${issue || "記錄摘要不相符"}`
         : `我的审计记录验证失败：${issue || "记录摘要不匹配"}`,
+      auditResultSource: (manual: boolean) =>
+        manual
+          ? traditional
+            ? "使用者主動校驗結果"
+            : "用户主动校验结果"
+          : traditional
+            ? "自動快照結果"
+            : "自动快照结果",
+      auditScope: (principal: boolean) =>
+        principal
+          ? traditional
+            ? "校驗範圍：目前進程內屬於我的記錄"
+            : "校验范围：当前进程内属于我的记录"
+          : traditional
+            ? "校驗範圍：目前進程的稽核鏈"
+            : "校验范围：当前进程的审计链",
+      verifyReceivedAt: (time: string) =>
+        traditional ? `收到該校驗結果的本地時間：${time}` : `收到该校验结果的本地时间：${time}`,
       verifyAudit: traditional ? "校驗稽核鏈" : "校验审计链",
       verifyingAudit: traditional ? "校驗中…" : "校验中…",
       automaticNotice: traditional
@@ -945,6 +963,11 @@ export const runtimeInsightCopy = (locale: Locale) => {
     verifyPrincipalAudit: "Verify my audit records",
     principalAuditVerified: (count: number) => `My audit records verified: ${count} record digests are intact. Full profile chain continuity is not checked.`,
     principalAuditFailed: (issue: string) => `My audit record verification failed: ${issue || "record digests differ"}`,
+    auditResultSource: (manual: boolean) =>
+      manual ? "User-initiated verification result" : "Automatic snapshot result",
+    auditScope: (principal: boolean) =>
+      principal ? "Scope: my records in the current process" : "Scope: current process audit chain",
+    verifyReceivedAt: (time: string) => `Verification result received locally at ${time}`,
     verifyAudit: "Verify audit chain",
     verifyingAudit: "Verifying…",
     automaticNotice: "All data below is recorded automatically by the system; no manual maintenance is required.",

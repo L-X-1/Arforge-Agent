@@ -162,10 +162,13 @@ powershell -ExecutionPolicy Bypass `
   -RetentionDays 30
 ```
 
-The task reads the application URL from the private
-`$HOME/.arforge/.env`; the database password is not placed in the scheduled
-task command line. Retention pruning runs only after the new backup has been
-created and verified.
+The scheduled task runs with `--administrator` for a complete dump. In the
+private `$HOME/.arforge/.env` file, set `ARFORGE_DB_URL` for the application
+database and `ARFORGE_DB_ADMIN_URL` for a separate PostgreSQL role on the same
+host and port. The backup uses the database named by `ARFORGE_DB_URL`.
+Keep both URLs in the private file so the scheduled task can read them without
+including passwords in its arguments. Retention pruning runs after the new
+backup has been created and verified.
 
 ## Disposable PostgreSQL restore drill
 

@@ -472,6 +472,9 @@ const layer = Layer.effectDiscard(
         expectedAdmittedSeq: event.data.expectedAdmittedSeq,
       }),
     )
+    yield* events.project(SessionEvent.PromptQueueSteered, (event) =>
+      SessionInput.projectQueueSteered(db, event.data),
+    )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.RequestEnvelopePrepared, (event) => run(db, event))
     yield* events.project(SessionEvent.RequestBindingPrepared, (event) => run(db, event))

@@ -21,7 +21,7 @@ import type { ProjectionMode, ToolExecutionProjection } from "./tool/execution-s
 import type { ReconciliationDecision, ReconciliationRequest } from "./runtime/reconciliation"
 import * as MutationIntentRuntime from "./runtime/mutation-intent"
 import { parseActionRequestEnvelope, requestEnvelopeJson, type RequestEnvelope } from "./session/request-envelope"
-import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, type Scope } from "effect"
 
 export const POLICY_VERSION = "arforge-risk/1"
 export const MAX_DURABLE_OUTPUT_BYTES = AgentRuntime.ActionOutputMaxBytes
@@ -340,6 +340,8 @@ export type OperationExecutionContext = {
 export type Operation<A, E, R> = {
   /** Pure scope declaration. Identity, source, persistence, and fresh-confirmation rules are bound by the gateway. */
   readonly authorization?: AuthorizationPlan
+  /** Acquired after authorization, before recording or dispatching an execution attempt. */
+  readonly executionPermit?: Effect.Effect<void, never, Scope.Scope>
   /**
    * The operation body receives the gateway-verified authorization
    * capability and may only run after preflight completed. Leaf permission
@@ -1245,7 +1247,7 @@ const layer = Layer.effect(
       /** Resolves once the durable proposal exists or execution has finalized. */
       readonly ready: Deferred.Deferred<void, never>
     }
-    const pendingSessionActions = new Map<string, Map<string, PendingSessionAction>>()
+    const pendingSessionActions = new Map<string, Set<PendingSessionAction>>()
 
     const registerPendingSessionAction = (input: Input, authorization: AuthorizationPlan | undefined) => {
       if (input.kind === "control-plane" || authorization === undefined) return undefined
@@ -1255,8 +1257,10 @@ const layer = Layer.effect(
         authorization,
         ready: Deferred.makeUnsafe<void>(),
       } satisfies PendingSessionAction
-      const actions = pendingSessionActions.get(sessionID) ?? new Map<string, PendingSessionAction>()
-      actions.set(String(input.actionID), entry)
+      // A competing invocation may lose the durable lease. Its finalizer
+      // must retire only its own handle, leaving the live owner's cancellable.
+      const actions = pendingSessionActions.get(sessionID) ?? new Set<PendingSessionAction>()
+      actions.add(entry)
       pendingSessionActions.set(sessionID, actions)
       return entry
     }
@@ -1269,8 +1273,7 @@ const layer = Layer.effect(
       if (!entry || entry.input.kind === "control-plane") return
       const sessionID = String(entry.input.sessionID)
       const actions = pendingSessionActions.get(sessionID)
-      if (!actions || actions.get(String(entry.input.actionID)) !== entry) return
-      actions.delete(String(entry.input.actionID))
+      if (!actions?.delete(entry)) return
       if (actions.size === 0) pendingSessionActions.delete(sessionID)
     }
 
@@ -1303,6 +1306,8 @@ const layer = Layer.effect(
      * Legacy/root session runs keep their existing contract; a loaded child
      * run must prove session identity, executable state, deadline, and every
      * action/resource request before the durable action is even proposed.
+     * Returns whether this action is bound to a child run (`true`) or is a
+     * root/unbound session action (`false`), reusing this single run read.
      */
     const assertSessionChildRun = Effect.fnUntraced(function* (
       input: Input,
@@ -1310,17 +1315,17 @@ const layer = Layer.effect(
       authorization: AuthorizationPlan | undefined,
       semantics: AgentRuntime.EffectSemantics,
     ) {
-      if (input.runID === undefined || session === undefined || input.kind === "control-plane") return
+      if (input.runID === undefined || session === undefined || input.kind === "control-plane") return false
       const loaded = yield* durableRuns
         .load(input.runID)
         .pipe(Effect.catchTag("DurableRun.NotFoundError", () => Effect.succeed(undefined)))
-      if (!loaded || !("sessionID" in loaded.run)) return
+      if (!loaded || !("sessionID" in loaded.run)) return false
       if (loaded.run.sessionID !== session.sessionID)
         return yield* new BlockedError({
           actionID: input.actionID,
           reason: "The session action does not belong to the durable run session.",
         })
-      if (!loaded.run.child) return
+      if (!loaded.run.child) return false
       if (!["queued", "running", "recovering"].includes(loaded.run.status))
         return yield* new BlockedError({
           actionID: input.actionID,
@@ -1349,6 +1354,7 @@ const layer = Layer.effect(
             reason: `The child capability does not authorize ${request.action} for the requested resources.`,
           })
       }
+      return true
     })
 
     const assertControlRunBinding = Effect.fnUntraced(function* (
@@ -1575,19 +1581,70 @@ const layer = Layer.effect(
       return { grant, requests: binding.requests }
     })
 
+    /**
+     * The single-use seal minted by `authorizeActionObserved` for a newly
+     * created top-level session action in this very execution. It is held in
+     * one `execute` fiber only and is never cached across actions or attempts.
+     */
+    type FreshGrantSeal = AgentRuntime.AuthorizationGrant
+
+    /**
+     * Reuses the in-execution seal instead of decrypting the durable proof once.
+     * It only applies when the persisted grant is byte-identical to the seal —
+     * same id, same complete ciphertext, same proof provider (also the current
+     * one), same binding digest and exact millisecond timestamps — and when the
+     * expected binding recomputed from this request still hashes to the sealed
+     * digest. Anything else returns undefined so the caller performs the full
+     * cryptographic verification exactly as before.
+     */
+    const reuseFreshGrantSeal = (
+      grant: AgentRuntime.AuthorizationGrant,
+      expected: ReturnType<typeof grantBinding>,
+      fresh: FreshGrantSeal | undefined,
+      provider: string,
+    ) => {
+      if (!fresh) return undefined
+      if (fresh.proofProvider !== provider || grant.proofProvider !== provider) return undefined
+      if (grant.id !== fresh.id) return undefined
+      if (grant.proof !== fresh.proof) return undefined
+      if (grant.bindingDigest !== fresh.bindingDigest) return undefined
+      if (DateTime.toEpochMillis(grant.issuedAt) !== DateTime.toEpochMillis(fresh.issuedAt)) return undefined
+      if (DateTime.toEpochMillis(grant.expiresAt) !== DateTime.toEpochMillis(fresh.expiresAt)) return undefined
+      // Never for control-plane grants or delegated (parent-bound) grants.
+      if (grant.subject?.type !== "session" || fresh.subject?.type !== "session") return undefined
+      if (grant.parentGrantID !== undefined || fresh.parentGrantID !== undefined) return undefined
+      // Recompute the expected binding digest; it must equal the sealed one.
+      const digest = bindingDigest(expected)
+      if (digest !== fresh.bindingDigest) return undefined
+      return {
+        binding: expected,
+        bindingDigest: digest,
+        issuedAt: DateTime.toEpochMillis(fresh.issuedAt),
+        expiresAt: DateTime.toEpochMillis(fresh.expiresAt),
+      }
+    }
+
     const validateGrant = Effect.fnUntraced(function* (
       grant: AgentRuntime.AuthorizationGrant | undefined,
       input: Input,
       plan: AuthorizationPlan | undefined,
       authority: AgentRuntime.Authority,
       riskTier: AgentRuntime.RiskTier,
+      freshSeal?: FreshGrantSeal,
     ) {
       if (!grant) return "The action has no durable authorization grant."
       if (!plan) return "The resumed action did not declare its authorization scope."
       const expected = grantBinding(input, plan, authority, riskTier, grant.parentGrantID)
       if (JSON.stringify(grant.requests) !== JSON.stringify(expected.requests))
         return "The durable authorization grant does not match this action identity, scope, or policy."
-      const stored = yield* parseProtectedBinding(grant)
+      // Only a newly created top-level session action may skip this one
+      // unprotect. Recovery, delegated and control-plane paths always decrypt.
+      const reused =
+        freshSeal !== undefined && input.kind !== "control-plane" && input.parentActionID === undefined
+          ? reuseFreshGrantSeal(grant, expected, freshSeal, secrets.id)
+          : undefined
+      let stored = reused
+      if (!stored) stored = yield* parseProtectedBinding(grant)
       if (!stored) return "The durable authorization proof could not be verified."
       if (JSON.stringify(stored.binding) !== JSON.stringify(expected))
         return "The durable authorization grant does not match this action identity, scope, or policy."
@@ -1932,7 +1989,6 @@ const layer = Layer.effect(
         assertOwnership,
       )
       yield* testCrashBoundaryPause("authorized-before-spawn")
-      yield* change(input, "authorized", "executing", "Authorized action started", assertOwnership)
       return mintCapability("granted", issued.value)
     })
 
@@ -2317,9 +2373,11 @@ const layer = Layer.effect(
       // running; the durable CAS below remains the final authority for that
       // race and a stale handle is treated as a no-op.
       const pending = [...(pendingSessionActions.get(String(sessionID))?.values() ?? [])]
+      const handled = new Set<AgentRuntime.ActionID>()
       let cancelled = 0
       let handoff = 0
       for (const entry of pending) {
+        if (handled.has(entry.input.actionID)) continue
         // A session interrupt can arrive in the tiny interval between the
         // gateway registering a handle and publishing `ActionProposed`.
         // Wait for that proposal (or for execution finalization) so the
@@ -2347,8 +2405,10 @@ const layer = Layer.effect(
           // record below and the normal durable recovery projection.
           Effect.catch(() => Effect.succeed("ignored" as const)),
         )
+        if (result === "ignored") continue
+        handled.add(entry.input.actionID)
         if (result === "cancelled") cancelled += 1
-        else if (result === "handoff") handoff += 1
+        else handoff += 1
       }
       if (pending.length > 0)
         RuntimeInsight.auditRecord({
@@ -2445,7 +2505,7 @@ const layer = Layer.effect(
               const invalid = invalidAuthorizationPlan(authorization)
               if (invalid) return yield* new BlockedError({ actionID: input.actionID, reason: invalid })
             }
-            yield* assertSessionChildRun(input, session, authorization, semantics)
+            const childDelegation = yield* assertSessionChildRun(input, session, authorization, semantics)
             if (subject.type === "control-plane") {
               // The presented identity must equal the deterministic durable
               // identity of this control-plane action; a forged actionID can
@@ -2951,13 +3011,6 @@ const layer = Layer.effect(
                   return yield* new RecoveryRequiredError({ actionID: input.actionID, reason })
                 }
               } else if (action.status === "authorized") {
-                yield* change(
-                  input,
-                  "authorized",
-                  "executing",
-                  "Recovered a verified authorization grant",
-                  assertOwnership,
-                )
                 resumingSafeExecution = true
               } else if (action.status === "awaiting_approval" && existing.authorization) {
                 yield* change(
@@ -2967,7 +3020,6 @@ const layer = Layer.effect(
                   "Recovered a verified authorization grant",
                   assertOwnership,
                 )
-                yield* change(input, "authorized", "executing", "Authorized action resumed", assertOwnership)
                 resumingSafeExecution = true
               } else if (action.status === "awaiting_approval") {
                 // Trusted recovery re-approval: the durable intent is unchanged
@@ -3019,8 +3071,19 @@ const layer = Layer.effect(
             let capability: AuthorizationGrantCapability = mintCapability("automatic", undefined)
             if (existing?.authorization) capability = mintCapability("granted", existing.authorization)
             if (recoveredCapability) capability = recoveredCapability
+            /**
+             * True only when this worker's own ActionProposed publish committed.
+             * A concurrent worker that won the CAS is not a fresh origin.
+             */
+            let proposedHere = false
+            /**
+             * Seal minted by this execution's own `authorizeActionObserved` for
+             * a newly created top-level session action. Consumed by exactly one
+             * pre-attempt validation and then cleared.
+             */
+            let freshGrantSeal: FreshGrantSeal | undefined
             yield* Effect.addFinalizer(() => Effect.sync(() => revokeCapability(capability)))
-            const assertCurrentGrant = Effect.fnUntraced(function* () {
+            const assertCurrentGrant = Effect.fnUntraced(function* (freshSeal?: FreshGrantSeal) {
               const current = yield* assertOwnership()
               const policyError = currentPolicyDecisionError(current)
               if (policyError)
@@ -3035,6 +3098,7 @@ const layer = Layer.effect(
                   authorization,
                   authority,
                   semantics.riskTier,
+                  freshSeal,
                 )
                 const capabilityGrant = capability.authority === "granted" ? capability.grant : undefined
                 if (invalid || capabilityGrant?.id !== current.authorization?.id)
@@ -3211,6 +3275,7 @@ const layer = Layer.effect(
                     { expectedSequence: -1 },
                   )
                   .pipe(Effect.exit)
+                if (proposed._tag === "Success") proposedHere = true
                 if (proposed._tag === "Failure") {
                   if (!sequenceConflict(proposed.cause)) return yield* Effect.failCause(proposed.cause)
                   const winner = yield* durableActions.load(input.actionID).pipe(Effect.option)
@@ -3297,7 +3362,7 @@ const layer = Layer.effect(
               if (authority === "scoped_grant" || authority === "human") {
                 yield* change(input, "policy_evaluated", "awaiting_approval", input.reasonSummary, assertOwnership)
                 if (authorization) {
-                  capability = yield* authorizeActionObserved(
+                  const granted = yield* authorizeActionObserved(
                     input,
                     authorization,
                     authority,
@@ -3308,6 +3373,19 @@ const layer = Layer.effect(
                     intentDigest,
                     assertOwnership,
                   )
+                  capability = granted
+                  // Only an action this worker proposed itself, at top level,
+                  // with no child-run delegation, may reuse the seal it just
+                  // minted. Recovery, delegated and control-plane actions keep
+                  // the original full verification path.
+                  if (
+                    proposedHere &&
+                    !childDelegation &&
+                    subject.type === "session" &&
+                    input.parentActionID === undefined &&
+                    granted.authority === "granted"
+                  )
+                    freshGrantSeal = granted.grant
                 } else {
                   const reason =
                     "The action declared a scoped or human authority but provided no enforceable permission gate."
@@ -3322,11 +3400,18 @@ const layer = Layer.effect(
                   "Automatically authorized by risk policy",
                   assertOwnership,
                 )
-                yield* change(input, "authorized", "executing", "Automatic action started", assertOwnership)
               }
             }
 
-            let beforeAttempt = yield* assertCurrentGrant()
+            // Approval can wait indefinitely. It must never reserve the shared tool lane.
+            if (operation.executionPermit) yield* operation.executionPermit
+            // One-shot: only this first pre-attempt check may reuse the seal.
+            // Every later assertCurrentGrant decrypts the persisted proof.
+            const firstAttemptSeal = freshGrantSeal
+            freshGrantSeal = undefined
+            let beforeAttempt = yield* assertCurrentGrant(firstAttemptSeal)
+            if (beforeAttempt.action.status === "authorized")
+              yield* change(input, "authorized", "executing", "Authorized action started", assertOwnership)
             if (!leaseLost)
               return yield* new RecoveryRequiredError({
                 actionID: input.actionID,

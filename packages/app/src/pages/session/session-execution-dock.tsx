@@ -7,7 +7,10 @@ import { useLanguage } from "@/context/language"
 import { useSync } from "@/context/sync"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import {
-  buildExecutionTrace,
+  executionPhaseLabel,
+  executionToolKey,
+  executionToolStep,
+  type ExecutionTrace,
   type ExecutionTraceKind,
   type ExecutionTraceStep,
 } from "./execution-trace-model"
@@ -15,6 +18,8 @@ import "./session-execution-dock.css"
 import "@/components/preview/workbench-review.css"
 import { ExecutionStepDetail } from "./execution-step-detail"
 import { SessionExecutionHistory } from "./session-execution-history"
+import { ExecutionEvidenceViews, type ExecutionEvidenceView } from "./execution-evidence-view"
+import type { ExecutionEvidence } from "./execution-evidence"
 
 type Copy = ReturnType<typeof copy>
 
@@ -25,16 +30,14 @@ function copy(locale: string) {
         title: "可视化执行",
         expand: "展开可视化执行",
         collapse: "收起可视化执行",
-        idle: "等待下一项任务",
-        running: "正在实时执行",
-        retry: "正在重试",
-        complete: "本轮执行完成",
         empty: "开始执行后，这里会实时展示推理摘要、工具调用和文件变更。",
         detail: "查看详情",
         hideDetail: "收起详情",
         completed: "已完成",
         failed: "失败",
         current: "进行中",
+        toolActive: "工具调用处理中",
+        interrupted: "已中断",
         pending: "等待中",
         subagents: "真实子 Agent",
         active: "活跃",
@@ -55,16 +58,14 @@ function copy(locale: string) {
         title: "Visual execution",
         expand: "Expand visual execution",
         collapse: "Collapse visual execution",
-        idle: "Waiting for the next task",
-        running: "Executing live",
-        retry: "Retrying",
-        complete: "Execution complete",
         empty: "Reasoning summaries, tool calls, and file changes will appear here as the task runs.",
         detail: "Show details",
         hideDetail: "Hide details",
         completed: "Completed",
         failed: "Failed",
         current: "In progress",
+        toolActive: "Tool call active",
+        interrupted: "Interrupted",
         pending: "Pending",
         subagents: "Live Subagents",
         active: "active",
@@ -101,6 +102,8 @@ function stepIcon(kind: ExecutionTraceKind): JSX.Element {
 function statusLabel(step: ExecutionTraceStep, words: Copy) {
   if (step.status === "completed") return words.completed
   if (step.status === "error") return words.failed
+  if (step.status === "interrupted") return words.interrupted
+  if (step.status === "active") return words.toolActive
   if (step.status === "running") return words.current
   return words.pending
 }
@@ -113,42 +116,44 @@ function elapsed(step: ExecutionTraceStep) {
   return `${Math.floor(duration / 60_000)}m ${Math.round((duration % 60_000) / 1_000)}s`
 }
 
-export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (opened: boolean) => void }) {
+export function SessionExecutionDock(props: {
+  opened: boolean
+  onOpenChange: (opened: boolean) => void
+  trace: ExecutionTrace
+  evidence: ExecutionEvidence
+  directory: string
+  onReviewApproval: (requestID: string) => void
+}) {
   const language = useLanguage()
   const sync = useSync()
   const { params, sessionKey } = useSessionLayout()
+  const chinese = () => language.locale().startsWith("zh")
   const words = createMemo(() => copy(language.locale()))
   const [state, setState] = createStore({
     tab: "current" as "current" | "history",
     selectedStep: undefined as string | null | undefined,
+    selectedTool: undefined as string | undefined,
+    view: "tools" as ExecutionEvidenceView,
     selectionScope: "",
   })
 
-  const messages = createMemo(() => {
-    const sessionID = params.id
-    return sessionID ? (sync().data.message[sessionID] ?? []) : []
-  })
-  const trace = createMemo(() => {
-    const sessionID = params.id
-    return buildExecutionTrace({
-      messages: messages(),
-      parts: (messageID) => sync().data.part[messageID] ?? [],
-      status: sessionID ? (sync().data.session_status[sessionID] ?? { type: "idle" }) : { type: "idle" },
-    })
-  })
+  const trace = () => props.trace
   const running = createMemo(() => trace().status !== "idle")
   const activeStep = createMemo(() =>
-    trace().steps.findLast((step) => step.status === "running" || step.status === "pending"),
+    trace().steps.findLast((step) => step.status === "running" || step.status === "active" || step.status === "pending"),
   )
   const currentStep = createMemo(() => activeStep() ?? trace().steps.at(-1))
   const selectedStep = createMemo(() => state.selectedStep === null ? undefined :
-    trace().steps.find((step) => step.id === state.selectedStep || step.sections?.some((section) => section.source === state.selectedStep)) ?? currentStep())
+    trace().steps.find((step) => step.id === state.selectedStep || step.tools?.some((tool) => executionToolKey(tool) === state.selectedStep)) ?? currentStep())
+  const detailStep = createMemo(() =>
+    (state.selectedTool ? executionToolStep(trace().steps, state.selectedTool) : undefined) ?? selectedStep(),
+  )
   createEffect(() => {
     const scope = sessionKey() + "\u0000" + (trace().userMessageID ?? "")
     if (state.selectionScope === scope) return
-    setState({ selectionScope: scope, selectedStep: undefined })
+    setState({ selectionScope: scope, selectedStep: undefined, selectedTool: undefined, view: "tools" })
   })
-  const turnStartedAt = createMemo(() => messages().findLast((message) => message.role === "user")?.time.created ?? 0)
+  const turnStartedAt = () => trace().startedAt ?? 0
   const turnChildren = createMemo(() => {
     const sessionID = params.id
     if (!sessionID) return []
@@ -163,36 +168,33 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
     turnChildren().filter((session) => (sync().data.session_status[session.id] ?? { type: "idle" }).type !== "idle"),
   )
   const usedSubagents = createMemo(() => turnChildren().length)
-  const headline = createMemo(() => {
-    if (trace().status === "retry") return words().retry
-    if (running()) return words().running
-    if (trace().failed > 0) return words().failed
-    if (trace().steps.length > 0) return words().complete
-    return words().idle
-  })
+  const headline = () => executionPhaseLabel(trace().phase, chinese())
   const actionLabel = createMemo(() => {
-    if (!running()) return headline()
+    if (!running() || trace().phase === "approval" || trace().phase === "started") return headline()
     const step = currentStep()
     if (!step) return headline()
     return `${words().kinds[step.kind]}${step.count > 1 ? ` × ${step.count}` : ""}`
   })
 
+  let root: HTMLElement | undefined
   createEffect(() => {
-    if (!props.opened) return
+    if (!props.opened || state.tab !== "current" || state.view !== "tools" || state.selectedTool) return
     const id = activeStep()?.id
     if (!id) return
     queueMicrotask(() => {
       const escaped = typeof CSS === "undefined" ? id : CSS.escape(id)
-      document.querySelector(`[data-execution-step="${escaped}"]`)?.scrollIntoView({ block: "nearest" })
+      root?.querySelector(`[data-execution-step="${escaped}"]`)?.scrollIntoView({ block: "nearest" })
     })
   })
 
   return (
     <aside
+      ref={root}
       id="execution-trace-panel"
       class="arforge-review-workbench execution-dock shrink-0 min-h-0 h-full rounded-l-[16px] rounded-r-none border border-r-0 border-v2-border-border-muted bg-v2-background-bg-base overflow-hidden"
       classList={{ "execution-dock--open": props.opened, "execution-dock--running": running() }}
       aria-label={words().title}
+      data-execution-phase={trace().phase}
     >
       <Show
         when={props.opened}
@@ -221,7 +223,8 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
               <div class="flex items-center gap-2">
                 <h2 class="truncate text-[14px] font-[600] leading-5 text-v2-text-text-base">{words().title}</h2>
               </div>
-              <p class="mt-0.5 truncate text-[12px] leading-4 text-v2-text-text-muted" aria-live="polite">
+              <p class="mt-0.5 truncate text-[12px] leading-4 text-v2-text-text-muted"
+                data-state={trace().phase === "approval" ? "warning" : undefined} aria-live="polite">
                 {headline()}
               </p>
             </div>
@@ -269,6 +272,32 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
             </span>
           </div>
 
+          <ExecutionEvidenceViews
+            evidence={props.evidence}
+            view={state.view}
+            onView={(view) => setState("view", view)}
+            onTool={(id) => setState({ selectedStep: id, selectedTool: id })}
+            chinese={chinese()}
+            notice={
+              <Show when={trace().approval}>
+                {(approval) => {
+                  const command = () => {
+                    const input = approval().tool.state.input.command
+                    return typeof input === "string" ? input : approval().tool.tool
+                  }
+                  return (
+                  <div class="execution-evidence__approval" data-component="execution-approval-wait">
+                    <strong>{chinese() ? "工具调用需要你批准" : "This tool call needs your approval"}</strong>
+                    <p><code>{command()}</code></p>
+                    <button type="button" onClick={() => props.onReviewApproval(approval().request.id)}>
+                      {chinese() ? "查看审批" : "View approval"}
+                    </button>
+                  </div>
+                  )
+                }}
+              </Show>
+            }
+          >
           <Show when={trace().steps.length > 0} fallback={<div class="execution-dock__empty">{words().empty}</div>}>
             <div class="execution-dock__summary">
               <span>
@@ -286,14 +315,23 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                   entrance animation runs once instead of replaying across the whole list. */}
               <Index each={trace().steps}>
                 {(step, index) => {
-                  const expandable = () => !!step().detail
+                  const expandable = () => !!(step().detail || step().sections?.length)
                   const expanded = () => selectedStep()?.id === step().id
-                  const label = () => `${words().kinds[step().kind]}${step().count > 1 ? ` × ${step().count}` : ""}`
+                  const label = () => step().id.startsWith("thinking:") ? executionPhaseLabel("started", chinese())
+                    : `${words().kinds[step().kind]}${step().count > 1 ? ` × ${step().count}` : ""}`
+                  const waiting = () => {
+                    const approval = trace().approval
+                    return approval && step().tools?.some((tool) => executionToolKey(tool) === executionToolKey(approval.tool))
+                  }
+                  const stepStatus = () => waiting() ? executionPhaseLabel("approval", chinese()) :
+                    !running() && (step().status === "running" || step().status === "active" || step().status === "pending")
+                      ? (chinese() ? "记录不完整" : "Incomplete")
+                      : statusLabel(step(), words())
                   return (
                     <li
                       class="execution-step"
                       classList={{
-                        "execution-step--active": step().status === "running" || step().status === "pending",
+                        "execution-step--active": running() && !waiting() && (step().status === "running" || step().status === "pending"),
                       }}
                       data-status={step().status}
                       data-execution-step={step().id}
@@ -308,15 +346,22 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                         disabled={!expandable()}
                         aria-expanded={expandable() ? expanded() : undefined}
                         aria-label={
-                          [expandable() ? `${expanded() ? words().hideDetail : words().detail}: ${label()}` : label(), step().title, statusLabel(step(), words()), elapsed(step())].filter(Boolean).join(" · ")
+                          [expandable() ? `${expanded() ? words().hideDetail : words().detail}: ${label()}` : label(), step().title, stepStatus(), elapsed(step())].filter(Boolean).join(" · ")
                         }
-                        title={[label(), step().title, statusLabel(step(), words()), elapsed(step())].filter(Boolean).join(" · ")}
-                        onClick={() => expandable() && setState("selectedStep", expanded() ? null : step().sections?.[0]?.source ?? step().id)}
+                        title={[label(), step().title, stepStatus(), elapsed(step())].filter(Boolean).join(" · ")}
+                        onClick={() => {
+                          if (!expandable()) return
+                          const first = step().tools?.[0]
+                          setState({
+                            selectedStep: expanded() && !state.selectedTool ? null : first ? executionToolKey(first) : step().id,
+                            selectedTool: undefined,
+                          })
+                        }}
                       >
                         <span class="execution-step__title">{step().title ? `${label()} · ${step().title}` : label()}</span>
                         <Show when={elapsed(step())}>{(duration) => <span class="execution-step__duration">{duration()}</span>}</Show>
-                        <span class="execution-step__status" data-status={step().status}>
-                          {statusLabel(step(), words())}
+                        <span class="execution-step__status" data-status={waiting() ? "approval" : step().status}>
+                          {stepStatus()}
                         </span>
                         <Show when={expandable()}>
                           <Icon name={expanded() ? "chevron-down" : "chevron-right"} size="small" />
@@ -327,9 +372,12 @@ export function SessionExecutionDock(props: { opened: boolean; onOpenChange: (op
                 }}
               </Index>
             </ol>
-            <Show when={selectedStep()}>{(step) => <ExecutionStepDetail step={step()} chinese={language.locale().startsWith("zh")} />}</Show>
+            <Show when={detailStep()}>{(step) =>
+              <ExecutionStepDetail step={step()} chinese={chinese()} focusTool={state.selectedTool} directory={props.directory} />
+            }</Show>
             </div>
           </Show>
+          </ExecutionEvidenceViews>
           </div>
           </Show>
         </div>

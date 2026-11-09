@@ -48,11 +48,18 @@ export type CompactInput = {
   readonly expectedDirectory?: string
 }
 
+export type ValidateCommandModel = (model: ModelV2.Ref) => Effect.Effect<ModelV2.Ref, OperationError>
+
+export type CommandValidation = {
+  readonly validateAgent?: (agent: string) => Effect.Effect<void, OperationError>
+  readonly validateModel?: ValidateCommandModel
+}
+
 export interface Interface {
   /** Product adapters reuse their existing direct Shell owner, including its exclusive slot and L3 gateway. */
   readonly shell?: (input: ShellInput) => Effect.Effect<void, OperationError>
   /** Resolve named commands before durable admission, for both idle and queued submission. */
-  readonly preparePrompt?: (input: {
+  readonly preparePrompt?: (input: CommandValidation & {
     readonly sessionID: SessionSchema.ID
     readonly id: SessionMessage.ID
     readonly prompt: PromptInput.Prompt

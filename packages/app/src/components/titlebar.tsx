@@ -229,7 +229,7 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
     if (!(target instanceof Element)) return false
 
     const selector =
-      "button, a, input, textarea, select, option, [role='button'], [role='menuitem'], [contenteditable='true'], [contenteditable='']"
+      "button, a, input, textarea, select, option, [role='button'], [role='menuitem'], [contenteditable='true'], [contenteditable=''], [data-titlebar-tab-slot]"
 
     return !!target.closest(selector)
   }
@@ -298,8 +298,6 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
             const tabsStoreActions = tabs
             const { currentTab, openNewTab } = useTitlebarTabs()
 
-            const [tabsAreOverflowing, setTabsAreOverflowing] = createSignal(false)
-
             return (
               <div
                 data-component="workspace-titlebar-content"
@@ -327,40 +325,35 @@ export function Titlebar(props: { update?: TitlebarUpdate; debugTools?: { visibl
                 <TitlebarTabStrip
                   tabs={tabsStore}
                   currentTab={currentTab}
-                  forceTruncate={tabsAreOverflowing()}
-                  onOverflowChange={setTabsAreOverflowing}
-                  onNavigate={(tab, el) => {
-                    tabs.select(tab)
-                    el?.scrollIntoView({ behavior: "instant" })
-                  }}
+                  onNavigate={(tab) => tabs.select(tab)}
                   onClose={(tab) => {
                     const index = tabsStore.findIndex((item) => tabKey(item) === tabKey(tab))
                     if (index !== -1) tabsStoreActions.closeTab(index)
                   }}
                   onReorder={(keys) => tabsStoreActions.reorder(keys)}
+                  newTabAction={
+                    <Show when={!creating() && (tabsStore.length > 1 || narrow() || !layout.sidebar.opened())}>
+                      <TooltipV2
+                        placement="bottom"
+                        value={
+                          <>
+                            {language.t("command.session.new")}
+                            <KeybindV2 keys={newTabTooltipKeybind(command)} variant="neutral" />
+                          </>
+                        }
+                      >
+                        <IconButtonV2
+                          type="button"
+                          variant="ghost-muted"
+                          size="small"
+                          icon={<IconV2 name="plus" />}
+                          onClick={openNewTab}
+                          aria-label={language.t("command.session.new")}
+                        />
+                      </TooltipV2>
+                    </Show>
+                  }
                 />
-                <Show when={!creating() && (tabsStore.length > 1 || narrow() || !layout.sidebar.opened())}>
-                  <TooltipV2
-                    placement="bottom"
-                    value={
-                      <>
-                        {language.t("command.session.new")}
-                        <KeybindV2 keys={newTabTooltipKeybind(command)} variant="neutral" />
-                      </>
-                    }
-                  >
-                    <IconButtonV2
-                      type="button"
-                      variant="ghost-muted"
-                      size="large"
-                      class="shrink-0"
-                      icon={<IconV2 name="plus" />}
-                      onClick={openNewTab}
-                      aria-label={language.t("command.session.new")}
-                    />
-                  </TooltipV2>
-                </Show>
-                <div class="flex-1" />
                 <Show when={narrow() || !layout.sidebar.opened()}>
                   <TooltipV2 placement="bottom" value={language.t("controlCenter.m001")}>
                     <IconButtonV2

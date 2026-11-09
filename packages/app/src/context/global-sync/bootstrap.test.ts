@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store"
 import { QueryClient } from "@tanstack/solid-query"
 import type { Config, ArforgeClient, Project } from "@arforge-ai/sdk/v2/client"
 import type { AgentApi, CatalogApi, CommandApi, ProjectApi, ReferenceApi } from "@arforge-ai/client/promise"
+import { Arforge } from "@arforge-ai/client/promise"
 import type { NormalizedProviderListResponse } from "@arforge-ai/session-ui/context"
 import {
   bootstrapDirectory,
@@ -16,6 +17,8 @@ import {
 import type { State, VcsCache } from "./types"
 import { ServerScope } from "@/utils/server-scope"
 import type { ServerApi } from "@/utils/server"
+import { Model } from "@arforge-ai/schema/model"
+import { Provider } from "@arforge-ai/schema/provider"
 
 const provider = { all: new Map(), connected: [], default: {} } satisfies NormalizedProviderListResponse
 const api = {
@@ -167,6 +170,24 @@ describe("query keys", () => {
       ["default", { location: { directory: "/repo" } }],
     ])
     expect(result.connected).toEqual(["openai"])
+  })
+
+  test("preserves unavailable exact aliases delivered separately from available choices", async () => {
+    const providerID = Provider.ID.make("deepseek")
+    const id = Model.ID.make("deepseek-v4-flash")
+    const exact = { ...Model.Info.empty(providerID, id), enabled: false }
+    const api = Arforge.make({
+      baseUrl: "http://owned-alias.test",
+      fetch: Object.assign(async (input: RequestInfo | URL) => {
+        const pathname = new URL(input instanceof Request ? input.url : input).pathname
+        if (pathname === "/api/model") return Response.json({ data: [], exactAliases: [exact] })
+        if (pathname === "/api/model/default") return Response.json({ data: null })
+        if (pathname === "/api/provider") return Response.json({ data: [{ id: providerID, name: "DeepSeek" }] })
+        throw new Error(`Unexpected request: ${pathname}`)
+      }, { preconnect: () => {} }),
+    })
+    const result = await new QueryClient().fetchQuery(loadProvidersQuery(ServerScope.local, "/repo", api))
+    expect(result.all.get(providerID)?.models[id]).toMatchObject({ id, enabled: false, listed: false })
   })
 
   test("loads agents from the current location-scoped endpoint", async () => {

@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 const [databasePath, workspace, mode] = Bun.argv.slice(2)
@@ -9,6 +9,10 @@ process.env.ARFORGE_DB = databasePath
 process.env.ARFORGE_DB_URL = ""
 process.env.ARFORGE_DB_ADMIN_URL = ""
 process.env.ARFORGE_HOME = join(dirname(databasePath), "home")
+process.env.ARFORGE_CONFIG_DIR = join(dirname(databasePath), "config")
+process.env.ARFORGE_TEST_MANAGED_CONFIG_DIR = join(dirname(databasePath), "managed")
+process.env.ARFORGE_DISABLE_MODELS_FETCH = "true"
+process.env.ARFORGE_MODELS_PATH = join(dirname(databasePath), "model-catalog.json")
 process.env.ARFORGE_AUTH_MODE = mode === "users" ? "users" : "private"
 process.env.ARFORGE_AUTH_SECRET = "rename-route-isolated-fixture-secret-32-characters"
 process.env.ARFORGE_AUTH_EMAIL_WEBHOOK_URL = ""
@@ -16,6 +20,25 @@ process.env.ARFORGE_AUTH_EMAIL_WEBHOOK_TOKEN = ""
 process.env.ARFORGE_AUTH_EXPOSE_TOKENS = "true"
 process.env.ARFORGE_PUBLIC_URL = "http://localhost"
 mkdirSync(process.env.ARFORGE_HOME, { recursive: true })
+const fixtureModel = {
+  id: "owned-model", name: "Owned model", release_date: "2026-01-01",
+  attachment: false, reasoning: false, temperature: true, tool_call: false,
+  limit: { context: 4096, output: 1024 },
+}
+const bundledDeepSeek = JSON.parse(readFileSync(new URL("../../core/assets/models.json", import.meta.url), "utf8")).deepseek
+writeFileSync(process.env.ARFORGE_MODELS_PATH, JSON.stringify({
+  deepseek: { ...bundledDeepSeek, env: [] },
+  fixture: {
+    id: "fixture", name: "Fixture", env: [], npm: "@ai-sdk/openai-compatible", api: "http://127.0.0.1:1",
+    models: {
+      "owned-model": fixtureModel,
+      "unsupported": { ...fixtureModel, id: "unsupported", provider: { npm: "unsupported" } },
+    },
+  },
+}))
+writeFileSync(join(workspace, "arforge.json"), JSON.stringify({
+  providers: { deepseek: { models: { "deepseek-v4-flash": { disabled: true } } } },
+}))
 const nativeFetch = globalThis.fetch
 let externalRequests = 0
 globalThis.fetch = Object.assign(
@@ -36,7 +59,9 @@ const { ProjectTable } = await import("@arforge-ai/core/project/sql")
 const { ProjectV2 } = await import("@arforge-ai/core/project")
 const { Git } = await import("@arforge-ai/core/git")
 const { SessionV2 } = await import("@arforge-ai/core/session")
-const { SessionTable, SessionMessageTable } = await import("@arforge-ai/core/session/sql")
+const { ModelV2 } = await import("@arforge-ai/core/model")
+const { ProviderV2 } = await import("@arforge-ai/core/provider")
+const { SessionTable, SessionInputTable } = await import("@arforge-ai/core/session/sql")
 const { SessionExecution } = await import("@arforge-ai/core/session/execution")
 const { AbsolutePath } = await import("@arforge-ai/core/schema")
 const { AppNodeBuilder } = await import("@arforge-ai/core/effect/app-node-builder")
@@ -175,18 +200,25 @@ const git = Layer.effect(
 ).pipe(Layer.provide(LayerNode.compile(Git.node)))
 const calls: { operation: string; input: unknown; principal?: unknown }[] = []
 let preparations = 0
+let wakes = 0
 const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Service.of({
   active: Effect.succeed(new Set()),
   exclusive: () => Effect.succeed(false), resume: () => Effect.void, resumeWith: () => Effect.void,
-  wake: () => Effect.void, wakeAndWait: () => Effect.void, interrupt: () => Effect.void,
+  wake: () => Effect.sync(() => { wakes++ }), wakeAndWait: () => Effect.void, interrupt: () => Effect.void,
   shell: input => Effect.gen(function* () {
     calls.push({ operation: "shell", input, principal: yield* Database.CurrentPrincipal })
     if (input.command === "busy") return yield* new SessionExecution.OperationError({ operation: "shell", reason: "busy", message: "busy" })
   }),
-  preparePrompt: input => Effect.sync(() => {
+  preparePrompt: input => Effect.gen(function* () {
+    const selected = input.validateModel && input.prompt.route?.model
+      ? yield* input.validateModel(input.prompt.route.model)
+      : input.prompt.route?.model
     preparations++
     calls.push({ operation: "command", input })
-    return { ...input.prompt, files: input.prompt.files?.map(file => ({ ...file, mime: file.mime ?? "text/plain" })), text: `Resolved ${input.prompt.command?.name}: ${input.prompt.command?.arguments}` }
+    const route = input.prompt.command?.arguments === "override-model"
+      ? { ...input.prompt.route, model: { providerID: ProviderV2.ID.make("fixture"), id: ModelV2.ID.make("missing-command-model") } }
+      : selected ? { ...input.prompt.route, model: selected } : input.prompt.route
+    return { ...input.prompt, route, files: input.prompt.files?.map(file => ({ ...file, mime: file.mime ?? "text/plain" })), text: `Resolved ${input.prompt.command?.name}: ${input.prompt.command?.arguments}` }
   }),
   compact: input => Effect.gen(function* () {
     calls.push({ operation: "compact", input, principal: yield* Database.CurrentPrincipal })
@@ -246,6 +278,12 @@ const probes: unknown[] = []
 const post = (operation: string, body: unknown, id = sessionID, kind: Parameters<typeof headers>[0] = "normal") => request(new Request(`http://localhost/api/session/${id}/${operation}?location[directory]=${encodeURIComponent(join(workspace, "forged"))}`, {
   method: "POST", headers: headers(kind), body: JSON.stringify(body),
 }))
+const snapshot = () => Effect.runPromise(Database.Service.use(({ db }) =>
+  Effect.all({
+    events: db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all(),
+    inputs: db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all(),
+  }),
+).pipe(Effect.scoped, Effect.provide(database)))
 try {
   for (const [operation, body] of [
     ["shell", { id: "msg_contract_shell", command: "NOT_EXECUTED", agent: "fixture", model: { providerID: "fixture", id: "fixture" } }],
@@ -267,6 +305,57 @@ try {
   const queued = await post("prompt", { id: "msg_contract_queued", prompt: { text: "/review queued", command: { name: "review", arguments: "queued" } }, delivery: "queue", resume: false })
   expect(queued.status).toBe(200)
   expect((await queued.json()).data.prompt.text).toBe("Resolved review: queued")
+  const before = await snapshot()
+  const available = { providerID: "fixture", id: "owned-model" }
+  const missing = { ...available, id: "removed-model" }
+  const checkError = async (response: Response, message: string) => {
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      _tag: "InvalidRequestError", kind: "session.prompt.model", message: expect.stringContaining(message),
+    })
+  }
+  await checkError(await post("prompt", { id: "msg_preflight_rejected", prompt: { text: "retain", route: { model: missing } } }), "removed-model")
+  await checkError(await post("prompt", { id: "msg_preflight_variant", delivery: "queue", prompt: { text: "retain", route: { model: { ...available, variant: "retired" } } } }), "reasoning option")
+  await checkError(await post("prompt", { id: "msg_preflight_api", prompt: { text: "retain", route: { model: { ...available, id: "unsupported" } } } }), "unsupported API")
+  const beforeCommand = preparations
+  await checkError(await post("command", { id: "msg_preflight_command", command: "review", model: missing }), "removed-model")
+  expect(preparations).toBe(beforeCommand)
+  await checkError(await post("command", { id: "msg_preflight_override", command: "review", arguments: "override-model", model: available }), "missing-command-model")
+  expect(preparations).toBe(beforeCommand + 1)
+  expect(await snapshot()).toEqual(before)
+  expect(wakes).toBe(0)
+  const prompt = { text: "exact content", files: [{ uri: "data:image/png;base64,YQ==", mime: "image/png", name: "a.png" }], route: { model: available } }
+  const valid = await post("prompt", { id: "msg_preflight_rejected", prompt, delivery: "queue" })
+  expect(valid.status).toBe(200)
+  expect((await valid.json()).data.prompt).toMatchObject(prompt)
+  const staged = { id: "msg_preflight_staged", prompt: { text: "offline", route: { model: missing } }, resume: false }
+  expect((await post("prompt", staged)).status).toBe(200)
+  const committed = await snapshot()
+  const retryStaged = await post("prompt", { ...staged, resume: true })
+  expect(retryStaged.status).toBe(200)
+  expect(await snapshot()).toEqual(committed)
+  expect(wakes).toBe(2)
+  const aliasCommand = {
+    id: "msg_preflight_alias", command: "review", arguments: "same original identity",
+    model: { providerID: "deepseek", id: "deepseek-v4-flash-vision-exp" },
+  }
+  const alias = await post("command", aliasCommand)
+  expect(alias.status).toBe(200)
+  expect((await alias.json()).data.prompt.route.model.id).toBe("deepseek-flash")
+  const preparedAlias = preparations
+  expect((await post("command", aliasCommand)).status).toBe(200)
+  expect(preparations).toBe(preparedAlias)
+  const modelResponse = await request(new Request(
+    `http://localhost/api/model?location[directory]=${encodeURIComponent(workspace)}`,
+    { headers: headers() },
+  ))
+  expect(modelResponse.status).toBe(200)
+  const models = await modelResponse.json()
+  expect(models.data.filter((model: { providerID: string }) => model.providerID === "deepseek").map((model: { id: string }) => model.id))
+    .toEqual(["deepseek-flash", "deepseek-v4-pro"])
+  expect(models.exactAliases).toEqual([expect.objectContaining({ id: "deepseek-v4-flash", enabled: false })])
+  await checkError(await post("command", { ...aliasCommand, id: "msg_preflight_disabled_alias", model: { providerID: "deepseek", id: "deepseek-v4-flash" } }), "deepseek-v4-flash")
+  expect(preparations).toBe(preparedAlias)
   expect((await post("shell", { command: "busy" })).status).toBe(409)
   expect((await post("compact", { expectedContext: "stale" })).status).toBe(409)
   expect((await post("compact", { expectedContext: "failed" })).status).toBe(503)

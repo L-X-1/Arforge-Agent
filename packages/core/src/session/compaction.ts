@@ -34,6 +34,7 @@ import { ContextBudget } from "../context-budget"
 import * as RuntimeInvariants from "../runtime/invariants"
 
 const DEFAULT_BUFFER = 20_000
+const PRESSURE_RATIO = 0.8
 const DEFAULT_KEEP_TOKENS = 8_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
 const SUMMARY_OUTPUT_TOKENS = 4_096
@@ -87,7 +88,7 @@ type Entry = {
 
 type Settings = {
   readonly auto: boolean
-  readonly buffer: number
+  readonly buffer?: number
   readonly tokens: number
 }
 
@@ -208,7 +209,18 @@ type Input = {
   readonly sourceCurrent?: () => Effect.Effect<boolean>
 }
 
-const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
+const requestInput = ({ system, messages, tools }: LLMRequest) => JSON.stringify({ system, messages, tools })
+
+function inputCapacity(model: Model, output: number) {
+  const context = model.defaults?.limits?.context ?? model.route.defaults.limits?.context
+  const input = model.defaults?.limits?.input ?? model.route.defaults.limits?.input
+  const inputLimit = input !== undefined && input > 0 ? input : undefined
+  if (context === undefined || context <= 0) return inputLimit
+  return Math.max(0, Math.min(context - output, inputLimit ?? context))
+}
+
+const requestOutput = (model: Model, request: LLMRequest) =>
+  request.generation?.maxTokens ?? model.defaults?.limits?.output ?? model.route.defaults.limits?.output ?? 0
 
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
@@ -330,7 +342,7 @@ const settings = (documents: readonly Config.Entry[]) => {
       buffer: current.buffer ?? result.buffer,
       tokens: current.keep?.tokens ?? result.tokens,
     }),
-    { auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS },
+    { auto: true, tokens: DEFAULT_KEEP_TOKENS },
   )
 }
 
@@ -556,10 +568,13 @@ export const make = (dependencies: Dependencies) => {
     return recovery.blocked.length === 0
   })
   const compactAfterOverflowImpl = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
-    const context = input.model.route.defaults.limits?.context
-    if (context === undefined || context <= 0) return false
-    const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     const tokenizer = input.model.tokenizer
+    const summaryOutput = Math.min(
+      requestOutput(input.model, input.request) || SUMMARY_OUTPUT_TOKENS,
+      SUMMARY_OUTPUT_TOKENS,
+    )
+    const capacity = inputCapacity(input.model, summaryOutput)
+    if (capacity === undefined || capacity === 0) return false
     const keepTokens = input.reason === "manual" ? 0 : config.tokens
     const selected = select(input.entries, keepTokens, tokenizer)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
@@ -568,8 +583,14 @@ export const make = (dependencies: Dependencies) => {
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
-    const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (ContextBudget.count(summaryPrompt, tokenizer).tokens > context - summaryOutput) return false
+    const request = LLM.request({
+      model: input.model,
+      system: [SystemPart.make(SYSTEM_PROMPT)],
+      messages: [Message.user(summaryPrompt)],
+      tools: [],
+      generation: { maxTokens: summaryOutput },
+    })
+    if (ContextBudget.count(requestInput(request), tokenizer).tokens > capacity) return false
 
     const store = new ContextSurface.SurfaceStore(surfaceNodes(input.entries), {
       epoch: input.surfaceEpoch,
@@ -630,13 +651,6 @@ export const make = (dependencies: Dependencies) => {
             summaryPending = Promise.resolve().then(() =>
               Effect.runPromise(
                 Effect.gen(function* () {
-                  const request = LLM.request({
-                    model: input.model,
-                    system: [SystemPart.make(SYSTEM_PROMPT)],
-                    messages: [Message.user(summaryPrompt)],
-                    tools: [],
-                    generation: { maxTokens: summaryOutput },
-                  })
                   const prepared = yield* dependencies.llm.prepare(request)
                   const envelope = createRequestEnvelope({
                     request,
@@ -746,21 +760,24 @@ export const make = (dependencies: Dependencies) => {
     if (!(yield* reconcileRecovery(input.sessionID))) return false
     return yield* compactAfterOverflowImpl(input)
   })
-  const exceedsAutomaticPressure = (input: Pick<Input, "model" | "request">) => {
+  const exceedsAutomaticPressure = (input: Pick<Input, "model" | "request"> & { legacyPressure?: boolean }) => {
     if (!config.auto) return false
-    const context = input.model.route.defaults.limits?.context
-    if (context === undefined || context <= 0) return false
-    const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    return (
-      estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) >
-      context - Math.max(output, config.buffer)
-    )
+    if (input.legacyPressure) {
+      const context = input.model.defaults?.limits?.context ?? input.model.route.defaults.limits?.context
+      const headroom = Math.max(requestOutput(input.model, input.request), config.buffer ?? DEFAULT_BUFFER)
+      return context !== undefined && context > 0 && Token.estimate(requestInput(input.request)) > context - headroom
+    }
+    const capacity = inputCapacity(input.model, requestOutput(input.model, input.request))
+    if (capacity === undefined) return false
+    const buffer = config.buffer ?? Math.min(DEFAULT_BUFFER, Math.floor(capacity / 4))
+    const threshold = Math.max(0, Math.min(Math.floor(capacity * PRESSURE_RATIO), capacity - buffer))
+    return ContextBudget.count(requestInput(input.request), input.model.tokenizer).tokens >= threshold
   }
   /**
    * The compaction owner decides pressure once; ResultPruner only projects
    * eligible tool-result text and never becomes a second context owner.
    */
-  const pruneToolResultsIfNeeded = (input: Pick<Input, "model" | "request">) =>
+  const pruneToolResultsIfNeeded = (input: Pick<Input, "model" | "request"> & { legacyPressure?: boolean }) =>
     exceedsAutomaticPressure(input) ? ResultPruner.pruneMessages(input.request.messages) : undefined
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!(yield* reconcileRecovery(input.sessionID))) return false

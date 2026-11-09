@@ -73,6 +73,10 @@ Desktop 的渲染层和 Web App 通过 HTTP 使用 TypeScript 后端。CLI 和�
 Core 的会话、权限与持久化契约，Python 层保留兼容和迁移用途。完整目录索引见
 [仓库结构](REPOSITORY_STRUCTURE.md)。
 
+执行证据从 Core 的会话事件和工具结果进入 Schema/Protocol 契约，再由 App 展示。
+改动契约时同步检查生成客户端和渲染入口。本地运维页面由 Server 提供只读状态，
+备份、恢复演练和计划任务的实际操作仍由对应脚本负责。
+
 ## 4. 常见开发任务
 
 ### 新增 CLI 命令

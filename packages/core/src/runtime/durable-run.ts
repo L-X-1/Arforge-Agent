@@ -97,6 +97,10 @@ export class BudgetExhaustedError extends Schema.TaggedErrorClass<BudgetExhauste
     attemptsUsed: Schema.Number,
     maxAttempts: Schema.Number,
     reason: Schema.optional(Schema.String),
+    tokensUsed: Schema.optional(Schema.Number),
+    maxTokens: Schema.optional(Schema.Number),
+    remainingTokens: Schema.optional(Schema.Number),
+    estimatedInputTokens: Schema.optional(Schema.Number),
   },
 ) {}
 
@@ -811,17 +815,20 @@ const normalizedUsageBaseline = (value: AgentRuntime.RunUsageBaseline | undefine
       })
     : undefined
 
+/** Durable numeric representation used only for newly admitted uncapped root chat runs. */
+export const UNLIMITED_ROOT_TOKENS = Number.MAX_SAFE_INTEGER
+
+const hasProviderTokenLimit = (run: AgentRuntime.Run) =>
+  run.budget.maxTokens !== UNLIMITED_ROOT_TOKENS ||
+  !("sessionID" in run) || run.child !== undefined ||
+  run.admission?.owner !== "session-runner" || run.admission.personalJob !== undefined
+
 /**
- * Computes a provider-call output allowance from settled run usage, active
- * child reservations, and the active attempt's cumulative Session baseline.
- * Input tokens are estimated separately so output cannot claim the entire
- * remaining total-token budget.
+ * Total-token budget shared by request admission and output allowance.
  */
-export const providerOutputTokenAllowance = (input: {
+export const providerTokenBudget = (input: {
   readonly snapshot: Snapshot
   readonly cumulativeSessionTokens: number
-  readonly estimatedInputTokens: number
-  readonly modelMaxOutputTokens?: number
 }) => {
   const run = input.snapshot.run
   const baseline = input.snapshot.activeAttempt?.usageBaseline?.tokens ?? 0
@@ -829,9 +836,26 @@ export const providerOutputTokenAllowance = (input: {
     ? Math.max(0, usageCounter(input.cumulativeSessionTokens) - baseline)
     : 0
   const reservedTokens = "childBudgetReserved" in run ? (run.childBudgetReserved?.tokens ?? 0) : 0
-  const remainingTotal = Math.max(0, run.budget.maxTokens - run.budget.tokensUsed - reservedTokens - inFlightTokens)
-  const remainingOutput = Math.max(0, remainingTotal - usageCounter(input.estimatedInputTokens))
+  const tokensUsed = run.budget.tokensUsed + inFlightTokens
+  return {
+    tokensUsed,
+    maxTokens: run.budget.maxTokens,
+    remainingTokens: hasProviderTokenLimit(run)
+      ? Math.max(0, run.budget.maxTokens - tokensUsed - reservedTokens)
+      : undefined,
+  }
+}
+
+export const providerOutputTokenAllowance = (input: {
+  readonly snapshot: Snapshot
+  readonly cumulativeSessionTokens: number
+  readonly estimatedInputTokens: number
+  readonly modelMaxOutputTokens?: number
+}) => {
+  const { remainingTokens } = providerTokenBudget(input)
   const modelLimit = usageCounter(input.modelMaxOutputTokens ?? 0)
+  if (remainingTokens === undefined) return modelLimit
+  const remainingOutput = Math.max(0, remainingTokens - usageCounter(input.estimatedInputTokens))
   return modelLimit > 0 ? Math.min(remainingOutput, modelLimit) : remainingOutput
 }
 
@@ -1139,23 +1163,7 @@ const layer = Layer.effect(
       runID: AgentRuntime.RunID,
       transaction?: Database.Transaction,
     ) {
-      const readStored = (tx: Database.Transaction) =>
-        Effect.gen(function* () {
-          const sequence = yield* tx
-            .select({ seq: EventSequenceTable.seq })
-            .from(EventSequenceTable)
-            .where(eq(EventSequenceTable.aggregate_id, runID))
-            .get()
-            .pipe(Effect.orDie)
-          const rows = yield* tx
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, runID))
-            .orderBy(asc(EventTable.seq))
-            .all()
-            .pipe(Effect.orDie)
-          return { latest: sequence?.seq ?? -1, rows }
-        })
+      const readStored = (tx: Database.Transaction) => EventV2.readAggregateSnapshot(tx, runID)
       const stored = yield* (transaction ? readStored(transaction) : db.transaction(readStored)).pipe(Effect.orDie)
       const collected: AgentRuntime.RunDurableEvent[] = []
       if (stored.rows.length !== stored.latest + 1)
@@ -1657,7 +1665,7 @@ const layer = Layer.effect(
             attemptStarted.attempt > run.budget.maxAttempts ||
             run.budget.durationMsUsed >= run.budget.maxDurationMs ||
             run.budget.costMicrosUsed >= run.budget.maxCostMicros ||
-            run.budget.tokensUsed >= run.budget.maxTokens
+            (hasProviderTokenLimit(run) && run.budget.tokensUsed >= run.budget.maxTokens)
           )
             return yield* new CorruptHistoryError({
               runID,
@@ -2498,11 +2506,14 @@ const layer = Layer.effect(
             maxAttempts: current.run.budget.maxAttempts,
             reason: `cost limit reached (${current.run.budget.costMicrosUsed}/${current.run.budget.maxCostMicros} micros)`,
           })
-        if (current.run.budget.tokensUsed >= current.run.budget.maxTokens)
+        if (hasProviderTokenLimit(current.run) && current.run.budget.tokensUsed >= current.run.budget.maxTokens)
           return yield* new BudgetExhaustedError({
             runID,
             attemptsUsed: current.run.budget.attemptsUsed,
             maxAttempts: current.run.budget.maxAttempts,
+            tokensUsed: current.run.budget.tokensUsed,
+            maxTokens: current.run.budget.maxTokens,
+            remainingTokens: 0,
             reason: `token limit reached (${current.run.budget.tokensUsed}/${current.run.budget.maxTokens} tokens)`,
           })
         const startedAt = yield* DateTime.now
@@ -3466,7 +3477,10 @@ const layer = Layer.effect(
         )
           return yield* new ChildBudgetExceededError({
             parentRunID: input.parentRunID,
-            reason: `Child budget exceeds remaining parent budget: requested ${JSON.stringify(requestedBudget)}, remaining ${JSON.stringify(remaining)}.`,
+            reason: `Child budget exceeds remaining parent budget: requested ${JSON.stringify(requestedBudget)}, remaining ${JSON.stringify({
+              ...remaining,
+              ...(hasProviderTokenLimit(parent.run) ? {} : { tokens: "unlimited" }),
+            })}.`,
           })
 
         const binding = AgentRuntime.ChildRunBinding.make({

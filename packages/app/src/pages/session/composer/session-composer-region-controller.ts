@@ -6,13 +6,7 @@ import type { PromptInputState } from "@/components/prompt-input"
 import { useSync } from "@/context/sync"
 import { getSessionHandoff, setSessionHandoff } from "@/pages/session/handoff"
 import type { SessionComposerController } from "./session-composer-state"
-
-export type SessionComposerFollowupDock = {
-  items: { id: string; text: string }[]
-  sending?: string
-  onSend: (id: string) => void
-  onEdit: (id: string) => void
-}
+import type { SessionFollowupDockProps } from "./session-followup-dock"
 
 export type SessionComposerRevertDock = {
   items: { id: string; text: string }[]
@@ -32,7 +26,7 @@ export function createSessionComposerRegionController(input: {
     collapsed: Accessor<boolean>
     onToggle: () => void
   }
-  followup: Accessor<SessionComposerFollowupDock | undefined>
+  followup: Accessor<SessionFollowupDockProps | undefined>
   revert: Accessor<SessionComposerRevertDock | undefined>
   onResponseSubmit: () => void
   openParent: () => void

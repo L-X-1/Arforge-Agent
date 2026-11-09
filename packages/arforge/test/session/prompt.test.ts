@@ -2872,6 +2872,69 @@ formalIntegration.instance(
     }),
 )
 
+credentialIntegration.instance("validates the effective named command model and parent Agent before shell substitution", () =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const marker = path.join(directory, "command-preflight-marker")
+    const template = "Run !`node -e \"require('node:fs').appendFileSync(process.argv[1], 'x')\" \"" + marker + "\"`"
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: {
+        blocked: { agent: "build", template },
+        delegate: { agent: "build", model: "test/test-model", subtask: true, template },
+        owned: { agent: "build", model: "test/test-model", template },
+      },
+    }))
+    const chat = yield* (yield* Session.Service).create({ title: "Named command preflight" })
+    const sessionID = SessionV2.ID.make(chat.id)
+    const core = yield* SessionV2.Service
+    const id = SessionMessage.ID.create()
+    const model = { providerID: ref.providerID, id: ModelV2.ID.make("missing-model") }
+    const input = {
+      sessionID, id,
+      prompt: { text: "/blocked", command: { name: "blocked", arguments: "" }, route: { model } },
+    }
+    const failure = yield* core.prompt(input).pipe(Effect.flip)
+    expect(failure).toMatchObject({ operation: "prompt.model", reason: "invalid" })
+    expect(failure.message).toContain("missing-model")
+    expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    expect(yield* SessionInput.find((yield* Database.Service).db, id)).toBeUndefined()
+    expect(yield* llm.hits).toHaveLength(0)
+
+    const invalidParent = yield* core.prompt({
+      ...input,
+      prompt: {
+        text: "/delegate",
+        command: { name: "delegate", arguments: "" },
+        route: { agent: "missing-parent-agent", model: { providerID: ref.providerID, id: ref.modelID } },
+      },
+    }).pipe(Effect.flip)
+    expect(invalidParent).toMatchObject({
+      operation: "prompt", reason: "invalid", message: "Unknown or unavailable Agent: missing-parent-agent",
+    })
+    expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    expect(yield* SessionInput.find((yield* Database.Service).db, id)).toBeUndefined()
+    expect(yield* llm.hits).toHaveLength(0)
+
+    const accepted = {
+      ...input,
+      prompt: {
+        ...input.prompt,
+        text: "/owned",
+        command: { name: "owned", arguments: "" },
+        route: { agent: "missing-parent-agent", model },
+      },
+    }
+    yield* llm.text("Owned command result")
+    const result = yield* core.prompt(accepted)
+    expect(result.prompt.route?.model).toMatchObject({ providerID: ref.providerID, id: ref.modelID })
+    expect(result.prompt.route?.agent).toBe("build")
+    expect(yield* core.prompt({ ...accepted, resume: false })).toEqual(result)
+    expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("x")
+    yield* core.wait(sessionID)
+  }),
+)
+
 for (const delivery of ["steer", "queue"] as const)
   formalIntegration.instance(
     `current named command ${delivery} resolves before canonical admission and actual provider execution`,

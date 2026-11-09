@@ -102,6 +102,9 @@ export function chooserStrengthOptions(
   const efforts = ["minimal", "low", "medium", "high", "xhigh", "max"]
   const ranked = groups.reasoning.map((option) => {
     const request = option.value === undefined ? undefined : metadata?.[option.value]
+    // Named modes stay separate from a session reset and from the ranked tiers.
+    if (option.value === "default" || option.value === "auto" || option.value === "automatic") return { option }
+    if (chooserReasoningOff(request)) return { option, off: true }
     let rank: { kind: "effort" | "budget"; value: number } | undefined
     reasoningRequest(request, (body) => {
       const effort =
@@ -123,20 +126,25 @@ export function chooserStrengthOptions(
       }
       return false
     })
-    // A named model default is distinct from clearing the session override.
-    if (option.value === "default" || chooserReasoningOff(request)) rank = undefined
     return { option, rank }
   })
   const kinds = new Set(ranked.flatMap((item) => (item.rank ? [item.rank.kind] : [])))
   // Effort labels and token budgets cannot be compared on the same numeric scale.
-  const levels =
+  const ordered =
     kinds.size === 1
       ? ranked
           .filter((item) => item.rank)
           .sort((a, b) => a.rank!.value - b.rank!.value)
-          .map((item) => item.option)
       : []
+  const disabled = ranked.filter((item) => item.off)
+  // Off can anchor the scale only when its recipe is unique and strengths differ.
+  const off =
+    disabled.length === 1 && new Set(ordered.map((item) => item.rank!.value)).size >= 2
+      ? disabled[0].option
+      : undefined
+  const levels = [...(off ? [off] : []), ...ordered.map((item) => item.option)]
   return {
+    off,
     levels,
     modes: [groups.reset, ...groups.reasoning.filter((option) => !levels.includes(option))],
   }

@@ -52,6 +52,7 @@ import { EventManifest } from "@arforge-ai/schema/event-manifest"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
 import { SessionRunCoordinator } from "@arforge-ai/core/session/run-coordinator"
 import { SessionRunner } from "@arforge-ai/core/session/runner"
+import { resourceAssistantID, resourceToolName } from "@arforge-ai/core/session/runner/resource-attachments"
 import {
   compare as compareSessionParity,
   fromCoreMessages as fromCoreParity,
@@ -107,6 +108,7 @@ import { asc, eq, inArray, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const requests: LLMRequest[] = []
+let sessionRunTokenLimit = false
 const preparedRequests = new WeakMap<PreparedRequest, LLMRequest>()
 const preparedSends: PreparedRequest[] = []
 const preparations: PreparedRequest[] = []
@@ -191,7 +193,8 @@ let fallbackModel: Model | undefined
 const compactModel = Model.make({
   id: "compact",
   provider: "fake",
-  route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+  route: OpenAIChat.route.with({ limits: { context: 200_000, output: 1_000 } }),
+  defaults: { limits: { context: 180_000, input: 4_000, output: 50 } },
 })
 const recoveryModel = Model.make({
   id: "recovery",
@@ -391,6 +394,7 @@ const evolution = Layer.mock(EvolutionV2.Service, {
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
+    sessionRunTokenLimit: () => Effect.sync(() => sessionRunTokenLimit),
     entries: () =>
       Effect.succeed([
         new Config.Document({
@@ -527,6 +531,7 @@ const insertSession = (id: SessionV2.ID) =>
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   response = []
+  sessionRunTokenLimit = false
   systemBaseline = "Initial context"
   systemRemoved = false
   systemUnavailable = false
@@ -4381,7 +4386,7 @@ describe("SessionRunnerLLM", () => {
     15_000,
   )
 
-  it.effect("automatically compacts into a completed summary and retained recent turn", () =>
+  it.effect("automatically compacts at the model's input limit and retains the recent turn", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -5486,6 +5491,8 @@ describe("SessionRunnerLLM", () => {
 
       yield* session.resume(sessionID)
 
+      const [run] = yield* (yield* DurableRun.Service).list({ sessionID })
+      expect(run?.run.budget.maxTokens).toBe(AgentRuntime.DEFAULT_MAX_TOKENS)
       expect(requests).toHaveLength(1)
       expect(requests[0]?.toolChoice).toMatchObject({ type: "required" })
       expect(requests[0]?.tools.find((tool) => tool.name === StructuredOutput.name)).toMatchObject({
@@ -6090,6 +6097,228 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const scenario of ["default", "closeout", "pressure-recovery", "closeout-recovery", "exhausted"] as const)
+    it.effect(`applies the admitted root token budget across tool turns: ${scenario}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const runs = yield* DurableRun.Service
+        const runner = yield* SessionRunner.Service
+        const { db } = yield* Database.Service
+        const capped = scenario !== "default"
+        sessionRunTokenLimit = capped
+        currentModel = Model.make({
+          id: model.id,
+          provider: model.provider,
+          route: AnthropicMessages.route.with({ limits: { context: 200_000, output: 2_048 } }),
+        })
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Inspect the work and report progress" }), resume: false })
+        requests.length = 0
+        executions.length = 0
+        const originalResult = "durable inspection detail\n".repeat(4_000)
+        const usage = (inputTokens: number, cacheReadInputTokens = 0) => ({
+          inputTokens,
+          nonCachedInputTokens: inputTokens - cacheReadInputTokens,
+          cacheReadInputTokens,
+        })
+        responses = [
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.toolCall({ id: "inspected", name: "echo", input: { text: "inspected" } }),
+            LLMEvent.toolCall({ id: "large-result", name: "web_search", input: {}, providerExecuted: true }),
+            LLMEvent.toolResult({
+              id: "large-result", name: "web_search", providerExecuted: true,
+              result: { type: "text", value: originalResult },
+            }),
+            LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: usage(scenario === "exhausted" ? 999_999 : 940_000, 875_904) }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ],
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.toolCall({ id: "verified", name: "echo", input: { text: "verified" } }),
+            LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: usage(55_000) }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ],
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            ...(capped ? [LLMEvent.toolCall({ id: "unexpected", name: "echo", input: { text: "must not run" } })] : []),
+            LLMEvent.textStart({ id: "budget-report" }),
+            LLMEvent.textDelta({ id: "budget-report", text: "Inspection verified. Final checks are unfinished." }),
+            LLMEvent.textEnd({ id: "budget-report" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop", usage: usage(capped ? 4_000 : 9_000) }),
+            LLMEvent.finish({ reason: "stop" }),
+          ],
+        ]
+        const interruptedStep = scenario === "pressure-recovery" ? 2 : scenario === "closeout-recovery" ? 3 : undefined
+        const readEnvelopes = EventV2.readSerialized(db, {
+          aggregateIDs: [sessionID],
+          types: [EventV2.versionedType(SessionEvent.RequestEnvelopePrepared.type, 1)],
+        }).pipe(Effect.map((rows) => rows.map((row) => parseRequestEnvelopeJson(String(row.data.envelope)))))
+        if (interruptedStep !== undefined) {
+          const checkpoint = runs.checkpoint
+          yield* Effect.addFinalizer(() => Effect.sync(() => { Object.assign(runs, { checkpoint }) }))
+          const stopBeforeDispatch: DurableRun.Interface["checkpoint"] = (input) =>
+            Effect.gen(function* () {
+              const saved = yield* checkpoint(input)
+              const cursor = SessionCheckpoint.fromContainer(saved.state, sessionID)
+              if (cursor && !cursor.legacy && cursor.kind === SessionCheckpoint.KIND &&
+                cursor.dispatch?.phase === "prepared" && cursor.dispatch.turnStep === interruptedStep)
+                return yield* Effect.interrupt
+              return saved
+            })
+          Object.assign(runs, { checkpoint: stopBeforeDispatch })
+          expect((yield* runner.run({ sessionID, force: true }).pipe(Effect.exit))._tag).toBe("Failure")
+          Object.assign(runs, { checkpoint })
+          expect(requests).toHaveLength(interruptedStep - 1)
+          const prepared = (yield* readEnvelopes).at(-1)!
+          expect(prepared.execution.turn_step).toBe(interruptedStep)
+          sessionRunTokenLimit = false
+          yield* runner.run({ sessionID, force: true })
+          expect(preparedSends[interruptedStep - 1]?.transmission).toEqual(prepared.request.transmission)
+        } else {
+          const result = yield* runner.run({ sessionID, force: true }).pipe(Effect.exit)
+          if (scenario === "exhausted") {
+            expect(Exit.isFailure(result) && Cause.squash(result.cause)).toMatchObject({
+              _tag: "DurableRun.BudgetExhaustedError", tokensUsed: 999_999, maxTokens: 1_000_000,
+              remainingTokens: 1, estimatedInputTokens: expect.any(Number),
+            })
+            expect(requests).toHaveLength(1)
+            expect(executions).toEqual(["inspected"])
+            const [failed] = yield* runs.list({ sessionID })
+            expect(failed?.run.status).toBe("failed")
+            const transitions = yield* EventV2.readSerialized(db, {
+              aggregateIDs: [failed!.run.id],
+              types: [EventV2.versionedType(AgentRuntime.Event.RunStateChanged.type, 1)],
+            })
+            expect(transitions.at(-1)?.data.reason).toMatch(
+              /^Token budget cannot admit another provider request \(999999\/1000000 tokens used, 1 available, \d+ estimated input tokens\)\.$/,
+            )
+            return
+          }
+          if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause)
+        }
+        expect(requests).toHaveLength(3)
+        expect(executions).toEqual(["inspected", "verified"])
+        const history = JSON.stringify(yield* session.context(sessionID))
+        expect(history).toContain("Inspection verified. Final checks are unfinished.")
+        expect(history).toContain(JSON.stringify(originalResult).slice(1, -1))
+        expect(history).not.toContain("must not run")
+        const [run] = yield* runs.list({ sessionID })
+        expect(run?.run).toMatchObject({ status: "completed", budget: {
+          maxTokens: capped ? 1_000_000 : DurableRun.UNLIMITED_ROOT_TOKENS,
+          tokensUsed: capped ? 999_000 : 1_004_000,
+        } })
+        const envelopes = yield* readEnvelopes
+        expect(envelopes.map(({ execution }) => execution.compiler_revision)).toEqual(capped
+          ? ["context-compiler/v2-context-pressure", "context-compiler/v2-budget-pressure", "context-compiler/v2-budget-closeout"]
+          : Array(3).fill("context-compiler/v2-context-pressure"))
+        const projected = requests[1]?.messages.flatMap((message) => message.content)
+          .find((part) => part.type === "tool-result" && part.id === "large-result")
+        const projectedResult = projected?.type === "tool-result" ? projected.result.value : undefined
+        if (capped) {
+          expect(projectedResult).toContain(ResultPruner.PRUNE_MARKER)
+          expect(requests[2]?.tools).toEqual([])
+          expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
+          expect(JSON.stringify(requests[2]?.system)).toContain("identify what remains unfinished or unverified")
+        } else {
+          expect(projectedResult).toEqual(originalResult)
+          expect(requests[2]?.generation?.maxTokens).toBe(2_048)
+        }
+      }),
+    )
+
+  for (const scenario of [0, 4_000, 30_000, "prepared replay"] as const)
+    it.effect(`gates a pending MCP attachment before a finite-budget tool turn (${scenario})`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const remainingTokens = scenario === "prepared replay" ? 30_000 : scenario
+        sessionRunTokenLimit = true
+        requests.length = 0
+        const session = yield* SessionV2.Service
+        const runner = yield* SessionRunner.Service
+        const attachmentID = SessionMessage.ID.create()
+        const resource = { server: "fixture", uri: "evidence://budget" }
+        const attachmentStep = resourceAssistantID(sessionID, attachmentID)
+        let reads = 0
+        const tool = Tool.make({
+          description: "Read the admitted fixture resource",
+          input: Schema.Struct({}),
+          output: Schema.String,
+          metadata: { sideEffect: "none" },
+          execute: () => Effect.sync(() => {
+            reads++
+            return "MCP resource body"
+          }),
+        })
+        yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start inspection" }), resume: false })
+        response = fragmentFixture("text", "read-finished", ["Resource inspected"]).completeEvents
+        responseStream = Stream.fromEffect(session.prompt({
+          sessionID,
+          id: attachmentID,
+          delivery: "steer",
+          prompt: Prompt.make({ text: "Inspect the attached resource", files: [{ uri: resource.uri, mime: "text/plain", resource }] }),
+          resume: false,
+        }).pipe(Effect.orDie)).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: {
+            inputTokens: AgentRuntime.DEFAULT_MAX_TOKENS - remainingTokens,
+            nonCachedInputTokens: AgentRuntime.DEFAULT_MAX_TOKENS - remainingTokens,
+          } }),
+          LLMEvent.finish({ reason: "stop" }),
+        ])))
+        const run = runner.run({ sessionID, force: true }).pipe(
+          Effect.provideService(SessionRunner.ExternalTools, () => Effect.succeed({ [resourceToolName(resource)]: tool })),
+          Effect.exit,
+        )
+        if (scenario === "prepared replay") {
+          const runs = yield* DurableRun.Service
+          const original = runs.checkpoint
+          yield* Effect.addFinalizer(() => Effect.sync(() => { Object.assign(runs, { checkpoint: original }) }))
+          const checkpoint: DurableRun.Interface["checkpoint"] = (input) => Effect.gen(function* () {
+            const saved = yield* original(input)
+            const cursor = SessionCheckpoint.fromContainer(saved.state, sessionID)
+            if (reads === 1 && cursor && !cursor.legacy && cursor.kind === SessionCheckpoint.KIND &&
+              cursor.dispatch?.phase === "prepared") return yield* Effect.interrupt
+            return saved
+          })
+          Object.assign(runs, { checkpoint })
+          expect((yield* run)._tag).toBe("Failure")
+          Object.assign(runs, { checkpoint: original })
+          expect(reads).toBe(1)
+          expect(requests).toHaveLength(1)
+          const [paused] = yield* runs.recoverable(sessionID)
+          expect(paused?.checkpoint?.state).toHaveProperty("dispatch.phase", "prepared")
+
+          const { db } = yield* Database.Service
+          yield* db.delete(SessionMessageTable).where(eq(SessionMessageTable.id, attachmentStep)).pipe(Effect.orDie)
+          const recovered = yield* run
+          expect(Exit.isFailure(recovered) && Cause.pretty(recovered.cause)).toContain("MCP attachment step is incomplete")
+          expect(reads).toBe(1)
+          expect(requests).toHaveLength(1)
+          expect((yield* runs.recoverable(sessionID))[0]?.checkpoint).toEqual(paused?.checkpoint)
+          return
+        }
+        const exit = yield* run
+        const history = yield* session.context(sessionID)
+        if (remainingTokens === 30_000) {
+          if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+          expect(reads).toBe(1)
+          expect(requests).toHaveLength(2)
+          expect(history.some((message) => message.id === attachmentStep)).toBe(true)
+          expect(JSON.stringify(requests[1]?.messages)).toContain("MCP resource body")
+        } else {
+          expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
+            _tag: "DurableRun.BudgetExhaustedError",
+            remainingTokens,
+            reason: expect.stringContaining("The pending MCP attachment was not read."),
+          })
+          expect(reads).toBe(0)
+          expect(requests).toHaveLength(1)
+          expect(history.some((message) => message.id === attachmentStep)).toBe(false)
+        }
+      }),
+    )
+
   it.effect("bounds recorded local tools and awaits ordered settlement before continuing", () =>
     Effect.gen(function* () {
       yield* setup
@@ -6288,46 +6517,114 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("steers an active provider turn with newly recorded prompts", () =>
+  for (const guide of [false, true]) it.effect(guide
+    ? "guides an exact queued prompt past FIFO after the in-flight tool settles"
+    : "steers an active provider turn after its in-flight tool settles", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
+      const runs = yield* DurableRun.Service
+      const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Start working" }), resume: false })
 
       requests.length = 0
-      responses = [
-        [
+      executions.length = 0
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      const providerGate = yield* Deferred.make<void>()
+      response = fragmentFixture("text", "steer-finished", ["Direction changed"]).completeEvents
+      responseStream = Stream.concat(
+        Stream.fromIterable([
           LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ],
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ],
-      ]
-      streamGate = yield* Deferred.make<void>()
-      streamStarted = yield* Deferred.make<void>()
+          LLMEvent.toolCall({ id: "call-before-followup", name: "echo", input: { text: "settled evidence" } }),
+        ]),
+        Stream.fromEffect(Deferred.await(providerGate)).pipe(Stream.flatMap(() => Stream.fromIterable([
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ]))),
+      )
 
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      yield* Deferred.await(streamStarted)
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Change direction" }) })
-      yield* Deferred.succeed(streamGate, undefined)
-      yield* Fiber.join(first)
-      streamGate = undefined
-      streamStarted = undefined
-      yield* Effect.yieldNow
+      yield* Deferred.await(toolExecutionsStarted)
+      const [running] = yield* runs.list({ sessionID })
+      const queue = (text: string) => session.prompt({ sessionID, prompt: Prompt.make({ text }), delivery: "queue", resume: false })
+      let followup: SessionInput.Admitted
+      if (guide) {
+        yield* queue("FIFO first")
+        const target = yield* queue("Change direction")
+        yield* queue("FIFO last")
+        const input = { sessionID, messageID: target.id, expectedAdmittedSeq: target.admittedSeq }
+        followup = yield* session.promptQueue.steer(input)
+        expect(followup).toEqual({ ...target, delivery: "steer" })
+        expect(yield* session.promptQueue.steer(input)).toEqual(followup)
+        expect((yield* session.promptQueue.list(sessionID)).map(({ prompt }) => prompt.text)).toEqual(["FIFO first", "FIFO last"])
+      } else {
+        followup = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Change direction" }) })
+      }
+      expect(followup.delivery).toBe("steer")
+      expect(followup.promotedSeq).toBeUndefined()
+      expect(activeToolExecutions).toBe(1)
+      expect(requests).toHaveLength(1)
 
-      expect(requests).toHaveLength(2)
+      yield* Deferred.succeed(providerGate, undefined)
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(first)
+
+      expect(requests).toHaveLength(guide ? 4 : 2)
       expect(userTexts(requests[0]!)).toEqual(["Start working"])
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Change direction"])
-      expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-      ])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "user"])
+      expect(JSON.stringify(requests[1]?.messages[2])).toContain("settled evidence")
+      expect(executions).toEqual(["settled evidence"])
+      expect(yield* SessionInput.listPending(db, sessionID, "steer")).toEqual([])
+      expect((yield* runs.list({ sessionID })).map(({ run }) => [run.id, run.status])).toEqual([[running?.run.id, "completed"]])
+      const receiptType = EventV2.versionedType(SessionEvent.Tool.Success.type, 1)
+      const promptedType = EventV2.versionedType(SessionEvent.Prompted.type, 1)
+      const rows = yield* EventV2.readSerialized(db, { aggregateIDs: [sessionID], types: [receiptType, promptedType] })
+      const receipts = rows.filter((row) => row.type === receiptType && row.data.callID === "call-before-followup")
+      expect(receipts).toHaveLength(1)
+      const promoted = rows.find((row) => row.type === promptedType && row.data.messageID === followup.id)
+      expect(promoted?.seq).toBeGreaterThan(receipts[0]!.seq)
+      if (guide) {
+        expect(userTexts(requests[2]!).at(-1)).toBe("FIFO first")
+        expect(userTexts(requests[3]!).at(-1)).toBe("FIFO last")
+        const beforeReplay = yield* SessionInput.find(db, followup.id)
+        yield* replaySessionProjection(sessionID)
+        expect(yield* SessionInput.find(db, followup.id)).toEqual(beforeReplay)
+      }
+    }),
+  )
+
+  it.effect("resamples a routed queue promotion when Guide wins after selection", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const target = yield* session.prompt({
+        sessionID, delivery: "queue", resume: false,
+        prompt: Prompt.make({
+          text: "Keep the same routed prompt",
+          route: { agent: "build", model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") } },
+        }),
+      })
+      let guided = false
+      systemLoadHook = Effect.suspend(() => {
+        if (guided) return Effect.void
+        guided = true
+        return session.promptQueue.steer({ sessionID, messageID: target.id, expectedAdmittedSeq: target.admittedSeq })
+          .pipe(Effect.asVoid, Effect.orDie)
+      })
+      requests.length = 0
+      response = fragmentFixture("text", "queue-race", ["Guided once"]).completeEvents
+      yield* session.resume(sessionID)
+      expect(guided).toBe(true)
+      expect(requests.map(userTexts)).toEqual([["Keep the same routed prompt"]])
+      const types = [SessionEvent.PromptQueueSteered, SessionEvent.AgentSwitched, SessionEvent.ModelSwitched, SessionEvent.Prompted]
+        .map((event) => EventV2.versionedType(event.type, 1))
+      const rows = yield* EventV2.readSerialized(db, { aggregateIDs: [sessionID], types })
+      expect(rows.map(({ type }) => type)).toEqual(types)
+      expect(rows.at(-1)?.data).toMatchObject({ messageID: target.id, delivery: "steer" })
     }),
   )
 
@@ -8003,6 +8300,8 @@ describe("SessionRunnerLLM", () => {
 
       yield* session.resume(sessionID)
 
+      const [run] = yield* (yield* DurableRun.Service).list({ sessionID })
+      expect(run?.run.budget.maxTokens).toBe(AgentRuntime.DEFAULT_MAX_TOKENS)
       expect(yield* goals.get({ sessionID, goalID: created.id })).toMatchObject({
         status: "blocked",
         lastError: "Session settled without explicitly completing or blocking the active goal",

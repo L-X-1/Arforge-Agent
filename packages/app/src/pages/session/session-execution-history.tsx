@@ -12,6 +12,9 @@ import { managementErrorText } from "@/components/settings-v2/management-state"
 import { canReadRunSource, navigateToRunSource, selectRunSourceSession, workspaceSnapshotSources } from "@/components/control-center/personal-workspace-source"
 import { statusLabel } from "@/components/control-center/personal-workspace-presentation"
 import { ExecutionStepDetail } from "./execution-step-detail"
+import { ExecutionEvidenceViews, type ExecutionEvidenceView } from "./execution-evidence-view"
+import { projectExecutionEvidence } from "./execution-evidence"
+import { executionToolKey, executionToolStep } from "./execution-trace-model"
 import { projectRunHistory, readSessionHistory, type RunHistorySummary, type SessionHistoryEvent } from "./execution-run-history-model"
 import type { OperationsApi } from "@/utils/server"
 import "./session-execution-history.css"
@@ -30,6 +33,7 @@ export function SessionExecutionHistory() {
     session: undefined as NativeSession | undefined,
     events: [] as SessionHistoryEvent[], summaries: [] as RunHistorySummary[],
     selected: undefined as string | undefined, step: undefined as string | undefined,
+    tool: undefined as string | undefined, view: "tools" as ExecutionEvidenceView,
   })
   const scope = () => `${server().scope}\u0000${sdk().directory}\u0000${params.id ?? ""}`
   let generation = 0
@@ -49,8 +53,11 @@ export function SessionExecutionHistory() {
       projectID: session.projectID, directory: session.location.directory,
     })
   }
-  const steps = createMemo(() => inspectable() && selected() ? projection().steps(selected()!.runID) : [])
+  const traces = createMemo(() => inspectable() && selected() ? projection().traces(selected()!.runID) : [])
+  const steps = createMemo(() => traces().flatMap((trace) => trace.steps))
+  const evidence = createMemo(() => projectExecutionEvidence(traces(), selected()?.summary?.source.directory))
   const selectedStep = createMemo(() => state.step ? steps().find(step => step.id === state.step) : steps()[0])
+  const detailStep = createMemo(() => (state.tool ? executionToolStep(steps(), state.tool) : undefined) ?? selectedStep())
   const sourceText = () => [safeControlServerLabel(ServerConnection.key(server().server)), state.session?.location.directory ?? sdk().directory, params.id].filter(Boolean).join(" · ")
   const refreshSoon = () => {
     dirty = true
@@ -99,7 +106,8 @@ export function SessionExecutionHistory() {
     controller?.abort()
     generation++
     navigationGeneration++
-    setState({ loaded: false, error: "", navigating: false, session: undefined, events: [], summaries: [], selected: undefined, step: undefined })
+    setState({ loaded: false, error: "", navigating: false, session: undefined, events: [], summaries: [],
+      selected: undefined, step: undefined, tool: undefined, view: "tools" })
     void load()
   }))
   createEffect(() => {
@@ -150,7 +158,10 @@ export function SessionExecutionHistory() {
     <Show when={state.loaded && !state.loading && projection().runs.length === 0}><p>{t("当前会话尚无可读取的持久运行。", "No durable runs are available for this session.")}</p></Show>
     <div class="execution-history-list" role="list" aria-label={t("运行记录", "Durable runs")}>
       <For each={projection().runs}>{run => <div role="listitem"><button type="button" data-history-run={run.runID}
-        aria-pressed={selected()?.runID === run.runID} onClick={() => { navigationGeneration++; setState({ selected: run.runID, step: undefined, navigating: false }) }}>
+        aria-pressed={selected()?.runID === run.runID} onClick={() => {
+          navigationGeneration++
+          setState({ selected: run.runID, step: undefined, tool: undefined, view: "tools", navigating: false })
+        }}>
         <span>{run.runID}</span><span class="execution-history-metadata">{run.summary ? statusLabel(run.summary.status, language.locale()) : t("运行状态未读取", "Run status unavailable")}</span>
       </button></div>}</For>
     </div>
@@ -169,13 +180,19 @@ export function SessionExecutionHistory() {
         <button type="button" disabled={state.navigating} onClick={() => void openSource()}>{state.navigating ? t("正在核对来源…", "Checking source…") : t("在原工作区查看", "View in original workspace")}</button>
       </Show>
       <Show when={inspectable()}>
-        <Show when={steps().length > 0} fallback={<p>{t("此运行没有已记录的可展开步骤。", "No expandable steps were recorded for this run.")}</p>}>
-          <div class="execution-history-steps"><For each={steps()}>{step => <button type="button" data-history-step={step.id}
-            aria-pressed={selectedStep()?.id === step.id} onClick={() => setState("step", step.id)}>
-            <span>{step.title || step.kind}</span><span class="execution-history-metadata">{step.status}</span>
-          </button>}</For></div>
-          <Show when={selectedStep()}>{step => <ExecutionStepDetail step={step()} chinese={language.locale().startsWith("zh")} />}</Show>
-        </Show>
+        <ExecutionEvidenceViews evidence={evidence()} view={state.view}
+          onView={(view) => setState("view", view)}
+          onTool={(tool) => setState({ tool, step: steps().find((step) => step.tools?.some((part) => executionToolKey(part) === tool))?.id })}
+          chinese={language.locale().startsWith("zh")}>
+          <Show when={steps().length > 0} fallback={<p>{t("此运行没有已记录的可展开步骤。", "No expandable steps were recorded for this run.")}</p>}>
+            <div class="execution-history-steps"><For each={steps()}>{step => <button type="button" data-history-step={step.id}
+              aria-pressed={selectedStep()?.id === step.id} onClick={() => setState({ step: step.id, tool: undefined })}>
+              <span>{step.title || step.kind}</span><span class="execution-history-metadata">{step.status}</span>
+            </button>}</For></div>
+            <Show when={detailStep()}>{step => <ExecutionStepDetail step={step()} chinese={language.locale().startsWith("zh")}
+              focusTool={state.tool} directory={run().summary?.source.directory} />}</Show>
+          </Show>
+        </ExecutionEvidenceViews>
       </Show>
     </div>}</Show>
   </section>

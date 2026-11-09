@@ -147,6 +147,17 @@ describe("formatServerError", () => {
 
     expect(formatServerError(wrapped, language.t)).toBe("Arquivo de config em config invalido: Missing host")
   })
+
+  test("shows actionable model preflight feedback through the existing error response", () => {
+    const body = {
+      _tag: "InvalidRequestError",
+      kind: "session.prompt.model",
+      message: "Select an available model or connect a provider in Settings.",
+    }
+    const wrapped = new Error("Request failed with status 400", { cause: { body, status: 400 } })
+    expect(formatServerError(wrapped, language.t)).toBe(body.message)
+    expect(formatServerError(body, language.t)).toBe(body.message)
+  })
 })
 
 describe("isSessionNotFoundError", () => {

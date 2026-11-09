@@ -3,6 +3,8 @@ import { Schema } from "effect"
 import { SessionEvent } from "@arforge-ai/schema/session-event"
 import { PersonalWorkspace } from "@arforge-ai/schema/personal-workspace"
 import { historyPresentationEvent, projectRunHistory, readSessionHistory, type SessionHistoryEvent, type RunHistorySummary } from "./execution-run-history-model"
+import { projectExecutionEvidence } from "./execution-evidence"
+import { executionStepText, executionToolKey, executionToolStep } from "./execution-trace-model"
 
 const sessionID = "ses_history_owned"
 function event(value: SessionHistoryEvent): SessionHistoryEvent {
@@ -12,10 +14,10 @@ function event(value: SessionHistoryEvent): SessionHistoryEvent {
 const eventBase = (seq: number) => ({ id: `evt_history_${seq}`, durable: { aggregateID: sessionID, seq, version: 1 }, location: { directory: "/owned" } })
 const eventData = (seq: number) => ({ sessionID, timestamp: 1000 + seq })
 const tokens = { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } }
-function turn(start: number, runID: string | undefined, suffix: string) {
+function turn(start: number, runID: string | undefined, suffix: string, prompt = `Prompt ${suffix}`) {
   const assistantMessageID = `msg_assistant_${suffix}`
   return [
-    event({ ...eventBase(start), type: "session.next.prompted", data: { ...eventData(start), messageID: `msg_user_${suffix}`, prompt: { text: `Prompt ${suffix}` }, delivery: "steer" } }),
+    event({ ...eventBase(start), type: "session.next.prompted", data: { ...eventData(start), messageID: `msg_user_${suffix}`, prompt: { text: prompt }, delivery: "steer" } }),
     event({ ...eventBase(start + 1), type: "session.next.step.started", data: { ...eventData(start + 1), assistantMessageID, ...(runID ? { runID } : {}), agent: "build", model: { providerID: "fixture", id: suffix } } }),
     event({ ...eventBase(start + 2), type: "session.next.text.started", data: { ...eventData(start + 2), assistantMessageID, textID: `text_${suffix}` } }),
     event({ ...eventBase(start + 3), type: "session.next.text.ended", data: { ...eventData(start + 3), assistantMessageID, textID: `text_${suffix}`, text: `Exact original answer ${suffix}\r\nEND 😀` } }),
@@ -68,6 +70,92 @@ describe("durable session run history", () => {
     expect(history.runs.find(run => run.runID === "run_new")?.assistantIDs).toEqual(["msg_assistant_new-model"])
     expect(history.steps("run_old").flatMap(step => step.sections?.map(section => section.content) ?? [])).toEqual(["Exact original answer old-model\r\nEND 😀"])
     expect(history.steps("run_new").flatMap(step => step.sections?.map(section => section.content) ?? [])).toEqual(["Exact original answer new-model\r\nEND 😀"])
+  })
+  test("replays file and verification evidence using only each historical run's recorded prompt", () => {
+    const older = turn(1, "run_older", "old", "Allowed files: merge.mjs\nTest command: node old-check.mjs")
+    const newer = turn(10, "run_newer", "new", "Allowed files: outside.mjs\nTest command: node new-check.mjs")
+    const source = { assistantMessageID: "msg_assistant_old", callID: "call_owned_edit" }
+    const events = [
+      ...older.slice(0, 2),
+      event({ ...eventBase(3), type: "session.next.tool.input.started", data: { ...eventData(3), ...source, name: "edit" } }),
+      event({ ...eventBase(4), type: "session.next.tool.called", data: { ...eventData(4), ...source, tool: "edit",
+        input: { path: "merge.mjs" }, provider: { executed: false } } }),
+      event({ ...eventBase(5), type: "session.next.tool.success", data: { ...eventData(5), ...source,
+        structured: { files: [{ file: "merge.mjs", patch: "stored patch" }] }, content: [], provider: { executed: true } } }),
+      ...newer,
+    ]
+    const history = projectRunHistory(sessionID, events, [summary("run_older"), summary("run_newer")])
+    expect(projectExecutionEvidence(history.traces("run_older"), "/owned")).toEqual({
+      files: [{ file: "merge.mjs", toolID: JSON.stringify([source.assistantMessageID, source.callID]), diff: { file: "merge.mjs", patch: "stored patch" } }],
+      verifications: [{ command: "node old-check.mjs", status: "unexecuted" }],
+      missingFileEvidence: false,
+    })
+    expect(projectExecutionEvidence(history.traces("run_newer"), "/owned").verifications).toEqual([
+      { command: "node new-check.mjs", status: "unexecuted" },
+    ])
+  })
+
+  test("uses the exact assistant identity when a durable run reuses a provider call ID", () => {
+    const command = "bun test"
+    const first = turn(1, "run_reused", "first")
+    const second = turn(10, "run_reused", "second")
+    const bash = (seq: number, suffix: string, exit: number) => {
+      const source = { assistantMessageID: "msg_assistant_" + suffix, callID: "call_reused" }
+      return [
+        event({ ...eventBase(seq), type: "session.next.tool.input.started", data: { ...eventData(seq), ...source, name: "bash" } }),
+        event({ ...eventBase(seq + 1), type: "session.next.tool.called", data: { ...eventData(seq + 1), ...source, tool: "bash", input: { command }, provider: { executed: false } } }),
+        event({ ...eventBase(seq + 2), type: "session.next.tool.success", data: { ...eventData(seq + 2), ...source,
+          structured: { exit }, content: [{ type: "text", text: `receipt ${suffix}` }], provider: { executed: false } } }),
+      ]
+    }
+    const replay = projectRunHistory(sessionID, [...first.slice(0, 2), ...bash(3, "first", 0), ...second.slice(0, 2), ...bash(12, "second", 7)], [summary("run_reused")])
+    const evidence = projectExecutionEvidence(replay.traces("run_reused"), "/owned")
+    expect(evidence.verifications.map((item) => item.exit)).toEqual([0, 7])
+    const failed = executionToolStep(replay.steps("run_reused"), evidence.verifications[1]!.toolID!)
+    expect(failed?.tools?.[0]?.messageID).toBe("msg_assistant_second")
+    expect(executionStepText(failed!)).toContain("receipt second")
+    expect(executionStepText(failed!)).not.toContain("receipt first")
+  })
+
+  test("replays cancellation terminal output and interrupted metadata, including when no progress was seen", () => {
+    const command = "node visible-test.mjs"
+    const [prompt, step] = turn(1, "run_cancel", "cancel")
+    const source = { assistantMessageID: "msg_assistant_cancel", callID: "call_cancel" }
+    const events = [
+      prompt!, step!,
+      event({ ...eventBase(3), type: "session.next.tool.input.started", data: { ...eventData(3), ...source, name: "bash" } }),
+      event({ ...eventBase(4), type: "session.next.tool.called", data: { ...eventData(4), ...source, tool: "bash", input: { command }, provider: { executed: false } } }),
+    ]
+    const paused = { ...summary("run_cancel"), status: "paused" } as const
+    const waiting = projectRunHistory(sessionID, events, [{ ...paused, status: "running" }]).traces("run_cancel")[0]!
+    expect(waiting.steps[0]?.status).toBe("active")
+    const output = "SHELL_STDOUT_cancel\nSHELL_STDERR_cancel\n"
+    const failed = event({ ...eventBase(6), type: "session.next.tool.failed", data: {
+      ...eventData(6), ...source, error: { type: "unknown", message: "Cancelled" }, provider: { executed: false },
+      content: [{ type: "text", text: output }], structured: { interrupted: true },
+    } })
+    const progress = event({ ...eventBase(5), type: "session.next.tool.progress", data: {
+      ...eventData(5), ...source, content: [{ type: "text", text: "earlier checkpoint" }], structured: {},
+    } })
+    const progressing = projectRunHistory(sessionID, [...events, progress], [{ ...paused, status: "running" }]).traces("run_cancel")[0]!
+    expect(progressing.steps[0]?.status).toBe("running")
+    for (const history of [events, [...events, progress]]) {
+      const replay = projectRunHistory(sessionID, [...history, failed], [paused]).traces("run_cancel")[0]!
+      expect(replay.phase).toBe("interrupted")
+      const tool = replay.steps[0]?.tools?.[0]!
+      expect(tool.state).toMatchObject({ status: "error", metadata: { interrupted: true }, output })
+      expect(projectExecutionEvidence([replay], "/owned").verifications).toMatchObject([
+        { toolID: executionToolKey(tool), status: "interrupted", output },
+      ])
+      expect(executionStepText(replay.steps[0]!)).toContain(output)
+      expect(executionStepText(replay.steps[0]!)).not.toContain("earlier checkpoint")
+    }
+    const legacy = event({ ...eventBase(6), type: "session.next.tool.failed", data: { ...eventData(6), ...source, provider: { executed: false },
+      error: { type: "unknown", message: "Tool execution interrupted" } } })
+    const replay = projectRunHistory(sessionID, [...events, progress, legacy], [paused]).traces("run_cancel")[0]!
+    expect(projectExecutionEvidence([replay], "/owned").verifications[0]).toMatchObject({
+      status: "interrupted", output: "earlier checkpoint",
+    })
   })
   test("two queued turns can belong to the same actual run", () => {
     const history = projectRunHistory(sessionID, [...turn(1, "run_shared", "first"), ...turn(6, "run_shared", "second")], [summary("run_shared")])

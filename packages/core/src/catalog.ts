@@ -9,6 +9,7 @@ import { EventV2 } from "./event"
 import { Policy } from "./policy"
 import { State } from "./state"
 import { Integration } from "./integration"
+import { officialDeepSeekFlash } from "./deepseek-flash"
 
 export type ProviderRecord = {
   provider: ProviderV2.MutableInfo
@@ -105,6 +106,22 @@ export const layer = Layer.effect(
         api,
         request,
       })
+    }
+
+    const flashAlias = (record: ProviderRecord, id: ModelV2.ID, exact?: ModelV2.Info) => {
+      if (record.provider.id !== "deepseek") return undefined
+      const canonical = record.models.get(ModelV2.ID.make("deepseek-flash"))
+      if (!canonical || canonical.id === id) return undefined
+      const canonicalApi = resolveModelApi(canonical, record.provider)
+      if (canonicalApi.id !== canonical.id || officialDeepSeekFlash(record.provider.id, id, canonicalApi.url) !== canonical.id)
+        return undefined
+      if (exact) {
+        const api = resolveModelApi(exact, record.provider)
+        if (api.id !== id || api.type !== "aisdk" || canonicalApi.type !== "aisdk" || api.package !== canonicalApi.package ||
+            !officialDeepSeekFlash(record.provider.id, id, api.url))
+          return undefined
+      }
+      return canonical
     }
 
     const normalizeApi = (item: ProviderV2.MutableInfo | ModelV2.MutableInfo) => {
@@ -217,15 +234,17 @@ export const layer = Layer.effect(
         get: Effect.fn("CatalogV2.model.get")(function* (providerID, modelID) {
           const record = state.get().providers.get(providerID)
           if (!record) return
-          const model = record.models.get(modelID)
-          return model && projectModel(model, record.provider)
+          const selected = record.models.get(modelID) ?? flashAlias(record, modelID)
+          return selected && projectModel(selected, record.provider)
         }),
 
         all: Effect.fn("CatalogV2.model.all")(function* () {
           return pipe(
             Array.fromIterable(state.get().providers.values()),
             Array.flatMap((record) => {
-              return Array.fromIterable(record.models.values()).map((model) => projectModel(model, record.provider))
+              return Array.fromIterable(record.models.values())
+                .filter((model) => !flashAlias(record, model.id, model)?.enabled)
+                .map((model) => projectModel(model, record.provider))
             }),
             Array.sortWith((item) => item.time.released, Order.flip(Order.Number)),
           )
@@ -275,6 +294,7 @@ export const layer = Layer.effect(
             Array.filter(
               (model) =>
                 model.providerID === providerID &&
+                !flashAlias(record, model.id, model)?.enabled &&
                 model.enabled &&
                 model.status === "active" &&
                 model.capabilities.input.some((item) => item.startsWith("text")) &&

@@ -13,7 +13,9 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "postgres-backup-crypto.ps1")
 if ([string]::IsNullOrWhiteSpace($ReportDirectory)) {
-  $ReportDirectory = Join-Path $PSScriptRoot "..\artifacts\recovery-drills"
+  # Packaged runtimes do not have a repository artifacts directory. Default the
+  # drill report next to the backups; an explicit -ReportDirectory still wins.
+  $ReportDirectory = Join-Path ([IO.Path]::GetFullPath($BackupDirectory)) "recovery-drills"
 }
 
 function Get-DatabaseConnection([string]$Value) {
@@ -132,6 +134,9 @@ $admin = Get-DatabaseConnection $adminUrl
 if ($admin.Username -eq $app.Username) {
   throw "The recovery drill requires a separate PostgreSQL maintenance role that can create and drop a temporary database."
 }
+if ($admin.Host -ne $app.Host -or $admin.Port -ne $app.Port) {
+  throw "The recovery drill requires the maintenance connection to use the same PostgreSQL host and port as the application connection."
+}
 $adminSource = [pscustomobject]@{
   Host = $admin.Host
   Port = $admin.Port
@@ -205,6 +210,9 @@ try {
   }
   $created = $false
   $started = Get-Date
+  $comparisonCompleted = $false
+  $comparisonPassed = $false
+  $cleanupSucceeded = $false
 
   try {
     $null = Invoke-PostgresTool $createDb $admin @(
@@ -239,6 +247,32 @@ try {
       }
     }
   )
+  $comparisonPassed = $mismatches.Count -eq 0
+  $comparisonCompleted = $true
+  } finally {
+    # A passing report may only be published after the temporary database was
+    # successfully removed. Record the cleanup outcome instead of assuming it.
+    if ($created) {
+      try {
+        $null = Invoke-PostgresTool $dropDb $admin @(
+        "--host", $admin.Host,
+        "--port", "$($admin.Port)",
+        "--username", $admin.Username,
+        "--maintenance-db", $admin.Database,
+        "--if-exists",
+        "--force",
+        $drillName
+        )
+        $cleanupSucceeded = $true
+      } catch {
+        $cleanupSucceeded = $false
+      }
+    }
+  }
+
+  if (-not $comparisonCompleted) {
+    throw "Recovery drill did not finish its comparison; no report was published."
+  }
 
   $reportRoot = [IO.Path]::GetFullPath($ReportDirectory)
   New-Item -ItemType Directory -Path $reportRoot -Force | Out-Null
@@ -263,26 +297,17 @@ try {
     restoredRows = [long](($restoredCounts.Values | Measure-Object -Sum).Sum)
     mismatchCount = $mismatches.Count
     mismatches = $mismatches
-    passed = $mismatches.Count -eq 0
+    temporaryDatabaseRemoved = $cleanupSucceeded
+    passed = ($comparisonPassed -and $cleanupSucceeded)
   }
   $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $reportPath -Encoding utf8
   $report + [ordered]@{ report = $reportPath } | ConvertTo-Json -Depth 6
 
-  if ($mismatches.Count -ne 0) {
-    throw "Recovery drill found $($mismatches.Count) table count mismatch(es). See $reportPath."
+  if (-not $cleanupSucceeded) {
+    throw "Temporary recovery database cleanup failed; the drill report is not a passing result. See $reportPath."
   }
-  } finally {
-    if ($created) {
-      $null = Invoke-PostgresTool $dropDb $admin @(
-      "--host", $admin.Host,
-      "--port", "$($admin.Port)",
-      "--username", $admin.Username,
-      "--maintenance-db", $admin.Database,
-      "--if-exists",
-      "--force",
-      $drillName
-      )
-    }
+  if (-not $comparisonPassed) {
+    throw "Recovery drill found $($mismatches.Count) table count mismatch(es). See $reportPath."
   }
 } finally {
   Remove-Item -LiteralPath $temporaryDump -Force -ErrorAction SilentlyContinue

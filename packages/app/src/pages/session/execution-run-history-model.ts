@@ -98,22 +98,24 @@ export function projectRunHistory(sessionID: string, events: readonly SessionHis
     if (reduction.missing) missingMessages.add(reduction.missing)
   }
   const normalized = normalizeSessionMessages(sessionID, messages)
+  const traces = (runID: string) => {
+    const run = runs.get(runID)
+    if (!run) return []
+    const included = new Set(run.assistantIDs)
+    const assistants = normalized.messages.filter(message => message.role === "assistant" && included.has(message.id))
+    const parents = new Set(assistants.flatMap(message => message.role === "assistant" ? [message.parentID] : []))
+    const busy = !!run.summary && ["running", "recovering", "verifying"].includes(run.summary.status)
+    return normalized.messages.filter(message => message.role === "user" && parents.has(message.id)).map(user => buildExecutionTrace({
+      messages: [user, ...assistants.filter(message => message.role === "assistant" && message.parentID === user.id)],
+      parts: id => normalized.parts.get(id) ?? [],
+      status: busy ? { type: "busy" } : { type: "idle" },
+    }))
+  }
   return {
     runs: [...runs.values()].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)),
     unboundAssistantIDs: [...new Set(unboundAssistantIDs)],
     missingMessages: [...missingMessages],
-    steps(runID: string) {
-      const run = runs.get(runID)
-      if (!run) return []
-      const included = new Set(run.assistantIDs)
-      const assistants = normalized.messages.filter(message => message.role === "assistant" && included.has(message.id))
-      const parents = new Set(assistants.flatMap(message => message.role === "assistant" ? [message.parentID] : []))
-      const busy = !!run.summary && ["running", "recovering", "verifying"].includes(run.summary.status)
-      return normalized.messages.filter(message => message.role === "user" && parents.has(message.id)).flatMap(user => buildExecutionTrace({
-        messages: [user, ...assistants.filter(message => message.role === "assistant" && message.parentID === user.id)],
-        parts: id => normalized.parts.get(id) ?? [],
-        status: busy ? { type: "busy" } : { type: "idle" },
-      }).steps)
-    },
+    traces,
+    steps: (runID: string) => traces(runID).flatMap((trace) => trace.steps),
   }
 }

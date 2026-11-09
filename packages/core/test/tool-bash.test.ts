@@ -78,7 +78,8 @@ const appProcess = Layer.succeed(
           env: command.options.env,
           options,
         })
-        return runFailure ? Effect.fail(runFailure) : Effect.succeed(result)
+        if (runFailure) return Effect.fail(runFailure)
+        return (options?.onSpawn ?? Effect.void).pipe(Effect.as(result))
       }),
   } as unknown as AppProcess.Interface),
 )
@@ -241,7 +242,26 @@ describe("BashTool", () => {
               phase: "settled",
               completed: 1,
               total: 1,
+              sequence: 1,
               detail: "Shell command completed",
+            })
+
+            const failedCallID = "call-bash-spawn-failure"
+            runFailure = new AppProcess.AppProcessError({ command: "pwd", cause: new Error("Shell not found") })
+            yield* settleTool(registry, call({ command: "pwd" }, failedCallID))
+            const failed = yield* actions.load(
+              ActionGateway.stableActionID({
+                sessionID,
+                assistantMessageID: toolIdentity.assistantMessageID,
+                toolCallID: failedCallID,
+              }),
+            )
+            expect(failed.progress).toMatchObject({
+              phase: "failed",
+              completed: 1,
+              total: 1,
+              sequence: 0,
+              detail: "Unable to execute shell command",
             })
           }),
         )
@@ -462,15 +482,25 @@ describe("BashTool", () => {
     ),
   )
 
-  it.live("returns a useful timeout settlement", () =>
+  it.live("returns captured output with a real process timeout", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
-        runFailure = new AppProcess.AppProcessError({ command: "sleep", cause: new Error("Timed out") })
-        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "sleep 60", timeout: 10 }))).pipe(
+        const command = `"${process.execPath}" -e "process.stdout.write('timeout stdout');process.stderr.write('timeout stderr');setInterval(()=>{},1000)"`
+        return withTool(
+          tmp.path,
+          (registry) => settleTool(registry, call({ command, timeout: 2000 })),
+          LayerNode.compile(AppProcess.node),
+        ).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
+              const captured = settled.output?.content[0]
+              expect(captured?.type).toBe("text")
+              const text = captured?.type === "text" ? captured.text : ""
+              expect(text).toContain("timeout stdout")
+              expect(text).toContain("timeout stderr")
+              expect(text).toContain("Command exceeded timeout of 2000 ms")
               expect(settled.output?.content[1]).toMatchObject({
                 type: "text",
                 text: expect.stringContaining("Command timed out"),

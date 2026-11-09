@@ -1,13 +1,13 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, type Ref } from "solid-js"
 import { makeEventListener } from "@solid-primitives/event-listener"
-import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { IconButtonV2 } from "@arforge-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@arforge-ai/ui/v2/icon"
 import { useGlobal } from "@/context/global"
 import { useLanguage } from "@/context/language"
 import { ServerConnection, serverName } from "@/context/server"
 import { displayName, projectForSession } from "@/pages/layout/helpers"
-import { SessionTabAvatar } from "@/pages/layout/session-tab-avatar"
+import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
+import { SessionProgressIndicatorV2 } from "@arforge-ai/session-ui/v2/session-progress-indicator-v2"
 import { showToast } from "@/utils/toast"
 import type { Session } from "@arforge-ai/sdk/v2"
 import { canOpenTabRename, forwardTabRef } from "./titlebar-tab-gesture"
@@ -28,7 +28,6 @@ export function TabNavItem(props: {
   onClose: () => void
   onNavigate: () => void
   active?: boolean
-  forceTruncate?: boolean
   suppressNavigation?: () => boolean
   dragging?: boolean
   pressed?: boolean
@@ -36,11 +35,9 @@ export function TabNavItem(props: {
 }) {
   const language = useLanguage()
   const [editing, setEditing] = createSignal(false)
-  const [titleOverflowing, setTitleOverflowing] = createSignal(false)
   let tabRoot!: HTMLDivElement
   let titleEl!: HTMLSpanElement
   let committing = false
-  let measureFrame: number | undefined
 
   const closeTab = (event: MouseEvent) => {
     event.preventDefault()
@@ -57,7 +54,12 @@ export function TabNavItem(props: {
     if (!session) return
     return projectForSession(session, serverCtx()?.projects.list() ?? [])
   })
-  const title = createMemo(() => props.session()?.title ?? props.fallbackTitle)
+  const title = createMemo(() => {
+    const session = props.session()
+    if (session?.title.trim()) return session.title
+    if (props.fallbackTitle?.trim()) return props.fallbackTitle
+    if (session) return language.t("session.tab.unknown")
+  })
 
   const projectName = createMemo(() => {
     const session = props.session()
@@ -79,34 +81,6 @@ export function TabNavItem(props: {
 
   const [popoverOpen, setPopoverOpen] = createSignal(false)
   const previewBlocked = () => !!props.dragging || editing() || !!props.pressed || !props.session()
-
-  const measureTitleOverflow = () => {
-    if (!titleEl || editing()) {
-      setTitleOverflowing(false)
-      return
-    }
-    setTitleOverflowing(titleEl.scrollWidth > titleEl.clientWidth)
-  }
-
-  const scheduleTitleOverflow = () => {
-    if (measureFrame !== undefined) return
-    measureFrame = requestAnimationFrame(() => {
-      measureFrame = undefined
-      measureTitleOverflow()
-    })
-  }
-
-  createEffect(() => {
-    title()
-    props.forceTruncate
-    editing()
-    scheduleTitleOverflow()
-  })
-
-  createResizeObserver(() => tabRoot, scheduleTitleOverflow)
-  onCleanup(() => {
-    if (measureFrame !== undefined) cancelAnimationFrame(measureFrame)
-  })
 
   const selectTitle = () => {
     const range = document.createRange()
@@ -201,9 +175,8 @@ export function TabNavItem(props: {
       }}
       data-titlebar-tab
       data-slot="titlebar-tab-item"
-      data-title-overflow={titleOverflowing()}
       data-editing={editing()}
-      class="group relative flex h-8 w-full min-w-0 select-none flex-row items-center gap-2 overflow-hidden whitespace-nowrap rounded-[12px] px-2 [container-type:inline-size]"
+      class="group relative flex h-8 w-full min-w-0 select-none flex-row items-center gap-1 overflow-hidden whitespace-nowrap rounded-lg ps-2 pe-0.5"
       classList={{ invisible: props.hidden }}
       data-active={props.active}
       data-dragging={props.dragging}
@@ -223,6 +196,7 @@ export function TabNavItem(props: {
           data-slot="tab-link"
           data-titlebar-tab-link
           href={props.href}
+          aria-current={props.active ? "page" : undefined}
           draggable={false}
           onDragStart={(event) => {
             event.preventDefault()
@@ -243,25 +217,11 @@ export function TabNavItem(props: {
             if (props.suppressNavigation?.()) return
             props.onNavigate()
           }}
-          class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-faint group-data-[active='true']:text-v2-text-text-base group-data-[editing='true']:text-v2-text-text-base [-webkit-user-drag:none]"
+          class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-muted group-data-[active='true']:text-v2-text-text-base group-data-[editing='true']:text-v2-text-text-base [-webkit-user-drag:none]"
         >
-          <span data-slot="project-avatar-slot" class="flex size-4 shrink-0 items-center justify-center">
-            <Show
-              when={props.session()}
-              fallback={
-                <span class="block size-4 rounded-[3px] border border-v2-border-border-muted" aria-hidden="true" />
-              }
-            >
-              {(session) => (
-                <SessionTabAvatar
-                  project={project()}
-                  directory={session().directory}
-                  sessionId={session().id}
-                  server={props.server}
-                />
-              )}
-            </Show>
-          </span>
+          <Show when={props.session()}>
+            {(session) => <SessionTabStatus server={props.server} session={session} />}
+          </Show>
           <span
             ref={(el) => {
               titleEl = el
@@ -273,7 +233,7 @@ export function TabNavItem(props: {
             data-titlebar-tab-title
             class="min-w-0 flex-1 outline-none leading-4"
             classList={{
-              "overflow-hidden text-clip whitespace-nowrap": !editing(),
+              truncate: !editing(),
               "select-text": editing(),
             }}
             contenteditable={editing() ? true : undefined}
@@ -303,17 +263,17 @@ export function TabNavItem(props: {
         </a>
       </Show>
 
-      <div data-slot="tab-close" class="group-hover:bg-[var(--tab-bg)] group-data-[active=true]:bg-[var(--tab-bg)]">
+      <div data-slot="tab-close">
         <IconButtonV2
           size="small"
           variant="ghost-muted"
-          class="hover-reveal relative z-10 group-hover:opacity-100 group-data-[active=true]:opacity-100 group-data-[editing=true]:opacity-100"
           onPointerDown={(event) => {
             event.preventDefault()
             event.stopPropagation()
           }}
           onClick={closeTab}
           icon={<IconV2 name="xmark-small" />}
+          aria-label={language.t("common.closeTab")}
         />
       </div>
     </div>
@@ -337,6 +297,24 @@ export function TabNavItem(props: {
   )
 }
 
+function SessionTabStatus(props: { server: ServerConnection.Key; session: () => Session }) {
+  const state = useSessionTabAvatarState(() => props.server, () => props.session().directory, () => props.session().id)
+  return (
+    <>
+      <Show when={state.loading()}>
+        <SessionProgressIndicatorV2 class="size-4 shrink-0" />
+      </Show>
+      <Show when={state.unread()}>
+        <span
+          data-slot="titlebar-tab-unread"
+          class="size-1.5 shrink-0 rounded-full bg-v2-icon-icon-accent"
+          aria-hidden="true"
+        />
+      </Show>
+    </>
+  )
+}
+
 export function DraftTabItem(props: {
   ref?: Ref<HTMLDivElement>
   href: string
@@ -349,6 +327,7 @@ export function DraftTabItem(props: {
   pressed?: boolean
   hidden?: boolean
 }) {
+  const language = useLanguage()
   const closeTab = (event: MouseEvent) => {
     event.preventDefault()
     event.stopPropagation()
@@ -362,7 +341,7 @@ export function DraftTabItem(props: {
       data-active={props.active}
       data-dragging={props.dragging}
       data-pressed={props.pressed}
-      class="group relative flex h-[30px] w-full min-w-0 flex-row items-center gap-1.5 overflow-hidden rounded-[8px] px-1.5 [container-type:inline-size] whitespace-nowrap"
+      class="group relative flex h-8 w-full min-w-0 flex-row items-center gap-1 overflow-hidden rounded-lg ps-2 pe-0.5 whitespace-nowrap"
       classList={{ invisible: props.hidden }}
       onMouseDown={(event) => {
         if (event.button !== MIDDLE_MOUSE_BUTTON) return
@@ -378,6 +357,7 @@ export function DraftTabItem(props: {
         data-slot="tab-link"
         data-titlebar-tab-link
         href={props.href}
+        aria-current={props.active ? "page" : undefined}
         draggable={false}
         onDragStart={(event) => {
           event.preventDefault()
@@ -396,19 +376,16 @@ export function DraftTabItem(props: {
           if (props.suppressNavigation?.()) return
           props.onNavigate()
         }}
-        class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-faint group-data-[active='true']:text-v2-text-text-base [-webkit-user-drag:none]"
+        class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 text-[13px] font-medium text-v2-text-text-muted group-data-[active='true']:text-v2-text-text-base [-webkit-user-drag:none]"
       >
-        <span class="flex size-4 shrink-0 items-center justify-center">
-          <IconV2 name="edit" />
-        </span>
         <span
           data-titlebar-tab-title
-          class="min-w-0 flex-1 overflow-hidden text-clip whitespace-nowrap outline-none leading-4"
+          class="min-w-0 flex-1 truncate outline-none leading-4"
         >
           {props.title}
         </span>
       </a>
-      <div data-slot="tab-close" class="group-hover:bg-[var(--tab-bg)] group-data-[active=true]:bg-[var(--tab-bg)]">
+      <div data-slot="tab-close">
         <IconButtonV2
           size="small"
           variant="ghost-muted"
@@ -420,10 +397,9 @@ export function DraftTabItem(props: {
             event.preventDefault()
             event.stopPropagation()
           }}
-          class="hover-reveal relative z-10 group-hover:opacity-100 group-data-[active=true]:opacity-100 group-data-[editing=true]:opacity-100"
           onClick={closeTab}
           icon={<IconV2 name="xmark-small" />}
-          aria-label="Close tab"
+          aria-label={language.t("common.closeTab")}
         />
       </div>
     </div>

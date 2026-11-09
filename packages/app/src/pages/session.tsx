@@ -56,7 +56,7 @@ import { useNotification } from "@/context/notification"
 import { PromptProvider, usePrompt } from "@/context/prompt"
 import { usePlatform } from "@/context/platform"
 import { SDKProvider, useSDK } from "@/context/sdk"
-import { useServerSDK } from "@/context/server-sdk"
+import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import { ServerConnection, serverName, useServer } from "@/context/server"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
@@ -68,7 +68,12 @@ import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/
 import { useSettingsCommand } from "@/components/settings-dialog"
 import { setCursorPosition } from "@/components/prompt-input/editor-dom"
 import { promptLength } from "@/components/prompt-input/history"
-import { durableFollowupPrompt, promptQueueSubmitting, type FollowupDraft } from "@/components/prompt-input/submit"
+import {
+  durableFollowupPrompt,
+  matchesQueuedDraft,
+  promptQueueSubmitting,
+  type FollowupDraft,
+} from "@/components/prompt-input/submit"
 import type { OperationsApi } from "@/utils/server"
 import {
   createPromptInputController,
@@ -101,7 +106,8 @@ import { SessionSidePanel } from "@/pages/session/session-side-panel"
 import { SessionExecutionDock } from "@/pages/session/session-execution-dock"
 import { SessionExecutionOverlay } from "@/pages/session/session-execution-overlay"
 import { SessionExecutionStatusBar } from "@/pages/session/session-execution-status-bar"
-import { buildExecutionTrace, type ExecutionTraceStep } from "@/pages/session/execution-trace-model"
+import { buildExecutionTrace, executionPhaseLabel, executionToolKey } from "@/pages/session/execution-trace-model"
+import { projectExecutionEvidence } from "@/pages/session/execution-evidence"
 import { SessionReviewEmptyChangesV2 } from "@arforge-ai/session-ui/v2/session-review-empty-changes-v2"
 import { SessionReviewEmptyNoGitV2 } from "@arforge-ai/session-ui/v2/session-review-empty-no-git-v2"
 import { SessionReviewV2SidebarToggle } from "@arforge-ai/session-ui/v2/session-review-v2"
@@ -130,7 +136,6 @@ import { SessionGoalDock } from "./session/goal/session-goal-dock"
 type FollowupItem = FollowupDraft & { id: string }
 type DurableFollowupItem = Awaited<ReturnType<OperationsApi["sessions"]["promptQueueList"]>>[number]
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
-const emptyFollowups: FollowupItem[] = []
 
 type ChangeMode = "git" | "branch" | "turn"
 type VcsMode = "git" | "branch"
@@ -570,35 +575,41 @@ export default function Page() {
   })
   const executionTrace = createMemo(() => {
     const sessionID = params.id
-    if (!sessionID) {
-      return {
-        steps: [] as ExecutionTraceStep[],
-        status: "idle" as const,
-        completed: 0,
-        failed: 0,
-      }
-    }
     return buildExecutionTrace({
-      messages: sync().data.message[sessionID] ?? [],
+      messages: sessionID ? sync().data.message[sessionID] ?? [] : [],
       parts: (messageID) => sync().data.part[messageID] ?? [],
-      status: sync().data.session_status[sessionID] ?? { type: "idle" },
+      status: sessionID ? sync().data.session_status[sessionID] ?? { type: "idle" } : { type: "idle" },
+      permission: composer.permissionRequest(),
     })
   })
-  const executionRunning = createMemo(() => executionTrace().status !== "idle")
+  const executionEvidence = createMemo(() => projectExecutionEvidence([executionTrace()], sdk().directory))
+  const executionRunning = createMemo(() => executionTrace().status !== "idle" || executionTrace().phase === "approval")
   const executionStatusLabel = createMemo(() => {
-    const chinese = language.locale() === "zh" || language.locale() === "zht"
+    const chinese = language.locale().startsWith("zh")
+    if (executionTrace().phase === "approval") return executionPhaseLabel("approval", chinese)
     if (composer.permissionRequest()) return chinese ? "等待你批准权限" : "Waiting for your permission"
     if (composer.questionRequest()) return chinese ? "等待你回答问题" : "Waiting for your answer"
-    if (executionTrace().status === "retry") return chinese ? "请求失败，正在重试" : "Request failed; retrying"
-    if (executionRunning()) return chinese ? "Arforge 正在执行" : "Arforge is working"
-    if (executionTrace().failed > 0) return chinese ? "本轮已结束，存在失败步骤" : "Finished with failed steps"
-    if (executionTrace().steps.length > 0) return chinese ? "本轮执行完成" : "Execution complete"
-    return chinese ? "准备就绪" : "Ready"
+    return executionPhaseLabel(executionTrace().phase, chinese)
   })
-  const executionStepCountLabel = createMemo(() => {
-    const count = executionTrace().steps.length
-    return language.locale() === "zh" || language.locale() === "zht" ? count + " 步" : count + " steps"
-  })
+  const reviewExecutionApproval = (requestID: string) => {
+    const approval = executionTrace().approval
+    if (approval?.request.id !== requestID || !executionDock.current?.()) return
+    const owner = sessionOwnership.capture()
+    const source = serverSDK()
+    setExecutionOpened(false)
+    requestAnimationFrame(() => {
+      if (!owner.current() || source !== serverSDK()) return
+      const request = composer.permissionRequest()
+      const activeApproval = executionTrace().approval
+      if (request?.id !== requestID || request.sessionID !== approval.request.sessionID ||
+        !activeApproval || executionToolKey(activeApproval.tool) !== executionToolKey(approval.tool)) return
+      const target = promptDock?.querySelector<HTMLElement>("[data-session-permission-request]")
+      if (target?.dataset.sessionPermissionRequest !== requestID ||
+        target.dataset.sessionPermissionSession !== request.sessionID || !target.isConnected) return
+      target.focus({ preventScroll: true })
+      target.scrollIntoView({ block: "nearest" })
+    })
+  }
   const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const desktopV2ReviewOpen = createMemo(() => newSessionDesign() && desktopReviewOpen() && !!params.id)
   const terminalOpen = createMemo(() => view().terminal.opened())
@@ -1970,9 +1981,10 @@ export default function Page() {
   )
   const followupQueueQuery = createQuery(() => {
     const sessionID = params.id
+    const sessions = serverSDK().operationsApi.sessions
     return {
       queryKey: followupQueueKey(),
-      queryFn: sessionID ? () => serverSDK().operationsApi.sessions.promptQueueList({ sessionID }) : skipToken,
+      queryFn: sessionID ? () => sessions.promptQueueList({ sessionID }) : skipToken,
       refetchInterval: 1_000,
     }
   })
@@ -1980,7 +1992,12 @@ export default function Page() {
 
   const durableDraft = (item: DurableFollowupItem): FollowupDraft => {
     const cached = followup.drafts[item.id]
-    if (cached) return cached
+    if (
+      cached?.sessionDirectory === sdk().directory &&
+      (cached.serverScope === undefined || cached.serverScope === sdk().scope) &&
+      matchesQueuedDraft(cached, item)
+    )
+      return cached
     const route = item.prompt.route
     const previous = lastUserMessage()
     const promptParts = queuedPromptParts(item)
@@ -1997,59 +2014,76 @@ export default function Page() {
     }
   }
 
-  const queuedFollowups = createMemo(() => {
-    const items = followupQueueQuery.data
-    if (!items) return emptyFollowups
-    return items.map((item) => ({ id: item.id, ...durableDraft(item) }))
-  })
-
   const editingFollowup = createMemo(() => {
     const id = params.id
     if (!id) return
     return followup.edit[id]
   })
 
+  type FollowupAction = {
+    action: "send" | "guide" | "delete"
+    sessionID: string
+    messageID: string
+    expectedAdmittedSeq: number
+    source: ServerSDK
+    owner: ReturnType<typeof sessionOwnership.capture>
+    queryKey: ReturnType<typeof followupQueueKey>
+    editGeneration?: string
+  }
+
+  const currentFollowupAction = (input: FollowupAction) => input.owner.current() && serverSDK() === input.source
   const followupMutation = useMutation(() => ({
-    mutationFn: async (input: { sessionID: string; id: string; manual?: boolean }) => {
-      const owner = sessionOwnership.capture()
-      const item = followupQueueQuery.data?.find((entry) => entry.id === input.id)
-      if (!item) return
+    mutationFn: async (input: FollowupAction) => {
+      if (!currentFollowupAction(input)) return
+      const { action, sessionID, messageID, expectedAdmittedSeq } = input
+      const sessions = input.source.operationsApi.sessions
+      const target = { sessionID, messageID, expectedAdmittedSeq }
+      setFollowup("failed", sessionID, undefined)
+      try {
+        if (action === "guide") await sessions.promptQueueSteer(target)
+        else if (action === "delete") await sessions.promptQueueRemove(target)
+        else await sessions.wait({ sessionID })
 
-      if (input.manual) setFollowup("paused", input.sessionID, undefined)
-      setFollowup("failed", input.sessionID, undefined)
-
-      await serverSDK()
-        .operationsApi.sessions.wait({ sessionID: input.sessionID })
-        .catch((err) => {
-          setFollowup("failed", input.sessionID, input.id)
-          fail(err)
-          throw err
+        if (!currentFollowupAction(input)) return
+        if (action === "send") {
+          setFollowup("paused", sessionID, undefined)
+          resumeScroll()
+          return
+        }
+        if (action === "delete") setFollowup("drafts", messageID, undefined)
+        const editing = followup.editTarget[sessionID]
+        if (editing?.id === messageID && editing.admittedSeq === expectedAdmittedSeq && editing.generation === input.editGeneration) {
+          setFollowup("editTarget", sessionID, undefined)
+          setFollowup("edit", sessionID, undefined)
+        }
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: input.queryKey, exact: true }).catch((err) => {
+          if (currentFollowupAction(input)) fail(err)
         })
-
-      await queryClient.invalidateQueries({ queryKey: followupQueueKey() })
-      if (input.manual) owner.run(resumeScroll)
+      }
+    },
+    onError: (err, input) => {
+      if (!currentFollowupAction(input)) return
+      setFollowup("failed", input.sessionID, input.messageID)
+      fail(err)
     },
   }))
 
-  const followupBusy = (sessionID: string) =>
-    followupMutation.isPending && followupMutation.variables?.sessionID === sessionID
-
   const sendingFollowup = createMemo(() => {
-    const id = params.id
-    if (!id) return
-    if (!followupBusy(id)) return
-    return followupMutation.variables?.id
+    const input = followupMutation.variables
+    if (!followupMutation.isPending || !input || !currentFollowupAction(input)) return
+    return input.messageID
   })
 
   const queueEnabled = createMemo(() => {
     const id = params.id
     if (!id) return false
     if (composer.blocked() || isChildSession()) return false
-    return !!followup.editTarget[id] || (settings.general.followup() === "queue" && busy(id))
+    return !!followup.editTarget[id] || busy(id)
   })
 
-  const followupText = (item: FollowupDraft) => {
-    const text = item.prompt
+  const followupText = (item: DurableFollowupItem) => {
+    const text = queuedPromptParts(item)
       .map((part) => {
         if (part.type === "image") return `[image:${part.filename}]`
         if (part.type === "file") return `[file:${part.path}]`
@@ -2150,21 +2184,37 @@ export default function Page() {
     }
   })
 
-  const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
+  const followupDock = createMemo(() =>
+    (followupQueueQuery.data ?? []).map((item) => ({
+      id: item.id,
+      admittedSeq: item.admittedSeq,
+      text: followupText(item),
+    })),
+  )
 
-  const sendFollowup = (sessionID: string, id: string, opts?: { manual?: boolean }) => {
-    if (sync().session.get(sessionID)?.parentID) return Promise.resolve()
-    const item = followupQueueQuery.data?.find((entry) => entry.id === id)
-    if (!item) return Promise.resolve()
-    if (followupBusy(sessionID)) return Promise.resolve()
+  const actOnFollowup = (action: FollowupAction["action"], id: string, expectedAdmittedSeq?: number) => {
+    const sessionID = params.id
+    if (!sessionID || isChildSession() || sendingFollowup() || promptQueueSubmitting(prompt.capture())) return
+    if (action !== "delete" && (composer.blocked() || busy(sessionID) !== (action === "guide"))) return
+    const item = followupQueueQuery.data?.find((entry) => entry.sessionID === sessionID && entry.id === id)
+    if (!item || (expectedAdmittedSeq !== undefined && item.admittedSeq !== expectedAdmittedSeq)) return
 
-    return followupMutation.mutateAsync({ sessionID, id, manual: opts?.manual })
+    followupMutation.mutate({
+      action,
+      sessionID,
+      messageID: item.id,
+      expectedAdmittedSeq: item.admittedSeq,
+      source: serverSDK(),
+      owner: sessionOwnership.capture(),
+      queryKey: followupQueueKey(),
+      editGeneration: followup.editTarget[sessionID]?.generation,
+    })
   }
 
   const editFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
+    if (sendingFollowup() || promptQueueSubmitting(prompt.capture())) return
 
     const stored = followupQueueQuery.data?.find((entry) => entry.id === id)
     if (!stored) return
@@ -2552,15 +2602,21 @@ export default function Page() {
                 collapsed: () => view().todoCollapsed.get(),
                 onToggle: () => view().todoCollapsed.set(!view().todoCollapsed.get()),
               },
-              followup: () =>
-                params.id && !isChildSession()
-                  ? {
-                      items: followupDock(),
-                      sending: sendingFollowup(),
-                      onSend: (id) => void sendFollowup(params.id!, id, { manual: true }),
-                      onEdit: editFollowup,
-                    }
-                  : undefined,
+              followup: () => {
+                const sessionID = params.id
+                if (!sessionID || isChildSession()) return
+                const working = busy(sessionID)
+                const available = !composer.blocked()
+                return {
+                  items: followupDock(),
+                  sending: sendingFollowup(),
+                  disabled: promptQueueSubmitting(prompt.capture()),
+                  onSend: available && !working ? (id) => actOnFollowup("send", id) : undefined,
+                  onGuide: available && working ? (id, sequence) => actOnFollowup("guide", id, sequence) : undefined,
+                  onEdit: editFollowup,
+                  onDelete: (id, sequence) => actOnFollowup("delete", id, sequence),
+                }
+              },
               revert: () =>
                 rolled().length > 0
                   ? {
@@ -2699,16 +2755,6 @@ export default function Page() {
         executionStepCount={executionTrace().steps.length}
         onOpenExecution={() => setExecutionOpened(!executionDock.opened)}
       />
-      <Show when={executionDockVisible() && (executionRunning() || executionTrace().steps.length > 0)}>
-        <SessionExecutionStatusBar
-          steps={executionTrace().steps}
-          running={executionRunning()}
-          stepCount={executionTrace().steps.length}
-          label={executionStatusLabel()}
-          countLabel={executionStepCountLabel()}
-          onOpen={() => setExecutionOpened(!executionDock.opened)}
-        />
-      </Show>
       <div
         ref={panelRow}
         class="relative flex-1 min-h-0 flex flex-col md:flex-row"
@@ -2849,11 +2895,28 @@ export default function Page() {
               current={() => executionDock.current === current && current()}
               onClose={() => setExecutionOpened(false)}
             >
-              <SessionExecutionDock opened onOpenChange={setExecutionOpened} />
+              <SessionExecutionDock
+                opened
+                onOpenChange={setExecutionOpened}
+                trace={executionTrace()}
+                evidence={executionEvidence()}
+                directory={sdk().directory}
+                onReviewApproval={reviewExecutionApproval}
+              />
             </SessionExecutionOverlay>
           )}
         </Show>
       </div>
+
+      <Show when={executionDockVisible() && executionTrace().phase !== "idle"}>
+        <SessionExecutionStatusBar
+          trace={executionTrace()}
+          evidence={executionEvidence()}
+          label={executionStatusLabel()}
+          opened={executionDock.opened}
+          onOpen={() => setExecutionOpened(!executionDock.opened)}
+        />
+      </Show>
 
       <Show when={newSessionDesign() && terminalOpen()}>
         <section

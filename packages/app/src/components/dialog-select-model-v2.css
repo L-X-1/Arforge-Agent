@@ -213,7 +213,7 @@
 .arforge-model-picker__strength {
   flex: none;
   min-width: 0;
-  max-height: min(180px, calc(var(--model-viewport-height, 100dvh) * 0.32));
+  max-height: min(300px, calc(var(--model-viewport-height, 100dvh) * 0.43));
   overflow: auto;
   margin-top: 8px;
   border-top: 1px solid var(--v2-border-border-muted);
@@ -255,94 +255,27 @@
   line-height: 16px;
   overflow-wrap: anywhere;
 }
-.arforge-model-picker__strength-range {
+.arforge-model-picker__strength-options {
   position: relative;
-  padding: 0 10px;
-  isolation: isolate;
 }
-.arforge-model-picker__strength-rail {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  right: 10px;
-  height: 24px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--v2-green-500), var(--v2-cyan-500) 50%, var(--v2-blue-600));
+.arforge-model-picker__strength-input {
   pointer-events: none;
 }
-.arforge-model-picker__strength-range input[type="range"] {
-  position: relative;
-  z-index: 2;
-  appearance: none;
+.arforge-model-picker__strength-motion {
   display: block;
-  width: 100%;
-  height: 44px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
+  min-height: 28px;
+  margin: 2px 2px 4px auto;
+  padding: 3px 8px;
+  border: 1px solid var(--v2-border-border-muted);
+  border-radius: 7px;
+  color: var(--v2-text-text-muted);
+  font-size: 12px !important;
 }
-.arforge-model-picker__strength-range input::-webkit-slider-runnable-track {
-  height: 24px;
-  border-radius: 999px;
-  background: transparent;
+.arforge-model-picker__strength-motion:hover:not([aria-disabled="true"]) {
+  background: var(--v2-overlay-simple-overlay-hover);
 }
-.arforge-model-picker__strength-range input::-moz-range-track {
-  height: 24px;
-  border-radius: 999px;
-  background: transparent;
-}
-.arforge-model-picker__strength-range input::-moz-range-progress {
-  background: transparent;
-}
-.arforge-model-picker__strength-range input::-webkit-slider-thumb {
-  appearance: none;
-  width: 28px;
-  height: 28px;
-  margin-top: -2px;
-  border-radius: 50%;
-  border: 0;
-  background: var(--white, #fff);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
-}
-.arforge-model-picker__strength-range input::-moz-range-thumb {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 0;
-  background: var(--white, #fff);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
-}
-.arforge-model-picker__strength-range[data-mode-selected="true"] input::-webkit-slider-thumb {
-  opacity: 0;
-}
-.arforge-model-picker__strength-range[data-mode-selected="true"] input::-moz-range-thumb {
-  opacity: 0;
-}
-.arforge-model-picker__strength-range[data-disabled="true"] .arforge-model-picker__strength-rail {
-  background: var(--v2-border-border-muted);
-}
-.arforge-model-picker__strength-range input:disabled {
-  opacity: 0.6;
+.arforge-model-picker__strength-motion[aria-disabled="true"] {
   cursor: default;
-}
-.arforge-model-picker__strength-ticks {
-  position: absolute;
-  z-index: 1;
-  top: 20px;
-  left: 24px;
-  right: 24px;
-  display: flex;
-  justify-content: space-between;
-  pointer-events: none;
-}
-.arforge-model-picker__strength-ticks span {
-  height: 4px;
-  width: 4px;
-  border-radius: 50%;
-  background: rgb(255 255 255 / 70%);
-}
-.arforge-model-picker__strength-ticks span:is([data-selected="true"], [data-preview="true"]) {
-  background: var(--white, #fff);
 }
 .arforge-model-picker__strength-modes {
   display: flex;
@@ -450,6 +383,7 @@
     .arforge-model-picker__group,
     .arforge-model-picker__action,
     .arforge-model-picker__clear,
+    .arforge-model-picker__strength-motion,
     .arforge-model-picker__strength-mode
   ) {
   min-height: 44px;
@@ -515,24 +449,6 @@
   }
   .arforge-model-picker__row[data-selected-model="true"] {
     border: 1px solid Highlight;
-  }
-  .arforge-model-picker__strength-range input[type="range"] {
-    appearance: auto;
-  }
-  .arforge-model-picker__strength-rail,
-  .arforge-model-picker__strength-ticks {
-    display: none;
-  }
-  .arforge-model-picker__strength-range input::-webkit-slider-thumb,
-  .arforge-model-picker__strength-range[data-mode-selected="true"] input::-webkit-slider-thumb {
-    appearance: auto;
-    opacity: 1;
-    background: ButtonText;
-  }
-  .arforge-model-picker__strength-range input::-moz-range-thumb,
-  .arforge-model-picker__strength-range[data-mode-selected="true"] input::-moz-range-thumb {
-    opacity: 1;
-    background: ButtonText;
   }
   .arforge-model-picker__strength-mode[aria-pressed="true"] {
     border-color: Highlight;

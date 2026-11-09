@@ -52,6 +52,8 @@ import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 import { normalizeSessionInfo } from "@/utils/session"
 import type { ServerProtocol } from "@/utils/server-protocol"
 import { assertBootstrapReadCurrent, retryBootstrapRead } from "./bootstrap-read"
+import { Model } from "@arforge-ai/schema/model"
+import { Option, Schema } from "effect"
 
 type GlobalStore = {
   ready: boolean
@@ -62,6 +64,8 @@ type GlobalStore = {
   config: Config
   reload: undefined | "pending" | "complete"
 }
+
+const decodeExactAliases = Schema.decodeUnknownOption(Schema.Array(Model.Info))
 
 function waitForPaint() {
   return new Promise<void>((resolve) => {
@@ -247,7 +251,8 @@ export const loadProvidersQuery = (
           sdk.model.list(location),
           sdk.model.default(location),
         ])
-        return normalizeProviderList(providers.data, models.data, defaultModel.data)
+        const exactAliases = "exactAliases" in models ? Option.getOrUndefined(decodeExactAliases(models.exactAliases)) : undefined
+        return normalizeProviderList(providers.data, models.data, defaultModel.data, exactAliases)
       }),
   })
 

@@ -48,6 +48,12 @@ The App and generated clients use the typed HTTP API. Core owns session
 execution, persistence, and capability authorization. Use the CLI entry point
 in `packages/arforge/src/index.ts` for terminal or scripted use.
 
+Session evidence follows the same boundaries. Core records tool outcomes and
+session events, Schema and Protocol define their public shape, and the App
+presents those records in the execution panel. The server's private operations
+projection reads local backup and recovery state for the App. Backup scheduling
+and restore drills live in the repository scripts.
+
 ## Evidence
 
 `artifacts/` contains only small, curated evidence that is useful for review or
@@ -58,8 +64,9 @@ Keep raw acceptance runs local. This includes screenshots, recordings,
 automation traces, staged profiles, fixture workspaces, and build directories,
 including run output created beneath `docs/ui-redesign/`. Share a curated
 report only after removing account identifiers, provider endpoints, machine
-paths, and other personal data. Keep the source for reusable fixtures beside
-the tests that use them.
+paths, and other personal data. Keep original backup manifests, recovery drill
+reports, and task scheduler output in private storage alongside their related
+operations data. Keep reusable fixture source beside the tests that use it.
 
 Before publishing a fixture derived from a local run, replace account data,
 machine paths, request context, and provider error text with synthetic values.

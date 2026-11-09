@@ -317,7 +317,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           OpenApi.annotations({
             identifier: "v2.session.prompt",
             summary: "Send message",
-            description: "Durably admit one session input and schedule agent-loop execution unless resume is false.",
+            description: "Validate the selected model for fresh execution, then durably admit the input and schedule the agent loop unless resume is false.",
           }),
         ),
     )
@@ -405,6 +405,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             description: "Remove one unpromoted durable queue entry.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.promptQueueSteer", "/api/session/:sessionID/prompt/queue/:messageID/steer", {
+        params: { sessionID: Session.ID, messageID: SessionMessage.ID },
+        payload: Schema.Struct({ expectedAdmittedSeq: NonNegativeInt }),
+        success: Schema.Struct({ data: SessionInput.Admitted }),
+        error: [MessageNotFoundError, SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(OpenApi.annotations({
+          identifier: "v2.session.promptQueueSteer",
+          summary: "Steer a queued prompt",
+          description: "Move one unpromoted durable queue entry to the next steer boundary without interrupting execution.",
+        })),
     )
     .add(
       HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {

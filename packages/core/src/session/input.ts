@@ -4,7 +4,8 @@ import { and, asc, eq, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Admitted, Delivery } from "@arforge-ai/schema/session-input"
 import { Database } from "../database/database"
-import type { EventV2 } from "../event"
+import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
@@ -32,6 +33,25 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
   const row = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie)
   return row === undefined ? undefined : fromRow(row)
+})
+
+/** Guide changes delivery in the inbox, while the original POST keeps its immutable retry identity. */
+export const originalQueueAdmission = Effect.fn("SessionInput.originalQueueAdmission")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  item: Admitted,
+) {
+  if (item.sessionID !== sessionID || item.delivery !== "steer") return undefined
+  const row = yield* db.select({ data: EventTable.data }).from(EventTable).where(and(
+    eq(EventTable.aggregate_id, sessionID),
+    eq(EventTable.seq, item.admittedSeq),
+    eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)),
+  )).get().pipe(Effect.orDie)
+  if (!row) return undefined
+  const admitted = Schema.decodeUnknownSync(SessionEvent.PromptAdmitted.data)(row.data)
+  if (admitted.sessionID !== sessionID || admitted.messageID !== item.id || admitted.delivery !== "queue")
+    return undefined
+  return Admitted.make({ ...item, prompt: admitted.prompt, delivery: admitted.delivery })
 })
 
 export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict>()("SessionInput.LifecycleConflict", {
@@ -285,6 +305,20 @@ export const projectQueueRemoved = Effect.fn("SessionInput.projectQueueRemoved")
   if (!removed) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
 })
 
+export const projectQueueSteered = Effect.fn("SessionInput.projectQueueSteered")(function* (
+  db: DatabaseService,
+  input: Pick<SessionEvent.PromptQueueSteered["data"], "messageID" | "sessionID" | "expectedAdmittedSeq">,
+) {
+  const updated = yield* db.update(SessionInputTable).set({ delivery: "steer" }).where(and(
+    eq(SessionInputTable.id, input.messageID),
+    eq(SessionInputTable.session_id, input.sessionID),
+    eq(SessionInputTable.admitted_seq, input.expectedAdmittedSeq),
+    isNull(SessionInputTable.promoted_seq),
+    eq(SessionInputTable.delivery, "queue"),
+  )).returning({ id: SessionInputTable.id }).get().pipe(Effect.orDie)
+  if (!updated) return yield* Effect.die(new LifecycleConflict({ id: input.messageID }))
+})
+
 const queuedOrFail = Effect.fn("SessionInput.queuedOrFail")(function* (
   db: DatabaseService,
   input: {
@@ -309,6 +343,11 @@ const queuedOrFail = Effect.fn("SessionInput.queuedOrFail")(function* (
   return current
 })
 
+const rejectRetiredQueueItem = (input: { sessionID: SessionSchema.ID; messageID: SessionMessage.ID }) =>
+  Effect.catchDefect((defect) => defect instanceof LifecycleConflict
+    ? new QueuedPromptNotFoundError(input)
+    : Effect.die(defect))
+
 export const updateQueued = Effect.fn("SessionInput.updateQueued")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -327,7 +366,7 @@ export const updateQueued = Effect.fn("SessionInput.updateQueued")(function* (
     prompt: input.prompt,
     delivery: "queue",
     expectedAdmittedSeq: input.expectedAdmittedSeq,
-  })
+  }).pipe(rejectRetiredQueueItem(input))
   const updated = yield* find(db, input.messageID)
   if (!updated) return yield* Effect.die(new LifecycleConflict({ id: input.messageID }))
   return updated
@@ -348,7 +387,41 @@ export const removeQueued = Effect.fn("SessionInput.removeQueued")(function* (
     messageID: input.messageID,
     timestamp: yield* DateTime.now,
     expectedAdmittedSeq: input.expectedAdmittedSeq,
+  }).pipe(rejectRetiredQueueItem(input))
+})
+
+export const steerQueued = Effect.fn("SessionInput.steerQueued")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: Pick<SessionEvent.PromptQueueSteered["data"], "messageID" | "sessionID" | "expectedAdmittedSeq">,
+) {
+  const matches = (item: Admitted | undefined): item is Admitted =>
+    item !== undefined && item.sessionID === input.sessionID && item.admittedSeq === input.expectedAdmittedSeq
+  const alreadySteered = Effect.gen(function* () {
+    const current = yield* find(db, input.messageID)
+    if (matches(current) && current.delivery === "steer") {
+      const history = yield* EventV2.readSerialized(db, {
+        aggregateIDs: [input.sessionID],
+        types: [EventV2.versionedType(SessionEvent.PromptQueueSteered.type, 1)],
+      })
+      if (history.some(({ data }) => data.messageID === input.messageID && data.expectedAdmittedSeq === input.expectedAdmittedSeq))
+        return current
+    }
+    return yield* new QueuedPromptNotFoundError(input)
   })
+  const current = yield* find(db, input.messageID)
+  if (!matches(current) || current.delivery !== "queue" || current.promotedSeq !== undefined) return yield* alreadySteered
+  return yield* events.publish(SessionEvent.PromptQueueSteered, {
+    ...input,
+    timestamp: yield* DateTime.now,
+  }).pipe(
+    Effect.flatMap(() => find(db, input.messageID)),
+    Effect.map((admitted) => {
+      if (!matches(admitted) || admitted.delivery !== "steer") throw new LifecycleConflict({ id: input.messageID })
+      return admitted
+    }),
+    Effect.catchDefect((defect) => defect instanceof LifecycleConflict ? alreadySteered : Effect.die(defect)),
+  )
 })
 
 export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
@@ -370,6 +443,16 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
     .get()
     .pipe(Effect.orDie)
   return row !== undefined
+})
+
+export const pendingDeliveries = Effect.fn("SessionInput.pendingDeliveries")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db.select({ delivery: SessionInputTable.delivery }).from(SessionInputTable)
+    .where(and(eq(SessionInputTable.session_id, sessionID), isNull(SessionInputTable.promoted_seq)))
+    .groupBy(SessionInputTable.delivery).all().pipe(Effect.orDie)
+  return rows.map(({ delivery }) => delivery)
 })
 
 export const equivalent = (
@@ -397,51 +480,46 @@ const matchesProjection = (
   equivalent(input, expected) &&
   DateTime.toEpochMillis(input.timeCreated) === DateTime.toEpochMillis(expected.timeCreated)
 
-const publish = Effect.fn("SessionInput.publish")(function* (
+/** Commit the sampled routes and inputs together. A losing sample publishes nothing. */
+export const promoteSelected = Effect.fn("SessionInput.promoteSelected")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionInputTable.$inferSelect>,
 ) {
-  for (const row of rows) {
-    const id = SessionMessage.ID.make(row.id)
-    const prompt = decodePrompt(row.prompt)
-    const timestamp = DateTime.makeUnsafe(row.time_created)
-    if (prompt.route?.agent !== undefined) {
-      yield* events.publish(SessionEvent.AgentSwitched, {
-        sessionID,
-        timestamp,
-        messageID: SessionMessage.ID.create(),
-        agent: prompt.route.agent,
-      })
+  if (rows.length === 0) return 0
+  return yield* db.transaction(() => Effect.gen(function* () {
+    // Lock the sampled inbox rows before publishing route events. Queue
+    // edits, deletions and Guide all acquire these same row locks before
+    // writing the aggregate sequence, including on PostgreSQL.
+    const selected = rows.map(fromRow)
+    for (const item of selected) {
+      const locked = yield* db.update(SessionInputTable).set({ delivery: item.delivery }).where(and(
+        eq(SessionInputTable.id, item.id),
+        eq(SessionInputTable.session_id, sessionID),
+        eq(SessionInputTable.admitted_seq, item.admittedSeq),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, item.delivery),
+      )).returning().get().pipe(Effect.orDie)
+      if (!locked || !matchesProjection(fromRow(locked), item))
+        return yield* Effect.die(new LifecycleConflict({ id: item.id }))
     }
-    if (prompt.route?.model !== undefined) {
-      yield* events.publish(SessionEvent.ModelSwitched, {
-        sessionID,
-        timestamp,
-        messageID: SessionMessage.ID.create(),
-        model: prompt.route.model,
-      })
+    for (const { id, prompt, delivery, timeCreated: timestamp } of selected) {
+      if (prompt.route?.agent !== undefined)
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID, timestamp, messageID: SessionMessage.ID.create(), agent: prompt.route.agent,
+        })
+      if (prompt.route?.model !== undefined)
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID, timestamp, messageID: SessionMessage.ID.create(), model: prompt.route.model,
+        })
+      yield* events.publish(SessionEvent.Prompted, { sessionID, timestamp, messageID: id, prompt, delivery })
     }
-    yield* events
-      .publish(SessionEvent.Prompted, {
-        sessionID,
-        timestamp,
-        messageID: id,
-        prompt,
-        delivery: row.delivery,
-      })
-      .pipe(
-        Effect.catchDefect((defect) =>
-          defect instanceof LifecycleConflict
-            ? find(db, id).pipe(
-                Effect.flatMap((stored) => (stored?.promotedSeq === undefined ? Effect.die(defect) : Effect.void)),
-              )
-            : Effect.die(defect),
-        ),
-      )
-  }
-  return rows.length
+    return rows.length
+  }), { behavior: "immediate" }).pipe(
+    Effect.orDie,
+    Effect.catchDefect((defect) => defect instanceof LifecycleConflict ? Effect.succeed(0) : Effect.die(defect)),
+  )
 })
 
 export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
@@ -464,7 +542,7 @@ export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows)
+  return yield* promoteSelected(db, events, sessionID, rows)
 })
 
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
@@ -488,5 +566,5 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  return row === undefined ? false : yield* publish(db, events, sessionID, [row]).pipe(Effect.as(true))
+  return row === undefined ? false : (yield* promoteSelected(db, events, sessionID, [row])) > 0
 })

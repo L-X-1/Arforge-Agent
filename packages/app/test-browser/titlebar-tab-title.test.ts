@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, mock, test } from "bun:test"
 import { plugin } from "bun"
 import { createRequire } from "node:module"
-import { createComponent, type JSX } from "solid-js"
+import { createComponent, createSignal, type JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { ArforgeClient, Session } from "@arforge-ai/sdk/v2/client"
 import type { SessionEvent } from "@arforge-ai/schema/session-event"
@@ -9,6 +9,9 @@ import type { ServerConnection } from "@/context/server"
 import { createServerSession } from "@/context/server-session"
 
 let TabNavItem: typeof import("@/components/titlebar-tab-nav")["TabNavItem"]
+let DraftTabItem: typeof import("@/components/titlebar-tab-nav")["DraftTabItem"]
+const [unread, setUnread] = createSignal(false)
+const [working, setWorking] = createSignal(false)
 let cache: ReturnType<typeof createServerSession>
 const disposals: (() => void)[] = []
 const requests: { sessionID: string; title: string }[] = []
@@ -56,22 +59,30 @@ beforeAll(async () => {
   }) }))
   mock.module("@/context/server", () => ({ ServerConnection: { key: () => "sidecar" }, serverName: () => "Local" }))
   mock.module("@/pages/layout/helpers", () => ({ projectForSession: () => undefined, displayName: () => "workspace" }))
-  mock.module("@/pages/layout/session-tab-avatar", () => ({ SessionTabAvatar: () => document.createElement("span") }))
+  mock.module("@/pages/layout/project-avatar-state", () => ({ useSessionTabAvatarState: () => ({ unread, loading: working }) }))
+  mock.module("@arforge-ai/session-ui/v2/session-progress-indicator-v2", () => ({ SessionProgressIndicatorV2: () => {
+    const indicator = document.createElement("span")
+    indicator.dataset.testProgress = "true"
+    return indicator
+  } }))
   mock.module("@/utils/toast", () => ({ showToast: () => { throw new Error("Unexpected rename failure") } }))
   mock.module("@arforge-ai/ui/v2/icon", () => ({ Icon: () => document.createElement("span") }))
-  mock.module("@arforge-ai/ui/v2/icon-button-v2", () => ({ IconButtonV2: (props: { onClick: (event: MouseEvent) => void }) => {
+  mock.module("@arforge-ai/ui/v2/icon-button-v2", () => ({ IconButtonV2: (props: { "aria-label": string; onClick: (event: MouseEvent) => void }) => {
     const button = document.createElement("button")
+    button.setAttribute("aria-label", props["aria-label"])
     button.addEventListener("click", props.onClick)
     return button
   } }))
   // Keep the real tab and editable title; the hover-card shell is unrelated.
   mock.module("@/components/titlebar-tab-popover", () => ({ TabPreviewPopover: (props: { trigger: JSX.Element }) => props.trigger }))
-  ;({ TabNavItem } = await import("@/components/titlebar-tab-nav"))
+  ;({ TabNavItem, DraftTabItem } = await import("@/components/titlebar-tab-nav"))
 })
 
 afterEach(() => {
   disposals.splice(0).reverse().forEach((dispose) => dispose())
   requests.length = 0
+  setUnread(false)
+  setWorking(false)
 })
 
 function mount(preloaded = false) {
@@ -82,6 +93,7 @@ function mount(preloaded = false) {
   let navigations = 0, closes = 0
   const dispose = render(() => createComponent(TabNavItem, {
     href: "/session/ses_titlebar", server: "sidecar" as ServerConnection.Key,
+    active: true,
     session: () => cache.peek("ses_titlebar"),
     onTitleChange: (title) => cache.remember({ ...cache.get("ses_titlebar")!, title }),
     onNavigate: () => { navigations++ }, onClose: () => { closes++ },
@@ -145,5 +157,42 @@ describe("titlebar metadata updates", () => {
     view.host.querySelector("button")!.click()
     expect(view.navigations()).toBe(1)
     expect(view.closes()).toBe(1)
+  })
+
+  test("uses the session title as the label and keeps status and close controls distinct", () => {
+    const { host } = mount(true)
+    const link = host.querySelector("a")!
+    expect(link.textContent).toBe("Original title")
+    expect(link.getAttribute("aria-current")).toBe("page")
+    expect(link.querySelector("[data-slot='project-avatar-slot']")).toBeNull()
+    expect(link.querySelector("button")).toBeNull()
+    expect(host.querySelector("[data-slot='tab-close'] button")?.getAttribute("aria-label")).toBe("common.closeTab")
+
+    setUnread(true)
+    expect(link.querySelector("[data-slot='titlebar-tab-unread']")).not.toBeNull()
+    setWorking(true)
+    expect(link.querySelector("[data-test-progress]")).not.toBeNull()
+    expect(link.querySelector("[data-slot='titlebar-tab-unread']")).not.toBeNull()
+  })
+
+  test("keeps the complete draft label separate from its close action", () => {
+    const host = document.createElement("div")
+    const dispose = render(() => createComponent(DraftTabItem, {
+      href: "/session", title: "New session", active: true,
+      onNavigate: () => {}, onClose: () => {},
+    }), host)
+    disposals.push(dispose)
+    const link = host.querySelector("a")!
+    expect(link.textContent).toBe("New session")
+    expect(link.getAttribute("aria-current")).toBe("page")
+    expect(link.querySelector("button")).toBeNull()
+    expect(host.querySelector("[data-slot='tab-close'] button")?.getAttribute("aria-label")).toBe("common.closeTab")
+  })
+
+  test("gives a loaded session with a blank title a readable fallback", async () => {
+    const view = mount(true)
+    cache.remember({ ...original(), title: "  " })
+    await settle()
+    expect(view.title().textContent).toBe("session.tab.unknown")
   })
 })

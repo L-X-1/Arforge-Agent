@@ -12,7 +12,7 @@ import { digest } from "@arforge-ai/core/runtime/insight"
 import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
 import { AbsolutePath } from "@arforge-ai/core/schema"
 import { SessionSchema } from "@arforge-ai/core/session/schema"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema, type Tracer } from "effect"
 import { ProjectID } from "@arforge-ai/schema/project-id"
 import { eq, sql } from "drizzle-orm"
 import * as TestClock from "effect/testing/TestClock"
@@ -1366,6 +1366,79 @@ describe("DurableRun", () => {
       expect(count(AgentRuntime.Event.ControlRunAttemptFinished)).toBe(1)
       expect(count(AgentRuntime.Event.ControlRunHeartbeatRecorded)).toBe(1)
       expect(count(AgentRuntime.Event.ControlRunLeaseReleased)).toBe(1)
+    }),
+  )
+
+  it.effect("loads the sequence projection and ordered run events with one SELECT", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableRun.Service
+      const { run } = yield* create(runtime)
+      yield* moveToRunning(runtime, run.id)
+
+      const tracer = yield* Effect.tracer
+      const statements: Tracer.Span[] = []
+      const loaded = yield* runtime.load(run.id).pipe(
+        Effect.withTracer({
+          span(options) {
+            const span = tracer.span(options)
+            if (options.name === "sql.execute") statements.push(span)
+            return span
+          },
+        }),
+      )
+
+      expect(loaded.run.status).toBe("running")
+      expect(loaded.lastSequence).toBe(3)
+      const selects = statements
+        .map((span) => span.attributes.get("db.query.text"))
+        .filter((statement) => typeof statement === "string" && /^\s*select\b/i.test(statement))
+      expect(selects).toHaveLength(1)
+    }),
+  )
+
+  it.effect("distinguishes an absent run from a head or events missing their counterpart", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableRun.Service
+      const { db } = yield* Database.Service
+      const absent = AgentRuntime.RunID.create()
+      const headOnly = yield* create(runtime)
+      const eventsOnly = yield* create(runtime)
+
+      yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, headOnly.run.id)).run().pipe(Effect.orDie)
+      // Simulate a dangling legacy row in the isolated SQLite fixture.
+      yield* db.run("PRAGMA foreign_keys = OFF").pipe(Effect.orDie)
+      yield* db
+        .delete(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, eventsOnly.run.id))
+        .run()
+        .pipe(Effect.orDie, Effect.ensuring(db.run("PRAGMA foreign_keys = ON").pipe(Effect.orDie)))
+
+      expect(yield* runtime.load(absent).pipe(Effect.flip)).toBeInstanceOf(DurableRun.NotFoundError)
+      const corrupt = [
+        [headOnly.run.id, 0],
+        [eventsOnly.run.id, -1],
+      ] as const
+      for (const [runID, sequence] of corrupt) {
+        const failure = yield* runtime.load(runID).pipe(Effect.flip)
+        expect(failure).toBeInstanceOf(DurableRun.CorruptHistoryError)
+        expect(failure).toMatchObject({
+          sequence,
+          reason: "The event sequence projection does not match the durable run event count.",
+        })
+      }
+    }),
+  )
+
+  it.effect("strictly decodes an event with a null legacy SQLite ID", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableRun.Service
+      const { db } = yield* Database.Service
+      const { run } = yield* create(runtime)
+      yield* db.update(EventTable).set({ id: sql`null` }).where(eq(EventTable.aggregate_id, run.id)).run().pipe(Effect.orDie)
+
+      const failure = yield* runtime.load(run.id).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(DurableRun.CorruptHistoryError)
+      expect(failure).toMatchObject({ sequence: 0, reason: expect.stringContaining("failed strict schema decoding") })
     }),
   )
 

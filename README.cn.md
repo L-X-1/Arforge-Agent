@@ -39,8 +39,9 @@ bun run cli --help
 bun run dev:desktop
 ```
 
-打开桌面端后，选择一个项目，在设置中配置服务商，并在输入框下方选定模型。
-Python 兼容工具和开发检查见[开发者上手指南](docs/DEVELOPER_ONBOARDING.md)。
+打开桌面端后，选择一个项目，在「设置 → 模型与服务商 → 服务商配置」配置连接，再在输入框下方选定模型。
+模型选择器会显示所选模型支持的思考选项。具体操作和执行记录见[用户指南](docs/USER_GUIDE.md)，
+开发检查见[开发者上手指南](docs/DEVELOPER_ONBOARDING.md)。
 
 ### Windows 私有启动器（可选）
 

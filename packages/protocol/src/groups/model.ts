@@ -26,6 +26,7 @@ export const ModelGroup = HttpApiGroup.make("server.model")
       query: Schema.Struct({ ...LocationQuery.fields, includePresets: Schema.Boolean.pipe(optional) }),
       success: Schema.Struct({
         ...Location.response(Schema.Array(Model.Info)).fields,
+        exactAliases: Schema.Array(Model.Info).pipe(optional),
         presets: ModelPreset.Catalog.pipe(optional),
       }),
       error: ServiceUnavailableError,

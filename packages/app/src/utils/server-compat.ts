@@ -32,6 +32,7 @@ type CompatibleSessionApi = Omit<
 type CompatiblePermissionApi = Omit<ServerApi["permission"], "reply"> & {
   reply: (
     input: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } },
+    options?: Parameters<ServerApi["permission"]["reply"]>[1],
   ) => ReturnType<ServerApi["permission"]["reply"]>
 }
 type ProjectUpdate = ServerApi["project"]["update"]
@@ -213,8 +214,11 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
         if (!result.data) throw new Error("Failed to fork session")
         return sessionInfo(result.data)
       },
-      async interrupt(value: Parameters<ServerApi["session"]["interrupt"]>[0]) {
-        await legacy().session.abort(value)
+      async interrupt(
+        value: Parameters<ServerApi["session"]["interrupt"]>[0],
+        options?: Parameters<ServerApi["session"]["interrupt"]>[1],
+      ) {
+        await legacy().session.abort(value, { signal: options?.signal })
       },
       async prompt(value: SessionPromptInput & LegacyPrompt) {
         await legacy().session.promptAsync({
@@ -502,12 +506,15 @@ function createV1Api(input: CompatibleInput): CompatibleApi {
     },
     permission: {
       ...input.current.permission,
-      async reply(value: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } }) {
+      async reply(
+        value: Parameters<ServerApi["permission"]["reply"]>[0] & { location?: { directory?: string } },
+        options?: Parameters<ServerApi["permission"]["reply"]>[1],
+      ) {
         await legacy(value.location).permission.reply({
           requestID: value.requestID,
           reply: value.reply,
           directory: directory(value.location),
-        })
+        }, { signal: options?.signal })
       },
     },
     question: {

@@ -5,13 +5,14 @@ import type {
   PermissionV2Request,
   ProviderListOutput,
 } from "@arforge-ai/client/promise"
-import type { Agent, PermissionRequest, Project, Provider, ProviderListResponse } from "@arforge-ai/sdk/v2/client"
+import type { Agent, PermissionRequest, Project, ProviderListResponse } from "@arforge-ai/sdk/v2/client"
+import { officialDeepSeekFlash } from "@arforge-ai/core/deepseek-flash"
 import type { Project as CurrentProject } from "@arforge-ai/client/promise"
 import type { Agent as RuntimeAgent } from "@arforge-ai/schema/agent"
 import type { Model as RuntimeModel } from "@arforge-ai/schema/model"
 import type { Provider as RuntimeProvider } from "@arforge-ai/schema/provider"
 import { chooserReasoningVariant } from "@/components/dialog-select-model-presentation"
-import { NormalizedProviderListResponse } from "@arforge-ai/session-ui/context"
+import type { CatalogProvider, NormalizedProviderListResponse } from "@arforge-ai/session-ui/context"
 export { pathKey as directoryKey, type PathKey as DirectoryKey } from "@/utils/path-key"
 
 export const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -78,6 +79,7 @@ export function normalizeProviderList(
   providers: Array<ProviderListOutput["data"][number] | RuntimeProvider.Info> | ProviderListResponse,
   models?: ReadonlyArray<ModelListOutput["data"][number] | RuntimeModel.Info>,
   defaultModel?: ModelDefaultOutput["data"] | RuntimeModel.Info | null,
+  exactAliases?: ReadonlyArray<RuntimeModel.Info>,
 ): NormalizedProviderListResponse {
   if (!Array.isArray(providers)) {
     return {
@@ -88,14 +90,20 @@ export function normalizeProviderList(
           {
             ...provider,
             models: Object.fromEntries(
-              Object.entries(provider.models).filter(([, model]) => model.status !== "deprecated"),
+              Object.entries(provider.models).flatMap(([id, model]) => {
+                if (model.status !== "deprecated") return [[id, model]]
+                const canonical = provider.models["deepseek-flash"]
+                return id !== canonical?.id && officialDeepSeekFlash(provider.id, id, canonical?.api.url)
+                  ? [[id, { ...model, enabled: false, listed: false as const }]]
+                  : []
+              }),
             ),
           },
         ]),
       ),
     }
   }
-  const all = new Map<string, Provider>()
+  const all = new Map<string, CatalogProvider>()
 
   for (const provider of providers) {
     all.set(provider.id, {
@@ -108,9 +116,9 @@ export function normalizeProviderList(
     })
   }
 
-  for (const model of models ?? []) {
+  const projectModel = (model: ModelListOutput["data"][number] | RuntimeModel.Info, listed: boolean) => {
     const provider = all.get(model.providerID)
-    if (!provider || model.status === "deprecated") continue
+    if (!provider || (listed && model.status === "deprecated")) return
     const cost = model.cost.find((item) => item.tier === undefined) ?? model.cost[0]
     // Canonical Model.Info carries Provider.Request in body; the vendored DTO
     // also has legacy settings. Project actual parameters, never headers, into
@@ -124,6 +132,8 @@ export function normalizeProviderList(
     )
     const profileReasoning = "profile" in model ? model.profile?.capabilities.reasoning : undefined
     provider.models[model.id] = {
+      ...(!listed ? { listed: false } : {}),
+      ...(model.enabled === false || model.status === "deprecated" ? { enabled: false } : {}),
       id: model.id,
       providerID: model.providerID,
       api: {
@@ -178,6 +188,8 @@ export function normalizeProviderList(
       variants,
     }
   }
+  for (const model of models ?? []) projectModel(model, true)
+  for (const model of exactAliases ?? []) projectModel(model, false)
 
   return {
     all,

@@ -24,6 +24,7 @@ import {
   type DiagnosisMode,
   type DiagnosisSeverity,
 } from "./diagnostics-presentation"
+import { MEMORY_RECALL_EVIDENCE_VIEW_ID } from "./navigation"
 
 /** Independent, read-only partitions retain their last successful values until scope reset. */
 export function createWorkbenchReads<Key extends string>(keys: readonly Key[]) {
@@ -1137,6 +1138,8 @@ export function MemoryLearningGovernance(props: {
   location: () => LocationInput
   ready: () => boolean
   sessionID?: string
+  openView?: () => string | undefined
+  onOpenViewConsumed?: () => void
 }) {
   const c = useCopy()
   const language = useLanguage()
@@ -1858,7 +1861,7 @@ export function MemoryLearningGovernance(props: {
       ),
     },
     {
-      id: "memory-2",
+      id: MEMORY_RECALL_EVIDENCE_VIEW_ID,
       label: () => c().actualRecallEvidence,
       render: () => (
         <article class="arforge-management-task-form" data-testid="memory-recall-evidence">
@@ -2597,7 +2600,12 @@ export function MemoryLearningGovernance(props: {
         <Metric label={c().quarantined} value={state.memory?.quarantined ?? "—"} />
         <Metric label={c().pendingConflicts} value={state.memory?.pendingConflicts ?? "—"} />
       </div>
-      <ManagementViews label={c().memoryLearning} views={memoryViews} />
+      <ManagementViews
+        label={c().memoryLearning}
+        views={memoryViews}
+        openView={props.openView}
+        onOpenViewConsumed={props.onOpenViewConsumed}
+      />
     </section>
   )
 }

@@ -44,9 +44,11 @@ const PROVIDER_NOTES = [
 
 const PROVIDER_ICON_SIZE = 16
 
-export const SettingsProvidersV2: Component<{ onBack?: () => void; onNavigate?: (value: string) => void }> = (
-  props,
-) => {
+export const SettingsProvidersV2: Component<{
+  title: string
+  onBack?: () => void
+  onNavigate?: (value: string) => void
+}> = (props) => {
   const dialog = useDialog()
   const confirmAction = useConfirmAction()
   const language = useLanguage()
@@ -362,7 +364,7 @@ export const SettingsProvidersV2: Component<{ onBack?: () => void; onNavigate?: 
   return (
     <>
       <div class="settings-v2-tab-header">
-        <h2 class="settings-v2-tab-title">{language.t("settings.providers.title")}</h2>
+        <h2 class="settings-v2-tab-title">{props.title}</h2>
       </div>
 
       <div class="settings-v2-tab-body settings-v2-providers" aria-busy={!!request.busy}>

@@ -4,11 +4,11 @@ import { createHash } from "node:crypto"
 import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { DurableEventManifest } from "@arforge-ai/schema/durable-event-manifest"
 import { Cause, Context, DateTime, Effect, Layer, Schema } from "effect"
-import { and, asc, desc, eq, lt } from "drizzle-orm"
+import { and, desc, eq, lt } from "drizzle-orm"
 import { Database } from "../database/database"
 import { makeGlobalNode, makeLocationNode } from "../effect/app-node"
 import { EventV2 } from "../event"
-import { EventSequenceTable, EventTable } from "../event/sql"
+import { EventTable } from "../event/sql"
 import { canTransition, isTerminal } from "./action-state"
 import * as MutationIntentRuntime from "./mutation-intent"
 import { parseActionRequestEnvelope } from "../session/request-envelope"
@@ -397,24 +397,7 @@ const layer = Layer.effect(
 
     const load = Effect.fn("DurableAction.load")(function* (actionID: AgentRuntime.ActionID) {
       const stored = yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const sequence = yield* tx
-              .select({ seq: EventSequenceTable.seq })
-              .from(EventSequenceTable)
-              .where(eq(EventSequenceTable.aggregate_id, actionID))
-              .get()
-              .pipe(Effect.orDie)
-            const rows = yield* tx
-              .select()
-              .from(EventTable)
-              .where(eq(EventTable.aggregate_id, actionID))
-              .orderBy(asc(EventTable.seq))
-              .all()
-              .pipe(Effect.orDie)
-            return { latest: sequence?.seq ?? -1, rows }
-          }),
-        )
+        .transaction((tx) => EventV2.readAggregateSnapshot(tx, actionID))
         .pipe(Effect.orDie)
       const collected: AgentRuntime.ActionDurableEvent[] = []
       if (stored.rows.length !== stored.latest + 1)

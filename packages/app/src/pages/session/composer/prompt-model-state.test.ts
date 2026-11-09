@@ -31,7 +31,11 @@ function fixture() {
   const [connected, setConnected] = createSignal(["provider"])
   const entries = ["primary", "fallback", "family/model"].map((id) => ({
     id, name: id, provider: { id: "provider", name: "Provider" }, variants: { low: {}, high: {} },
-  }))
+    api: { id, url: "https://fixture.invalid", npm: "@ai-sdk/openai-compatible" },
+  })) as Array<{
+    id: string; name: string; provider: { id: string; name: string }; variants: { low: {}; high: {} }
+    api: { id: string; url: string; npm: string }; enabled?: boolean; listed?: false
+  }>
   const [catalog, setCatalog] = createSignal(new Map([["provider", {
     id: "provider", models: Object.fromEntries(entries.map((item) => [item.id, item])),
   }]]))
@@ -62,7 +66,7 @@ function fixture() {
     setHydrated(isReady)
     return () => { setHydrated(true); release() }
   }
-  return { model, first, active, target, setActive, location, setLocation, setConnected, setCatalog,
+  return { model, first, active, target, setActive, location, setLocation, setConnected, setCatalog, entries,
     setConfigured, setAgent, writes, visibility, recent, variants, gate }
 }
 
@@ -105,6 +109,51 @@ describe("draft model selection", () => {
     state.setConnected(["provider"])
     expect(state.model.current()?.id).toBe("primary")
     expect(state.model.binding.unavailable()).toBeUndefined()
+  }))
+
+  test("restores a saved Flash alias only for an official catalog route", () => withState((state) => {
+    const id = "deepseek-flash"
+    const entry = {
+      id, name: id, provider: { id: "deepseek", name: "DeepSeek" }, variants: { low: {}, high: {} },
+      api: { id, url: "https://api.deepseek.com", npm: "@ai-sdk/openai-compatible" },
+    }
+    state.entries.push(entry)
+    state.setConnected(["deepseek"])
+    const setCatalog = () => state.setCatalog(new Map([["deepseek", { id: "deepseek", models: { [id]: entry } }]]))
+    setCatalog()
+    const old = { providerID: "deepseek", modelID: "deepseek-v4-flash-vision-exp", variant: "high" }
+    state.first.model.set(old)
+    expect(state.model.current()?.id).toBe(id)
+    expect(state.model.variant.current()).toBe("high")
+    expect(state.first.model.current()).toEqual(old)
+    entry.api.url = "https://relay.invalid"
+    setCatalog()
+    expect(state.model.current()).toBeUndefined()
+    expect(state.model.binding.unavailable()).toBe("removed")
+    expect(state.first.model.current()).toEqual(old)
+  }))
+
+  test("keeps a disabled exact official alias unavailable while an absent alias still resolves", () => withState((state) => {
+    const provider = { id: "deepseek", name: "DeepSeek" }
+    const canonical = {
+      id: "deepseek-flash", name: "Flash", provider, variants: { low: {}, high: {} },
+      api: { id: "deepseek-flash", url: "https://api.deepseek.com", npm: "@ai-sdk/openai-compatible" },
+    }
+    const id = "deepseek-v4-flash"
+    const disabled = { ...canonical, id, enabled: false, listed: false as const, api: { ...canonical.api, id } }
+    state.entries.push(canonical, disabled)
+    state.setConnected([provider.id])
+    state.setCatalog(new Map([[provider.id, {
+      id: provider.id, models: { [canonical.id]: canonical, [id]: disabled },
+    }]]))
+    const saved = { providerID: provider.id, modelID: id, variant: "high" }
+    state.first.model.set(saved)
+    expect(state.model.binding.key()).toEqual({ providerID: provider.id, modelID: id })
+    expect(state.model.binding.unavailable()).toBe("removed")
+    expect(state.model.current()).toBeUndefined()
+    expect(state.first.model.current()).toEqual(saved)
+    state.first.model.set({ ...saved, modelID: "deepseek-v4-flash-vision-exp" })
+    expect(state.model.current()?.id).toBe(canonical.id)
   }))
 
   test("preserves slash-containing model IDs in configured defaults", () => withState((state) => {

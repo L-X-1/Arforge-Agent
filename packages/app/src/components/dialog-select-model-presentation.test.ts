@@ -117,8 +117,8 @@ describe("reasoning strength scale", () => {
     const groups = chooserVariantGroups(Object.keys(metadata), metadata)
     const strength = chooserStrengthOptions(groups, metadata)
     expect(groups.other).toEqual([])
-    expect(strength.levels.map((item) => item.value)).toEqual(["relay-smallest", "relay-middle", "relay-largest"])
-    expect(strength.modes.map((item) => item.value)).toEqual([undefined, "off"])
+    expect(strength.levels.map((item) => item.value)).toEqual(["off", "relay-smallest", "relay-middle", "relay-largest"])
+    expect(strength.modes.map((item) => item.value)).toEqual([undefined])
   })
 
   test("keeps explicit Qwen thinking toggles in reasoning modes without inventing strength tiers", () => {
@@ -135,7 +135,7 @@ describe("reasoning strength scale", () => {
     expect(chooserReasoningVariant({ body: { enable_thinking: "true" } })).toBe(false)
   })
 
-  test("orders real DeepSeek request tiers and keeps off/reset outside the maximum", () => {
+  test("orders explicit off before DeepSeek request tiers and keeps reset separate", () => {
     const metadata = {
       low: { body: { reasoning_effort: "low" } },
       high: { body: { reasoning_effort: "high" } },
@@ -143,8 +143,8 @@ describe("reasoning strength scale", () => {
       off: { body: { thinking: { type: "disabled" } } },
     }
     const strength = chooserStrengthOptions(chooserVariantGroups(["max", "low", "high", "off"], metadata), metadata)
-    expect(strength.levels.map((option) => option.value)).toEqual(["low", "high", "max"])
-    expect(strength.modes.map((option) => option.value)).toEqual([undefined, "off"])
+    expect(strength.levels.map((option) => option.value)).toEqual(["off", "low", "high", "max"])
+    expect(strength.modes.map((option) => option.value)).toEqual([undefined])
   })
   test("uses request semantics for aliases, preserves custom/default/auto and never uses a name as evidence", () => {
     const metadata = {
@@ -161,7 +161,7 @@ describe("reasoning strength scale", () => {
     expect(strength.modes.map((option) => option.value)).toEqual([undefined, "auto", "default", "custom"])
     expect(groups.other.map((option) => option.value)).toEqual(["max"])
   })
-  test("orders positive explicit token budgets and separates zero/off and automatic budgets", () => {
+  test("puts explicit zero before positive token budgets and keeps automatic separate", () => {
     const metadata = {
       larger: { thinking: { type: "enabled", budget_tokens: 8192 } },
       smaller: { thinking: { type: "enabled", budget_tokens: 2048 } },
@@ -169,8 +169,8 @@ describe("reasoning strength scale", () => {
       auto: { thinkingConfig: { thinkingBudget: -1 } },
     }
     const strength = chooserStrengthOptions(chooserVariantGroups(Object.keys(metadata), metadata), metadata)
-    expect(strength.levels.map((option) => option.value)).toEqual(["smaller", "larger"])
-    expect(strength.modes.map((option) => option.value)).toEqual([undefined, "off", "auto"])
+    expect(strength.levels.map((option) => option.value)).toEqual(["off", "smaller", "larger"])
+    expect(strength.modes.map((option) => option.value)).toEqual([undefined, "auto"])
   })
   test("does not imply an order between unlike scales or expose unsupported metadata", () => {
     const metadata = {
@@ -182,9 +182,37 @@ describe("reasoning strength scale", () => {
     expect(strength.levels).toEqual([])
     expect(strength.modes.map((option) => option.value)).toEqual([undefined, "effort", "budget"])
     expect(chooserStrengthOptions(chooserVariantGroups([], undefined), undefined)).toEqual({
+      off: undefined,
       levels: [],
       modes: [{ key: "reset", value: undefined, label: "default" }],
     })
+  })
+  test("keeps off as a mode without an unambiguous scale and never infers off from a key", () => {
+    const metadata = {
+      off: { body: { temperature: 0.2 } },
+      high: { body: { reasoning_effort: "high" } },
+      relayDisabled: { body: { enable_thinking: false } },
+      low: { body: { reasoning_effort: "low" } },
+      automatic: { body: { reasoning_effort: "max" } },
+      anotherDisabled: { body: { reasoning: { enabled: false } } },
+    }
+    const strength = (keys: string[]) => chooserStrengthOptions(chooserVariantGroups(keys, metadata), metadata)
+    expect(strength(["relayDisabled", "low", "automatic"]).levels.map((option) => option.value)).toEqual(["low"])
+    expect(strength(["relayDisabled", "low", "automatic"]).modes.map((option) => option.value)).toEqual([
+      undefined,
+      "relayDisabled",
+      "automatic",
+    ])
+    expect(strength(["off", "low", "high", "relayDisabled"]).levels.map((option) => option.value)).toEqual([
+      "relayDisabled",
+      "low",
+      "high",
+    ])
+    expect(strength(["off", "low", "high", "relayDisabled", "anotherDisabled"]).modes.map((option) => option.value)).toEqual([
+      undefined,
+      "relayDisabled",
+      "anotherDisabled",
+    ])
   })
 })
 

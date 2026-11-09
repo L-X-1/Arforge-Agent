@@ -521,6 +521,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.promptQueueSteer",
+        Effect.fn(function* (ctx) {
+          return { data: yield* session.promptQueue.steer({ ...ctx.params, ...ctx.payload }).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(sessionError(error))),
+            Effect.catchTag("SessionInput.QueuedPromptNotFoundError", (error) => Effect.fail(new MessageNotFoundError({
+              sessionID: error.sessionID,
+              messageID: error.messageID,
+              message: `Queued prompt not found or already promoted: ${error.messageID}`,
+            }))),
+          ) }
+        }),
+      )
+      .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
           yield* lifecycleCall("resume", session.compact({ ...ctx.params, ...ctx.payload }).pipe(

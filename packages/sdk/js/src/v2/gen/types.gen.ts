@@ -24,6 +24,7 @@ export type Event =
   | EventSessionNextPromptAdmitted
   | EventSessionNextPromptQueueUpdated
   | EventSessionNextPromptQueueRemoved
+  | EventSessionNextPromptQueueSteered
   | EventSessionNextContextUpdated
   | EventSessionNextMemoryContextPrepared
   | EventSessionNextContextFusionPrepared
@@ -1026,6 +1027,16 @@ export type GlobalEvent = {
     | {
         id: string
         type: "session.next.prompt.queue.removed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          expectedAdmittedSeq: number
+        }
+      }
+    | {
+        id: string
+        type: "session.next.prompt.queue.steered"
         properties: {
           timestamp: number
           sessionID: string
@@ -2670,6 +2681,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextPromptQueueUpdated
     | SyncEventSessionNextPromptQueueRemoved
+    | SyncEventSessionNextPromptQueueSteered
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextMemoryContextPrepared
     | SyncEventSessionNextContextFusionPrepared
@@ -3011,6 +3023,7 @@ export type AttachmentConfig = {
 export type Config = {
   $schema?: string
   shell?: string
+  session_run_token_limit?: boolean
   logLevel?: LogLevel
   server?: ServerConfig
   command?: {
@@ -4057,6 +4070,7 @@ export type SessionDurableEvent =
   | SessionNextPromptAdmitted
   | SessionNextPromptQueueUpdated
   | SessionNextPromptQueueRemoved
+  | SessionNextPromptQueueSteered
   | SessionNextContextUpdated
   | SessionNextMemoryContextPrepared
   | SessionNextContextFusionPrepared
@@ -4501,6 +4515,7 @@ export type V2Event =
   | SessionNextPromptAdmitted
   | SessionNextPromptQueueUpdated
   | SessionNextPromptQueueRemoved
+  | SessionNextPromptQueueSteered
   | SessionNextContextUpdated
   | SessionNextMemoryContextPrepared
   | SessionNextContextFusionPrepared
@@ -5967,6 +5982,23 @@ export type SyncEventSessionNextPromptQueueRemoved = {
   id: string
   syncEvent: {
     type: "session.next.prompt.queue.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      expectedAdmittedSeq: number
+    }
+  }
+}
+
+export type SyncEventSessionNextPromptQueueSteered = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.prompt.queue.steered.1"
     id: string
     seq: number
     aggregateID: string
@@ -8079,6 +8111,26 @@ export type SessionNextPromptQueueRemoved = {
     [key: string]: unknown
   }
   type: "session.next.prompt.queue.removed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    expectedAdmittedSeq: number
+  }
+}
+
+export type SessionNextPromptQueueSteered = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.prompt.queue.steered"
   durable?: {
     aggregateID: string
     seq: number
@@ -14283,6 +14335,17 @@ export type EventSessionNextPromptQueueUpdated = {
 export type EventSessionNextPromptQueueRemoved = {
   id: string
   type: "session.next.prompt.queue.removed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    expectedAdmittedSeq: number
+  }
+}
+
+export type EventSessionNextPromptQueueSteered = {
+  id: string
+  type: "session.next.prompt.queue.steered"
   properties: {
     timestamp: number
     sessionID: string
@@ -21413,6 +21476,47 @@ export type V2SessionPromptQueueUpdateResponses = {
 
 export type V2SessionPromptQueueUpdateResponse =
   V2SessionPromptQueueUpdateResponses[keyof V2SessionPromptQueueUpdateResponses]
+
+export type V2SessionPromptQueueSteerData = {
+  body: {
+    expectedAdmittedSeq: number
+  }
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/prompt/queue/{messageID}/steer"
+}
+
+export type V2SessionPromptQueueSteerErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * MessageNotFoundError | SessionNotFoundError
+   */
+  404: MessageNotFoundError | SessionNotFoundError
+}
+
+export type V2SessionPromptQueueSteerError = V2SessionPromptQueueSteerErrors[keyof V2SessionPromptQueueSteerErrors]
+
+export type V2SessionPromptQueueSteerResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionInputAdmitted
+  }
+}
+
+export type V2SessionPromptQueueSteerResponse =
+  V2SessionPromptQueueSteerResponses[keyof V2SessionPromptQueueSteerResponses]
 
 export type V2SessionCompactData = {
   body?: never

@@ -5,8 +5,39 @@ import { filter, firstBy, flat, groupBy, mapValues, pipe, uniqueBy, values } fro
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { useProviders } from "@/hooks/use-providers"
 import { Persist, persisted } from "@/utils/persist"
+import { officialDeepSeekFlash } from "@arforge-ai/core/deepseek-flash"
+import type { CatalogProvider } from "@arforge-ai/session-ui/context"
 
 export type ModelKey = { providerID: string; modelID: string }
+
+export function providerModelID(provider: CatalogProvider, modelID: string) {
+  if (provider.id !== "deepseek" || Object.hasOwn(provider.models, modelID)) return modelID
+  const canonical = provider.models["deepseek-flash"]
+  if (
+    canonical && canonical.enabled !== false &&
+    canonical.id !== modelID &&
+    canonical.api.id === canonical.id &&
+    officialDeepSeekFlash(provider.id, modelID, canonical.api.url) === canonical.id
+  )
+    return canonical.id
+  return modelID
+}
+
+export function providerModel(provider: CatalogProvider, modelID: string) {
+  const selected = provider.models[providerModelID(provider, modelID)]
+  return selected?.enabled !== false ? selected : undefined
+}
+
+function listedModel(provider: CatalogProvider, model: CatalogProvider["models"][string]) {
+  if (model.enabled === false || model.listed === false) return false
+  const canonical = provider.models["deepseek-flash"]
+  return (
+    !canonical || canonical.enabled === false || canonical.id === model.id ||
+    model.api.id !== model.id || model.api.npm !== canonical.api.npm ||
+    officialDeepSeekFlash(provider.id, model.id, canonical.api.url) !== canonical.id ||
+    !officialDeepSeekFlash(provider.id, model.id, model.api.url)
+  )
+}
 
 type Visibility = "show" | "hide"
 type User = ModelKey & { visibility: Visibility; favorite?: boolean }
@@ -39,10 +70,9 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
 
     const available = createMemo(() =>
       providers.connected().flatMap((p) =>
-        Object.values(p.models).map((m) => ({
-          ...m,
-          provider: p,
-        })),
+        Object.values(p.models)
+          .filter((m) => listedModel(p, m))
+          .map((m) => ({ ...m, provider: p })),
       ),
     )
 
@@ -93,15 +123,19 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
       return map
     })
 
-    const list = createMemo(() =>
-      available().map((m) => ({
+    const display = <T extends { name: string }>(m: T) => ({
         ...m,
         name: m.name.replace("(latest)", "").trim(),
         latest: m.name.includes("(latest)"),
-      })),
-    )
+      })
+    const list = createMemo(() => available().map(display))
 
-    const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
+    const find = (key: ModelKey) => {
+      const provider = providers.all().get(key.providerID)
+      const model = provider && providerModel(provider, key.modelID)
+      if (!provider || !model || !providers.connected().some((item) => item.id === provider.id)) return
+      return list().find((item) => item.id === model.id && item.provider.id === provider.id) ?? display({ ...model, provider })
+    }
 
     function update(model: ModelKey, state: Visibility) {
       const index = store.user.findIndex((x) => x.modelID === model.modelID && x.providerID === model.providerID)

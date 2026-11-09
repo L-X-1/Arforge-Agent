@@ -13,7 +13,7 @@ import * as MutationIntent from "@arforge-ai/core/runtime/mutation-intent"
 import { SessionMessage } from "@arforge-ai/core/session/message"
 import { SessionSchema } from "@arforge-ai/core/session/schema"
 import { AbsolutePath } from "@arforge-ai/core/schema"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Layer, type Tracer } from "effect"
 import { and, eq } from "drizzle-orm"
 import * as TestClock from "effect/testing/TestClock"
 import { location } from "./fixture/location"
@@ -97,6 +97,32 @@ describe("DurableAction", () => {
     )
     return { actionID, sessionID, subject, action }
   })
+
+  it.effect("loads the sequence projection and action events with one SELECT", () =>
+    Effect.gen(function* () {
+      const actions = yield* DurableAction.Service
+      const { actionID } = yield* propose()
+
+      const tracer = yield* Effect.tracer
+      const statements: Tracer.Span[] = []
+      const loaded = yield* actions.load(actionID).pipe(
+        Effect.withTracer({
+          span(options) {
+            const span = tracer.span(options)
+            if (options.name === "sql.execute") statements.push(span)
+            return span
+          },
+        }),
+      )
+
+      expect(loaded.action.id).toBe(actionID)
+      expect(loaded.lastSequence).toBe(0)
+      const selects = statements
+        .map((span) => span.attributes.get("db.query.text"))
+        .filter((statement) => typeof statement === "string" && /^\s*select\b/i.test(statement))
+      expect(selects).toHaveLength(1)
+    }),
+  )
 
   it.effect("filters nonlocal event ownership and allowed Sessions before decoding foreign proposals", () => Effect.gen(function* () {
     const { db } = yield* Database.Service

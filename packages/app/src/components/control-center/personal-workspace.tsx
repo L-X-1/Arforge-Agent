@@ -50,6 +50,9 @@ export function PersonalWorkspace(props: {
   onNavigate?: (value: ArforgeSettingsValue | SessionSettingsValue) => void
   serverName?: string
   onOpenSource?: (run: WorkspaceRun, current: () => boolean) => Promise<unknown>
+  /** One-shot anchor requested by the memory page; consumed after the section is rendered. */
+  pendingAnchor?: () => `#${string}` | undefined
+  onPendingAnchorConsumed?: () => void
 }) {
   const t = useControlCenterText()
   const language = useLanguage()
@@ -602,12 +605,35 @@ export function PersonalWorkspace(props: {
                   </div>
                 </ProjectionSection>
               </div>
+              <PendingAnchorFocus target={props.pendingAnchor} onConsumed={props.onPendingAnchorConsumed} />
             </>
           )
         }}
       </Show>
     </section>
   )
+}
+
+/**
+ * Mounted only after the workspace snapshot rendered, so a queued memory-page
+ * navigation focuses the real candidate section exactly once. The owner clears
+ * the request on project/server changes, which removes the target without a
+ * second focus pass.
+ */
+function PendingAnchorFocus(props: {
+  target?: () => `#${string}` | undefined
+  onConsumed?: () => void
+}) {
+  createEffect(() => {
+    const target = props.target?.()
+    if (!target) return
+    const element = document.querySelector<HTMLElement>(target)
+    if (!element) return
+    element.scrollIntoView({ behavior: "smooth", block: "start" })
+    element.focus({ preventScroll: true })
+    props.onConsumed?.()
+  })
+  return null
 }
 
 type ChildWorkspaceCopy = ReturnType<typeof workspaceCopy>

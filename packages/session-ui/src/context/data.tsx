@@ -3,8 +3,12 @@ import type { FileDiffInfo } from "@arforge-ai/client/promise"
 import { createSimpleContext } from "@arforge-ai/ui/context"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 
+export type CatalogProvider = Omit<Provider, "models"> & {
+  models: Record<string, Provider["models"][string] & { enabled?: boolean; listed?: false }>
+}
+
 export type NormalizedProviderListResponse = {
-  all: Map<string, Provider>
+  all: Map<string, CatalogProvider>
   default: {
     [key: string]: string
   }

@@ -269,11 +269,15 @@ for (const late of ["success", "failure"] as const) {
     await settle()
     expect(f.success()).toBe(false)
     expect(f.error()).toBeNull()
+    expect(f.text()).not.toContain("Verification result received locally at")
+    expect(f.text()).not.toContain("User-initiated verification result")
     expect(f.busy()).toBe("true")
     expect(f.row()).toContain("audit-B/retained-row")
     f.pending[1].resolve(verified(2))
     await settle()
     expect(f.text()).toContain("Audit chain verified: 2 records are intact.")
+    expect(f.text()).toContain("User-initiated verification result")
+    expect(f.text()).toContain("Verification result received locally at")
     expect(f.busy()).toBe("false")
   })
 }
@@ -288,6 +292,7 @@ test("source readiness loss clears prior verification and fences an old response
   f.setSource("ready", false)
   await settle()
   expect(f.success()).toBe(false)
+  expect(f.text()).not.toContain("Verification result received locally at")
   f.setSource("ready", true)
   await settle()
   await f.verify()
@@ -316,10 +321,66 @@ test("typed principal record verification stays usable and never claims whole-pr
   expect(f.text()).toContain("My audit records verified: 2 record digests are intact")
   expect(f.text()).toContain("Full profile chain continuity is not checked")
   expect(f.text()).not.toContain("Audit chain verified:")
+  expect(f.text()).toContain("Scope: my records in the current process")
   await f.verify()
   f.pending[1]!.resolve({ valid: false, count: 2, headHash: "own-head", issue: "Owned digest mismatch", scope: "principal-records" })
   await settle()
   expect(f.text()).toContain("My audit record verification failed: Owned digest mismatch")
   expect(f.text()).not.toContain("Audit chain verification failed:")
   expect(f.busy()).toBe("false")
+})
+
+test("automatic snapshot verification result is labeled automatic and carries no user receipt time", async () => {
+  const f = fixture()
+  await settle()
+  // The snapshot already contains an audit verification result, but that is an
+  // automatic snapshot, not a user-initiated verification receipt.
+  expect(f.text()).toContain("Chain status")
+  expect(f.text()).toContain("Intact (1)")
+  expect(f.text()).toContain("Automatic snapshot result")
+  expect(f.text()).toContain("Scope: current process audit chain")
+  expect(f.text()).not.toContain("User-initiated verification result")
+  expect(f.text()).not.toContain("Verification result received locally at")
+  expect(f.success()).toBe(false)
+})
+
+test("user verification receipt binds the result to its local time and never reuses it", async () => {
+  const originalNow = Date.now
+  let now = new Date("2026-11-08T02:30:00Z").getTime()
+  Date.now = () => now
+  try {
+    const f = fixture()
+    await settle()
+    expect(f.text()).not.toContain("Verification result received locally at")
+
+    // No result yet: no receipt time may be written.
+    await f.verify()
+    expect(f.text()).not.toContain("Verification result received locally at")
+    f.pending[0].resolve(verified(30))
+    await settle()
+    const firstReceipt = "Verification result received locally at " + new Date(now).toLocaleTimeString("en")
+    expect(f.text()).toContain("User-initiated verification result")
+    expect(f.text()).toContain(firstReceipt)
+
+    // A retry clears the old receipt; a failed request publishes no new time.
+    now = new Date("2026-11-08T02:40:00Z").getTime()
+    await f.verify()
+    expect(f.text()).not.toContain("Verification result received locally at")
+    f.pending[1].reject(new Error("Transport unavailable"))
+    await settle()
+    expect(f.text()).not.toContain("Verification result received locally at")
+    expect(f.text()).not.toContain(firstReceipt)
+
+    // A received failing result gets its own local receipt time, not the old one.
+    now = new Date("2026-11-08T02:50:00Z").getTime()
+    await f.verify()
+    f.pending[2].resolve({ valid: false, count: 1, headHash: "head-1", issue: "Hash mismatch at record 1" })
+    await settle()
+    const failureReceipt = "Verification result received locally at " + new Date(now).toLocaleTimeString("en")
+    expect(f.text()).toContain("Audit chain verification failed: Hash mismatch at record 1")
+    expect(f.text()).toContain(failureReceipt)
+    expect(f.text()).not.toContain(firstReceipt)
+  } finally {
+    Date.now = originalNow
+  }
 })

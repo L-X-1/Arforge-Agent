@@ -3,7 +3,7 @@ import { decode64 } from "@/utils/base64"
 import { useParams } from "@solidjs/router"
 import { Iterable, pipe } from "effect"
 import type { Accessor } from "solid-js"
-import { selectProviderCatalog } from "./provider-catalog"
+import { providerConnectionChoices, selectProviderCatalog } from "./provider-catalog"
 
 export const popularProviders = [
   "anthropic",
@@ -36,6 +36,7 @@ export function useProviders(directory?: Accessor<string | undefined>) {
   }
   return {
     all: () => providers().all,
+    connectionChoices: () => providerConnectionChoices(providers()),
     default: () => providers().default,
     popular: () =>
       pipe(

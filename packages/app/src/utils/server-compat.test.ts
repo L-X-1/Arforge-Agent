@@ -470,15 +470,25 @@ describe("createCompatibleApi", () => {
 
   test("routes V1 permission replies through the unified permission bridge", async () => {
     const { api, requests } = setup("v1")
-    await api.permission.reply({
-      sessionID: "ses_1",
-      requestID: "permission_1",
-      reply: "once",
-      location: { directory: "/other" },
-    })
+    const control = new AbortController()
+    await api.permission.reply(
+      { sessionID: "ses_1", requestID: "permission_1", reply: "once", location: { directory: "/other" } },
+      { signal: control.signal },
+    )
 
     expect(new URL(requests[0]!.url).pathname).toBe("/permission/permission_1/reply")
     expect(new URL(requests[0]!.url).searchParams.get("directory")).toBe("/other")
     expect(await requests[0]!.json()).toEqual({ reply: "once" })
+    control.abort()
+    expect(requests[0]!.signal.aborted).toBe(true)
+  })
+
+  test("forwards a V1 interrupt request's cancellation signal", async () => {
+    const { api, requests } = setup("v1")
+    const control = new AbortController()
+    await api.session.interrupt({ sessionID: "ses_1" }, { signal: control.signal })
+    expect(new URL(requests[0]!.url).pathname).toBe("/session/ses_1/abort")
+    control.abort()
+    expect(requests[0]!.signal.aborted).toBe(true)
   })
 })

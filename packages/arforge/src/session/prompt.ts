@@ -1796,7 +1796,13 @@ const layer = Layer.effect(
       return yield* drainAdmitted(input.sessionID, owner, admitted.info.id)
     })
 
-    const prepareCommand = Effect.fn("SessionPrompt.prepareCommand")(function* (input: CommandInput) {
+    const prepareCommand = Effect.fn("SessionPrompt.prepareCommand")(function* <E = never>(
+      input: CommandInput,
+      validation?: {
+        validateAgent?: (agent: string) => Effect.Effect<void, E>
+        validateModel?: (model: ModelV2.Ref) => Effect.Effect<ModelV2.Ref, E>
+      },
+    ) {
       yield* Effect.logInfo("command", {
         "session.id": input.sessionID,
         command: input.command,
@@ -1811,6 +1817,41 @@ const layer = Layer.effect(
         throw error
       }
       const agentName = cmd.agent ?? input.agent
+      const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
+      if (!agent) {
+        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
+        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        throw error
+      }
+      const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
+      const taskModel = yield* Effect.gen(function* () {
+        if (cmd.model) return Provider.parseModel(cmd.model)
+        if (cmd.agent && agent.model) return agent.model
+        if (input.model) return Provider.parseModel(input.model)
+        return yield* currentModel(input.sessionID)
+      })
+      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
+      if (validation?.validateAgent) yield* validation.validateAgent(userAgent)
+      const userModel = isSubtask
+        ? input.model
+          ? Provider.parseModel(input.model)
+          : yield* currentModel(input.sessionID)
+        : taskModel
+
+      // Resolve the effective task and parent routes before reading or expanding
+      // the template. The durable runner validates through its scoped catalog.
+      const validateModel = validation?.validateModel
+      const taskRoute = { providerID: taskModel.providerID, id: taskModel.modelID }
+      const userRoute = {
+        providerID: userModel.providerID,
+        id: userModel.modelID,
+        variant: input.variant ? ModelV2.VariantID.make(input.variant) : undefined,
+      }
+      if (!validateModel) yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
+      const selectedTask = validateModel && isSubtask ? yield* validateModel(taskRoute) : taskRoute
+      const selectedUser = validateModel ? yield* validateModel(userRoute) : userRoute
 
       const raw = input.arguments.match(argsRegex) ?? []
       const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
@@ -1851,27 +1892,6 @@ const layer = Layer.effect(
       }
       template = template.trim()
 
-      const taskModel = yield* Effect.gen(function* () {
-        if (cmd.model) return Provider.parseModel(cmd.model)
-        if (cmd.agent) {
-          const cmdAgent = yield* agents.get(cmd.agent)
-          if (cmdAgent?.model) return cmdAgent.model
-        }
-        if (input.model) return Provider.parseModel(input.model)
-        return yield* currentModel(input.sessionID)
-      })
-
-      yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
-
-      const agent = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-      if (!agent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
-        throw error
-      }
-
       const templateParts = yield* resolvePromptParts(template)
       const inputFiles = new Set(
         input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
@@ -1879,7 +1899,6 @@ const layer = Layer.effect(
       const uniqueTemplateParts = templateParts.filter(
         (part) => part.type !== "file" || !inputFiles.has(fileURLToPath(part.url)),
       )
-      const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
         ? [
             {
@@ -1887,18 +1906,11 @@ const layer = Layer.effect(
               agent: agent.name,
               description: cmd.description ?? "",
               command: input.command,
-              model: { providerID: taskModel.providerID, modelID: taskModel.modelID },
+              model: { providerID: selectedTask.providerID, modelID: selectedTask.id },
               prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
             },
           ]
         : [...uniqueTemplateParts, ...(input.parts ?? [])]
-
-      const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
-      const userModel = isSubtask
-        ? input.model
-          ? Provider.parseModel(input.model)
-          : yield* currentModel(input.sessionID)
-        : taskModel
 
       yield* plugin.trigger(
         "command.execute.before",
@@ -1910,7 +1922,7 @@ const layer = Layer.effect(
         prompt: {
           sessionID: input.sessionID,
           messageID: input.messageID,
-          model: userModel,
+          model: { providerID: selectedUser.providerID, modelID: selectedUser.id },
           agent: userAgent,
           parts,
           variant: input.variant,
@@ -2185,7 +2197,7 @@ const layer = Layer.effect(
                   : {}),
             }
           }),
-        })
+        }, input)
         const parts = prepared.prompt.parts
         return DurablePrompt.make({
           ...input.prompt,
@@ -2247,17 +2259,16 @@ const layer = Layer.effect(
           },
         })
       },
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
-          : Effect.fail(
-              new SessionExecution.OperationError({
-                operation: "command",
-                reason: "invalid",
-                message: "Named command preparation failed; verify its command, agent and model configuration",
-              }),
-            ),
-      ),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause)
+        const error = Cause.squash(cause)
+        if (error instanceof SessionExecution.OperationError) return Effect.fail(error)
+        return Effect.fail(new SessionExecution.OperationError({
+          operation: "command",
+          reason: "invalid",
+          message: "Named command preparation failed; verify its command, agent and model configuration",
+        }))
+      }),
     )
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {

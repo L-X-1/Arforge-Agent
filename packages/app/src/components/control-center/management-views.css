@@ -39,6 +39,12 @@
 }
 .settings-v2-surface
   .arforge-management-views[data-component="tabs-v2"][data-variant="normal"][data-orientation="horizontal"]
+  > [data-slot="tabs-v2-list"]::before {
+  inset-inline: 0;
+  width: auto;
+}
+.settings-v2-surface
+  .arforge-management-views[data-component="tabs-v2"][data-variant="normal"][data-orientation="horizontal"]
   > [data-slot="tabs-v2-list"]
   > [data-slot="tabs-v2-trigger-wrapper"] {
   width: auto;

@@ -1,7 +1,7 @@
-import { describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it } from "bun:test"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { LLMClient, LLMEvent, Model, Usage } from "@arforge-ai/llm"
 import * as OpenAIChat from "@arforge-ai/llm/protocols/openai-compatible-chat"
 import * as TitleGeneration from "../src/session/title-generation"
@@ -34,6 +34,9 @@ import * as TestClock from "effect/testing/TestClock"
 import { testEffect } from "./lib/effect"
 
 const authorizationRequests: PermissionV2.AssertInput[] = []
+const WaitForApproval = Context.Reference<Effect.Effect<void>>("test/ActionGateway.WaitForApproval", {
+  defaultValue: () => Effect.void,
+})
 const permissionLayer = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
@@ -45,7 +48,9 @@ const permissionLayer = Layer.succeed(
             ? Effect.die(new PermissionV2.DeclinedError())
             : input.action === "reject"
               ? Effect.fail(new PermissionV2.BlockedError({ rules: [] }))
-              : Effect.void,
+              : input.action === "await-test-approval"
+                ? Effect.flatMap(WaitForApproval, (wait) => wait)
+                : Effect.void,
         ),
       ),
     reply: () => Effect.void,
@@ -55,7 +60,49 @@ const permissionLayer = Layer.succeed(
   }),
 )
 const testSecrets = SecretProvider.makeAes256Gcm(new Uint8Array(32).fill(7), "test-authorization-aes-256-gcm")
-const secretLayer = Layer.succeed(SecretProvider.Service, testSecrets)
+/**
+ * Counts real protect/unprotect calls on the existing AES test provider and
+ * keeps a per-ciphertext tally, so a test can tell which grant proof was
+ * decrypted. `failOnUnprotect` makes that attempt fail, proving the pre-execution
+ * verification still decrypts for real.
+ */
+const secretCalls = {
+  protect: 0,
+  unprotect: 0,
+  failOnUnprotect: Number.POSITIVE_INFINITY,
+  byProof: new Map<string, number>(),
+}
+const resetSecretCalls = () => {
+  secretCalls.protect = 0
+  secretCalls.unprotect = 0
+  secretCalls.failOnUnprotect = Number.POSITIVE_INFINITY
+  secretCalls.byProof.clear()
+}
+const proofDecryptions = (proof: string) => secretCalls.byProof.get(proof) ?? 0
+// Never let one test's failure injection leak into the next one.
+afterEach(resetSecretCalls)
+const secretLayer = Layer.succeed(
+  SecretProvider.Service,
+  new Proxy(testSecrets, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver)
+      if (property === "protect" && typeof value === "function")
+        return (plaintext: Uint8Array) =>
+          Effect.sync(() => {
+            secretCalls.protect += 1
+          }).pipe(Effect.andThen(target.protect(plaintext)))
+      if (property === "unprotect" && typeof value === "function")
+        return (ciphertext: string) =>
+          Effect.sync(() => {
+            secretCalls.unprotect += 1
+            secretCalls.byProof.set(ciphertext, (secretCalls.byProof.get(ciphertext) ?? 0) + 1)
+            if (secretCalls.unprotect === secretCalls.failOnUnprotect)
+              throw new Error("fixture proof decrypt failure")
+          }).pipe(Effect.andThen(target.unprotect(ciphertext)))
+      return value
+    },
+  }),
+)
 
 const itEffect = testEffect(
   AppNodeBuilder.build(
@@ -723,6 +770,34 @@ describe("ActionGateway", () => {
       expect(String(before)).toContain("ActionGateway.ActionInProgressError")
       yield* gateway.blockAuthorizedHandoff(handoff, authorization, "explicit cancel at uncertain handoff")
       expect((yield* actions.load(handoff.actionID)).action.status).toBe("blocked")
+    }),
+  )
+
+  itEffect.live("keeps the live approval cancellable after a duplicate loses its lease", () =>
+    Effect.gen(function* () {
+      const gateway = yield* ActionGateway.Service
+      const actions = yield* DurableAction.Service
+      const waiting = yield* Deferred.make<void>()
+      const action = input("L3")
+      let executions = 0
+      const operation = {
+        authorization: { requests: [{ action: "await-test-approval", resources: ["test"] }] },
+        execute: () => Effect.sync(() => ++executions),
+      }
+      const original = yield* gateway.execute(action, operation).pipe(
+        Effect.provideService(WaitForApproval, Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never))),
+        Effect.forkScoped,
+      )
+      yield* Deferred.await(waiting).pipe(Effect.timeout(2500))
+      const duplicate = yield* gateway.execute(action, operation).pipe(Effect.exit)
+      expect(String(duplicate)).toContain("ActionGateway.ActionInProgressError")
+
+      yield* gateway.cancelPendingSessionActions!(action.sessionID)
+      yield* Fiber.interrupt(original)
+      const snapshot = yield* actions.load(action.actionID)
+      expect(snapshot.action.status).toBe("cancelled")
+      expect(snapshot.action.budget.attemptsUsed).toBe(0)
+      expect(executions).toBe(0)
     }),
   )
 
@@ -5594,5 +5669,144 @@ describe("ActionGateway control-plane subject", () => {
           }
         }
       }),
+  )
+})
+
+/**
+ * Fresh-grant seal reuse: a newly created top-level session action may skip the
+ * first proof decryption because the gateway just sealed that exact grant in the
+ * same execution. The final pre-execution check must still decrypt for real.
+ */
+describe("fresh authorization seal", () => {
+  for (const tier of ["L2", "L3"] as const)
+    itEffect.effect(`decrypts a fresh top-level ${tier} grant once instead of twice`, () =>
+      Effect.gen(function* () {
+        resetSecretCalls()
+        const gateway = yield* ActionGateway.Service
+        const actions = yield* DurableAction.Service
+        const action = input(tier)
+        const authorization: ActionGateway.AuthorizationPlan = {
+          requests: [{ action: "edit", resources: ["alpha"] }],
+        }
+        let executions = 0
+        const value = yield* gateway.execute(action, {
+          authorization,
+          execute: () =>
+            Effect.sync(() => {
+              executions += 1
+              return "done"
+            }),
+        })
+        expect(value).toBe("done")
+        expect(executions).toBe(1)
+        const snapshot = yield* actions.load(action.actionID)
+        expect(snapshot.action.status).toBe("settled")
+        if (!snapshot.authorization) throw new Error("authorization grant was not persisted")
+        // One seal at issue time; the first pre-attempt check reuses it, and
+        // only the last check before operation.execute decrypts.
+        expect(secretCalls.protect).toBe(1)
+        expect(secretCalls.unprotect).toBe(1)
+        expect(proofDecryptions(snapshot.authorization.proof)).toBe(1)
+      }),
+    )
+
+  itEffect.effect("still decrypts the proof before the executor and fails closed", () =>
+    Effect.gen(function* () {
+      resetSecretCalls()
+      const gateway = yield* ActionGateway.Service
+      const actions = yield* DurableAction.Service
+      const action = input("L2")
+      // The seal covers the pre-attempt check, so the only remaining decrypt is
+      // the final one immediately before operation.execute.
+      secretCalls.failOnUnprotect = 1
+      let executions = 0
+      const exit = yield* gateway
+        .execute(action, {
+          authorization: { requests: [{ action: "edit", resources: ["alpha"] }] },
+          execute: () =>
+            Effect.sync(() => {
+              executions += 1
+              return "done"
+            }),
+        })
+        .pipe(Effect.exit)
+      expect(executions).toBe(0)
+      expect(secretCalls.protect).toBe(1)
+      expect(secretCalls.unprotect).toBe(1)
+      expect(String(exit)).toContain("ActionGateway.RecoveryRequiredError")
+      const snapshot = yield* actions.load(action.actionID)
+      expect(snapshot.observation).toBeUndefined()
+      expect(snapshot.action.status).toBe("executing")
+      // The failure hit the final re-check after the attempt was durably
+      // started, proving the mock did not merely break an earlier decrypt.
+      expect(snapshot.activeAttempt?.attempt).toBe(1)
+    }),
+  )
+
+  itEffect.effect("never reuses a seal for a delegated child or on recovery", () =>
+    Effect.gen(function* () {
+      authorizationRequests.length = 0
+      const gateway = yield* ActionGateway.Service
+      const actions = yield* DurableAction.Service
+      const parent = input("L2")
+      yield* gateway.execute(parent, {
+        authorization: { requests: [{ action: "github_list_issues", resources: ["*"] }] },
+        execute: () => Effect.succeed("parent"),
+      })
+      const parentGrant = (yield* actions.load(parent.actionID)).authorization
+      if (!parentGrant) throw new Error("parent authorization grant was not persisted")
+      const childInput = {
+        ...input("L2"),
+        sessionID: parent.sessionID,
+        assistantMessageID: parent.assistantMessageID,
+        actionID: ActionGateway.stableChildActionID({
+          parentActionID: parent.actionID,
+          server: "github",
+          tool: "list_issues",
+          argsDigest: "abc",
+          invocation: "call-1",
+        }),
+        parentActionID: parent.actionID,
+        name: "github_list_issues",
+        resources: ["github_list_issues", "github", "list_issues", "args:abc"],
+      }
+      resetSecretCalls()
+      let childExecutions = 0
+      yield* gateway.execute(childInput, {
+        authorization: { requests: [{ action: "github_list_issues", resources: ["*"] }] },
+        execute: () =>
+          Effect.sync(() => {
+            childExecutions += 1
+            return "child"
+          }),
+      })
+      expect(childExecutions).toBe(1)
+      const childSnapshot = yield* actions.load(childInput.actionID)
+      if (!childSnapshot.authorization) throw new Error("child authorization grant was not persisted")
+      expect(childSnapshot.authorization.parentGrantID).toBe(parentGrant.id)
+      // Both pre-execution checks decrypt the child's own proof; the inherited
+      // parent grant is also re-verified while authorizing the child.
+      expect(proofDecryptions(childSnapshot.authorization.proof)).toBe(2)
+      expect(proofDecryptions(parentGrant.proof)).toBeGreaterThan(0)
+      expect(secretCalls.protect).toBe(1)
+
+      // Recovery of an already-authorized action never reuses a seal either.
+      yield* reseedAuthorized(parent, parentGrant, "authorized", {
+        requests: [{ action: "github_list_issues", resources: ["*"] }],
+      })
+      resetSecretCalls()
+      let resumed = 0
+      yield* gateway.execute(parent, {
+        authorization: { requests: [{ action: "github_list_issues", resources: ["*"] }] },
+        execute: () =>
+          Effect.sync(() => {
+            resumed += 1
+            return "resumed"
+          }),
+      })
+      expect(resumed).toBe(1)
+      expect(secretCalls.protect).toBe(0)
+      expect(proofDecryptions(parentGrant.proof)).toBe(3)
+    }),
   )
 })

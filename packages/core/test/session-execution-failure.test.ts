@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
+import { AgentRuntime } from "@arforge-ai/schema/agent-runtime"
 import { EventV2 } from "@arforge-ai/core/event"
+import { DurableRun } from "@arforge-ai/core/runtime/durable-run"
 import { SessionSchema } from "@arforge-ai/core/session/schema"
 import { SessionEvent } from "@arforge-ai/core/session/event"
 import { SessionV1 } from "@arforge-ai/core/v1/session"
@@ -52,6 +54,67 @@ describe("session drain failure observation", () => {
       ])
       expect(state.listeners.size).toBe(0)
     })
+
+  test("a budget defect reports the redacted reason and how to continue without replacing the cause", async () => {
+    const state = fixture()
+    const token = "synthetic-private-budget-token"
+    const detail = "Token budget cannot admit another provider request (961253/1000000 settled tokens)."
+    const failure = new DurableRun.BudgetExhaustedError({
+      runID: AgentRuntime.RunID.create(),
+      attemptsUsed: 1,
+      maxAttempts: 3,
+      reason: `${detail} token=${token};\u0000 ${"diagnostic ".repeat(1_000)}`,
+    })
+    const exit = await Effect.runPromise(
+      reportDrainFailure(Effect.die(failure), { sessionID, events: state.events }).pipe(Effect.exit),
+    )
+
+    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBe(failure)
+    expect(state.published).toHaveLength(1)
+    expect(state.published[0].type).toBe(SessionV1.Event.Error.type)
+    const payload = Schema.decodeUnknownSync(SessionV1.Event.Error.data, { onExcessProperty: "error" })(
+      state.published[0].data,
+    )
+    expect(payload.sessionID).toBe(sessionID)
+    expect(payload.error?.name).toBe("UnknownError")
+    if (payload.error?.name !== "UnknownError") throw new Error("Expected an UnknownError")
+    const { message } = payload.error.data
+    expect(message).toContain("Send a new message in this session to continue.")
+    expect(message).toContain(`${detail} token=[REDACTED_SECRET];`)
+    expect(message).not.toContain(token)
+    expect(message).not.toContain("\u0000")
+    expect(message.length).toBeLessThanOrEqual(500)
+    expect(state.listeners.size).toBe(0)
+  })
+
+  test("a typed budget failure without a reason still explains how to continue", async () => {
+    const state = fixture()
+    const failure = new DurableRun.BudgetExhaustedError({
+      runID: AgentRuntime.RunID.create(),
+      attemptsUsed: 3,
+      maxAttempts: 3,
+    })
+    const exit = await Effect.runPromise(
+      reportDrainFailure(Effect.fail(failure), { sessionID, events: state.events }).pipe(Effect.exit),
+    )
+
+    expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toBe(failure)
+    expect(state.published).toEqual([
+      {
+        type: SessionV1.Event.Error.type,
+        data: {
+          sessionID,
+          error: {
+            name: "UnknownError",
+            data: {
+              message: "This run stopped because of its execution budget. Send a new message in this session to continue.",
+            },
+          },
+        },
+        location: undefined,
+      },
+    ])
+  })
 
   test("success preserves queued input facts and terminal state without publishing or retrying", async () => {
     const state = fixture()

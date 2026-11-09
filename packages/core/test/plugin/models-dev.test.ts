@@ -28,6 +28,42 @@ const layer = AppNodeBuilder.build(LayerNode.group([Catalog.node, Integration.no
 const it = testEffect(layer)
 
 describe("ModelsDevPlugin", () => {
+  it.effect("lists one bundled official Flash and retains exact relay IDs", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const catalog = yield* Catalog.Service
+      const bundled: Record<string, ModelsDev.Provider> = yield* Effect.promise(() =>
+        Bun.file(path.join(import.meta.dir, "../../assets/models.json")).json(),
+      )
+      const deepseek = bundled.deepseek
+      const relay = { ...deepseek, id: "relay", env: [], api: "https://relay.invalid" }
+      yield* ModelsDevPlugin.effect(host({ catalog: catalogHost(catalog), integration: integrationHost(integrations) }))
+        .pipe(Effect.provideService(ModelsDev.Service, ModelsDev.Service.of({
+          get: () => Effect.succeed({ deepseek, relay }),
+          refresh: () => Effect.void,
+        })))
+      const official = ProviderV2.ID.make("deepseek")
+      const canonical = ModelV2.ID.make("deepseek-flash")
+      const legacy = ModelV2.ID.make("deepseek-v4-flash")
+      const vision = ModelV2.ID.make("deepseek-v4-flash-vision-exp")
+      expect((yield* catalog.model.all()).filter(item => item.providerID === official).map(item => item.id))
+        .toEqual([canonical, ModelV2.ID.make("deepseek-v4-pro")])
+      expect(yield* catalog.model.get(official, canonical)).toMatchObject({
+        capabilities: { input: ["text", "image"] },
+        limit: { context: 1048576, output: 393216 },
+      })
+      expect(yield* catalog.model.get(official, legacy)).toBeDefined()
+      expect((yield* catalog.model.get(official, vision))?.id).toBe(canonical)
+      expect((yield* catalog.model.get(ProviderV2.ID.make("relay"), legacy))?.api.id).toBe(legacy)
+      expect(yield* catalog.model.get(ProviderV2.ID.make("relay"), vision)).toBeUndefined()
+      yield* catalog.transform(editor => editor.provider.update(official, provider => {
+        provider.api.url = "https://relay.invalid"
+      }))
+      expect((yield* catalog.model.get(official, legacy))?.api.id).toBe(legacy)
+      expect(yield* catalog.model.get(official, vision)).toBeUndefined()
+    }),
+  )
+
   it.effect("projects bundled model catalog modes as separate models instead of variants", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

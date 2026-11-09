@@ -52,10 +52,20 @@ The chooser SHALL present the selected model's supported reasoning variants as a
 
 - GIVEN a selected model with explicit executable reasoning variants
 - WHEN the user opens its model chooser
-- THEN the bottom strength control SHALL use the reference's pill-shaped track, discrete supported stops, clear current value and existing configurable shortcut hint while retaining the approved application theme
+- THEN the bottom strength control SHALL show the approved neural pulse dial with discrete supported stops, a clear current value and the existing configurable shortcut hint in warm-white and graphite themes
 - AND pointer, touch and native keyboard range operations SHALL select an actual supported variant that persists and reaches the next real model request
 - AND reset/default, off and automatic SHALL remain distinguishable; a decorative stop SHALL NOT invent an extra provider-supported tier
 - AND provider/model/source changes or disposal during a drag or save SHALL invalidate the old preview and completion without overwriting the new selection or in-flight response
+- AND a stale pointer release or cancellation SHALL affect only its original gesture, even if a newer keyboard preview has started
+
+#### Scenario: The user previews strength on the neural pulse dial
+
+- GIVEN the selected model exposes at least two compatible, ordered strength options
+- WHEN the user clicks a stop or drags around the dial
+- THEN the dial SHALL show only those options and morph the network as the preview changes
+- AND reaching the maximum supported strength SHALL show the full network and, with motion enabled, the expansion wave
+- AND the user's pause control and system reduced-motion setting SHALL stop animation while retaining the available choices and their selected state
+- AND hiding or closing the chooser SHALL stop its animation work
 
 #### Scenario: The selected model has no verified reasoning choices
 

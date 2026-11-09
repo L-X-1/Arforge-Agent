@@ -35,7 +35,7 @@ beforeAll(async () => {
   await plugin({
     name: "real-model-strength-component",
     setup(build) {
-      build.onLoad({ filter: /[\\/](?:dialog-select-model-v2|keybind-v2)\.tsx$/ }, async ({ path }) => {
+      build.onLoad({ filter: /[\\/](?:dialog-select-model-v2|model-strength-dial|keybind-v2)\.tsx$/ }, async ({ path }) => {
         const result = babel.transformSync(await Bun.file(path).text(), {
           filename: path,
           configFile: false,
@@ -188,9 +188,13 @@ async function mount() {
   return {
     host,
     range: () => host.querySelector<HTMLInputElement>('input[type="range"]')!,
+    options: () => host.querySelector<HTMLElement>('[data-slot="model-strength-options"]')!,
+    dial: () => host.querySelector('[data-slot="model-strength-dial"]'),
+    stops: () => [...host.querySelectorAll('[data-slot="model-strength-stop"]')],
+    selectedStop: () => host.querySelector('[data-slot="model-strength-stop"][data-selected="true"]'),
     value: () => host.querySelector("output")!.textContent,
     mode: (key: string) =>
-      Array.from(host.querySelectorAll<HTMLButtonElement>("[data-variant-key]")).find(
+      Array.from(host.querySelectorAll<HTMLButtonElement>("button[data-variant-key]")).find(
         (item) => item.dataset.variantKey === key,
       )!,
   }
@@ -205,13 +209,15 @@ function commit(input: HTMLInputElement) {
 }
 
 describe("real model reasoning footer", () => {
-  test("shows the selected label, pill rail, only actual tier stops and configured keycaps", async () => {
+  test("shows the selected label, neural dial, only actual tier stops and configured keycaps", async () => {
     const view = await mount()
     expect(view.value()).toBe("最高")
-    expect(view.range().max).toBe("2")
+    expect(view.range().max).toBe("3")
     expect(view.range().getAttribute("aria-valuetext")).toBe("最高")
-    expect(view.host.querySelector(".arforge-model-picker__strength-rail")).not.toBeNull()
-    expect(view.host.querySelectorAll(".arforge-model-picker__strength-ticks span")).toHaveLength(3)
+    expect(view.dial()?.querySelector("canvas")).not.toBeNull()
+    expect(view.stops().map((stop) => stop.getAttribute("title"))).toEqual(["关闭", "低", "高", "最高"])
+    expect(view.options().dataset.strengthState).toBe("max")
+    expect(view.selectedStop()?.getAttribute("title")).toBe("最高")
     expect(view.host.querySelector('[data-component="keybind-v2"]')?.textContent).toBe("AltR")
     fixture.set("shortcut", ["Shift", "F9"])
     expect(view.host.querySelector('[data-component="keybind-v2"]')?.textContent).toBe("ShiftF9")
@@ -219,29 +225,53 @@ describe("real model reasoning footer", () => {
     expect(view.host.querySelector('[data-component="keybind-v2"]')).toBeNull()
     expect(fixture.writes).toEqual([])
   })
-  test("previews without writing, then commits the exact supported recipe", async () => {
+  test("moves the selected dial stop and current label before committing one exact recipe", async () => {
     const view = await mount()
-    preview(view.range(), 1)
-    expect(view.value()).toBe("高")
-    expect(fixture.state.variant).toBe("max")
-    expect(fixture.writes).toEqual([])
+    for (const [index, label, state] of [
+      [2, "高", "level"],
+      [1, "低", "level"],
+      [0, "关闭", "off"],
+    ] as const) {
+      preview(view.range(), index)
+      expect(view.range().valueAsNumber).toBe(index)
+      expect(view.value()).toBe(label)
+      expect(view.range().getAttribute("aria-valuetext")).toBe(label)
+      expect(view.options().dataset.strengthState).toBe(state)
+      expect(view.selectedStop()?.getAttribute("title")).toBe(label)
+      expect(fixture.state.variant).toBe("max")
+      expect(fixture.writes).toEqual([])
+    }
     commit(view.range())
     await settle()
-    expect(fixture.writes).toEqual(["high"])
-    expect(view.value()).toBe("高")
+    expect(fixture.writes).toEqual(["off"])
+    expect(view.value()).toBe("关闭")
+    expect(view.options().dataset.strengthState).toBe("off")
+  })
+  test("retires the dial canvas on close and restores the current choice on reopen", async () => {
+    const view = await mount()
+    const canvas = view.dial()?.querySelector("canvas")
+    expect(canvas).toBeTruthy()
+    fixture.open(false)
+    expect(canvas?.isConnected).toBe(false)
+    fixture.open(true)
+    await settle()
+    expect(view.selectedStop()?.getAttribute("title")).toBe("最高")
   })
   test("reset, off, automatic, model default and generic presets remain distinct", async () => {
     const view = await mount()
-    for (const value of [undefined, "off", "auto", "default"]) {
+    expect(view.mode(JSON.stringify(["variant", "off"]))).toBeUndefined()
+    for (const value of [undefined, "auto", "default"]) {
       view.mode(value === undefined ? "reset" : JSON.stringify(["variant", value])).click()
       await settle()
       expect(fixture.state.variant).toBe(value)
+      expect(view.options().dataset.strengthState).toBe("mode")
+      expect(view.selectedStop()).toBeNull()
     }
     const presets = view.host.querySelector<HTMLSelectElement>("select")!
     presets.value = JSON.stringify(["variant", "json"])
     presets.dispatchEvent(new Event("change", { bubbles: true }))
     await settle()
-    expect(fixture.writes).toEqual([undefined, "off", "auto", "default", "json"])
+    expect(fixture.writes).toEqual([undefined, "auto", "default", "json"])
     expect(presets.getAttribute("aria-label")).toBe("其他选项")
   })
   test("pointer activation can choose the lowest tier from default even with no native value change", async () => {
@@ -250,14 +280,14 @@ describe("real model reasoning footer", () => {
     view.range().dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerType: "touch", bubbles: true }))
     view.range().dispatchEvent(new PointerEvent("pointerup", { button: 0, pointerType: "touch", bubbles: true }))
     await settle()
-    expect(fixture.writes).toEqual(["low"])
+    expect(fixture.writes).toEqual(["off"])
   })
   test("native arrows and Home/End are not prevented or redirected to model navigation", async () => {
     const view = await mount()
     for (const [key, index, value] of [
-      ["Home", 0, "low"],
-      ["End", 2, "max"],
-      ["ArrowLeft", 1, "high"],
+      ["Home", 0, "off"],
+      ["End", 3, "max"],
+      ["ArrowLeft", 2, "high"],
     ] as const) {
       const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
       view.range().dispatchEvent(event)
@@ -275,7 +305,18 @@ describe("real model reasoning footer", () => {
     view.range().dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }))
     view.range().dispatchEvent(new KeyboardEvent("keyup", { key: "Home", bubbles: true }))
     await settle()
-    expect(fixture.writes).toEqual(["low"])
+    expect(fixture.writes).toEqual(["off"])
+  })
+  test("clicking the current thumb or pressing End at max leaves the effective preference alone", async () => {
+    const view = await mount()
+    const slider = view.range()
+    slider.dispatchEvent(new PointerEvent("pointerdown", { button: 0, pointerType: "mouse", bubbles: true }))
+    slider.dispatchEvent(new PointerEvent("pointerup", { button: 0, pointerType: "mouse", bubbles: true }))
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
+    slider.dispatchEvent(new KeyboardEvent("keyup", { key: "End", bubbles: true }))
+    await settle()
+    expect(view.value()).toBe("最高")
+    expect(fixture.writes).toEqual([])
   })
   test("pointer cancellation discards preview and an ensuing change cannot commit it", async () => {
     const view = await mount()
@@ -284,6 +325,8 @@ describe("real model reasoning footer", () => {
     commit(view.range())
     expect(fixture.writes).toEqual([])
     expect(view.value()).toBe("最高")
+    expect(view.range().valueAsNumber).toBe(3)
+    expect(view.options().dataset.strengthState).toBe("max")
   })
   test("successful same-owner writes restore range focus lost while it was disabled", async () => {
     const view = await mount()
@@ -298,7 +341,7 @@ describe("real model reasoning footer", () => {
         }),
     )
     view.range().focus()
-    preview(view.range(), 1)
+    preview(view.range(), 2)
     commit(view.range())
     // Browsers may move focus to body when the pending range becomes disabled.
     document.body.tabIndex = -1
@@ -317,7 +360,7 @@ describe("real model reasoning footer", () => {
     expect(view.host.querySelector('[data-slot="model-strength"]')?.textContent).toContain("未提供明确的思考预设")
     expect(view.range().getAttribute("aria-describedby")).toContain("strength-reason")
     expect(view.host.textContent).toContain("dialog.model.manage")
-    expect(view.host.querySelectorAll(".arforge-model-picker__strength-ticks span")).toHaveLength(0)
+    expect(view.stops()).toHaveLength(0)
     preview(view.range(), 0)
     commit(view.range())
     expect(fixture.writes).toEqual([])
@@ -341,6 +384,32 @@ describe("real model reasoning footer", () => {
     expect(fixture.writes).toEqual([])
     expect(view.value()).toBe("最高")
   })
+  for (const finish of ["pointerup", "pointercancel"] as const) {
+    test(`a stale dial ${finish} after A/B/A cannot commit or discard a newer keyboard preview`, async () => {
+      const view = await mount()
+      const dial = view.dial() as HTMLDivElement
+      dial.setPointerCapture = () => undefined
+      const pointer = { button: 0, pointerId: 7, pointerType: "mouse", bubbles: true, cancelable: true }
+      view.stops()[0].dispatchEvent(new PointerEvent("pointerdown", pointer))
+      expect(view.value()).toBe("关闭")
+
+      fixture.set("modelID", "beta")
+      fixture.set("modelID", "alpha")
+      const range = view.range()
+      range.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }))
+      range.dispatchEvent(new KeyboardEvent("keyup", { key: "End", bubbles: true }))
+      range.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }))
+      preview(range, 2)
+      expect(view.value()).toBe("高")
+
+      dial.dispatchEvent(new PointerEvent(finish, pointer))
+      expect(fixture.writes).toEqual([])
+      expect(view.value()).toBe("高")
+      commit(range)
+      await settle()
+      expect(fixture.writes).toEqual(["high"])
+    })
+  }
   test("a model change after pointer-down but before its first input also invalidates the gesture", async () => {
     const view = await mount()
     view.range().dispatchEvent(new PointerEvent("pointerdown", { button: 0, bubbles: true }))
@@ -366,7 +435,7 @@ describe("real model reasoning footer", () => {
     fixture.set("metadata", "low", { body: { reasoning_effort: "medium" } })
     commit(view.range())
     expect(fixture.writes).toEqual([])
-    preview(view.range(), 1)
+    preview(view.range(), 2)
     fixture.set("scope", "source/draft-B")
     commit(view.range())
     fixture.open(true)
@@ -385,7 +454,7 @@ describe("real model reasoning footer", () => {
           reject = fail
         }),
     )
-    preview(view.range(), 1)
+    preview(view.range(), 2)
     commit(view.range())
     expect(view.range().disabled).toBe(true)
     expect(view.mode("reset").disabled).toBe(true)

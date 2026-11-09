@@ -24,7 +24,8 @@ $arguments = @(
     "--private-env", "`"$privateEnv`"",
     "--destination", "`"$BackupDirectory`"",
     "--retention-days", "$RetentionDays",
-    "--prune"
+    "--prune",
+    "--administrator"
 ) -join " "
 
 $action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $root

@@ -3,6 +3,7 @@ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { Database } from "@arforge-ai/core/database/database"
 import { EventV2 } from "@arforge-ai/core/event"
+import { Catalog } from "@arforge-ai/schema/catalog"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@arforge-ai/core/installation/version"
@@ -97,7 +98,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
       const result = yield* config.updateGlobal(ctx.payload, locations)
-      if (result.changed) bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
+      if (result.changed) {
+        if (result.liveUpdate)
+          GlobalBus.emit("event", { directory: "global", payload: { type: Catalog.Event.Updated.type, properties: {} } })
+        else bridge.fork(disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }))
+      }
       return result.info
     })
 

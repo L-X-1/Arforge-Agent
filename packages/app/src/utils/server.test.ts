@@ -36,6 +36,36 @@ describe("operations API", () => {
     expect(api.controlledSessions.revert).toBeFunction()
   })
 
+  test("guides the selected queue entry using only its admission sequence", async () => {
+    const requests: Request[] = []
+    const target = { sessionID: "ses_guide", messageID: "msg_selected", expectedAdmittedSeq: 7 }
+    const fetcher = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(input instanceof Request ? input : new Request(input, init))
+        return Response.json({
+          data: {
+            sessionID: target.sessionID,
+            id: target.messageID,
+            admittedSeq: target.expectedAdmittedSeq,
+            prompt: { text: "Keep the existing queued prompt" },
+            delivery: "steer",
+            timeCreated: 1,
+          },
+        })
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    )
+    const api = createOperationsApiForServer({ server: { url: "http://localhost:4096" }, fetch: fetcher })
+
+    const guided = await api.sessions.promptQueueSteer(target)
+
+    expect(guided).toMatchObject({ id: target.messageID, admittedSeq: 7, delivery: "steer" })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].method).toBe("POST")
+    expect(new URL(requests[0].url).pathname).toBe("/api/session/ses_guide/prompt/queue/msg_selected/steer")
+    expect(await requests[0].json()).toEqual({ expectedAdmittedSeq: 7 })
+  })
+
   test("sends controlled session revert through the authenticated server adapter", async () => {
     let captured: Request | undefined
     const fetcher = Object.assign(

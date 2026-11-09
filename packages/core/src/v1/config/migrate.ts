@@ -61,6 +61,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
       },
       buffer: info.compaction.reserved,
     },
+    session_run_token_limit: info.session_run_token_limit,
     skills: info.skills && [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])],
     commands: info.command,
     instructions: info.instructions,

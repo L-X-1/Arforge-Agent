@@ -1178,7 +1178,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         commentCount,
         autoAccept: () => accepting(),
         mode: () => store.mode,
-        working,
         editor: () => editorRef,
         queueScroll,
         promptLength,
@@ -1558,7 +1557,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
                 <IconButton
                   data-action="prompt-submit"
-                  type="submit"
+                  type={stopping() ? "button" : "submit"}
+                  onClick={() => {
+                    if (stopping()) void abort()
+                  }}
                   disabled={(!working() && blank()) || (!stopping() && props.controls.session.canSubmit?.() === false)}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}

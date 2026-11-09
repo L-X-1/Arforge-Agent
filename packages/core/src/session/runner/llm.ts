@@ -11,6 +11,7 @@ import {
   type ProviderErrorEvent,
   type Usage,
 } from "@arforge-ai/llm"
+import { parseDevelopmentConditions } from "@arforge-ai/schema/development-conditions"
 import { Cause, DateTime, Effect, Exit, Fiber, FiberSet, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { ActionGateway } from "../../action-gateway"
@@ -55,7 +56,8 @@ import { createLLMEventPublisher, publicProviderFailure } from "./publish-llm-ev
 import { prepareFileMessages } from "./file-attachments"
 import { ReadToolFileSystem } from "../../tool/read-filesystem"
 import { LocationMutation } from "../../location-mutation"
-import { isResourceAttachmentTool, settleResourceAttachments } from "./resource-attachments"
+import { isResourceAttachmentTool, resourceAssistantID, settleResourceAttachments } from "./resource-attachments"
+import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
@@ -102,6 +104,13 @@ const durableProcessID = `worker_${process.pid}_${randomUUID()}`
 const durableLeaseTtlMs = 30_000
 const durableHeartbeatMs = 10_000
 const defaultProviderOutputTokenLimit = 32_000
+const legacyCompilerRevision = "context-compiler/v1"
+const standardCompilerRevision = "context-compiler/v2-context-pressure"
+const budgetPressureRevision = "context-compiler/v2-budget-pressure"
+const budgetCloseoutRevision = "context-compiler/v2-budget-closeout"
+const budgetCloseoutPrompt =
+  "The run is near its total token limit. Give a concise final response now without calling any tools. " +
+  "Report completed work and verified results, identify what remains unfinished or unverified, and avoid claiming success for work you did not complete."
 
 // Private codec for the existing Action result, not a second event/queue.
 const TitleReceipt = Schema.Struct({
@@ -1271,64 +1280,50 @@ const layer = Layer.effect(
       let currentStep = step
       const currentRun = (yield* durableRuns.load(runID).pipe(Effect.orDie)).run
       const personalJob = "admission" in currentRun ? currentRun.admission?.personalJob : undefined
-      const cutoff = promotion ? yield* EventV2.latestSequence(db, sessionID) : 0
-      // Sample the agent from the same queue/steer boundary as promotion, but
-      // initialize its context before consuming any durable pending input.
-      // In particular, an unavailable newly routed agent must leave every
-      // admission pending so the original message IDs can be retried safely.
-      const queued =
-        promotion === "queue"
-          ? yield* db
-              .select({ id: SessionInputTable.id, prompt: SessionInputTable.prompt })
-              .from(SessionInputTable)
-              .where(
-                and(
-                  eq(SessionInputTable.session_id, sessionID),
-                  isNull(SessionInputTable.promoted_seq),
-                  eq(SessionInputTable.delivery, "queue"),
-                  personalJob ? eq(SessionInputTable.id, personalJob.occurrence.messageID) : undefined,
-                ),
-              )
-              .orderBy(asc(SessionInputTable.admitted_seq))
-              .limit(1)
-              .get()
-              .pipe(Effect.orDie)
-          : undefined
-      const steers =
-        promotion && !personalJob
-          ? yield* db
-              .select({ prompt: SessionInputTable.prompt })
-              .from(SessionInputTable)
-              .where(
-                and(
-                  eq(SessionInputTable.session_id, sessionID),
-                  isNull(SessionInputTable.promoted_seq),
-                  eq(SessionInputTable.delivery, "steer"),
-                  lte(SessionInputTable.admitted_seq, cutoff),
-                ),
-              )
-              .orderBy(asc(SessionInputTable.admitted_seq))
-              .all()
-              .pipe(Effect.orDie)
-          : []
-      let agentID = queued?.prompt.route?.agent ?? beforePromotion.agent
-      for (const input of steers) agentID = input.prompt.route?.agent ?? agentID
-      const agent = yield* agents.select(agentID)
-      const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(sessionID, agent), sessionID)
-      let promoted = 0
-      if (promotion) {
-        if (promotion === "steer" && !personalJob)
-          promoted = yield* SessionInput.promoteSteers(db, events, sessionID, cutoff)
-        if (promotion === "queue") {
-          if (queued) promoted += Number(yield* SessionInput.promoteNextQueued(db, events, sessionID, queued.id))
-          if (!personalJob) promoted += yield* SessionInput.promoteSteers(db, events, sessionID, cutoff)
+      const preparedPromotion = yield* Effect.gen(function* () {
+        // Resolve the agent from the same inputs that commit. Concurrent
+        // edits, removal and Guide actions can retire the sampled queue row.
+        for (let attempt = 0; attempt < 4; attempt++) {
+          yield* validateExecution
+          const cutoff = promotion ? yield* EventV2.latestSequence(db, sessionID) : 0
+          const queued = promotion === "queue"
+            ? yield* db.select().from(SessionInputTable).where(and(
+                eq(SessionInputTable.session_id, sessionID),
+                isNull(SessionInputTable.promoted_seq),
+                eq(SessionInputTable.delivery, "queue"),
+                personalJob ? eq(SessionInputTable.id, personalJob.occurrence.messageID) : undefined,
+              )).orderBy(asc(SessionInputTable.admitted_seq)).limit(1).get().pipe(Effect.orDie)
+            : undefined
+          const steers = promotion && !personalJob
+            ? yield* db.select().from(SessionInputTable).where(and(
+                eq(SessionInputTable.session_id, sessionID),
+                isNull(SessionInputTable.promoted_seq),
+                eq(SessionInputTable.delivery, "steer"),
+                lte(SessionInputTable.admitted_seq, cutoff),
+              )).orderBy(asc(SessionInputTable.admitted_seq)).all().pipe(Effect.orDie)
+            : []
+          const selected = steers.length > 0 ? steers : queued ? [queued] : []
+          if (promotion === "queue" && selected.length === 0 && !recoveryRequest) return undefined
+          let agentID: string | undefined = beforePromotion.agent
+          for (const input of selected) agentID = input.prompt.route?.agent ?? agentID
+          const agent = yield* agents.select(agentID)
+          const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(sessionID, agent), sessionID)
+          if (selected.length === 0 || (yield* SessionInput.promoteSelected(db, events, sessionID, selected)) > 0)
+            return { agent, initialized, promoted: selected.length > 0 }
         }
-        if (promoted > 0) currentStep = 1
+        return yield* Effect.die(new SessionCheckpoint.RecoveryRequiredError(
+          "Pending input changed repeatedly during promotion. Resume after the queue settles.",
+        ))
+      })
+      if (!preparedPromotion) {
+        if (entryCheckpoint && !entryCheckpoint.legacy && entryCheckpoint.kind === SessionCheckpoint.KIND)
+          return { needsContinuation: false, step: currentStep, lastTurn: entryCheckpoint.lastTurn }
+        return yield* Effect.interrupt
       }
-      // Promotion applies the admitted route to the Session projection. Capture
-      // the actual post-promotion model with the agent sampled for this request;
-      // later selections must not change a request already being prepared/sent.
-      const session = promoted > 0 ? yield* getSession(sessionID) : beforePromotion
+      const { agent, initialized, promoted } = preparedPromotion
+      if (promoted) currentStep = 1
+      // Promotion applies the sampled routes before assembling the request.
+      const session = promoted ? yield* getSession(sessionID) : beforePromotion
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const system =
@@ -1344,8 +1339,8 @@ const layer = Layer.effect(
         ? undefined
         : (yield* skillService.value.snapshot()).digest
       const model = modelOverride ?? (yield* models.resolve(session))
-      const goalDeliveryLocked =
-        (yield* goals.list({ sessionID: session.id, includeHistory: false })).active?.status === "running"
+      const activeGoal = (yield* goals.list({ sessionID: session.id, includeHistory: false })).active
+      const goalDeliveryLocked = activeGoal?.status === "running"
       let entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       let context = entries.map((entry) => entry.message)
       let latestUserMessage = context.findLast((message) => message.type === "user")
@@ -1490,6 +1485,15 @@ const layer = Layer.effect(
       const resources = context.flatMap((message) =>
         message.type === "user" ? (message.files ?? []).flatMap((file) => (file.resource ? [file.resource] : [])) : [],
       )
+      const pendingResourceAttachment = resources.length > 0 && context.some((message) => {
+        if (message.type !== "user" || !message.files?.some((file) => file.resource)) return false
+        const assistantID = resourceAssistantID(session.id, message.id)
+        return !context.some((step) => step.type === "assistant" && step.id === assistantID && step.time.completed)
+      })
+      if (recoveryRequest && pendingResourceAttachment)
+        return yield* Effect.die(new SessionCheckpoint.RecoveryRequiredError(
+          "The prepared request's MCP attachment step is incomplete. Recovery is paused before reading the resource again.",
+        ))
       const externalTools =
         (!isLastStep || resources.length > 0) && externalSource
           ? yield* externalSource({
@@ -1541,6 +1545,15 @@ const layer = Layer.effect(
         latestRequest !== undefined && RuntimeStrategy.selectStrategy(latestRequest).id === "hypothesis-test"
           ? RuntimeStrategy.strategyPrompt(latestRequest)
           : ""
+      const developmentConditions = latestRequest === undefined ? undefined : parseDevelopmentConditions(latestRequest)
+      const developmentGuidance = developmentConditions && [
+        developmentConditions.files.length
+          ? "Treat the current user's explicit file scope as a delivery condition. Preserve unrelated workspace changes and report any observed out-of-scope edits for review."
+          : "",
+        developmentConditions.commands.length
+          ? "Run the current user's explicit verification commands through the usual permission flow. Base the final verification summary on actual tool receipts and say which checks were skipped, failed, or incomplete."
+          : "",
+      ].filter(Boolean).join("\n")
       let compiledParts: string[] = []
       let compiledLayers: ContextLayerReport[] = []
       try {
@@ -1553,6 +1566,7 @@ const layer = Layer.effect(
             ...(evolutionModelContext ? [{ layer: "L4", name: "evolution", text: evolutionModelContext }] : []),
             ...(routedSkills ? [{ layer: "L4", name: "routedSkills", text: routedSkills }] : []),
             ...(strategyLayer ? [{ layer: "L4", name: "strategy", text: strategyLayer }] : []),
+            ...(developmentGuidance ? [{ layer: "L4", name: "developmentConditions", text: developmentGuidance }] : []),
             ...(structuredFormat
               ? [
                   {
@@ -1581,8 +1595,56 @@ const layer = Layer.effect(
       } catch (error) {
         console.error("runtime: compile failed", error)
       }
+      const configuredOutputTokens = model.defaults?.generation?.maxTokens ?? model.route.defaults.generation?.maxTokens
+      const provisionalOutputTokens = Math.max(
+        1,
+        Math.floor(
+          configuredOutputTokens ??
+            model.defaults?.limits?.output ??
+            model.route.defaults.limits?.output ??
+            defaultProviderOutputTokenLimit,
+        ),
+      )
+      const outputTokenSnapshot = yield* durableRuns.load(runID).pipe(Effect.orDie)
+      if (!("sessionID" in outputTokenSnapshot.run) || outputTokenSnapshot.run.sessionID !== session.id)
+        return yield* Effect.die(new Error(`Durable run ${runID} is not bound to Session ${session.id}`))
+      if (!outputTokenSnapshot.activeAttempt)
+        return yield* Effect.die(new Error(`Durable run ${runID} has no active attempt for a provider call`))
+      const activeAttempt = outputTokenSnapshot.activeAttempt
+      const budgetInput = {
+        snapshot: outputTokenSnapshot,
+        cumulativeSessionTokens: sessionTokenTotal(session.tokens),
+      }
+      const tokenBudget = DurableRun.providerTokenBudget(budgetInput)
+      const { remainingTokens } = tokenBudget
+      const replyReserve = Math.min(provisionalOutputTokens, 2_048)
+      const inputText = (messages: ReadonlyArray<Message>, system: ReadonlyArray<string>) =>
+        [system.join("\n"), ...messages.map((message) => JSON.stringify(message) ?? "")].join("\n")
+      const toolDefinitions = toolMaterialization?.definitions ?? []
+      const toolInputText = toolDefinitions.length > 0 ? `\n${JSON.stringify(toolDefinitions)}` : ""
+      const ordinaryRoot = !structuredFormat && !session.parentID && !outputTokenSnapshot.run.child &&
+        !checkpointExecution && !personalJob && !activeGoal
+      const budgetExhausted = (estimatedInputTokens: number, attachmentBlocked = false) =>
+        new DurableRun.BudgetExhaustedError({
+          runID,
+          attemptsUsed: outputTokenSnapshot.run.budget.attemptsUsed,
+          maxAttempts: outputTokenSnapshot.run.budget.maxAttempts,
+          ...tokenBudget,
+          estimatedInputTokens,
+          reason: `Token budget cannot admit another provider request (${tokenBudget.tokensUsed}/${tokenBudget.maxTokens} tokens used, ${remainingTokens} available, ${estimatedInputTokens} estimated input tokens).${attachmentBlocked ? " The pending MCP attachment was not read." : ""}`,
+        })
+      if (pendingResourceAttachment && remainingTokens !== undefined) {
+        // Estimate known input without invoking any attachment tools. An MCP
+        // read is admitted only while a tool-enabled request still fits.
+        const preview = toLLMMessages(context, model)
+        const projected = ordinaryRoot ? ResultPruner.pruneMessages(preview).messages : preview
+        const estimated = Token.estimate(inputText(projected, compiledParts) + toolInputText)
+        if (estimated >= remainingTokens ||
+          (ordinaryRoot && !isLastStep && (estimated + replyReserve) * 2 >= remainingTokens))
+          return yield* Effect.die(budgetExhausted(estimated, true))
+      }
       if (
-        resources.length > 0 &&
+        !recoveryRequest && resources.length > 0 &&
         (yield* settleResourceAttachments({
           sessionID: session.id,
           runID,
@@ -1608,67 +1670,80 @@ const layer = Layer.effect(
           location: session.location, validateExecution }),
         ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
-      const configuredOutputTokens = model.defaults?.generation?.maxTokens ?? model.route.defaults.generation?.maxTokens
-      const provisionalOutputTokens = Math.max(
-        1,
-        Math.floor(
-          configuredOutputTokens ??
-            model.defaults?.limits?.output ??
-            model.route.defaults.limits?.output ??
-            defaultProviderOutputTokenLimit,
-        ),
-      )
       const provisionalRequest = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
         system: compiledParts.map(SystemPart.make),
         messages: rawRequestMessages,
-        tools: toolMaterialization?.definitions ?? [],
+        tools: toolDefinitions,
         toolChoice: structuredFormat ? "required" : isLastStep ? "none" : undefined,
         generation: { maxTokens: provisionalOutputTokens },
       })
-      const projectedToolResults = compaction.pruneToolResultsIfNeeded({ model, request: provisionalRequest })
-      const requestMessages = projectedToolResults?.messages ?? rawRequestMessages
-      const providerInputText = [
-        compiledParts.join("\n"),
-        ...requestMessages.map((message) => JSON.stringify(message) ?? ""),
-      ].join("\n")
-      const outputTokenSnapshot = yield* durableRuns.load(runID).pipe(Effect.orDie)
-      if (!("sessionID" in outputTokenSnapshot.run) || outputTokenSnapshot.run.sessionID !== session.id)
-        return yield* Effect.die(new Error(`Durable run ${runID} is not bound to Session ${session.id}`))
-      if (!outputTokenSnapshot.activeAttempt)
-        return yield* Effect.die(new Error(`Durable run ${runID} has no active attempt for a provider call`))
-      const activeAttempt = outputTokenSnapshot.activeAttempt
+      const recoveredRevision = recoveryRequest?.envelope.execution.compiler_revision
+      let projectedToolResults = compaction.pruneToolResultsIfNeeded({
+        model,
+        request: provisionalRequest,
+        legacyPressure: recoveredRevision === legacyCompilerRevision,
+      })
+      let providerInputText = inputText(projectedToolResults?.messages ?? rawRequestMessages, compiledParts)
+      let compilerRevision = recoveredRevision === legacyCompilerRevision ? legacyCompilerRevision : standardCompilerRevision
+      // A committed preparation keeps its original policy even if the current
+      // admission threshold differs. The exact request digest still gates replay.
+      if (
+        recoveredRevision === budgetPressureRevision ||
+        recoveredRevision === budgetCloseoutRevision ||
+        (!recoveryRequest && ordinaryRoot && remainingTokens !== undefined &&
+          (Token.estimate(providerInputText + toolInputText) + replyReserve) * 6 >= remainingTokens)
+      ) {
+        compilerRevision = budgetPressureRevision
+        projectedToolResults ??= ResultPruner.pruneMessages(rawRequestMessages)
+        providerInputText = inputText(projectedToolResults.messages, compiledParts) + toolInputText
+        if (
+          recoveredRevision === budgetCloseoutRevision ||
+          (!recoveryRequest && !pendingResourceAttachment && !isLastStep && remainingTokens !== undefined &&
+            (Token.estimate(providerInputText) + replyReserve) * 2 >= remainingTokens)
+        ) {
+          compilerRevision = budgetCloseoutRevision
+          projectedToolResults = ResultPruner.pruneMessages(rawRequestMessages, {
+            thresholdChars: 2_048,
+            headChars: 1_536,
+            tailChars: 384,
+          })
+          providerInputText = inputText(projectedToolResults.messages, [...compiledParts, budgetCloseoutPrompt])
+        }
+      }
+      const budgetCloseout = compilerRevision === budgetCloseoutRevision
+      const requestToolDefinitions = budgetCloseout ? [] : toolDefinitions
+      const estimatedInputTokens = Token.estimate(providerInputText)
       const budgetOutputTokens = DurableRun.providerOutputTokenAllowance({
-        snapshot: outputTokenSnapshot,
-        cumulativeSessionTokens: sessionTokenTotal(session.tokens),
-        estimatedInputTokens: Token.estimate(providerInputText),
+        ...budgetInput,
+        estimatedInputTokens,
         modelMaxOutputTokens:
           model.defaults?.limits?.output ?? model.route.defaults.limits?.output ?? defaultProviderOutputTokenLimit,
       })
+      // Keep room for another copy of the context and a reply during a tool
+      // turn. The next iteration rechecks the actual usage before dispatch.
+      const reservedOutputTokens = compilerRevision === budgetPressureRevision && !isLastStep && remainingTokens !== undefined
+        ? Math.max(0, remainingTokens - estimatedInputTokens * 2 - replyReserve)
+        : budgetOutputTokens
       // A model/route generation default is a user-visible contract, not just
       // metadata. Keep the durable budget allowance as the upper bound while
       // preserving that configured maxTokens in the exact provider request.
-      const maxOutputTokens =
-        configuredOutputTokens === undefined
-          ? budgetOutputTokens
-          : Math.min(budgetOutputTokens, Math.max(0, Math.floor(configuredOutputTokens)))
-      if (maxOutputTokens < 1)
-        return yield* Effect.die(
-          new DurableRun.BudgetExhaustedError({
-            runID,
-            attemptsUsed: outputTokenSnapshot.run.budget.attemptsUsed,
-            maxAttempts: outputTokenSnapshot.run.budget.maxAttempts,
-            reason: `Token budget cannot admit another provider request (${outputTokenSnapshot.run.budget.tokensUsed}/${outputTokenSnapshot.run.budget.maxTokens} settled tokens).`,
-          }),
-        )
+      const maxOutputTokens = Math.min(
+        budgetOutputTokens,
+        reservedOutputTokens,
+        configuredOutputTokens === undefined ? Infinity : Math.max(0, Math.floor(configuredOutputTokens)),
+      )
+      if (maxOutputTokens < 1 && remainingTokens === undefined)
+        return yield* Effect.die(new Error("The model's configured output limit cannot admit a provider request."))
+      if (maxOutputTokens < 1) return yield* Effect.die(budgetExhausted(estimatedInputTokens))
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: compiledParts.map(SystemPart.make),
-        messages: requestMessages,
-        tools: toolMaterialization?.definitions ?? [],
-        toolChoice: structuredFormat ? "required" : isLastStep ? "none" : undefined,
+        system: (budgetCloseout ? [...compiledParts, budgetCloseoutPrompt] : compiledParts).map(SystemPart.make),
+        messages: projectedToolResults?.messages ?? rawRequestMessages,
+        tools: requestToolDefinitions,
+        toolChoice: budgetCloseout ? "none" : provisionalRequest.toolChoice,
         generation: { maxTokens: maxOutputTokens },
       })
       // The envelope is the deterministic boundary between Core assembly and
@@ -1676,6 +1751,7 @@ const layer = Layer.effect(
       // revision identities without persisting any credential value.
       if (
         !recoveryRequest &&
+        !budgetCloseout &&
         (yield* compaction
           .compactIfNeeded({
             sessionID: session.id,
@@ -1702,10 +1778,10 @@ const layer = Layer.effect(
           attempt: activeAttempt.attempt,
           prompt_digest: latestPrompt === undefined ? undefined : PromptSystem.promptDigest(latestPrompt),
           context_digest: digest(providerInputText),
-          compiler_revision: "context-compiler/v1",
+          compiler_revision: compilerRevision,
           ...(skillSnapshotDigest === undefined ? {} : { skill_snapshot_digest: skillSnapshotDigest }),
           credential_identity: SessionRunnerModel.credentialIdentity(model),
-          tool_set_revision: digest(toolMaterialization?.definitions ?? []),
+          tool_set_revision: digest(requestToolDefinitions),
           route_config_revision: digest({
             id: model.route.id,
             protocol: String(model.route.protocol),
@@ -1867,7 +1943,7 @@ const layer = Layer.effect(
         requestDigest: persistedRequestEnvelope.request_digest,
         contextDigest: persistedRequestEnvelope.execution.context_digest ?? digest(providerInputText),
         toolSetRevision:
-          persistedRequestEnvelope.execution.tool_set_revision ?? digest(toolMaterialization?.definitions ?? []),
+          persistedRequestEnvelope.execution.tool_set_revision ?? digest(requestToolDefinitions),
         routeConfigRevision:
           persistedRequestEnvelope.execution.route_config_revision ??
           digest({
@@ -1879,7 +1955,7 @@ const layer = Layer.effect(
               path: typeof model.route.endpoint.path === "string" ? model.route.endpoint.path : "dynamic",
             },
           }),
-        compilerRevision: persistedRequestEnvelope.execution.compiler_revision ?? "context-compiler/v1",
+        compilerRevision: persistedRequestEnvelope.execution.compiler_revision ?? standardCompilerRevision,
       }
       // The same metadata-only projection contract used by parity acceptance
       // is checked at the live formal provider boundary. Missing optional
@@ -1960,6 +2036,7 @@ const layer = Layer.effect(
         )
       })
       let overflowFailure: ProviderErrorEvent | undefined
+      let closeoutHasText = false
       const toolsUsed = new Set<string>()
       const providerToolCalls: string[] = []
       const prepareBillingCall = () =>
@@ -1986,6 +2063,12 @@ const layer = Layer.effect(
                   overflowFailure = event
                   return
                 }
+              }
+              if (budgetCloseout) {
+                // A malformed stream cannot re-enable local tools or publish
+                // a hosted tool result during a text-only closeout.
+                if (event.type.startsWith("tool-")) return
+                if (event.type === "text-delta" && event.text.trim()) closeoutHasText = true
               }
               yield* publish(event)
               if (event.type !== "tool-call") return
@@ -2357,7 +2440,7 @@ const layer = Layer.effect(
           let transportRetriesUsed = 0
           let priorBillingCostMicros = inheritedBillingCostMicros
           let stream = yield* Effect.suspend(() => restore(runProviderStream()).pipe(Effect.exit))
-          while (stream._tag === "Failure") {
+          while (!budgetCloseout && stream._tag === "Failure") {
             const failure = Option.getOrUndefined(Cause.findErrorOption(stream.cause))
             const decision = RuntimeRetry.decide({
               failure,
@@ -2442,6 +2525,7 @@ const layer = Layer.effect(
           const billingSettlement = finalBilling.billingSettlement
           const billingCostMicros = priorBillingCostMicros + finalBilling.billingCostMicros
           if (
+            !budgetCloseout &&
             stream._tag === "Failure" &&
             !publisher.hasAssistantStarted() &&
             toolsUsed.size === 0 &&
@@ -2511,6 +2595,7 @@ const layer = Layer.effect(
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
+            !budgetCloseout &&
             recoverOverflow &&
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
@@ -2683,7 +2768,10 @@ const layer = Layer.effect(
                   // the provider's `tool-calls` transport reason out of the
                   // user-facing session state so the formal runner and the
                   // mature Prompt adapter share one terminal contract.
-                  finish: structuredValue !== undefined ? "stop" : stepSettlement.finish,
+                  finish: structuredValue !== undefined ||
+                    (budgetCloseout && closeoutHasText && stepSettlement.finish === "tool-calls")
+                    ? "stop"
+                    : stepSettlement.finish,
                   cost: billingCostMicros / 1_000_000,
                   tokens: stepSettlement.tokens,
                   snapshot: endSnapshot,
@@ -2779,6 +2867,11 @@ const layer = Layer.effect(
           }
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
+          if (budgetCloseout && !closeoutHasText && !contentFiltered && !publisher.hasProviderError()) {
+            const message = "The provider returned no text for the token-limit closeout. Prior work remains in the session."
+            yield* withPublication(publisher.failAssistant(message))
+            return yield* Effect.die(new Error(message))
+          }
           const primaryDelivered = primaryDeliveries.consume(session.id)
           const terminal = contentFiltered || !needsContinuation || primaryDelivered || publisher.hasProviderError()
           if (terminal)
@@ -3081,12 +3174,11 @@ const layer = Layer.effect(
       const durableSnapshot = yield* durableRuns.load(input.runID).pipe(Effect.orDie)
       const personalJob = "admission" in durableSnapshot.run ? durableSnapshot.run.admission?.personalJob : undefined
       const ownedInput = personalJob ? yield* SessionInput.find(db, personalJob.occurrence.messageID) : undefined
-      const hasSteer = personalJob ? false : yield* SessionInput.hasPending(db, input.sessionID, "steer")
+      const pending = personalJob ? [] : yield* SessionInput.pendingDeliveries(db, input.sessionID)
+      const hasSteer = pending.includes("steer")
       const hasQueue = personalJob
         ? ownedInput !== undefined && ownedInput.promotedSeq === undefined
-        : hasSteer
-          ? false
-          : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        : !hasSteer && pending.includes("queue")
       yield* failInterruptedTools(input.sessionID)
 
       // DurableRun owns persistence and integrity (event sequence, state digest,
@@ -3169,7 +3261,8 @@ const layer = Layer.effect(
             }),
           )
 
-          const hasPendingSteer = personalJob ? false : yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          const pending = personalJob ? [] : yield* SessionInput.pendingDeliveries(db, input.sessionID)
+          const hasPendingSteer = pending.includes("steer")
           const pendingSteer = result.needsContinuation || hasPendingSteer
           if (pendingSteer) {
             if (hasPendingSteer) repeatGuard.reset()
@@ -3180,7 +3273,7 @@ const layer = Layer.effect(
             // Queue promotion is a second user turn. Record that promotion
             // before mutating the durable input queue so a crash between the
             // two operations still has an unambiguous recovery cursor.
-            queuedNextCycle = personalJob ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+            queuedNextCycle = pending.includes("queue")
             needsContinuation = queuedNextCycle
             step = queuedNextCycle ? 1 : result.step + 1
             promotion = queuedNextCycle ? "queue" : undefined
@@ -3331,12 +3424,12 @@ const layer = Layer.effect(
             ),
           )
         const prior = (yield* durableRuns.recoverable(input.sessionID)).at(0)
+        const hasPendingInput = (yield* SessionInput.pendingDeliveries(db, input.sessionID)).length > 0
         if (
           !prior &&
           input.force &&
           sessionRuns[0]?.lastTransition?.reason === DurableRun.REQUEST_ABANDONED_REASON &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "steer")) &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "queue"))
+          !hasPendingInput
         )
           return yield* Effect.die(
             new SessionCheckpoint.RecoveryRequiredError(
@@ -3359,8 +3452,7 @@ const layer = Layer.effect(
         if (
           !prior &&
           !input.force &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "steer")) &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "queue"))
+          !hasPendingInput
         ) {
           // A redundant wake may repair already-settled metadata, but must not
           // allocate another run, budget, attempt, or model request.
@@ -3377,8 +3469,7 @@ const layer = Layer.effect(
         if (
           prior?.run.status === "paused" &&
           !input.force &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "steer")) &&
-          !(yield* SessionInput.hasPending(db, input.sessionID, "queue"))
+          !hasPendingInput
         )
           return
         // A no-op wake of a paused run needs no execution policy. An actual
@@ -3468,6 +3559,27 @@ const layer = Layer.effect(
               .pipe(Effect.orDie)
           }
         } else {
+          let tokenLimitEnabled = session.parentID !== undefined || input.personalJob !== undefined ||
+            (config.sessionRunTokenLimit ? yield* config.sessionRunTokenLimit() : false)
+          if (!tokenLimitEnabled) {
+            const goal = (yield* goals.list({ sessionID: session.id, includeHistory: false })).active
+            if (goal) tokenLimitEnabled = true
+            else {
+              // One run can drain both steers and queued prompts. Inspect the
+              // admitted input without promoting it or replacing a recovery budget.
+              const pending = yield* db.select({ prompt: SessionInputTable.prompt }).from(SessionInputTable)
+                .where(and(eq(SessionInputTable.session_id, session.id), isNull(SessionInputTable.promoted_seq)))
+                .all().pipe(Effect.orDie)
+              tokenLimitEnabled = pending.some(({ prompt }) => prompt.format?.type === "json_schema")
+              if (pending.length === 0) {
+                const latest = (yield* SessionHistory.load(db, session.id)).findLast((message) => message.type === "user")
+                if (latest) {
+                  const admitted = yield* SessionInput.find(db, latest.id)
+                  tokenLimitEnabled = (admitted?.prompt ?? latest).format?.type === "json_schema"
+                }
+              }
+            }
+          }
           const created = yield* durableRuns.create(
             {
               sessionID: input.sessionID,
@@ -3480,7 +3592,7 @@ const layer = Layer.effect(
                 maxAttempts: 3,
                 maxDurationMs: 60 * 60 * 1_000,
                 maxCostMicros: 5_000_000,
-                maxTokens: AgentRuntime.DEFAULT_MAX_TOKENS,
+                maxTokens: tokenLimitEnabled ? AgentRuntime.DEFAULT_MAX_TOKENS : DurableRun.UNLIMITED_ROOT_TOKENS,
                 attemptsUsed: 0,
                 durationMsUsed: 0,
                 costMicrosUsed: 0,
@@ -3628,7 +3740,9 @@ const layer = Layer.effect(
                     ? "Execution interrupted and can be resumed from its latest checkpoint"
                     : terminalFailure instanceof LLMError
                       ? publicProviderFailure(terminalFailure).message
-                      : Cause.pretty(exit.cause).slice(0, 500)
+                      : terminalFailure instanceof DurableRun.BudgetExhaustedError
+                        ? (terminalFailure.reason ?? "Execution budget exhausted").slice(0, 500)
+                        : Cause.pretty(exit.cause).slice(0, 500)
             }
             if (!interrupted && !billingPending && !recoveryPending)
               yield* settleRunningGoal(goals, input.sessionID, exit)

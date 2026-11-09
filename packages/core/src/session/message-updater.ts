@@ -147,6 +147,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.prompt.admitted": () => Effect.void,
       "session.next.prompt.queue.updated": () => Effect.void,
       "session.next.prompt.queue.removed": () => Effect.void,
+      "session.next.prompt.queue.steered": () => Effect.void,
       "session.next.context.updated": (event) =>
         adapter.appendMessage(
           SessionMessage.System.make({

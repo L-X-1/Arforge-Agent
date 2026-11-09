@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, SessionStatus } from "@arforge-ai/sdk/v2"
-import { buildExecutionTrace, executionStepText } from "./execution-trace-model"
+import type { Message, Part, PermissionRequest, SessionStatus, ToolPart } from "@arforge-ai/sdk/v2"
+import { buildExecutionTrace, executionStepText, executionToolKey, executionToolStep } from "./execution-trace-model"
+import { countVerificationOutcomes, projectExecutionEvidence } from "./execution-evidence"
 
 const sessionID = "ses_1"
 const user = {
@@ -26,15 +27,142 @@ const assistant = {
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
 } as Message
 
-function trace(parts: Part[], status: SessionStatus = { type: "idle" }) {
+function trace(parts: Part[], status: SessionStatus = { type: "idle" }, prompt?: string, permission?: PermissionRequest) {
   return buildExecutionTrace({
     messages: [user, assistant],
     parts: (id) => (id === assistant.id ? parts : []),
     status,
+    prompt,
+    permission,
   })
 }
 
+function tool(id: string, name: string, state: ToolPart["state"]): ToolPart {
+  return { id, sessionID, messageID: assistant.id, type: "tool", callID: "call_" + id, tool: name, state }
+}
+
 describe("execution trace model", () => {
+  test("only links an unsettled tool to the visible ask with the exact session, message and call", () => {
+    const command = tool("verify", "bash", { status: "running", input: { command: "node visible-test.mjs" }, time: { start: 3 } })
+    const request: PermissionRequest = {
+      id: "per_real", sessionID, permission: "bash", patterns: ["node visible-test.mjs"], always: [], metadata: {},
+      tool: { messageID: assistant.id, callID: command.callID },
+    }
+    const waiting = trace([command], { type: "busy" }, undefined, request)
+    expect(waiting.phase).toBe("approval")
+    expect(waiting.approval?.tool.id).toBe(command.id)
+    expect(projectExecutionEvidence([waiting]).verifications[0]?.status).toBe("approval")
+    for (const foreign of [
+      { ...request, sessionID: "ses_other" },
+      { ...request, tool: { messageID: "msg_other", callID: command.callID } },
+      { ...request, tool: { messageID: assistant.id, callID: "call_other" } },
+      { ...request, tool: undefined },
+    ]) {
+      const active = trace([command], { type: "busy" }, undefined, foreign)
+      expect(active.phase).toBe("running")
+      expect(active.approval).toBeUndefined()
+      expect(active.steps[0]?.status).toBe("active")
+      expect(projectExecutionEvidence([active]).verifications[0]?.status).toBe("active")
+    }
+    const denied = tool("verify", "bash", { status: "error", input: command.state.input, error: "Permission denied", time: { start: 3, end: 4 } })
+    const finished = trace([denied], { type: "idle" }, undefined, request)
+    expect(finished.approval).toBeUndefined()
+    expect(finished.phase).toBe("failed")
+    expect(projectExecutionEvidence([finished]).verifications[0]).toMatchObject({ status: "tool-error", output: "Permission denied" })
+  })
+
+  test("distinguishes admitted, finishing, settled and incomplete evidence", () => {
+    const answer: Part = { id: "answer", sessionID, messageID: assistant.id, type: "text", text: "done", time: { start: 3, end: 4 } }
+    expect(trace([], { type: "busy" }).phase).toBe("started")
+    expect(trace([{ ...answer, time: { start: 3 } }], { type: "busy" }).phase).toBe("running")
+    expect(trace([answer], { type: "busy" }).phase).toBe("finishing")
+    expect(trace([answer]).phase).toBe("incomplete")
+    const settled = buildExecutionTrace({
+      messages: [user, { ...assistant, finish: "stop", time: { created: 2, completed: 4 } } as Message],
+      parts: (id) => id === assistant.id ? [answer] : [],
+      status: { type: "idle" },
+    })
+    expect(settled.phase).toBe("completed")
+  })
+
+  test("links actual exit codes and file snapshots to exact siblings and flags unexecuted requested checks", () => {
+    const edit = (id: string, file: string) => tool(id, "edit", {
+      status: "completed", input: { path: file }, title: "edit", output: file,
+      metadata: { files: [{ file, patch: `patch for ${file}` }] }, time: { start: 2, end: 3 },
+    })
+    const shell = (id: string, command: string, exit?: number) => tool(id, "bash", {
+      status: "completed", input: { command }, title: "bash", output: "this stdout says passed",
+      metadata: { exit }, time: { start: 3, end: 4 },
+    })
+    const parts = [
+      edit("in-scope", "c:\\work\\REPO\\src\\owned.ts"),
+      edit("out-of-scope", "outside.mjs"),
+      edit("unbound", "D:/other/work.ts"),
+      shell("exit-three", "node visible-test.mjs", 3),
+      shell("missing-exit", "bun test"),
+      shell("compound", "node other-test.mjs ; echo OK", 0),
+    ]
+    const live = trace(parts, { type: "busy" }, "Allowed files: src/\nTest command: node visible-test.mjs\nTest command: cargo check")
+    const evidence = projectExecutionEvidence([live], "C:/Work/repo")
+    expect(evidence.files.map((file) => [file.toolID, file.scope])).toEqual([
+      [executionToolKey(parts[0]), undefined], [executionToolKey(parts[1]), "outside"], [executionToolKey(parts[2]), "incomplete"],
+    ])
+    expect(evidence.files[1]?.diff).toEqual({ file: "outside.mjs", patch: "patch for outside.mjs" })
+    expect(evidence.verifications).toMatchObject([
+      { toolID: executionToolKey(parts[3]), status: "failed", exit: 3, output: "this stdout says passed" },
+      { toolID: executionToolKey(parts[4]), status: "incomplete" },
+      { command: "cargo check", status: "pending" },
+    ])
+    expect(executionToolStep(live.steps, executionToolKey(parts[3]))?.sections?.map((section) => section.source)).toEqual(["exit-three", "exit-three"])
+    expect(executionToolStep(live.steps, executionToolKey(parts[1]))?.sections?.map((section) => section.source)).toEqual(["out-of-scope", "out-of-scope"])
+    expect(projectExecutionEvidence([trace(parts, { type: "idle" }, live.prompt)], "C:/Work/repo").verifications.at(-1)?.status).toBe("unexecuted")
+    expect(projectExecutionEvidence([trace([edit("case", "src/owned.ts")], { type: "idle" }, "Allowed files: SRC/")], "/work").files[0]?.scope).toBe("outside")
+  })
+
+  test("selects a repeated provider call ID by assistant message in Current", () => {
+    const next = { ...assistant, id: "msg_next" } as Message
+    const result = (exit: number) => ({
+      status: "completed" as const, input: { command: "bun test" }, title: "bash",
+      output: `receipt with exit ${exit}`, metadata: { exit }, time: { start: 3, end: 4 },
+    })
+    const first = tool("reused", "bash", result(0))
+    const second = { ...tool("reused", "bash", result(7)), messageID: next.id }
+    const current = buildExecutionTrace({
+      messages: [user, assistant, next], parts: (id) => id === next.id ? [second] : [first],
+      status: { type: "idle" },
+    })
+    const evidence = projectExecutionEvidence([current], "/owned")
+    expect(evidence.verifications.map((item) => item.exit)).toEqual([0, 7])
+    expect(countVerificationOutcomes(evidence.verifications)).toEqual({ passed: 1, failed: 1, incomplete: 0 })
+    const failed = executionToolStep(current.steps, evidence.verifications[1]!.toolID!)
+    expect(failed?.tools?.[0]?.messageID).toBe(next.id)
+    expect(executionStepText(failed!)).toContain("receipt with exit 7")
+    expect(executionStepText(failed!)).not.toContain("receipt with exit 0")
+  })
+
+  test("does not satisfy an exact requested command with an external or unverified working directory", () => {
+    const command = "node visible-test.mjs"
+    const run = (workdir?: string) => trace([tool("shell", "bash", {
+      status: "completed", input: { command, ...(workdir === undefined ? {} : { workdir }) }, title: "bash",
+      output: "success", metadata: { exit: 0 }, time: { start: 3, end: 4 },
+    })], { type: "idle" }, `Test command: ${command}`)
+    for (const [directory, cwd, expected] of [
+      ["C:/Work/owned", "D:/other", "outside-workspace"],
+      ["/work/owned", "/work/owned-alias", "outside-workspace"],
+      ["/work/owned", "../unknown", "workdir-unverified"],
+      ["/work/owned", "./maybe-a-symlink", "workdir-unverified"],
+      [undefined, ".", "workdir-unverified"],
+    ] as const) {
+      const evidence = projectExecutionEvidence([run(cwd)], directory)
+      expect(evidence.verifications.map((entry) => entry.status)).toEqual([expected, "unexecuted"])
+      expect(evidence.verifications[0]?.exit).toBe(0)
+      expect(countVerificationOutcomes(evidence.verifications)).toEqual({ passed: 0, failed: 0, incomplete: 1 })
+    }
+    for (const cwd of [undefined, ".", "c:\\WORK\\OWNED\\"]) {
+      expect(projectExecutionEvidence([run(cwd)], "C:/Work/owned").verifications.map((entry) => entry.status)).toEqual(["passed"])
+    }
+  })
+
   test("retains complete output, input and source identity beyond the summary limit", () => {
     const output = "full output ".repeat(3000) + "END-OF-OUTPUT"
     const parts = [{ id: "long", sessionID, messageID: assistant.id, type: "tool", callID: "call_long", tool: "bash",

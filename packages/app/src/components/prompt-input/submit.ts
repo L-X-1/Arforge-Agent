@@ -21,7 +21,7 @@ import { Identifier } from "@/utils/id"
 import { Worktree as WorktreeState } from "@/utils/worktree"
 import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
-import { formatServerError } from "@/utils/server-errors"
+import { formatServerError, promptModelErrorMessage } from "@/utils/server-errors"
 import { formatHtmlSelectionSnapshot } from "@/utils/html-selection-reference"
 import { ScopedKey } from "@/utils/server-scope"
 import { createPromptSubmissionState } from "./submission-state"
@@ -29,6 +29,7 @@ import { normalizeSessionInfo } from "@/utils/session"
 import { Prompt as DurablePromptSchema } from "@arforge-ai/schema/prompt-input"
 import { OutputFormat } from "@arforge-ai/schema/prompt"
 import { Schema } from "effect"
+import { isDeepEqual } from "remeda"
 import type { OperationsApi } from "@/utils/server"
 import type { PromptInputGoalControl } from "./contracts"
 import type { SessionPermissionMode } from "@/context/permission-mode"
@@ -40,6 +41,7 @@ import {
 import { showControlOperationStatusNotice } from "@/utils/control-operation-notice"
 
 type DurablePrompt = typeof DurablePromptSchema.Encoded
+type QueuedPrompt = Awaited<ReturnType<OperationsApi["sessions"]["promptQueueList"]>>[number]
 
 type PendingPrompt = {
   abort: AbortController
@@ -97,10 +99,7 @@ export function durableFollowupPrompt(
   draft: FollowupDraft,
   messageID: string,
   commandNames: ReadonlySet<string>,
-  retained?: Pick<
-    Awaited<ReturnType<OperationsApi["sessions"]["promptQueueList"]>>[number]["prompt"],
-    "system" | "format" | "scheduledTasks"
-  >,
+  retained?: Pick<QueuedPrompt["prompt"], "system" | "format" | "scheduledTasks">,
 ): DurablePrompt {
   const text = draftText(draft.prompt)
   const images = draftImages(draft.prompt)
@@ -169,6 +168,31 @@ export function durableFollowupPrompt(
       },
     },
     command,
+  }
+}
+
+const queueEditorContent = ({ text, files, agents, route }: Pick<DurablePrompt, "text" | "files" | "agents" | "route">) => ({
+  text,
+  files: (files ?? []).map(({ uri, mime, name, description, source, resource }) => ({
+    uri,
+    mime,
+    name,
+    description,
+    source,
+    resource,
+  })),
+  agents: (agents ?? []).map(({ name, source }) => ({ name, source })),
+  agent: route?.agent,
+  model: route?.model && { id: route.model.id, providerID: route.model.providerID, variant: route.model.variant },
+})
+
+export function matchesQueuedDraft(draft: FollowupDraft, item: Pick<QueuedPrompt, "id" | "sessionID" | "prompt">) {
+  if (draft.sessionID !== item.sessionID) return false
+  try {
+    const serialized = durableFollowupPrompt(draft, item.id, new Set())
+    return isDeepEqual(queueEditorContent(serialized), queueEditorContent(item.prompt))
+  } catch {
+    return false
   }
 }
 
@@ -328,7 +352,6 @@ type PromptSubmitInput = {
   autoAccept: Accessor<boolean>
   permissionMode?: Accessor<SessionPermissionMode>
   mode: Accessor<"normal" | "shell">
-  working: Accessor<boolean>
   editor: () => HTMLDivElement | undefined
   queueScroll: () => void
   promptLength: (prompt: Prompt) => number
@@ -367,6 +390,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk().scope, sessionID)
 
   const errorMessage = (err: unknown) => {
+    const modelMessage = promptModelErrorMessage(err)
+    if (modelMessage) return modelMessage
     if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message
     if (err && typeof err === "object" && "data" in err) {
       const data = (err as { data?: { message?: string } }).data
@@ -393,7 +418,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       pending.delete(key)
       return Promise.resolve()
     }
-    return source.api.session.interrupt({ sessionID }).catch((error: unknown) => {
+    return source.api.session.interrupt({ sessionID }, { signal: AbortSignal.timeout(15_000) }).catch((error: unknown) => {
       if (sdk() !== source || params.id !== sessionID) return
       showToast({ title: language.t("common.requestFailed"), description: errorMessage(error) })
     })
@@ -477,10 +502,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
     const selectedPermissionMode = input.permissionMode?.() ?? (input.autoAccept() ? "fullAccess" : "acceptEdits")
 
-    if (!hasPromptContent(currentPrompt) && images.length === 0 && input.commentCount() === 0) {
-      if (input.working()) void abort()
-      return
-    }
+    if (!hasPromptContent(currentPrompt) && images.length === 0 && input.commentCount() === 0) return
 
     const modelSelection = input.model ?? local.model
     const currentModel = modelSelection.current()

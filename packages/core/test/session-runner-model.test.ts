@@ -45,6 +45,27 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
   })
 
 describe("SessionRunnerModel", () => {
+  it.effect("canonicalizes only official DeepSeek Flash wire requests", () =>
+    Effect.gen(function* () {
+      for (const [providerID, url, wireID, expected] of [
+        ["deepseek", "https://api.deepseek.com/v1", "deepseek-v4-flash", "deepseek-flash"],
+        ["deepseek", "https://api.deepseek.com", "deepseek-v4-flash-vision-exp", "deepseek-flash"],
+        ["deepseek", "https://api.deepseek.com.invalid", "deepseek-v4-flash", "deepseek-v4-flash"],
+        ["deepseek", "https://api.deepseek.com/relay", "deepseek-v4-flash", "deepseek-v4-flash"],
+        ["relay", "https://api.deepseek.com", "deepseek-v4-flash", "deepseek-v4-flash"],
+      ]) {
+        const source = model({ type: "aisdk", package: "@ai-sdk/openai-compatible", url })
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(ModelV2.Info.make({
+          ...source,
+          providerID: ProviderV2.ID.make(providerID),
+          api: { ...source.api, id: ModelV2.ID.make(wireID) },
+        }))
+        const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "offline fixture" }))
+        expect(prepared.body).toMatchObject({ model: expected })
+      }
+    }),
+  )
+
   it.effect("durable credential target permits the original API and rejects a changed BaseURL", () =>
     Effect.gen(function* () {
       const original = model({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "http://127.0.0.1:4781/v1" })

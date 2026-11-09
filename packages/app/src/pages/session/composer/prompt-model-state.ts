@@ -1,6 +1,6 @@
 import { batch, createMemo, onCleanup } from "solid-js"
 import type { ModelKey, ModelSelection } from "@/context/local"
-import type { useModels } from "@/context/models"
+import { providerModel, providerModelID, type useModels } from "@/context/models"
 import type { usePrompt } from "@/context/prompt"
 import type { useProviders } from "@/hooks/use-providers"
 import type { ModelSelectionBinding } from "@/components/dialog-select-model"
@@ -37,7 +37,7 @@ export function createPromptModelState(input: {
     const provider = providers.all().get(key.providerID)
     if (!provider) return "provider" as const
     if (!connected().has(key.providerID)) return "disconnected" as const
-    if (!provider.models[key.modelID]) return "removed" as const
+    if (!providerModel(provider, key.modelID)) return "removed" as const
   }
   const valid = (key: ModelKey) => unavailableKey(key) === undefined
   const configured = () => {
@@ -61,7 +61,7 @@ export function createPromptModelState(input: {
       if (valid(key)) return key
     }
   }
-  const key = () => {
+  const selectedKey = () => {
     // Use the captured store rather than the suspense resource, which can still
     // expose the previous draft's value while a different draft is hydrating.
     const explicit = prompt.capture().model.current()
@@ -69,6 +69,12 @@ export function createPromptModelState(input: {
     return [input.agent()?.model, configured(), models.recent.list().find(valid), defaultModel()].find(
       (item): item is ModelKey => !!item && valid(item),
     )
+  }
+  const key = () => {
+    const selected = selectedKey()
+    if (!selected) return
+    const provider = providers.all().get(selected.providerID)
+    return provider ? { ...selected, modelID: providerModelID(provider, selected.modelID) } : selected
   }
   const current = () => {
     if (!ready()) return
@@ -145,7 +151,9 @@ export function createPromptModelState(input: {
         if (resolved) return resolved
         const model = current()
         if (!model) return
+        const original = selectedKey()
         const saved = models.variant.get({ providerID: model.provider.id, modelID: model.id })
+          ?? (original && original.modelID !== model.id ? models.variant.get(original) : undefined)
         if (saved && this.list().includes(saved)) return saved
       },
       list() {

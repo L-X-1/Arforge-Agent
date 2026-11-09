@@ -1,7 +1,18 @@
-import type { AssistantMessage, Message, Part, SessionStatus, ToolPart } from "@arforge-ai/sdk/v2"
+import type { AssistantMessage, Message, Part, PermissionRequest, SessionStatus, ToolPart } from "@arforge-ai/sdk/v2"
 
 export type ExecutionTraceKind = "reasoning" | "context" | "command" | "edit" | "agent" | "verify" | "tool" | "answer" | "retry"
-export type ExecutionTraceStatus = "pending" | "running" | "completed" | "error"
+export type ExecutionTraceStatus = "pending" | "active" | "running" | "completed" | "error" | "interrupted"
+export type ExecutionPhase =
+  | "idle"
+  | "started"
+  | "running"
+  | "approval"
+  | "finishing"
+  | "retry"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "incomplete"
 export type ExecutionTraceSection = { kind: "input" | "output" | "error" | "detail"; source: string; content: string }
 
 export type ExecutionTraceStep = {
@@ -16,11 +27,16 @@ export type ExecutionTraceStep = {
   endedAt?: number
   agentSessionID?: string
   sections?: ExecutionTraceSection[]
+  tools?: ToolPart[]
 }
 
 export type ExecutionTrace = {
   userMessageID?: string
+  startedAt?: number
+  prompt?: string
   status: SessionStatus["type"]
+  phase: ExecutionPhase
+  approval?: { request: PermissionRequest; tool: ToolPart }
   steps: ExecutionTraceStep[]
   completed: number
   failed: number
@@ -60,10 +76,27 @@ function toolKind(tool: string): ExecutionTraceKind {
   return "tool"
 }
 
-function toolStatus(part: ToolPart): ExecutionTraceStatus {
+export function executionToolKey(part: ToolPart) {
+  return JSON.stringify([part.messageID, part.callID])
+}
+
+export function executionToolOutput(part: ToolPart) {
+  return "output" in part.state && typeof part.state.output === "string" ? part.state.output : undefined
+}
+
+export function executionToolStatus(part: ToolPart): ExecutionTraceStatus {
   if (part.state.status === "completed") return "completed"
-  if (part.state.status === "error") return "error"
-  if (part.state.status === "running") return "running"
+  if (part.state.status === "error") {
+    // Older runtime interruptions did not include structured receipt metadata.
+    if (part.state.metadata?.interrupted === true || part.state.error === "Tool execution interrupted") return "interrupted"
+    return "error"
+  }
+  if (part.state.status === "running") {
+    // Called precedes permission admission. Captured command output is the first
+    // process evidence available in this projection for older runtime events.
+    if (toolKind(part.tool) === "command" && !executionToolOutput(part)) return "active"
+    return "running"
+  }
   return "pending"
 }
 
@@ -87,10 +120,8 @@ function toolDetail(part: ToolPart) {
   const blocks: string[] = []
   const input = json(part.state.input)
   if (input) blocks.push(input)
-  if (part.state.status === "completed") {
-    const output = clipped(part.state.output)
-    if (output) blocks.push(output)
-  }
+  const output = clipped(executionToolOutput(part))
+  if (output) blocks.push(output)
   if (part.state.status === "error") {
     const error = clipped(part.state.error)
     if (error) blocks.push(error)
@@ -100,7 +131,8 @@ function toolDetail(part: ToolPart) {
 
 function toolSections(part: ToolPart): ExecutionTraceSection[] {
   const sections: ExecutionTraceSection[] = [{ kind: "input", source: part.id, content: JSON.stringify(part.state.input, null, 2) }]
-  if (part.state.status === "completed" && part.state.output) sections.push({ kind: "output", source: part.id, content: part.state.output })
+  const output = executionToolOutput(part)
+  if (output) sections.push({ kind: "output", source: part.id, content: output })
   if (part.state.status === "error" && part.state.error) sections.push({ kind: "error", source: part.id, content: part.state.error })
   return sections
 }
@@ -141,14 +173,15 @@ function partStep(part: Part, busy: boolean): ExecutionTraceStep | undefined {
   if (part.type === "tool") {
     const kind = toolKind(part.tool)
     return {
-      id: part.id,
+      id: executionToolKey(part),
       kind,
-      status: toolStatus(part),
+      status: executionToolStatus(part),
       count: 1,
       title: part.tool,
       preview: toolPreview(part),
       detail: toolDetail(part),
       sections: toolSections(part),
+      tools: [part],
       ...(kind === "agent" ? { agentSessionID: toolAgentSessionID(part) } : {}),
       ...toolTiming(part),
     }
@@ -213,7 +246,9 @@ function mergeable(a: ExecutionTraceStep, b: ExecutionTraceStep) {
 
 function mergeStatus(a: ExecutionTraceStatus, b: ExecutionTraceStatus): ExecutionTraceStatus {
   if (a === "error" || b === "error") return "error"
+  if (a === "interrupted" || b === "interrupted") return "interrupted"
   if (a === "running" || b === "running") return "running"
+  if (a === "active" || b === "active") return "active"
   if (a === "pending" || b === "pending") return "pending"
   return "completed"
 }
@@ -231,16 +266,65 @@ function mergeSteps(steps: ExecutionTraceStep[]) {
     previous.preview = [previous.preview, step.preview].filter(Boolean).join(" · ") || undefined
     previous.detail = [previous.detail, step.detail].filter(Boolean).join("\n\n") || undefined
     previous.sections = [...(previous.sections ?? []), ...(step.sections ?? [])]
+    if (step.tools) (previous.tools ??= []).push(...step.tools)
     previous.startedAt = previous.startedAt ?? step.startedAt
     previous.endedAt = step.endedAt ?? previous.endedAt
     return result
   }, [])
 }
 
+export function executionToolStep(steps: readonly ExecutionTraceStep[], key: string) {
+  for (const step of steps) {
+    const tool = step.tools?.find((part) => executionToolKey(part) === key)
+    if (tool) return partStep(tool, false)
+  }
+}
+
+export function executionPhaseLabel(phase: ExecutionPhase, chinese: boolean) {
+  const labels: Record<ExecutionPhase, [string, string]> = {
+    idle: ["等待下一项任务", "Waiting for the next task"],
+    started: ["执行已开始", "Execution started"],
+    running: ["正在实时执行", "Executing live"],
+    approval: ["等待审批", "Waiting for approval"],
+    finishing: ["正在完成本轮执行", "Finishing execution"],
+    retry: ["正在重试", "Retrying"],
+    completed: ["本轮执行完成", "Execution complete"],
+    failed: ["本轮已结束，存在失败步骤", "Finished with failed steps"],
+    interrupted: ["执行已中断", "Execution interrupted"],
+    incomplete: ["执行记录不完整", "Execution evidence incomplete"],
+  }
+  return labels[phase][chinese ? 0 : 1]
+}
+
+function executionPhase(
+  status: SessionStatus["type"],
+  steps: ExecutionTraceStep[],
+  latest: AssistantMessage | undefined,
+  approval: ExecutionTrace["approval"],
+): ExecutionPhase {
+  if (approval) return "approval"
+  if (status === "retry") return "retry"
+  const incomplete = steps.some((step) => step.status === "pending" || step.status === "active" || step.status === "running")
+  if (status === "busy") {
+    if (!steps.length) return "started"
+    const last = steps.at(-1)
+    if (!incomplete && last?.kind === "answer" && last.status === "completed") return "finishing"
+    return "running"
+  }
+  if (latest?.error?.name === "MessageAbortedError" || steps.at(-1)?.status === "interrupted") return "interrupted"
+  if (steps.some((step) => step.status === "error")) return "failed"
+  if (!latest && !steps.length) return "idle"
+  if (!incomplete && latest?.time.completed !== undefined && latest.finish && latest.finish !== "tool-calls")
+    return "completed"
+  return "incomplete"
+}
+
 export function buildExecutionTrace(input: {
   messages: Message[]
   parts: (messageID: string) => Part[]
   status: SessionStatus
+  permission?: PermissionRequest
+  prompt?: string
 }): ExecutionTrace {
   const user = input.messages.findLast((message) => message.role === "user")
   const assistants = user
@@ -270,13 +354,28 @@ export function buildExecutionTrace(input: {
     }),
   )
 
+  const request = input.permission
+  const source = request?.tool
+  const approvalTool = request && source && steps.flatMap((step) => step.tools ?? []).find((part) =>
+    part.sessionID === request.sessionID && part.messageID === source.messageID && part.callID === source.callID &&
+    (part.state.status === "pending" || part.state.status === "running"),
+  )
+  const approval = request && approvalTool ? { request, tool: approvalTool } : undefined
+  const phase = executionPhase(input.status.type, steps, assistants.at(-1), approval)
+
   if (busy && steps.length === 0) {
     steps.push({ id: `thinking:${user?.id ?? "session"}`, kind: "reasoning", status: "running", count: 1 })
   }
 
   return {
     userMessageID: user?.id,
+    startedAt: user?.time.created,
+    prompt: input.prompt ?? (user ? input.parts(user.id).flatMap((part) =>
+      part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : [],
+    ).join("\n") : undefined),
     status: input.status.type,
+    phase,
+    approval,
     steps,
     completed: steps.filter((step) => step.status === "completed").length,
     failed: steps.filter((step) => step.status === "error").length,

@@ -92,6 +92,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
   }),
+  session_run_token_limit: Schema.Boolean.pipe(Schema.optional).annotate({
+    description: "Apply a cumulative 1,000,000 token limit to new root chat runs (default: false)",
+  }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",
   }),
@@ -133,6 +136,8 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 export interface Interface {
   /** Returns location config documents and supplemental directories from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  /** Samples the global preference for a new run without reopening its location. */
+  readonly sessionRunTokenLimit?: () => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@arforge/v2/Config") {}
@@ -393,6 +398,21 @@ const layer = Layer.effect(
     return Service.of({
       entries: Effect.fn("Config.entries")(function* () {
         return configs
+      }),
+      sessionRunTokenLimit: Effect.fn("Config.sessionRunTokenLimit")(function* () {
+        // Match the global writer and reader's file precedence. Project and
+        // inline configuration cannot override this server preference.
+        for (const name of [...names.toReversed(), "config.json"]) {
+          const source = yield* fs.readFileStringSafe(path.join(globalDirectory, name)).pipe(Effect.orDie)
+          if (!source) continue
+          const errors: ParseError[] = []
+          const input: unknown = parse(source, errors, { allowTrailingComma: true })
+          if (
+            errors.length === 0 && typeof input === "object" && input !== null &&
+            "session_run_token_limit" in input && typeof input.session_run_token_limit === "boolean"
+          ) return input.session_run_token_limit
+        }
+        return false
       }),
     })
   }),

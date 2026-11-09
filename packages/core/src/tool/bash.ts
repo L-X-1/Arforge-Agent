@@ -178,62 +178,58 @@ const layer = Layer.effectDiscard(
                 forceKillAfter: Duration.seconds(3),
               })
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+              const captureNotice = "[output capture truncated at the in-memory safety limit]"
+              const retainPartialOutput = context.retainPartialOutput
               const partialChunks: Buffer[] = []
               let capturedBytes = 0
               let captureTruncated = false
-              yield* reportProgress({
-                phase: "executing",
-                completed: 0,
-                total: 1,
-                detail: "Shell command started",
-              })
+              const partialText = () =>
+                Buffer.concat(partialChunks, capturedBytes).toString("utf8") +
+                (captureTruncated ? `\n${captureNotice}` : "")
               const result = yield* appProcess
                 .run(command, {
                   combineOutput: true,
                   timeout: Duration.millis(timeout),
                   maxOutputBytes: MAX_CAPTURE_BYTES,
-                  onCombinedOutput: context.retainPartialOutput
-                    ? (chunk) =>
-                        Effect.gen(function* () {
-                          const remaining = MAX_CAPTURE_BYTES - capturedBytes
-                          if (remaining > 0) {
-                            const kept = Buffer.from(chunk.subarray(0, remaining))
-                            partialChunks.push(kept)
-                            capturedBytes += kept.length
-                          }
-                          if (chunk.length > remaining) captureTruncated = true
-                          yield* context.retainPartialOutput!({
-                            structured: { truncated: captureTruncated, interrupted: true },
-                            content: [
-                              {
-                                type: "text",
-                                text:
-                                  Buffer.concat(partialChunks).toString("utf8") +
-                                  (captureTruncated
-                                    ? "\n[output capture truncated at the in-memory safety limit]"
-                                    : ""),
-                              },
-                            ],
-                          })
+                  onSpawn: reportProgress({
+                    phase: "executing",
+                    completed: 0,
+                    total: 1,
+                    detail: "Shell command started",
+                  }),
+                  onCombinedOutput: (chunk) =>
+                    Effect.gen(function* () {
+                      if (captureTruncated) return
+                      const remaining = MAX_CAPTURE_BYTES - capturedBytes
+                      if (remaining > 0) {
+                        const kept = Buffer.from(chunk.subarray(0, remaining))
+                        partialChunks.push(kept)
+                        capturedBytes += kept.length
+                      }
+                      captureTruncated = chunk.length > remaining
+                      if (retainPartialOutput)
+                        yield* retainPartialOutput({
+                          structured: { truncated: captureTruncated, interrupted: true },
+                          content: [{ type: "text", text: partialText() }],
                         })
-                    : undefined,
+                    }),
                 })
                 .pipe(
-                  Effect.catchTag("AppProcessError", (error) =>
-                    isTimeout(error)
-                      ? reportProgress({
-                          phase: "failed",
-                          completed: 1,
-                          total: 1,
-                          detail: "Shell command timed out",
-                        }).pipe(Effect.andThen(Effect.succeed(undefined)))
-                      : Effect.fail(error),
-                  ),
+                  Effect.catchTag("AppProcessError", (error) => {
+                    const timedOut = isTimeout(error)
+                    return reportProgress({
+                      phase: "failed",
+                      completed: 1,
+                      total: 1,
+                      detail: timedOut ? "Shell command timed out" : "Unable to execute shell command",
+                    }).pipe(Effect.andThen(timedOut ? Effect.succeed(undefined) : Effect.fail(error)))
+                  }),
                 )
               if (!result) {
+                const notice = `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`
                 return {
-                  output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-                  truncated: false,
+                  output: capturedBytes > 0 ? `${partialText()}\n\n${notice}` : notice,
+                  truncated: captureTruncated,
                   timeout: true,
                   ...(warnings.length ? { warnings } : {}),
                 }
@@ -247,12 +243,9 @@ const layer = Layer.effectDiscard(
               })
 
               const output = result.output?.toString("utf8") || "(no output)"
-              const notice = result.outputTruncated
-                ? "[output capture truncated at the in-memory safety limit]"
-                : undefined
               return {
                 exit: result.exitCode,
-                output: notice ? `${output}\n\n${notice}` : output,
+                output: result.outputTruncated ? `${output}\n\n${captureNotice}` : output,
                 truncated: result.outputTruncated === true,
                 ...(warnings.length ? { warnings } : {}),
               }

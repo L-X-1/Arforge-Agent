@@ -40,11 +40,9 @@
 }
 [data-component="workspace-titlebar-content"] [data-slot="titlebar-tabs"] {
   min-width: 0;
-  flex: 0 1 auto;
+  /* The inline-size container cannot contribute an intrinsic flex basis. */
+  flex: 1 1 0;
   max-width: 100%;
-}
-[data-component="workspace-titlebar-content"] [data-titlebar-tab-slot] {
-  max-width: 260px;
 }
 [data-component="workspace-titlebar-content"] [data-titlebar-tab-title] {
   font-size: 14px;
@@ -241,9 +239,6 @@
   #arforge-titlebar-session-toolbar [data-slot="session-title-parent"],
   #arforge-titlebar-session-toolbar [data-slot="session-title-separator"] {
     display: none;
-  }
-  [data-component="workspace-titlebar-content"] [data-titlebar-tab-slot] {
-    max-width: 180px;
   }
 }
 @media (pointer: coarse) {

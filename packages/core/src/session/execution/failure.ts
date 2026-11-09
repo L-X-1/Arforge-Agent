@@ -4,6 +4,7 @@ import type { SessionSchema } from "../schema"
 import { SessionEvent } from "../event"
 import { SessionV1 } from "../../v1/session"
 import { redact } from "../../redact"
+import { BudgetExhaustedError } from "../../runtime/durable-run"
 
 const publicMessage = (message: string) =>
   redact(message)
@@ -12,6 +13,10 @@ const publicMessage = (message: string) =>
     .slice(0, 500) || "Session execution failed"
 
 function publicError(failure: unknown): NonNullable<SessionV1.Assistant["error"]> {
+  if (failure instanceof BudgetExhaustedError) {
+    const guidance = "This run stopped because of its execution budget. Send a new message in this session to continue."
+    return { name: "UnknownError", data: { message: publicMessage(`${guidance} ${failure.reason ?? ""}`) } }
+  }
   if (failure && Schema.is(SessionV1.Assistant.fields.error)(failure)) {
     // Keep the existing error semantics, but expose only the fields needed by
     // clients. Provider response headers/body/metadata remain on the Cause.

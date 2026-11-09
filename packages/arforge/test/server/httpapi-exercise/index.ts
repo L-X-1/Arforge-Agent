@@ -2622,6 +2622,31 @@ const scenarios: Scenario[] = [
         ),
     ),
   http.protected
+    .post("/api/session/{sessionID}/prompt/queue/{messageID}/steer", "v2.session.promptQueueSteer")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* apiSession(ctx)
+        const prompt = yield* apiPrompt(ctx, session.id, "Guide queued prompt")
+        return { session, prompt }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/prompt/queue/{messageID}/steer", {
+        sessionID: ctx.state.session.id,
+        messageID: ctx.state.prompt.id,
+      }),
+      headers: ctx.headers(),
+      body: { expectedAdmittedSeq: ctx.state.prompt.admittedSeq },
+    }))
+    .mutating()
+    .json(200, (body, ctx) => {
+      object(body)
+      object(body.data)
+      check(body.data.id === ctx.state.prompt.id, "Guide should retain message identity")
+      check(body.data.delivery === "steer", "Guide should return steer delivery")
+      check(body.data.admittedSeq === ctx.state.prompt.admittedSeq, "Guide should retain the original admission sequence")
+    }),
+  http.protected
     .get("/api/session/{sessionID}", "v2.session.get")
     .seeded((ctx) => ctx.session({ title: "Session get" }))
     .at((ctx) => ({

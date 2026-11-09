@@ -528,10 +528,7 @@ const registryLayer = Layer.effect(
         around: (_prepared, next) => next(),
         postInExecute: true,
         execute: (_prepared, post) =>
-          scheduler.run({
-            metadata: toolExecutionMetadata,
-            coordinatesChildren: "coordinatesChildren" in registration && registration.coordinatesChildren === true,
-            effect: gateway
+          gateway
               .execute<ToolOutput, ToolFailure, never>(
                 {
                   actionID,
@@ -553,6 +550,11 @@ const registryLayer = Layer.effect(
                 },
                 {
                   ...(authorization ? { authorization } : {}),
+                  executionPermit: scheduler.acquire({
+                    metadata: toolExecutionMetadata,
+                    sessionID: input.sessionID,
+                    coordinatesChildren: "coordinatesChildren" in registration && registration.coordinatesChildren === true,
+                  }),
                   ...(hasPostprocessing(registration.tool)
                     ? {
                         afterSuccessMode: "projection" as const,
@@ -713,7 +715,6 @@ const registryLayer = Layer.effect(
                   Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
                 ),
               ),
-          }),
         post: (_prepared, result) =>
           "output" in result && result.output !== undefined
             ? postprocess(registration.tool, input.call, result.output, context).pipe(
@@ -1037,7 +1038,7 @@ const registryLayer = Layer.effect(
         }
         return {
           definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
-          quiesce: scheduler.quiesce,
+          quiesce: (timeoutMs) => scheduler.quiesce(timeoutMs, sessionID),
           settle: (input) => {
             if (externalSessionID && input.sessionID !== externalSessionID)
               return Effect.succeed({

@@ -66,33 +66,64 @@
 }
 @media (pointer: coarse) { .settings-v2-model-provider-nav button, .settings-v2-model-select { min-height: 44px; } }
 
-.arforge-provider-workspace { min-width:0; margin-bottom:24px; border:1px solid var(--border-base); border-radius:12px; background:var(--background-base); }
+.arforge-provider-workspace { min-width:0; max-width:100%; margin-bottom:24px; border:1px solid var(--border-base); border-radius:12px; background:var(--background-base); overflow:hidden; }
 .arforge-provider-workspace > header, .arforge-provider-editor > header { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:16px; }
+.arforge-provider-workspace > header { padding:16px 20px; border-bottom:1px solid var(--border-base); }
+.arforge-provider-workspace-header-actions { display:flex; flex-wrap:wrap; gap:8px; margin-inline-start:auto; }
+.arforge-provider-workspace > [data-model-metadata-state=unavailable] { margin:12px 20px 0; color:var(--text-weak); }
+.arforge-provider-workspace > [data-model-metadata-state=unavailable] + button { margin:8px 20px 12px; }
 .arforge-provider-workspace header h3, .arforge-provider-editor header h4 { flex:1; margin:0; min-width:0; overflow-wrap:anywhere; }
-.arforge-provider-workspace-columns { display:grid; grid-template-columns:minmax(160px, 26%) minmax(0, 1fr); min-width:0; }
-.arforge-provider-workspace nav { display:flex; flex-direction:column; gap:4px; padding:12px; border-inline-end:1px solid var(--border-base); }
-.arforge-provider-workspace nav button { display:flex; gap:8px; flex-wrap:wrap; text-align:start; padding:12px; border:1px solid transparent; border-radius:8px; min-height:44px; overflow-wrap:anywhere; }
-.arforge-provider-workspace nav button[aria-current=page] { border-color:var(--border-base); background:var(--background-stronger); }
+.arforge-provider-workspace-columns { display:grid; grid-template-columns:minmax(200px, 280px) minmax(0, 1fr); min-width:0; align-items:start; }
+.arforge-provider-workspace nav { display:flex; flex-direction:column; gap:4px; min-width:0; padding:12px; border-inline-end:1px solid var(--border-base); align-self:stretch; }
+.arforge-provider-workspace-list-item { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:8px 12px; width:100%; min-width:0; min-height:48px; padding:10px 12px; border:1px solid transparent; border-radius:8px; color:var(--text-base); background:transparent; text-align:start; box-sizing:border-box; }
+.arforge-provider-workspace-list-item:hover { background:var(--background-stronger); }
+.arforge-provider-workspace-list-item[aria-current=page] { border-color:var(--border-base); background:var(--background-stronger); }
+.arforge-provider-workspace-list-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.arforge-provider-workspace-list-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.arforge-provider-workspace-list-copy code { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-weak); font-size:12px; }
+.arforge-provider-workspace-status { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; color:var(--text-weak); font-size:12px; }
+.arforge-provider-workspace-status-dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.55; }
+.arforge-provider-workspace-list-item[data-provider-state=enabled] .arforge-provider-workspace-status { color:var(--text-base); }
+.arforge-provider-workspace-list-item[data-provider-state=enabled] .arforge-provider-workspace-status-dot { background:var(--border-selected); opacity:1; }
+.arforge-provider-workspace-list-status { display:flex; flex-direction:column; align-items:flex-start; gap:8px; padding:4px 0 8px; }
+.arforge-provider-workspace-list-status p { margin:0; color:var(--text-weak); overflow-wrap:anywhere; }
+.arforge-provider-workspace-list-item[data-provider-state=disabled] .arforge-provider-workspace-status-dot { background:var(--text-weak); opacity:.55; }
 .arforge-provider-workspace button:focus-visible, .arforge-provider-workspace select:focus-visible { outline:2px solid var(--border-selected); outline-offset:2px; }
-.arforge-provider-workspace-detail { min-width:0; padding:12px; }
+.arforge-provider-workspace-detail { min-width:0; padding:16px 20px; }
+.arforge-provider-workspace-detail-bar { display:flex; margin-bottom:12px; }
+.arforge-provider-workspace-detail-bar button { min-height:44px; }
 .arforge-provider-connection-editor, .arforge-model-editor { display:flex; flex-direction:column; gap:16px; min-width:0; padding:16px; }
+.arforge-provider-connection-editor > *, .arforge-provider-workspace-detail > * { min-width:0; max-width:100%; }
+.arforge-provider-editor { min-width:0; max-width:100%; }
 .arforge-provider-workspace select { display:block; width:100%; min-height:44px; padding:8px; border:1px solid var(--border-base); border-radius:8px; color:var(--text-base); background:var(--background-base); }
 .arforge-provider-model-list { margin:0; padding:0 16px; list-style:none; }
 .arforge-provider-model-list > li { display:flex; flex-direction:column; gap:8px; padding:14px 0; border-top:1px solid var(--border-base); }
 .arforge-provider-model-list li > div { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
 .arforge-provider-model-list code { overflow-wrap:anywhere; color:var(--text-weak); }
 .arforge-provider-model-badge { padding:2px 6px; border:1px solid var(--border-base); border-radius:6px; font-size:12px; }
-.arforge-provider-model-actions, .arforge-provider-editor-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.arforge-provider-model-actions, .arforge-provider-editor-actions { display:flex; flex-wrap:wrap; gap:8px; min-width:0; }
 .arforge-model-editor { border:1px solid var(--border-base); border-radius:8px; margin:16px; }
 .arforge-model-editor summary { min-height:44px; padding:12px 0; cursor:pointer; }
 .arforge-model-editor details > * + * { margin-top:12px; }
-@media(max-width:720px) { .arforge-provider-workspace-columns { grid-template-columns:minmax(0,1fr); } .arforge-provider-workspace nav { border-inline-end:0; border-bottom:1px solid var(--border-base); flex-direction:row; flex-wrap:wrap; } .arforge-provider-workspace nav button { flex:1 1 160px; } }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-workspace-columns { grid-template-columns:minmax(0, 1fr); }
+.arforge-provider-workspace[data-provider-narrow=true] nav { border-inline-end:0; border-bottom:1px solid var(--border-base); }
+.arforge-provider-workspace[data-provider-narrow=true][data-provider-view=list] .arforge-provider-workspace-columns > nav { display:flex; }
+.arforge-provider-workspace[data-provider-narrow=true][data-provider-view=list] .arforge-provider-workspace-columns > .arforge-provider-workspace-detail { display:none; }
+.arforge-provider-workspace[data-provider-narrow=true][data-provider-view=detail] .arforge-provider-workspace-columns > nav { display:none; }
+.arforge-provider-workspace[data-provider-narrow=true][data-provider-view=detail] .arforge-provider-workspace-columns > .arforge-provider-workspace-detail { display:block; }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-list > li { grid-template-columns:minmax(0, 1fr); min-width:0; }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-list > li > div { width:100%; min-width:0; max-width:100%; }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-list strong,
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-list code { min-width:0; max-width:100%; overflow-wrap:anywhere; }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-list > li > [role=status] { overflow-wrap:anywhere; }
+.arforge-provider-workspace[data-provider-narrow=true] .arforge-provider-model-actions { width:100%; justify-content:flex-start; }
+@media(max-width:720px) { .arforge-provider-workspace-columns { grid-template-columns:minmax(0, 1fr); } .arforge-provider-workspace nav { border-inline-end:0; border-bottom:1px solid var(--border-base); } }
 @media(pointer:coarse) { .arforge-provider-model-actions button { min-height:44px; } }
 .arforge-provider-legacy-actions > summary { min-height:44px; cursor:pointer; padding:16px 8px; color:var(--text-base); font-weight:500; }
 .arforge-provider-legacy-actions[open] > summary { border-bottom:1px solid var(--border-base); margin-bottom:16px; }
 .arforge-model-capability { display:inline-flex; align-items:center; gap:8px; margin:4px 16px 4px 0; min-height:36px; }
 .arforge-model-metadata-sources p { overflow-wrap:anywhere; font-size:12px; color:var(--text-weak); }
-.arforge-provider-model-list > li { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px 12px; }
+.arforge-provider-model-list > li { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, auto); align-items:center; gap:8px 12px; min-width:0; }
 .arforge-provider-model-list > li > [role=status] { grid-column:1 / -1; margin:0; }
 .arforge-provider-model-actions { justify-content:flex-end; }
 .arforge-provider-model-actions > [data-component=icon-button] { min-width:44px; min-height:44px; }

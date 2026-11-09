@@ -15,7 +15,7 @@ import { useControlCenterText } from "@/components/control-center/control-center
 import { Button } from "@arforge-ai/ui/button"
 import { TabsV2 } from "@arforge-ai/ui/v2/tabs-v2"
 import { TextInputV2 } from "@arforge-ai/ui/v2/text-input-v2"
-import { For, Show, createEffect, createMemo, on, onCleanup, onMount, type JSX } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useServerSDK, type ServerSDK } from "@/context/server-sdk"
 import { useLanguage } from "@/context/language"
@@ -35,11 +35,22 @@ import {
   useWorkbenchWriteReason,
 } from "./capability-workbench"
 import { ManagementActionToolbar } from "./management-action-toolbar"
+import { BackupSnapshot, RecoveryDrillSnapshot, WindowsBackupSnapshot } from "./local-operations-snapshot"
 import "./workbench-detail-polish.css"
 import { EvolutionWorkbench } from "./evolution-workbench"
 import { ExperienceCandidateWorkbench, SkillLifecycleWorkbench, TenantPlatformWorkbench } from "./governance-workbench"
 import { RuntimeInsightWorkbench } from "./runtime-insight-workbench"
 import { PersonalWorkspaceNavigation } from "./personal-workspace-navigation"
+import {
+  MEMORY_RECALL_EVIDENCE_VIEW_ID,
+  PERSONAL_WORKSPACE_MEMORY_CANDIDATES_ID,
+  createNavigationScopeRequest,
+  isNavigationScopeCurrent,
+  sessionLocationSource,
+  settingsLocationReady,
+  settingsLocationScope,
+  type NavigationScopeRequest,
+} from "./navigation"
 import { parseCustomAgentAdmissionSection } from "./custom-agent-admission-presentation"
 import "./control-center.css"
 type LocationInfo = Awaited<ReturnType<OperationsApi["location"]["get"]>>
@@ -86,15 +97,54 @@ function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }
       ...(state.location?.workspaceID ? { workspace: state.location.workspaceID } : {}),
     },
   }))
-  const personalWorkspaceSession = createMemo(() => (props.value === "arforge-workspace" ? props.sessionID : undefined))
+  // The memory page shares the session-derived location with Personal Workspace.
+  // Without that shared source it would resolve the default location first and a
+  // focused navigation queued there would be discarded by the tab switch.
+  const personalWorkspaceSession = createMemo(() => sessionLocationSource(props.value, props.sessionID))
+  // Focused navigation from the memory page reuses the existing settings/workspace
+  // switch. Each queued request carries the workspace it was requested from and is
+  // dropped when the project/workspace or the session source changes.
+  const [workspaceCandidatesRequest, setWorkspaceCandidatesRequest] = createSignal<NavigationScopeRequest>()
+  const [memoryPanelRequest, setMemoryPanelRequest] = createSignal<NavigationScopeRequest>()
+  const [memoryRecallRequest, setMemoryRecallRequest] = createSignal<NavigationScopeRequest>()
+  createEffect(
+    on(
+      () => [settingsLocationScope(location().location), personalWorkspaceSession()] as const,
+      () => {
+        setWorkspaceCandidatesRequest(undefined)
+        setMemoryPanelRequest(undefined)
+        setMemoryRecallRequest(undefined)
+      },
+      { defer: true },
+    ),
+  )
+  const openWorkspaceMemoryCandidates = () => {
+    // A navigation is never dispatched from a partially resolved or failed source.
+    if (!settingsLocationReady(state.loading, state.error, !!state.location)) return
+    setWorkspaceCandidatesRequest(createNavigationScopeRequest(location().location))
+    props.onNavigate("arforge-workspace")
+  }
+  const openMemoryRecallEvidence = () => {
+    if (!settingsLocationReady(state.loading, state.error, !!state.location)) return
+    const request = createNavigationScopeRequest(location().location)
+    setMemoryPanelRequest(request)
+    setMemoryRecallRequest(request)
+    props.onNavigate("arforge-memory")
+  }
+  const workspaceCandidatesAnchor = (): `#${string}` | undefined =>
+    isNavigationScopeCurrent(workspaceCandidatesRequest(), location().location)
+      ? `#${PERSONAL_WORKSPACE_MEMORY_CANDIDATES_ID}`
+      : undefined
   const loadLocation = async () => {
     if (!scope.live()) return
     const current = scope.next("personal-workspace-location")
     const targetSession = personalWorkspaceSession()
     setState({ loading: true, error: "" })
     try {
-      // Canonical session navigation resolves its own directory. Re-entering
-      // Personal Workspace must use that session source, not the server default.
+      // Canonical session navigation resolves its own directory. The memory page
+      // and Personal Workspace share this existing session source, so a focused
+      // navigation queued on the memory page survives the switch to the workspace
+      // page instead of being pinned to the server default location.
       const session = targetSession ? await api().sessions.get({ sessionID: targetSession }) : undefined
       if (!current()) return
       const next = await api().location.get(
@@ -157,7 +207,15 @@ function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }
     {
       id: "entries",
       label: () => t("记忆与学习（Memory / Learning）"),
-      render: () => <MemoryControl api={api} location={location} ready={() => !state.loading && !!state.location} />,
+      render: () => (
+        <MemoryControl
+          api={api}
+          location={location}
+          ready={() => settingsLocationReady(state.loading, state.error, !!state.location)}
+          onOpenPendingCandidates={openWorkspaceMemoryCandidates}
+          onOpenRecallEvidence={openMemoryRecallEvidence}
+        />
+      ),
     },
     {
       id: "governance",
@@ -167,7 +225,13 @@ function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }
           api={api}
           location={location}
           sessionID={props.sessionID}
-          ready={() => !state.loading && !!state.location}
+          ready={() => settingsLocationReady(state.loading, state.error, !!state.location)}
+          openView={() =>
+            isNavigationScopeCurrent(memoryRecallRequest(), location().location)
+              ? MEMORY_RECALL_EVIDENCE_VIEW_ID
+              : undefined
+          }
+          onOpenViewConsumed={() => setMemoryRecallRequest(undefined)}
         />
       ),
     },
@@ -289,6 +353,8 @@ function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }
             ready={() => !state.loading && !state.error && !!state.location}
             sessionID={props.sessionID}
             onNavigate={props.onNavigate}
+            pendingAnchor={workspaceCandidatesAnchor}
+            onPendingAnchorConsumed={() => setWorkspaceCandidatesRequest(undefined)}
           />
         </ControlPanel>
       </Show>
@@ -338,7 +404,14 @@ function ArforgeSettingsContent(props: ArforgeSettingsProps & { sdk: ServerSDK }
             t("查看、搜索和管理当前工作区长期保留的记忆，并检查召回质量。"),
           )}
         >
-          <ManagementViews label={"arforge-memory"} views={views_arforge_memory} />
+          <ManagementViews
+            label={"arforge-memory"}
+            views={views_arforge_memory}
+            openView={() =>
+              isNavigationScopeCurrent(memoryPanelRequest(), location().location) ? "governance" : undefined
+            }
+            onOpenViewConsumed={() => setMemoryPanelRequest(undefined)}
+          />
         </ControlPanel>
       </Show>
       <Show when={props.value === "arforge-evolution"}>
@@ -1421,6 +1494,8 @@ export function MemoryControl(props: {
   api: () => OperationsApi
   location: () => LocationInput
   ready: () => boolean
+  onOpenPendingCandidates: () => void
+  onOpenRecallEvidence: () => void
 }) {
   const t = useControlCenterText()
   const language = useLanguage()
@@ -1483,6 +1558,8 @@ export function MemoryControl(props: {
           pagination: "记忆列表分页",
           read: "已读取",
           total: "服务器记录数",
+          pendingCandidates: "查看待审记忆候选",
+          recallEvidence: "查看本次会话召回证据",
         }
       : {
           details: "Memory details",
@@ -1500,6 +1577,8 @@ export function MemoryControl(props: {
           pagination: "Memory list pages",
           read: "Loaded",
           total: "Server records",
+          pendingCandidates: "Review pending memory candidates",
+          recallEvidence: "Open this session's recall evidence",
         }
   let previousScopeKey: string | undefined
 
@@ -1725,6 +1804,26 @@ export function MemoryControl(props: {
           value={state.quality ? `${Math.round(state.quality.top1Rate * 100)}%` : "—"}
         />
         <MetricCard label={t("MRR")} value={state.quality ? state.quality.meanReciprocalRank.toFixed(2) : "—"} />
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="small"
+          variant="ghost"
+          disabled={!props.ready()}
+          onClick={props.onOpenPendingCandidates}
+        >
+          {copy().pendingCandidates}
+        </Button>
+        <Button
+          type="button"
+          size="small"
+          variant="ghost"
+          disabled={!props.ready()}
+          onClick={props.onOpenRecallEvidence}
+        >
+          {copy().recallEvidence}
+        </Button>
       </div>
       <form
         class="flex flex-wrap items-center gap-2"
@@ -1980,6 +2079,7 @@ export function MemoryControl(props: {
 }
 function PrivateOperations(props: { api: () => OperationsApi; location: () => LocationInput; ready: () => boolean }) {
   const t = useControlCenterText()
+  const language = useLanguage()
   const reads = createWorkbenchReads(["overview"] as const)
   const locationScopeKey = () => JSON.stringify(props.location().location)
   const scopeGuard = createScopeRequestGuard(locationScopeKey)
@@ -2135,35 +2235,24 @@ function PrivateOperations(props: { api: () => OperationsApi; location: () => Lo
                   id: "snapshot-1",
                   title: t("PostgreSQL \u5907\u4EFD"),
                   description: overview().backup.createdAt ?? "—",
-                  render: () => (
-                    <article class="rounded-md border border-border-weak-base p-3">
-                      <h3 class="arforge-management-section-title text-text-strong">{t("PostgreSQL \u5907\u4EFD")}</h3>
-                      <div class="mt-2 arforge-management-copy text-text-weak">
-                        <div>{overview().backup.available ? (overview().backup.createdAt ?? "✓") : "—"}</div>
-                        <div>
-                          {overview().backup.database ?? "PostgreSQL"} · {overview().backup.bytes} B · AES-256-CBC{" "}
-                          {overview().backup.checksumVerified ? "✓ SHA-256" : "—"}
-                        </div>
-                        <div>restore list {overview().backup.restoreListVerified ? "✓" : "—"}</div>
-                      </div>
-                    </article>
-                  ),
+                  render: () => <BackupSnapshot overview={overview()} t={t} />,
                 },
                 {
                   id: "snapshot-2",
                   title: t("\u6062\u590D\u6F14\u7EC3"),
                   description: overview().recoveryDrill.completedAt ?? "—",
+                  render: () => <RecoveryDrillSnapshot overview={overview()} t={t} />,
+                },
+                {
+                  id: "snapshot-windows",
+                  title: t("Windows \u5907\u4EFD\u8BA1\u5212\u4EFB\u52A1"),
+                  description: overview().windowsBackupTasks?.[0]?.lastRunAt ?? "—",
                   render: () => (
-                    <article class="rounded-md border border-border-weak-base p-3">
-                      <h3 class="arforge-management-section-title text-text-strong">{t("\u6062\u590D\u6F14\u7EC3")}</h3>
-                      <div class="mt-2 arforge-management-copy text-text-weak">
-                        <div>{overview().recoveryDrill.completedAt ?? "—"}</div>
-                        <div>
-                          {overview().recoveryDrill.tables} tables · {overview().recoveryDrill.sourceRows}/
-                          {overview().recoveryDrill.restoredRows} rows · Δ {overview().recoveryDrill.differences}
-                        </div>
-                      </div>
-                    </article>
+                    <WindowsBackupSnapshot
+                      tasks={overview().windowsBackupTasks}
+                      t={t}
+                      intl={() => language.intl()}
+                    />
                   ),
                 },
                 {

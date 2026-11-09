@@ -67,12 +67,18 @@ import {
   type ChooserVariant,
 } from "./dialog-select-model-presentation"
 import { chooserCopy, chooserVariantLabel } from "./dialog-select-model-copy"
+import { ModelStrengthDial } from "./model-strength-dial"
 export type { ModelSelectionBinding } from "./dialog-select-model-binding"
 import "./dialog-select-model-v2.css"
 
 type ModelState = ReturnType<typeof useLocal>["model"]
 type ModelItem = ReturnType<ModelState["list"]>[number]
 type Dismiss = "escape" | "outside" | "select" | "manage" | "provider" | "scope"
+type StrengthCapture = {
+  input: "range" | "dial"
+  current: (committed?: boolean) => boolean
+  options: ChooserVariant[]
+}
 
 export function ModelSelectorPopoverV2(props: {
   provider?: string
@@ -128,8 +134,11 @@ export function ModelSelectorPopoverV2(props: {
     viewportTop: 0,
     viewportLeft: 0,
     strengthPreview: undefined as number | undefined,
+    strengthMotionPaused: false,
+    strengthMotionReduced: false,
   })
   let searchRef: HTMLInputElement | undefined
+  let strengthInputRef: HTMLInputElement | undefined
   let contentRef: HTMLDivElement | undefined
   let triggerRef: HTMLElement | undefined
   let restoreSelection: ReturnType<typeof captureModelComposerSelection>
@@ -301,12 +310,12 @@ export function ModelSelectorPopoverV2(props: {
   const strengthOptions = () => strength().levels
   const strengthModes = () => [...strength().modes, ...(strengthOptions().length === 1 ? strengthOptions() : [])]
   const strengthShortcut = createMemo(() => command.keybindParts("model.variant.cycle"))
-  let rangeCapture: { current: (committed?: boolean) => boolean; options: ChooserVariant[] } | undefined
+  let rangeCapture: StrengthCapture | undefined
   const clearStrengthPreview = () => {
     rangeCapture = undefined
     setStore("strengthPreview", undefined)
   }
-  const strengthIndex = () => {
+  const strengthSelection = createMemo(() => {
     const preview = store.strengthPreview
     if (
       preview !== undefined &&
@@ -314,21 +323,31 @@ export function ModelSelectorPopoverV2(props: {
       chooserRangeIndex(preview, strengthOptions().length) !== undefined
     )
       return preview
-    return Math.max(
-      0,
-      strengthOptions().findIndex((option) => option.value === model().variant.current()),
-    )
+    return strengthOptions().findIndex((option) => option.value === model().variant.current())
+  })
+  const strengthIndex = () => Math.max(0, strengthSelection())
+  const strengthState = () => {
+    if (strengthOptions().length < 2) return "unavailable"
+    const index = strengthSelection()
+    if (index < 0) return "mode"
+    if (strengthOptions()[index] === strength().off) return "off"
+    return index === strengthOptions().length - 1 ? "max" : "level"
   }
   const variantLabel = (option: ChooserVariant) =>
-    chooserVariantLabel(
-      option.value,
-      language.locale(),
-      true,
-      option.value === undefined ? undefined : model().current()?.variants?.[option.value],
-    )
+    option === strength().off
+      ? copy().strengthNames.off
+      : chooserVariantLabel(
+          option.value,
+          language.locale(),
+          true,
+          option.value === undefined ? undefined : model().current()?.variants?.[option.value],
+        )
+  const strengthStops = createMemo(() =>
+    strengthOptions().map((option) => ({ key: option.key, label: variantLabel(option) })),
+  )
   const strengthValue = () => {
-    if (store.strengthPreview !== undefined && rangeCapture?.current())
-      return variantLabel(strengthOptions()[strengthIndex()])
+    const selected = strengthOptions()[strengthSelection()]
+    if (selected) return variantLabel(selected)
     const value = model().variant.current()
     return chooserVariantLabel(
       value,
@@ -336,6 +355,10 @@ export function ModelSelectorPopoverV2(props: {
       variantGroups().reasoning.some((option) => option.value === value),
       value === undefined ? undefined : model().current()?.variants?.[value],
     )
+  }
+  const restoreStrengthInput = (origin: HTMLInputElement) => {
+    clearStrengthPreview()
+    origin.valueAsNumber = strengthIndex()
   }
   const variantDisabled = () =>
     store.selecting || !store.hydrated || !model().ready() || !model().current() || !!(binding() && !binding()!.ready())
@@ -347,55 +370,68 @@ export function ModelSelectorPopoverV2(props: {
     if (!strengthOptions().length) return copy().noStrengthScale
     if (strengthOptions().length === 1) return copy().singleStrength
   }
-  const previewStrength = (value: number) => {
-    if (strengthDisabled() || chooserRangeIndex(value, strengthOptions().length) === undefined) return
-    if (!rangeCapture) {
-      const options = strengthOptions()
-      const keys = options.map((option) => option.key).join("\n")
-      const capturedVersion = version
-      const source = sdk()
-      const selectedModel = model()
-      const selectedBinding = binding()
-      const selectedStrength = strength()
-      const selectedVariant = selectedModel.variant.current()
-      const owner = variantOwnership.capture()
-      let retired = false
-      rangeCapture = {
-        options,
-        current: (committed = false) => {
-          if (retired) return false
-          retired = !(
-            mounted &&
-            store.open &&
-            version === capturedVersion &&
-            sdk() === source &&
-            model() === selectedModel &&
-            binding() === selectedBinding &&
-            strength() === selectedStrength &&
-            (committed || selectedModel.variant.current() === selectedVariant) &&
-            owner.current() &&
-            keys ===
-              strengthOptions()
-                .map((option) => option.key)
-                .join("\n")
-          )
-          return !retired
-        },
-      }
+  const captureStrength = (input: StrengthCapture["input"]) => {
+    const options = strengthOptions()
+    const keys = options.map((option) => option.key).join("\n")
+    const capturedVersion = version
+    const source = sdk()
+    const selectedModel = model()
+    const selectedBinding = binding()
+    const selectedStrength = strength()
+    const selectedVariant = selectedModel.variant.current()
+    const owner = variantOwnership.capture()
+    let retired = false
+    const capture: StrengthCapture = {
+      input,
+      options,
+      current: (committed = false) => {
+        if (retired) return false
+        retired = !(
+          mounted &&
+          store.open &&
+          version === capturedVersion &&
+          sdk() === source &&
+          model() === selectedModel &&
+          binding() === selectedBinding &&
+          strength() === selectedStrength &&
+          (committed || selectedModel.variant.current() === selectedVariant) &&
+          owner.current() &&
+          keys ===
+            strengthOptions()
+              .map((option) => option.key)
+              .join("\n")
+        )
+        return !retired
+      },
     }
-    if (!rangeCapture.current()) {
+    rangeCapture = capture
+    return capture
+  }
+  const previewStrength = (value: number, capture: StrengthCapture) => {
+    if (
+      rangeCapture !== capture ||
+      strengthDisabled() ||
+      chooserRangeIndex(value, capture.options.length) === undefined
+    )
+      return
+    if (!capture.current()) {
       setStore("strengthPreview", undefined)
       return
     }
     setStore("strengthPreview", value)
   }
-  const changeStrength = (value: number, origin: HTMLInputElement) => {
-    const capture = rangeCapture
-    const index = chooserRangeIndex(value, capture?.options.length ?? 0)
+  const changeStrength = (value: number, origin: HTMLInputElement, capture: StrengthCapture) => {
+    if (rangeCapture !== capture) return
+    const index = chooserRangeIndex(value, capture.options.length)
     clearStrengthPreview()
-    if (!capture?.current() || index === undefined) return
+    if (!capture.current() || index === undefined) {
+      origin.valueAsNumber = strengthIndex()
+      return
+    }
+    const target = capture.options[index]
+    if (target.value === model().variant.current()) return
     const focused = document.activeElement === origin
-    void selectVariant(capture.options[index]).then(() => {
+    void selectVariant(target).then(() => {
       if (
         focused &&
         capture.current(true) &&
@@ -404,6 +440,28 @@ export function ModelSelectorPopoverV2(props: {
       )
         origin.focus({ preventScroll: true })
     })
+  }
+  const previewRangeStrength = (value: number) => {
+    if (strengthDisabled() || chooserRangeIndex(value, strengthOptions().length) === undefined) return
+    const capture = rangeCapture?.input === "range" ? rangeCapture : captureStrength("range")
+    previewStrength(value, capture)
+  }
+  const changeRangeStrength = (origin: HTMLInputElement) => {
+    if (rangeCapture?.input === "range") changeStrength(origin.valueAsNumber, origin, rangeCapture)
+  }
+  const beginDialStrength = (index: number) => {
+    const origin = strengthInputRef
+    if (!origin || strengthDisabled() || chooserRangeIndex(index, strengthOptions().length) === undefined) return
+    origin.focus({ preventScroll: true })
+    const capture = captureStrength("dial")
+    previewStrength(index, capture)
+    return {
+      preview: (value: number) => previewStrength(value, capture),
+      commit: (value: number) => changeStrength(value, origin, capture),
+      cancel: () => {
+        if (rangeCapture === capture) restoreStrengthInput(origin)
+      },
+    }
   }
   const selectVariant = async (option: ChooserVariant) => {
     if (variantDisabled()) return
@@ -569,7 +627,7 @@ export function ModelSelectorPopoverV2(props: {
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return
     const target = event.target instanceof Element ? event.target : undefined
-    // Native range owns arrows/Home/End and emits only discrete option indices.
+    // The native range owns keyboard and assistive-technology input for the dial.
     if (target?.closest('input[type="range"]')) return
     const provider = target?.closest<HTMLElement>("[data-provider-id]")
     if (provider) {
@@ -627,6 +685,14 @@ export function ModelSelectorPopoverV2(props: {
     if (!store.open) clearStrengthPreview()
     else if (store.strengthPreview !== undefined && rangeCapture && !rangeCapture.current())
       setStore("strengthPreview", undefined)
+  })
+  createEffect(() => {
+    if (!store.open || strengthOptions().length < 2) return
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)")
+    const update = () => setStore("strengthMotionReduced", motion.matches)
+    update()
+    motion.addEventListener("change", update)
+    onCleanup(() => motion.removeEventListener("change", update))
   })
   createEffect(() => {
     const key = catalogKey()
@@ -970,19 +1036,16 @@ export function ModelSelectorPopoverV2(props: {
               </div>
             </Show>
             <div
-              class="arforge-model-picker__strength-range"
+              class="arforge-model-picker__strength-options"
               data-slot="model-strength-options"
               data-disabled={strengthDisabled() ? true : undefined}
-              data-mode-selected={
-                store.strengthPreview !== undefined ||
-                strengthOptions().some((option) => option.value === model().variant.current())
-                  ? undefined
-                  : true
-              }
+              data-strength-state={strengthState()}
+              data-mode-selected={strengthSelection() < 0 ? true : undefined}
             >
-              <div class="arforge-model-picker__strength-rail" aria-hidden="true" />
               <input
+                ref={strengthInputRef}
                 id={`${id}-strength`}
+                class="sr-only arforge-model-picker__strength-input"
                 type="range"
                 min={0}
                 max={Math.max(0, strengthOptions().length - 1)}
@@ -1000,33 +1063,54 @@ export function ModelSelectorPopoverV2(props: {
                     .join(" ") || undefined
                 }
                 onPointerDown={(event) => {
-                  if (event.button === 0) previewStrength(event.currentTarget.valueAsNumber)
+                  if (event.button === 0) previewRangeStrength(event.currentTarget.valueAsNumber)
                 }}
-                onPointerUp={(event) => changeStrength(event.currentTarget.valueAsNumber, event.currentTarget)}
+                onPointerUp={(event) => changeRangeStrength(event.currentTarget)}
                 onKeyDown={(event) => {
-                  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-                    previewStrength(event.currentTarget.valueAsNumber)
+                  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
+                  if (rangeCapture?.input === "dial") restoreStrengthInput(event.currentTarget)
+                  previewRangeStrength(event.currentTarget.valueAsNumber)
                 }}
                 onKeyUp={(event) => {
                   if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-                    changeStrength(event.currentTarget.valueAsNumber, event.currentTarget)
+                    changeRangeStrength(event.currentTarget)
                 }}
-                onInput={(event) => previewStrength(event.currentTarget.valueAsNumber)}
-                onChange={(event) => changeStrength(event.currentTarget.valueAsNumber, event.currentTarget)}
-                onPointerCancel={clearStrengthPreview}
-                onBlur={clearStrengthPreview}
+                onInput={(event) => {
+                  previewRangeStrength(event.currentTarget.valueAsNumber)
+                  event.currentTarget.valueAsNumber = strengthIndex()
+                }}
+                onChange={(event) => changeRangeStrength(event.currentTarget)}
+                onPointerCancel={(event) => {
+                  if (rangeCapture?.input === "range") restoreStrengthInput(event.currentTarget)
+                }}
+                onBlur={(event) => restoreStrengthInput(event.currentTarget)}
               />
-              <div class="arforge-model-picker__strength-ticks" aria-hidden="true">
-                <For each={strengthOptions()}>
-                  {(option, index) => (
-                    <span
-                      title={variantLabel(option)}
-                      data-selected={option.value === model().variant.current() ? true : undefined}
-                      data-preview={store.strengthPreview === index() ? true : undefined}
-                    />
-                  )}
-                </For>
-              </div>
+              <Show when={store.open && strengthOptions().length >= 2}>
+                <ModelStrengthDial
+                  stops={strengthStops()}
+                  selection={strengthSelection()}
+                  hasOff={!!strength().off}
+                  disabled={strengthDisabled()}
+                  paused={store.strengthMotionPaused}
+                  reducedMotion={store.strengthMotionReduced}
+                  begin={beginDialStrength}
+                />
+                <button
+                  type="button"
+                  class="arforge-model-picker__strength-motion"
+                  data-slot="model-strength-motion"
+                  aria-disabled={store.strengthMotionReduced ? true : undefined}
+                  onClick={() => {
+                    if (!store.strengthMotionReduced) setStore("strengthMotionPaused", (paused) => !paused)
+                  }}
+                >
+                  {store.strengthMotionReduced
+                    ? copy().strengthMotionReduced
+                    : store.strengthMotionPaused
+                      ? copy().strengthMotionResume
+                      : copy().strengthMotionPause}
+                </button>
+              </Show>
             </div>
             <Show when={strengthReason()}>
               {(reason) => (
@@ -1077,7 +1161,9 @@ export function ModelSelectorPopoverV2(props: {
                     {copy().choosePreset}
                   </option>
                   <option value="reset">{copy().defaultStrength}</option>
-                  <For each={variantGroups().other}>{(option) => <option value={option.key}>{option.value}</option>}</For>
+                  <For each={variantGroups().other}>
+                    {(option) => <option value={option.key}>{option.value}</option>}
+                  </For>
                 </select>
               </label>
             </Show>

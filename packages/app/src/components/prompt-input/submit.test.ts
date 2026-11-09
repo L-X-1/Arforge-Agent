@@ -14,6 +14,7 @@ import { resolveAgent, unavailableAgentReason } from "@/context/local-agent"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 let durableFollowupPrompt: typeof import("./submit").durableFollowupPrompt
+let matchesQueuedDraft: typeof import("./submit").matchesQueuedDraft
 let promptQueueSubmitting: typeof import("./submit").promptQueueSubmitting
 
 const createdClients: string[] = []
@@ -415,6 +416,7 @@ beforeAll(async () => {
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
   durableFollowupPrompt = mod.durableFollowupPrompt
+  matchesQueuedDraft = mod.matchesQueuedDraft
   promptQueueSubmitting = mod.promptQueueSubmitting
 })
 
@@ -461,7 +463,7 @@ beforeEach(() => {
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
-describe("resource-only prompt submission", () => {
+describe("follow-up prompt submission", () => {
   test("queue text/model edits retain the original request system, format and scheduled tasks", () => {
     const original = {
       text: "Review sources",
@@ -529,7 +531,7 @@ describe("resource-only prompt submission", () => {
     expect(original.route?.model).toEqual({ providerID: "owned", id: "original", variant: "original-high" })
   })
 
-  const controller = (working: boolean, queued?: FollowupDraft[], mode: "normal" | "shell" = "normal") =>
+  const controller = (queued?: FollowupDraft[], mode: "normal" | "shell" = "normal") =>
     createPromptSubmit({
       prompt,
       info: () => ({ id: "session-current" }),
@@ -537,7 +539,6 @@ describe("resource-only prompt submission", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => mode,
-      working: () => working,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -564,11 +565,32 @@ describe("resource-only prompt submission", () => {
       source: { type: "resource", clientName, uri: "evidence://shared/manual", text: { value: "", start: 0, end: 0 } },
     }))
 
-  test.each([false, true])("sends unmentioned resources without aborting (working=%s)", async (working) => {
+  test("reuses cached editing assets only when they still match the durable queued prompt", () => {
+    const text = "Original follow-up"
+    const draft: FollowupDraft = {
+      sessionID: "ses_current",
+      sessionDirectory: "/repo/main",
+      prompt: [{ type: "text", content: text, start: 0, end: text.length }, ...resourceDraft()],
+      context: [],
+      agent: "build",
+      model: { providerID: "provider", modelID: "model" },
+    }
+    const item = {
+      id: "msg_same_queue_entry",
+      sessionID: draft.sessionID,
+      prompt: JSON.parse(JSON.stringify(durableFollowupPrompt(draft, "msg_same_queue_entry", new Set()))),
+    }
+
+    expect(matchesQueuedDraft(draft, item)).toBe(true)
+    expect(matchesQueuedDraft(draft, { ...item, prompt: { ...item.prompt, text: "Edited in another window" } })).toBe(false)
+    expect(matchesQueuedDraft(draft, { ...item, prompt: { ...item.prompt, files: [] } })).toBe(false)
+  })
+
+  test("sends unmentioned resources without aborting", async () => {
     params = { id: "session-current" }
     variant = "high"
     promptValue = resourceDraft()
-    await controller(working).handleSubmit(new Event("submit"))
+    await controller().handleSubmit(new Event("submit"))
     await Bun.sleep(0)
     expect(interruptInputs).toEqual([])
     expect(sentPrompts).toEqual(["/repo/main"])
@@ -597,7 +619,7 @@ describe("resource-only prompt submission", () => {
     promptValue = resourceDraft()
     const original = promptValue
     const queued: FollowupDraft[] = []
-    await controller(true, queued).handleSubmit(new Event("submit"))
+    await controller(queued).handleSubmit(new Event("submit"))
     expect(interruptInputs).toEqual([])
     expect(promptInputs).toEqual([])
     expect(queued).toEqual([
@@ -614,14 +636,32 @@ describe("resource-only prompt submission", () => {
     ])
   })
 
-  test.each(["normal", "shell"] as const)("genuinely empty %s drafts retain Stop semantics", async (mode) => {
+  test.each(["normal", "shell"] as const)("blank %s submission does nothing until Stop is requested", async (mode) => {
     params = { id: "session-current" }
     promptValue = [{ type: "text", content: "", start: 0, end: 0 }]
-    await controller(true, undefined, mode).handleSubmit(new Event("submit"))
-    await Bun.sleep(0)
+    const submission = controller(undefined, mode)
+    await submission.handleSubmit(new Event("submit"))
+    expect(interruptInputs).toEqual([])
+    expect(promptInputs).toEqual([])
+    expect(sentShell).toEqual([])
+
+    await submission.abort()
     expect(interruptInputs).toEqual([{ sessionID: "session-current" }])
     expect(promptInputs).toEqual([])
     expect(sentShell).toEqual([])
+  })
+
+  test("sends a normal text follow-up to the current session without interrupting", async () => {
+    params = { id: "session-current" }
+    const text = "Continue with the next step."
+    promptValue = [{ type: "text", content: text, start: 0, end: text.length }]
+
+    await controller().handleSubmit(new Event("submit"))
+    await Bun.sleep(0)
+
+    expect(interruptInputs).toEqual([])
+    expect(promptInputs).toHaveLength(1)
+    expect(promptInputs[0]).toMatchObject({ sessionID: "session-current", text })
   })
 })
 
@@ -634,7 +674,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => true,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: () => 2,
@@ -675,7 +714,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -693,6 +731,35 @@ describe("prompt submit worktree selection", () => {
       { title: "prompt.toast.promptSendFailed.title", description: "durable-run admission: isolated getSQL failure" },
     ])
     expect(restoredPrompts).toEqual([original])
+  })
+
+  test("keeps the submitted draft and displays the model preflight remedy", async () => {
+    params = { id: "session-existing" }
+    const message = "Model owned/current is unavailable. Select an available model or check the provider in Settings."
+    promptSendError = new Error("Request failed with status 400", {
+      cause: { body: { _tag: "InvalidRequestError", kind: "session.prompt.model", message }, status: 400 },
+    })
+    const original = promptValue
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-existing" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: () => 0,
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+    })
+    await submit.handleSubmit(new Event("submit"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(promptInputs).toHaveLength(1)
+    expect(restoredPrompts).toEqual([original])
+    expect(failureToasts).toEqual([{ title: "prompt.toast.promptSendFailed.title", description: message }])
   })
 
   test("queued MCP attachments preserve two servers sharing one URI", () => {
@@ -777,7 +844,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -832,7 +898,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -865,7 +930,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -907,7 +971,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -939,7 +1002,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -969,7 +1031,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => true,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1001,7 +1062,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => true,
       mode: () => "shell",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1031,7 +1091,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1074,7 +1133,6 @@ describe("prompt submit worktree selection", () => {
           commentCount: () => 0,
           autoAccept: () => false,
           mode: () => "normal",
-          working: () => false,
           editor: () => undefined,
           queueScroll: () => undefined,
           promptLength: (value) => value.reduce((n, part) => n + ("content" in part ? part.content.length : 0), 0),
@@ -1159,7 +1217,6 @@ describe("prompt submit worktree selection", () => {
         commentCount: () => 0,
         autoAccept: () => false,
         mode: () => "normal",
-        working: () => false,
         editor: () => undefined,
         queueScroll: () => undefined,
         promptLength: () => 16,
@@ -1204,7 +1261,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1254,7 +1310,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1293,7 +1348,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1321,7 +1375,6 @@ describe("prompt submit worktree selection", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => false,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1360,7 +1413,6 @@ describe("acknowledged queue submission", () => {
       commentCount: () => 0,
       autoAccept: () => false,
       mode: () => "normal",
-      working: () => true,
       editor: () => undefined,
       queueScroll: () => undefined,
       promptLength: () => 0,
@@ -1575,7 +1627,6 @@ describe("unavailable injected draft model", () => {
         commentCount: () => 0,
         autoAccept: () => false,
         mode: () => mode,
-        working: () => false,
         editor: () => undefined,
         queueScroll: () => undefined,
         promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
@@ -1620,7 +1671,6 @@ describe("unavailable selected Agent", () => {
         commentCount: () => 0,
         autoAccept: () => false,
         mode: () => mode,
-        working: () => false,
         editor: () => undefined,
         queueScroll: () => undefined,
         promptLength: () => 2,

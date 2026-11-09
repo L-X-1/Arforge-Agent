@@ -805,6 +805,8 @@ import type {
   V2SessionPromptQueueListResponses,
   V2SessionPromptQueueRemoveErrors,
   V2SessionPromptQueueRemoveResponses,
+  V2SessionPromptQueueSteerErrors,
+  V2SessionPromptQueueSteerResponses,
   V2SessionPromptQueueUpdateErrors,
   V2SessionPromptQueueUpdateResponses,
   V2SessionPromptResponses,
@@ -6928,6 +6930,47 @@ export class Session3 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/api/session/{sessionID}/prompt/queue/{messageID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Steer a queued prompt
+   *
+   * Move one unpromoted durable queue entry to the next steer boundary without interrupting execution.
+   */
+  public promptQueueSteer<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      messageID: string
+      expectedAdmittedSeq: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "messageID" },
+            { in: "body", key: "expectedAdmittedSeq" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionPromptQueueSteerResponses,
+      V2SessionPromptQueueSteerErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/prompt/queue/{messageID}/steer",
       ...options,
       ...params,
       headers: {

@@ -1,4 +1,4 @@
-import { Deferred, Effect, Semaphore } from "effect"
+import { Deferred, Effect, Scope, Semaphore } from "effect"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import type { ResolvedToolExecutionMetadata } from "./metadata"
 
@@ -20,13 +20,16 @@ export interface ToolScheduler {
    * caller must keep the tool outcome unknown; it is never permission to
    * start the same side effect again.
    */
-  readonly quiesce: (timeoutMs?: number) => Effect.Effect<Quiescence>
-  readonly run: <A, E, R>(input: {
-    /** Trusted task coordination waits for child work; it is not a leaf execution permit. */
-    readonly coordinatesChildren?: boolean
-    readonly metadata: Pick<ResolvedToolExecutionMetadata, "concurrency" | "resourceKey">
-    readonly effect: Effect.Effect<A, E, R>
-  }) => Effect.Effect<A, E, R>
+  readonly quiesce: (timeoutMs?: number, sessionID?: string) => Effect.Effect<Quiescence>
+  readonly acquire: (input: Admission) => Effect.Effect<void, never, Scope.Scope>
+  readonly run: <A, E, R>(input: Admission & { readonly effect: Effect.Effect<A, E, R> }) => Effect.Effect<A, E, R>
+}
+
+type Admission = {
+  /** Trusted task coordination waits for child work; it is not a leaf execution permit. */
+  readonly coordinatesChildren?: boolean
+  readonly metadata: Pick<ResolvedToolExecutionMetadata, "concurrency" | "resourceKey">
+  readonly sessionID?: string
 }
 
 export const DEFAULT_TOOL_SCHEDULER_CONCURRENCY = 4
@@ -48,24 +51,44 @@ export const make = (maxConcurrency = DEFAULT_TOOL_SCHEDULER_CONCURRENCY): ToolS
 
   const pool = Semaphore.makeUnsafe(maxConcurrency)
   const keyed = KeyedMutex.makeUnsafe<string>()
-  const admitted = new Set<object>()
-  const waiters = new Set<Deferred.Deferred<void>>()
+  const admitted = new Map<object, string | undefined>()
+  const waiters = new Map<Deferred.Deferred<void>, string | undefined>()
+  const count = (sessionID?: string) => {
+    if (sessionID === undefined) return admitted.size
+    let active = 0
+    for (const owner of admitted.values()) if (owner === sessionID) active++
+    return active
+  }
 
   const release = (token: object) => {
     admitted.delete(token)
-    if (admitted.size !== 0) return
-    for (const waiter of waiters) Deferred.doneUnsafe(waiter, Effect.void)
-    waiters.clear()
+    for (const [waiter, sessionID] of waiters) {
+      if (count(sessionID) !== 0) continue
+      waiters.delete(waiter)
+      Deferred.doneUnsafe(waiter, Effect.void)
+    }
   }
 
-  const tracked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.suspend(() => {
-      const token = {}
-      admitted.add(token)
-      return effect.pipe(Effect.ensuring(Effect.sync(() => release(token))))
+  const acquire = ({ metadata, coordinatesChildren, sessionID }: Admission) =>
+    Effect.gen(function* () {
+      // Holding a leaf permit while a trusted task coordinates its children would deadlock them.
+      if (coordinatesChildren) return
+      const key = metadata.concurrency === "keyed" ? metadata.resourceKey : undefined
+      const permits = metadata.concurrency === "safe" || key ? 1 : maxConcurrency
+      // Same-resource waiters must leave shared capacity available for other work.
+      if (key) yield* keyed.acquire(key)
+      yield* Effect.acquireRelease(pool.take(permits), () => pool.release(permits), { interruptible: true })
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          const token = {}
+          admitted.set(token, sessionID)
+          return token
+        }),
+        (token) => Effect.sync(() => release(token)),
+      )
     })
 
-  const quiesce = (timeoutMs = DEFAULT_TOOL_QUIESCENCE_TIMEOUT_MS): Effect.Effect<Quiescence> => {
+  const quiesce = (timeoutMs = DEFAULT_TOOL_QUIESCENCE_TIMEOUT_MS, sessionID?: string): Effect.Effect<Quiescence> => {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TOOL_QUIESCENCE_TIMEOUT_MS)
       return Effect.die(
         new RangeError(
@@ -73,16 +96,16 @@ export const make = (maxConcurrency = DEFAULT_TOOL_SCHEDULER_CONCURRENCY): ToolS
         ),
       )
     return Effect.suspend(() => {
-      if (admitted.size === 0) return Effect.succeed({ status: "quiescent", active: 0 } as const)
+      if (count(sessionID) === 0) return Effect.succeed({ status: "quiescent", active: 0 } as const)
       const waiter = Deferred.makeUnsafe<void>()
-      waiters.add(waiter)
+      waiters.set(waiter, sessionID)
       return Deferred.await(waiter).pipe(
         Effect.timeoutOption(timeoutMs),
         Effect.map(
           (completed): Quiescence =>
             completed._tag === "Some"
               ? { status: "quiescent", active: 0 }
-              : { status: "timed_out", active: admitted.size },
+              : { status: "timed_out", active: count(sessionID) },
         ),
         Effect.ensuring(Effect.sync(() => waiters.delete(waiter))),
       )
@@ -93,23 +116,7 @@ export const make = (maxConcurrency = DEFAULT_TOOL_SCHEDULER_CONCURRENCY): ToolS
     maxConcurrency,
     active: Effect.sync(() => admitted.size),
     quiesce,
-    run: ({ metadata, effect, coordinatesChildren }) => {
-      // The caller's task fiber owns coordination lifetime and cancellation.
-      // Holding a leaf permit here would deadlock the child (and its quiesce)
-      // against the parent waiting for that same child. Only the registry's
-      // trusted task registration can set this flag; tool metadata cannot.
-      if (coordinatesChildren) return effect
-      // A keyed declaration without a resolved key is invalid at the
-      // metadata boundary.  Keep this second guard conservative for callers
-      // that construct the scheduler directly: it must never become an
-      // accidentally parallel lane.
-      if (metadata.concurrency === "keyed" && metadata.resourceKey) {
-        return tracked(pool.withPermit(keyed.withLock(metadata.resourceKey)(effect)))
-      }
-      if (metadata.concurrency === "safe") return tracked(pool.withPermit(effect))
-      // `exclusive` and malformed `keyed` metadata both occupy every permit,
-      // creating a barrier against all safe/keyed work already in flight.
-      return tracked(pool.withPermits(maxConcurrency)(effect))
-    },
+    acquire,
+    run: (input) => Effect.scopedWith((scope) => acquire(input).pipe(Scope.provide(scope), Effect.andThen(input.effect))),
   }
 }

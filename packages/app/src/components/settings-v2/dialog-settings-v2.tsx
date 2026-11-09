@@ -13,6 +13,7 @@ import { SettingsProvidersV2 } from "./providers"
 import { SettingsModelsV2 } from "./models"
 import "./settings-v2.css"
 import "./management-review.css"
+import "../control-center/management-views.css"
 import { ManagementStatus } from "./management-status"
 import { SettingsServersV2 } from "./servers"
 import { useDialog } from "@arforge-ai/ui/context/dialog"
@@ -25,7 +26,14 @@ import {
   sessionSettingsTab,
 } from "../session/session-settings-navigation"
 import { onboardingCopy } from "../onboarding/onboarding-copy"
-import { settingsTabValue } from "./navigation"
+import {
+  SETTINGS_INTEGRATIONS_TAB,
+  isSettingsIntegrationsSection,
+  settingsIntegrationsSection,
+  settingsPageTab,
+  settingsTabValue,
+  type SettingsIntegrationsSection,
+} from "./navigation"
 
 const ArforgeSettingsPanels = lazy(async () => {
   const module = await import("../control-center")
@@ -46,6 +54,86 @@ type SettingsProps = {
   onTabChange?: (value: string) => void
 }
 
+type SettingsIntegrationsProps = {
+  section: SettingsIntegrationsSection
+  sessionID?: string
+  onSectionChange: (section: SettingsIntegrationsSection) => void
+  onBack?: () => void
+  onNavigate: (value: string) => void
+}
+
+const SettingsIntegrationsPanel: Component<SettingsIntegrationsProps> = (props) => {
+  const language = useLanguage()
+  const copy = () => {
+    if (language.locale() === "zh") {
+      return {
+        title: "模型与服务商",
+        providers: "服务商配置",
+        connections: "连接",
+        models: "模型可见性",
+      }
+    }
+    if (language.locale() === "zht") {
+      return {
+        title: "模型與服務商",
+        providers: "服務商設定",
+        connections: "連線",
+        models: "模型可見性",
+      }
+    }
+    return {
+      title: "Models & providers",
+      providers: "Provider configuration",
+      connections: "Connections",
+      models: "Model visibility",
+    }
+  }
+  return (
+    <TabsV2
+      value={props.section}
+      onChange={(value) => {
+        if (isSettingsIntegrationsSection(value)) props.onSectionChange(value)
+      }}
+      class="arforge-management-views"
+    >
+      <TabsV2.List aria-label={copy().title}>
+        <TabsV2.Trigger value="providers">{copy().providers}</TabsV2.Trigger>
+        <TabsV2.Trigger value="arforge-integrations">{copy().connections}</TabsV2.Trigger>
+        <TabsV2.Trigger value="models">{copy().models}</TabsV2.Trigger>
+      </TabsV2.List>
+      <TabsV2.Content value="providers">
+        <SettingsProvidersV2 title={copy().title} onBack={props.onBack} onNavigate={props.onNavigate} />
+      </TabsV2.Content>
+      <TabsV2.Content value="arforge-integrations">
+        <Suspense
+          fallback={
+            <div class="settings-v2-tab-body">
+              <ManagementStatus loading initialLoading />
+            </div>
+          }
+        >
+          <ErrorBoundary
+            fallback={(error, reset) => (
+              <div class="settings-v2-tab-body arforge-management-recovery">
+                <ManagementStatus error={error} onRetry={reset} />
+              </div>
+            )}
+          >
+            <ArforgeSettingsPanels
+              value="arforge-integrations"
+              sessionID={props.sessionID}
+              onNavigate={props.onNavigate}
+            />
+          </ErrorBoundary>
+        </Suspense>
+      </TabsV2.Content>
+      <TabsV2.Content value="models">
+        <SettingsModelsV2 />
+      </TabsV2.Content>
+    </TabsV2>
+  )
+}
+
 const SettingsTabs: Component<SettingsProps> = (props) => {
   const language = useLanguage()
   const controlText = useControlCenterText()
@@ -54,6 +142,8 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
   const [state, setState] = createStore({ tab: settingsTabValue(props.defaultValue), compact: false, navigationOpen: false })
   createEffect(on(() => props.defaultValue, value => setState("tab", settingsTabValue(value)), { defer: true }))
   const tab = () => state.tab
+  const visibleTab = () => settingsPageTab(tab())
+  const integrationSection = () => settingsIntegrationsSection(tab())
   const navID = createUniqueId()
   let root!: HTMLDivElement
   let navigationToggle!: HTMLButtonElement
@@ -74,13 +164,16 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
     onCleanup(() => observer.disconnect())
   })
   const setCurrentTab = (value: string) => {
+    // The single navigation entry lands on the provider workspace. Its own
+    // historical route still opens the integration-connection section.
+    const nextTab = value === SETTINGS_INTEGRATIONS_TAB ? "providers" : value
     setState("navigationOpen", false)
     if (state.compact) navigationToggle.focus({ preventScroll: true })
     void startTransition(() => {
-      setState("tab", value)
-      props.onTabChange?.(value)
+      setState("tab", nextTab)
+      props.onTabChange?.(nextTab)
     }).then(() => requestAnimationFrame(() => {
-      if (!root.isConnected || !state.compact || state.navigationOpen || state.tab !== value) return
+      if (!root.isConnected || !state.compact || state.navigationOpen || state.tab !== nextTab) return
       const active = root.ownerDocument.activeElement
       // The tab primitive may focus its trigger after onChange returns.
       // Once the compact list is hidden, restore that focus to its toggle;
@@ -89,6 +182,14 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
           (active instanceof Element && active.closest(".settings-v2-nav-list")))
         navigationToggle.focus({ preventScroll: true })
     }))
+  }
+  const setIntegrationSection = (section: SettingsIntegrationsSection) => {
+    setState("tab", section)
+    props.onTabChange?.(section)
+  }
+  const navigateWithinSettings = (value: string) => {
+    if (isSettingsIntegrationsSection(value)) setIntegrationSection(value)
+    else setCurrentTab(value)
   }
   const groupedTabs = (id: string) => {
     const values: readonly string[] = ARFORGE_SETTINGS_GROUPS.find(group => group.id === id)?.values ?? []
@@ -151,7 +252,7 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
   }
 
   return (
-    <TabsV2 ref={root} orientation="vertical" variant="settings" value={tab()} onChange={setCurrentTab}
+    <TabsV2 ref={root} orientation="vertical" variant="settings" value={visibleTab()} onChange={setCurrentTab}
       class="settings-v2" data-compact={state.compact} data-navigation-open={state.navigationOpen}
       onKeyDown={(event: KeyboardEvent) => {
         if (event.key !== "Escape" || !state.compact || !state.navigationOpen) return
@@ -207,14 +308,6 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
                   <TabsV2.Trigger value="servers">
                     <Icon name="server" />
                     {language.t("status.popover.tab.servers")}
-                  </TabsV2.Trigger>
-                  <TabsV2.Trigger value="providers">
-                    <Icon name="providers" />
-                    {language.t("settings.providers.title")}
-                  </TabsV2.Trigger>
-                  <TabsV2.Trigger value="models">
-                    <Icon name="models" />
-                    {language.t("settings.models.title")}
                   </TabsV2.Trigger>
                   <For each={groupedTabs("connections")}>
                     {(item) => <TabsV2.Trigger value={item.value} title={controlText(item.label)}>
@@ -286,13 +379,16 @@ const SettingsTabs: Component<SettingsProps> = (props) => {
       <TabsV2.Content value="servers" class="settings-v2-panel">
         <SettingsServersV2 />
       </TabsV2.Content>
-      <TabsV2.Content value="providers" class="settings-v2-panel">
-        <SettingsProvidersV2 onBack={showProviders} onNavigate={setCurrentTab} />
+      <TabsV2.Content value={SETTINGS_INTEGRATIONS_TAB} class="settings-v2-panel">
+        <SettingsIntegrationsPanel
+          section={integrationSection()}
+          sessionID={props.sessionID}
+          onSectionChange={setIntegrationSection}
+          onBack={showProviders}
+          onNavigate={navigateWithinSettings}
+        />
       </TabsV2.Content>
-      <TabsV2.Content value="models" class="settings-v2-panel">
-        <SettingsModelsV2 />
-      </TabsV2.Content>
-      <Show when={isArforgeSettingsValue(tab())}>
+      <Show when={isArforgeSettingsValue(tab()) && tab() !== SETTINGS_INTEGRATIONS_TAB}>
         <Suspense
           fallback={
             <TabsV2.Content value={tab()} class="settings-v2-panel">

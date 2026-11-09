@@ -13,6 +13,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
 import { resolveProductRoot } from "../product-root"
+import { projectLocalOperations } from "../private-operation-projection"
 
 const productRoot = resolveProductRoot()
 const runtimeVersion = (() => {
@@ -29,28 +30,6 @@ const message = (error: unknown) =>
     .replace(/\b(postgresql|postgres|mysql):\/\/[^\s]+/gi, "$1://[REDACTED]")
     .replace(/\b(password|passwd|pwd|token|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
     .slice(0, 300)
-
-async function latestJson(directory: string, pattern: RegExp) {
-  const entries = await fs
-    .readdir(directory, { withFileTypes: true })
-    .then((items) => items.filter((item) => item.isFile() && pattern.test(item.name)))
-    .catch(() => [])
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const file = path.join(directory, entry.name)
-      return { file, mtime: (await fs.stat(file)).mtimeMs }
-    }),
-  )
-  const latest = files.toSorted((a, b) => b.mtime - a.mtime)[0]
-  if (!latest) return
-  return JSON.parse((await fs.readFile(latest.file, "utf8")).replace(/^\uFEFF/, "")) as Record<string, unknown>
-}
-
-const object = (value: unknown): Record<string, unknown> =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {}
-const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0)
-const bool = (value: unknown) => value === true
-const string = (value: unknown) => (typeof value === "string" && value ? value : undefined)
 
 export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.privateOperation", (handlers) =>
   handlers.handle(
@@ -109,10 +88,18 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
       const backupDirectory =
         process.env.ARFORGE_BACKUP_DIRECTORY ??
         path.join(process.env.LOCALAPPDATA ?? Global.Path.data, "Arforge", "backups", "postgresql")
-      const [manifest, drill, secrets, logs] = yield* Effect.promise(() =>
+      const [localOperations, secrets, logs] = yield* Effect.promise(() =>
         Promise.all([
-          latestJson(backupDirectory, /^arforge-\d{8}-\d{6}\.manifest\.json$/),
-          latestJson(path.join(productRoot, "artifacts", "recovery-drills"), /^postgres-recovery-.+\.json$/),
+          projectLocalOperations({
+            backupDirectory,
+            // Recovery drills now default next to the backups (packaged runtime
+            // safe); the repository artifacts directory stays readable for
+            // reports produced by the previous layout.
+            drillDirectories: [
+              path.join(backupDirectory, "recovery-drills"),
+              path.join(productRoot, "artifacts", "recovery-drills"),
+            ],
+          }),
           scanSensitiveFiles(Global.Path.data, {
             maxFiles: 2_000,
             excludeDirectories: ["repos", "snapshot", "log"],
@@ -120,29 +107,6 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
           pruneLogs(Global.Path.log, 30),
         ]),
       )
-      const encrypted = object(manifest?.encrypted)
-      const encryption = object(manifest?.encryption)
-      const sourceCounts = object(drill?.sourceTableCounts ?? drill?.source_table_counts)
-      const restoredCounts = object(drill?.restoredTableCounts ?? drill?.restored_table_counts)
-      const tables = new Set([...Object.keys(sourceCounts), ...Object.keys(restoredCounts)])
-      let sourceRows = 0
-      let restoredRows = 0
-      let differences = 0
-      for (const table of tables) {
-        const source = number(sourceCounts[table])
-        const restored = number(restoredCounts[table])
-        sourceRows += source
-        restoredRows += restored
-        if (source !== restored) differences += 1
-      }
-      const reportedTables = number(drill?.tableCount ?? drill?.table_count)
-      const reportedSourceRows = number(drill?.productionRows ?? drill?.sourceRows ?? drill?.source_rows)
-      const reportedRestoredRows = number(drill?.restoredRows ?? drill?.restored_rows)
-      const reportedDifferences = number(drill?.mismatchCount ?? drill?.mismatch_count)
-      const drillTables = tables.size || reportedTables
-      const drillSourceRows = sourceRows || reportedSourceRows
-      const drillRestoredRows = restoredRows || reportedRestoredRows
-      const drillDifferences = tables.size ? differences : reportedDifferences
       const passed = checks.filter((check) => check.ok).length
       const totalTokens = usage.input + usage.output + usage.reasoning + usage.cacheRead + usage.cacheWrite
       const findingCount = secrets.findings.reduce(
@@ -172,26 +136,9 @@ export const PrivateOperationHandler = HttpApiBuilder.group(Api, "server.private
               total: totalTokens,
             },
           },
-          backup: {
-            available: manifest !== undefined,
-            ...(string(manifest?.createdAtUtc) ? { createdAt: string(manifest?.createdAtUtc) } : {}),
-            ...(string(manifest?.database) ? { database: string(manifest?.database) } : {}),
-            bytes: number(encrypted.bytes),
-            encrypted: string(encryption.algorithm) === "AES-256-CBC",
-            checksumVerified: typeof encrypted.sha256 === "string" && encrypted.sha256.length > 0,
-            restoreListVerified: bool(manifest?.restoreListVerified),
-          },
-          recoveryDrill: {
-            available: drill !== undefined,
-            ...(string(drill?.completedAtUtc ?? drill?.completed_at_utc)
-              ? { completedAt: string(drill?.completedAtUtc ?? drill?.completed_at_utc) }
-              : {}),
-            passed: bool(drill?.passed ?? drill?.success) && drillDifferences === 0,
-            tables: drillTables,
-            sourceRows: drillSourceRows,
-            restoredRows: drillRestoredRows,
-            differences: drillDifferences,
-          },
+          backup: localOperations.backup,
+          recoveryDrill: localOperations.recoveryDrill,
+          windowsBackupTasks: localOperations.windowsBackupTasks,
           secrets: {
             filesScanned: secrets.filesScanned,
             filesSkipped: secrets.filesSkipped,

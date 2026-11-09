@@ -441,7 +441,6 @@ export function usePromptInputV2Controller(props: PromptInputV2ControllerProps):
       autoAccept: accepting,
       permissionMode: currentPermissionMode,
       mode,
-      working,
       editor: () => editor,
       queueScroll: () => requestAnimationFrame(() => editor?.scrollIntoView({ block: "nearest" })),
       promptLength,

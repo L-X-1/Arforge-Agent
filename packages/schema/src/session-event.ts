@@ -146,6 +146,17 @@ export const PromptQueueRemoved = Event.define({
 })
 export type PromptQueueRemoved = typeof PromptQueueRemoved.Type
 
+export const PromptQueueSteered = Event.define({
+  type: "session.next.prompt.queue.steered",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    expectedAdmittedSeq: NonNegativeInt,
+  },
+})
+export type PromptQueueSteered = typeof PromptQueueSteered.Type
+
 export const ContextUpdated = Event.define({
   type: "session.next.context.updated",
   ...options,
@@ -669,6 +680,7 @@ export const DurableDefinitions = Event.inventory(
   PromptAdmitted,
   PromptQueueUpdated,
   PromptQueueRemoved,
+  PromptQueueSteered,
   ContextUpdated,
   MemoryContextPrepared,
   ContextFusionPrepared,
@@ -710,6 +722,7 @@ export const Definitions = Event.inventory(
   PromptAdmitted,
   PromptQueueUpdated,
   PromptQueueRemoved,
+  PromptQueueSteered,
   ContextUpdated,
   MemoryContextPrepared,
   ContextFusionPrepared,

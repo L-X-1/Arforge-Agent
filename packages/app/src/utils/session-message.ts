@@ -352,6 +352,10 @@ function textPart(sessionID: string, messageID: string, ordinal: number, text: s
   }
 }
 
+function toolText(content: Extract<SessionMessageAssistantTool["state"], { status: "running" }>["content"]) {
+  return content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+}
+
 function toolOutput(tool: SessionMessageAssistantTool & { state: { status: "completed" } }) {
   const output = tool.state.structured
   if (
@@ -360,7 +364,7 @@ function toolOutput(tool: SessionMessageAssistantTool & { state: { status: "comp
     typeof output.content === "string"
   )
     return output.content
-  const text = tool.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n")
+  const text = toolText(tool.state.content)
   if (tool.name === "bash" && typeof output.output === "string")
     return text && text !== output.output ? `${output.output}\n\n${text}` : output.output
   if (tool.state.content.length) return text
@@ -381,6 +385,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
         status: "running" as const,
         input: normalizeToolInput(tool.name, tool.state.input),
         metadata: normalizeToolMetadata(tool.name, tool.state.structured),
+        output: tool.state.content.length ? toolText(tool.state.content) : undefined,
         time: { start },
       }
     }
@@ -390,6 +395,7 @@ function toolPart(sessionID: string, messageID: string, tool: SessionMessageAssi
         input: normalizeToolInput(tool.name, tool.state.input),
         error: tool.state.error.message,
         metadata: normalizeToolMetadata(tool.name, tool.state.structured),
+        output: tool.state.content.length ? toolText(tool.state.content) : undefined,
         time: { start, end: tool.time.completed ?? start },
       }
     }

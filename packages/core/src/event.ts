@@ -4,7 +4,7 @@ import { Cause, Context, Effect, Layer, Option, PubSub, Queue, Schema, Stream } 
 import { isSqlError } from "effect/unstable/sql/SqlError"
 import { Event } from "@arforge-ai/schema/event"
 import type { Data, Definition, Payload } from "@arforge-ai/schema/event"
-import { and, asc, desc, eq, gt, inArray } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm"
 import { Database } from "./database/database"
 import { EventSequenceTable, EventTable } from "./event/sql"
 import { Location } from "./location"
@@ -30,6 +30,36 @@ export const latestSequence = Effect.fn("EventV2.latestSequence")(function* (
     .get()
     .pipe(Effect.orDie)
   return row?.seq ?? -1
+})
+
+export const readAggregateSnapshot = Effect.fn("EventV2.readAggregateSnapshot")(function* (
+  transaction: Database.Transaction,
+  aggregateID: string,
+) {
+  // Both reads need the same statement snapshot under PostgreSQL READ COMMITTED.
+  // Join independently so a missing projection cannot hide dangling event rows.
+  const snapshot = yield* transaction
+    .select({
+      latest: EventSequenceTable.seq,
+      event: {
+        // Drizzle detects the outer-join placeholder by the first event column.
+        // The legacy SQLite schema can store NULL in the text primary key.
+        aggregate_id: EventTable.aggregate_id,
+        id: EventTable.id,
+        seq: EventTable.seq,
+        type: EventTable.type,
+        data: EventTable.data,
+      },
+    })
+    .from(sql`(select 1) as aggregate_probe`)
+    .leftJoin(EventSequenceTable, eq(EventSequenceTable.aggregate_id, aggregateID))
+    .leftJoin(EventTable, eq(EventTable.aggregate_id, aggregateID))
+    .orderBy(asc(EventTable.seq))
+    .all()
+  return {
+    latest: snapshot[0]?.latest ?? -1,
+    rows: snapshot.flatMap(({ event }) => event ?? []),
+  }
 })
 
 /**

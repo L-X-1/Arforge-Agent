@@ -42,9 +42,11 @@ bun run cli --help
 bun run dev:desktop
 ```
 
-In Desktop, open a project, configure a provider in Settings, and select a model
-before sending a message. For Python compatibility tooling and development checks,
-see the [developer onboarding guide](docs/DEVELOPER_ONBOARDING.md).
+In Desktop, open a project, configure a connection in Settings under
+**Provider / model → Provider configuration**, and select a model in the composer. The picker shows reasoning
+options supported by the selected model. See the [user guide](docs/USER_GUIDE.md)
+for model controls and execution records, and the
+[developer onboarding guide](docs/DEVELOPER_ONBOARDING.md) for development checks.
 
 ### Optional private launcher configuration
 

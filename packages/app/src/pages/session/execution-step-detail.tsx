@@ -3,12 +3,25 @@ import { createStore } from "solid-js/store"
 import { executionStepText, type ExecutionTraceStep } from "./execution-trace-model"
 import { executionContentPreview } from "./execution-content-preview"
 
-export function ExecutionStepDetail(props: { step: ExecutionTraceStep; chinese: boolean }) {
+export function ExecutionStepDetail(props: {
+  step: ExecutionTraceStep
+  chinese: boolean
+  focusTool?: string
+  directory?: string
+}) {
   const [state, setState] = createStore({ expanded: {} as Record<string, boolean>, copying: false, copied: false, error: "" })
   const identity = createMemo(() => props.step.id)
   const t = (zh: string, en: string) => props.chinese ? zh : en
   let generation = 0
+  let title: HTMLHeadingElement | undefined
   createEffect(on(identity, () => { generation++; setState({ expanded: {}, copied: false, copying: false, error: "" }) }))
+  createEffect(() => {
+    if (props.focusTool !== props.step.id) return
+    const frame = requestAnimationFrame(() => {
+      if (title?.isConnected) title.focus()
+    })
+    onCleanup(() => cancelAnimationFrame(frame))
+  })
   onCleanup(() => generation++)
   const sections = createMemo(() => props.step.sections?.length ? props.step.sections : [{ kind: "detail" as const, source: props.step.id, content: executionStepText(props.step) }])
   const copy = async () => {
@@ -24,10 +37,25 @@ export function ExecutionStepDetail(props: { step: ExecutionTraceStep; chinese: 
   const heading = (kind: "input" | "output" | "error" | "detail") => ({
     input: t("输入", "Input"), output: t("输出", "Output"), error: t("错误", "Error"), detail: t("详情", "Details"),
   })[kind]
-  return <section class="execution-detail-pane" aria-label={t("执行步骤详情", "Execution step details")}>
-    <header><h3>{props.step.title || t("步骤详情", "Step details")}</h3>
+  const tool = () => props.step.tools?.length === 1 ? props.step.tools[0] : undefined
+  const workdir = () => {
+    const selected = tool()
+    if (props.step.kind !== "command" || !selected) return
+    const input = selected.state.input.workdir
+    if (typeof input === "string" && input) return { path: input, source: "tool-input" }
+    if (input === undefined && props.directory) return { path: props.directory, source: "execution-source" }
+  }
+  return <section class="execution-detail-pane" aria-label={t("执行步骤详情", "Execution step details")}
+    data-execution-tool={tool()?.callID} data-execution-message={tool()?.messageID}>
+    <header><h3 ref={title} tabIndex={-1}>{props.step.title || t("步骤详情", "Step details")}</h3>
       <button type="button" disabled={state.copying} onClick={() => void copy()}>{state.copied ? t("已复制", "Copied") : t("复制完整内容", "Copy full content")}</button>
     </header>
+    <Show when={workdir()}>{(value) => (
+      <p class="execution-detail-preview" data-component="execution-working-directory" data-workdir-source={value().source}>
+        {value().source === "tool-input" ? t("请求的工作目录", "Requested working directory") : t("工作目录", "Working directory")}
+        {" · "}<code>{value().path}</code>
+      </p>
+    )}</Show>
     <Show when={props.step.preview}><p class="execution-detail-preview">{props.step.preview}</p></Show>
     <Show when={state.error}><p role="alert">{state.error}</p></Show>
     <Index each={sections()}>{(section, index) => {

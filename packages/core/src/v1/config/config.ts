@@ -176,6 +176,9 @@ export const Info = Schema.Struct({
       }),
     }),
   ),
+  session_run_token_limit: Schema.optional(Schema.Boolean).annotate({
+    description: "Apply a cumulative 1,000,000 token limit to new root chat runs (default: false)",
+  }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),

@@ -25,3 +25,13 @@ export function selectProviderCatalog(input: ProviderCatalogInput) {
   if (input.explicit) return emptyProviderCatalog
   return input.global
 }
+
+export function providerConnectionChoices(catalog: NormalizedProviderListResponse) {
+  const connected = new Set(catalog.connected)
+  return Array.from(catalog.all.values()).filter(
+    (provider) =>
+      provider.source !== "custom" ||
+      (provider.id !== "opencode" && provider.id !== "arforge") ||
+      connected.has(provider.id),
+  )
+}

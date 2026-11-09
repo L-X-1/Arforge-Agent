@@ -26,7 +26,7 @@ import { canonicalHash } from "@arforge-ai/core/util/canonical-hash"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { location } from "./fixture/location"
 import { and, eq } from "drizzle-orm"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
 // Read-only preflight resolution needs a real existing directory; the test
@@ -56,10 +56,16 @@ const outputStore = Layer.mock(ToolOutputStore.Service, {
 })
 const permissionAssertions: PermissionV2.AssertInput[] = []
 const deniedPermissionAssertions: PermissionV2.AssertInput[] = []
+const WaitForApproval = Context.Reference<Effect.Effect<void>>("test/ToolRegistry.WaitForApproval", {
+  defaultValue: () => Effect.void,
+})
 const allowPermission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
-    assert: (input) => Effect.sync(() => permissionAssertions.push(input)),
+    assert: (input) =>
+      Effect.sync(() => permissionAssertions.push(input)).pipe(
+        Effect.andThen(input.action === "pending_tool" ? Effect.flatMap(WaitForApproval, (wait) => wait) : Effect.void),
+      ),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
@@ -152,6 +158,36 @@ const make = (permission?: string) => {
 }
 
 describe("ToolRegistry", () => {
+  it.live("keeps a second session's tools moving while an exclusive action awaits approval", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const waiting = yield* Deferred.make<void>()
+      const approval = yield* Deferred.make<void>()
+      const owner = SessionV2.ID.make("ses_approval_wait")
+      yield* service.register({ pending_tool: make(), echo: make() })
+      const pending = yield* service.materialize([], owner)
+      const other = yield* service.materialize([], sessionID)
+      const tool = yield* pending
+        .settle({ ...call("pending_tool"), sessionID: owner })
+        .pipe(
+          Effect.provideService(
+            WaitForApproval,
+            Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Deferred.await(approval))),
+          ),
+          Effect.forkScoped,
+        )
+
+      yield* Deferred.await(waiting).pipe(Effect.timeout(2500))
+      expect(yield* pending.quiesce!(0)).toEqual({ status: "quiescent", active: 0 })
+      expect((yield* other.settle(call("echo")).pipe(Effect.timeout(2500))).result).toEqual({
+        type: "text",
+        value: "echo",
+      })
+      yield* Deferred.succeed(approval, undefined)
+      expect((yield* Fiber.join(tool)).result).toEqual({ type: "text", value: "pending_tool" })
+    }),
+  )
+
   it.effect("keeps external tool snapshots isolated by session and stable after later materialization", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service

@@ -99,7 +99,10 @@ export function createSessionComposerController(options?: { closeMs?: number | (
 
     setStore({ responding: key, permissionError: "", failedPermission: undefined })
     source.api.permission
-      .reply({ sessionID: perm.sessionID, requestID: perm.id, reply: response })
+      .reply(
+        { sessionID: perm.sessionID, requestID: perm.id, reply: response },
+        { signal: AbortSignal.timeout(15_000) },
+      )
       .catch((err: unknown) => {
         if (!current()) return
         if (isPermissionRequestGone(err, perm.id)) {

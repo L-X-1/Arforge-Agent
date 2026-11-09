@@ -5,10 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 
 from arforge.database.backup import create_backup, verify_backup
 
@@ -32,6 +33,43 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _database_endpoint(url: URL) -> tuple[str, int]:
+    return (url.host or "").casefold(), url.port or 5432
+
+
+def _administrator_database_url(source: URL, values: dict[str, str]) -> URL:
+    configured = (
+        os.environ.get("ARFORGE_DB_ADMIN_URL", "").strip()
+        or values.get("ARFORGE_DB_ADMIN_URL", "").strip()
+    )
+    if not configured:
+        raise SystemExit(
+            "--administrator requires ARFORGE_DB_ADMIN_URL in the process environment "
+            "or the private env file"
+        )
+    try:
+        admin = make_url(configured)
+    except Exception:
+        raise SystemExit(
+            "ARFORGE_DB_ADMIN_URL must be a valid PostgreSQL URL"
+        ) from None
+    if admin.drivername.split("+", 1)[0] != "postgresql":
+        raise SystemExit("ARFORGE_DB_ADMIN_URL must identify PostgreSQL")
+    if (
+        not source.username
+        or not admin.username
+        or source.username.casefold() == admin.username.casefold()
+    ):
+        raise SystemExit(
+            "ARFORGE_DB_ADMIN_URL must use a PostgreSQL role different from ARFORGE_DB_URL"
+        )
+    if _database_endpoint(admin) != _database_endpoint(source):
+        raise SystemExit(
+            "ARFORGE_DB_ADMIN_URL must use the same PostgreSQL host and port as ARFORGE_DB_URL"
+        )
+    return admin.set(database=source.database)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--private-env", type=Path, default=Path.home() / ".arforge" / ".env")
@@ -51,7 +89,7 @@ def main() -> int:
     parser.add_argument(
         "--administrator",
         action="store_true",
-        help="Use the temporary private administrator URL for a complete pre-migration dump.",
+        help="Use the configured private administrator URL for a complete pre-migration dump.",
     )
     args = parser.parse_args()
 
@@ -72,11 +110,8 @@ def main() -> int:
     if url.drivername.split("+", 1)[0] != "postgresql" or not url.database:
         raise SystemExit("ARFORGE_DB_URL must identify a PostgreSQL database")
     if args.administrator:
-        admin = make_url(values.get("ARFORGE_DB_ADMIN_URL", ""))
-        if admin.drivername.split("+", 1)[0] != "postgresql":
-            raise SystemExit("ARFORGE_DB_ADMIN_URL must identify PostgreSQL")
-        database_url = admin.set(database=url.database).render_as_string(hide_password=False)
-        url = make_url(database_url)
+        url = _administrator_database_url(url, values)
+        database_url = url.render_as_string(hide_password=False)
 
     destination = args.destination.expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)

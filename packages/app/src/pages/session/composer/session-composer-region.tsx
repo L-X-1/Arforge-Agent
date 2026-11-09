@@ -48,7 +48,13 @@ export function SessionComposerRegion(props: {
 
         <Show when={controller.state.permissionRequest()} keyed>
           {(request) => (
-            <div>
+            <div
+              tabIndex={-1}
+              role="group"
+              aria-label={language.t("notification.permission.title")}
+              data-session-permission-request={request.id}
+              data-session-permission-session={request.sessionID}
+            >
               <SessionPermissionDock
                 request={request}
                 responding={controller.state.permissionResponding()}
@@ -140,8 +146,11 @@ export function SessionComposerRegion(props: {
                 <SessionFollowupDock
                   items={controller.followup()!.items}
                   sending={controller.followup()!.sending}
+                  disabled={controller.followup()!.disabled}
                   onSend={controller.followup()!.onSend}
+                  onGuide={controller.followup()!.onGuide}
                   onEdit={controller.followup()!.onEdit}
+                  onDelete={controller.followup()!.onDelete}
                 />
               </Show>
               <Show

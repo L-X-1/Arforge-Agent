@@ -107,6 +107,8 @@ export const SettingsGeneralV2: Component<{
   const [request, setRequest] = createStore({
     savingShell: false,
     shellError: "",
+    savingRunTokenLimit: false,
+    runTokenLimitError: "",
     savingDisplay: false,
     displayError: "",
   })
@@ -374,6 +376,37 @@ export const SettingsGeneralV2: Component<{
         </div>
 
         <SettingsRowV2
+          title={language.t("settings.general.row.runTokenLimit.title")}
+          description={language.t("settings.general.row.runTokenLimit.description")}
+        >
+          <div data-action="settings-session-run-token-limit">
+            <Switch
+              hideLabel
+              children={language.t("settings.general.row.runTokenLimit.title")}
+              checked={serverSync().data.config.session_run_token_limit === true}
+              disabled={!serverSync().ready || request.savingRunTokenLimit}
+              onChange={async (checked) => {
+                const sync = serverSync()
+                if (!sync.ready || request.savingRunTokenLimit) return
+                setRequest({ savingRunTokenLimit: true, runTokenLimitError: "" })
+                try {
+                  const result = await sync.updateConfig({ session_run_token_limit: checked })
+                  if (result.data?.session_run_token_limit !== checked) throw new Error(language.t("common.requestFailed"))
+                  if (serverSync() === sync) sync.set("config", "session_run_token_limit", checked)
+                } catch (error) {
+                  setRequest("runTokenLimitError", managementErrorText(error, language.t("common.requestFailed")))
+                } finally {
+                  setRequest("savingRunTokenLimit", false)
+                }
+              }}
+            />
+          </div>
+        </SettingsRowV2>
+        <div class="settings-v2-field-status">
+          <ManagementStatus saving={request.savingRunTokenLimit} error={request.runTokenLimitError} />
+        </div>
+
+        <SettingsRowV2
           title={language.t("settings.general.row.reasoningSummaries.title")}
           description={language.t("settings.general.row.reasoningSummaries.description")}
         >
@@ -420,23 +453,15 @@ export const SettingsGeneralV2: Component<{
             language.locale() === "zh" ? "追问方式" : language.locale() === "zht" ? "追問方式" : "Follow-up behavior"
           }
           description={
-            language.locale() === "zh" || language.locale() === "zht"
-              ? "显示当前有效行为；已排队任务的原有绑定保持不变。"
-              : "Existing effective behavior; queued work keeps its original binding."
+            language.locale() === "zh"
+              ? "运行期间发送的追问会先排队。点击某条消息的「引导」，会在当前模型请求和工具调用结束后将它交给下一步。"
+              : language.locale() === "zht"
+                ? "執行期間送出的追問會先排入佇列。點選訊息的「引導」，會在目前的模型請求和工具呼叫結束後將它交給下一步。"
+                : "Follow-ups sent during a run enter the queue. Select Guide on a message to send it to the next step after the current model request and tool calls finish."
           }
         >
           <span class="settings-v2-readonly-value" data-action="settings-followup-mode">
-            {settings.general.followup() === "steer"
-              ? language.locale() === "zh"
-                ? "引导当前运行"
-                : language.locale() === "zht"
-                  ? "引導目前執行"
-                  : "Steer the current run"
-              : language.locale() === "zh"
-                ? "排入追问"
-                : language.locale() === "zht"
-                  ? "排入追問"
-                  : "Queue follow-up"}
+            {language.locale() === "zh" ? "先排队" : language.locale() === "zht" ? "先排入佇列" : "Queue first"}
           </span>
         </SettingsRowV2>
 

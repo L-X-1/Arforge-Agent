@@ -28,6 +28,8 @@ import { ProjectTable } from "./project/sql"
 import path from "path"
 import { fromRow } from "./session/info"
 import { SessionRunner } from "./session/runner/index"
+import { SessionRunnerModel } from "./session/runner/model"
+import { Catalog } from "./catalog"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
 import { makeGlobalNode } from "./effect/app-node"
@@ -181,6 +183,11 @@ export interface Interface {
       messageID: SessionMessage.ID
       expectedAdmittedSeq: number
     }) => Effect.Effect<void, NotFoundError | SessionInput.QueuedPromptNotFoundError>
+    readonly steer: (input: {
+      sessionID: SessionSchema.ID
+      messageID: SessionMessage.ID
+      expectedAdmittedSeq: number
+    }) => Effect.Effect<SessionInput.Admitted, NotFoundError | SessionInput.QueuedPromptNotFoundError>
   }
   readonly shell: (input: SessionExecution.ShellInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError | SessionExecution.OperationError>
   readonly skill: (input: {
@@ -261,7 +268,8 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       id: SessionMessage.ID,
       input: PromptInput.Prompt,
-      retry = false,
+      existing?: SessionInput.Admitted,
+      validation?: SessionExecution.CommandValidation,
     ) {
       if (input.files?.some((file) => file.resource !== undefined && file.resource.uri !== file.uri))
         return (
@@ -274,19 +282,66 @@ const layer = Layer.effect(
         )
       if (!input.command) return resolvePrompt(input)
       const requestDigest = canonicalHash(resolvePrompt(input))!
-      if (retry) {
-        const existing = yield* SessionInput.find(db, id)
-        if (existing) {
-          if (existing.sessionID !== sessionID || existing.prompt.command?.requestDigest !== requestDigest)
-            return yield* new SessionExecution.OperationError({ operation: "command", reason: "conflict", message: "Command identity already belongs to a different request" })
-          return existing.prompt
-        }
+      if (existing) {
+        if (existing.sessionID !== sessionID || existing.prompt.command?.requestDigest !== requestDigest)
+          return yield* new SessionExecution.OperationError({ operation: "command", reason: "conflict", message: "Command identity already belongs to a different request" })
+        return existing.prompt
       }
       if (!execution.preparePrompt)
         return yield* new SessionExecution.OperationError({ operation: "command", reason: "unavailable", message: "Command preparation is unavailable" })
-      const resolved = yield* execution.preparePrompt({ sessionID, id, prompt: input })
+      const resolved = yield* execution.preparePrompt({ sessionID, id, prompt: input, ...validation })
       return Prompt.make({ ...resolved, command: { ...input.command, requestDigest } })
     })
+    const validatePromptAgent = (source: SessionSchema.Info, requestedAgent: string) =>
+      AgentV2.Service.use((agents) => Effect.gen(function* () {
+        yield* agents.reload()
+        if (!(yield* agents.get(AgentV2.ID.make(requestedAgent))))
+          return yield* new SessionExecution.OperationError({
+            operation: "prompt", reason: "invalid", message: `Unknown or unavailable Agent: ${requestedAgent}`,
+          })
+      })).pipe(
+        Effect.provide(locations.get(source.location)),
+        Effect.mapError((error) => error instanceof SessionExecution.OperationError ? error : new SessionExecution.OperationError({
+          operation: "prompt", reason: "unavailable", message: "Agent availability could not be checked for the Session source",
+        })),
+      )
+    const preflight = (source: SessionSchema.Info, model: ModelV2.Ref | undefined) =>
+      Effect.gen(function* () {
+        const resolver = yield* Effect.serviceOption(SessionRunnerModel.Service)
+        // Recording-only hosts do not compose a model runner into their Location.
+        if (Option.isNone(resolver)) return model
+        yield* resolver.value.resolve({ ...source, model: model ?? source.model })
+        if (!model || model.providerID !== "deepseek") return model
+        const catalog = yield* Effect.serviceOption(Catalog.Service)
+        const selected = Option.isSome(catalog) ? yield* catalog.value.model.get(model.providerID, model.id) : undefined
+        return selected && selected.id !== model.id ? { ...model, id: selected.id } : model
+      }).pipe(
+        Effect.provide(locations.get(source.location)),
+        Effect.mapError((error) => {
+          let message: string
+          switch (error._tag) {
+            case "SessionRunnerModel.ModelUnavailableError":
+              message = `Model ${error.providerID}/${error.modelID} is unavailable. Select an available model or check the provider in Settings.`
+              break
+            case "SessionRunnerModel.VariantUnavailableError":
+              message = `${error.message}. Select another reasoning option or use the model default.`
+              break
+            case "SessionRunnerModel.UnsupportedApiError":
+              message = `Model ${error.providerID}/${error.modelID} has an unsupported API format or endpoint. Check the provider in Settings.`
+              break
+            case "SessionRunnerModel.CredentialUnavailableError":
+            case "SessionRunnerModel.CredentialScopeError":
+              message = `Reconnect provider ${error.providerID} in Settings or select another model.`
+              break
+            case "SessionRunnerModel.ModelNotSelectedError":
+              message = "Select an available model or connect a provider in Settings."
+              break
+            default:
+              message = "The model could not be checked. Check the provider connection in Settings and retry."
+          }
+          return new SessionExecution.OperationError({ operation: "prompt.model", reason: "invalid", message })
+        }),
+      )
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -576,28 +631,43 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const source = yield* result.get(input.sessionID)
             const messageID = input.id ?? SessionMessage.ID.create()
-            const prompt = yield* restore(prepare(input.sessionID, messageID, input.prompt, true))
+            const delivery = input.delivery ?? "steer"
+            const existing = input.id === undefined ? undefined : yield* SessionInput.find(db, messageID)
+            const original = existing && delivery === "queue"
+              ? yield* SessionInput.originalQueueAdmission(db, input.sessionID, existing)
+              : undefined
+            const shouldPreflight = input.resume !== false && existing === undefined
+            const prompt = yield* restore(prepare(
+              input.sessionID,
+              messageID,
+              input.prompt,
+              original ?? existing,
+              existing || !input.prompt.command ? undefined : {
+                validateAgent: (agent) => validatePromptAgent(source, agent),
+                validateModel: shouldPreflight
+                  ? (model) => preflight(source, model).pipe(Effect.map((selected) => selected ?? model))
+                  : undefined,
+              },
+            ))
             const requestedAgent = prompt.route?.agent
-            if (requestedAgent !== undefined && (yield* SessionInput.find(db, messageID)) === undefined) {
-              const agent = yield* restore(AgentV2.Service.use((agents) => Effect.gen(function* () {
-                yield* agents.reload()
-                return yield* agents.get(AgentV2.ID.make(requestedAgent))
-              })).pipe(
-                Effect.provide(locations.get(source.location)),
-                Effect.mapError(() => new SessionExecution.OperationError({
-                  operation: "prompt", reason: "unavailable", message: "Agent availability could not be checked for the Session source",
-                })),
-              ))
-              if (!agent) return yield* new SessionExecution.OperationError({
-                operation: "prompt", reason: "invalid", message: `Unknown or unavailable Agent: ${requestedAgent}`,
-              })
-            }
+            if (requestedAgent !== undefined && existing === undefined)
+              yield* restore(validatePromptAgent(source, requestedAgent))
             const current = yield* result.get(input.sessionID)
             if (canonicalHash(current.location) !== canonicalHash(source.location))
               return yield* new SessionExecution.OperationError({ operation: "command", reason: "conflict", message: "Session source changed during prompt preparation" })
-            const delivery = input.delivery ?? "steer"
+            if (shouldPreflight) {
+              yield* restore(preflight(current, prompt.route?.model))
+              const checked = yield* result.get(input.sessionID)
+              if (
+                canonicalHash(checked.location) !== canonicalHash(source.location) ||
+                (prompt.route?.model === undefined && canonicalHash(checked.model) !== canonicalHash(current.model))
+              )
+                return yield* new SessionExecution.OperationError({
+                  operation: "prompt", reason: "conflict", message: "Session source or model changed during prompt preparation",
+                })
+            }
             const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
-            const admitted = yield* SessionInput.admit(db, events, {
+            const admitted = existing ?? (yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
               prompt,
@@ -608,10 +678,14 @@ const layer = Layer.effect(
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                   : Effect.die(defect),
               ),
-            )
-            if (!SessionInput.equivalent(admitted, expected))
+            ))
+            const originalAdmission = existing === admitted ? original : delivery === "queue"
+              ? yield* SessionInput.originalQueueAdmission(db, input.sessionID, admitted)
+              : undefined
+            if (!SessionInput.equivalent(originalAdmission ?? admitted, expected))
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            if (input.resume !== false) yield* execution.wake(admitted.sessionID)
+            if (input.resume !== false && (!originalAdmission || admitted.promotedSeq === undefined))
+              yield* execution.wake(admitted.sessionID)
             return admitted
           }),
         ).pipe(preparation.withPermit),
@@ -657,6 +731,14 @@ const layer = Layer.effect(
               yield* SessionInput.removeQueued(db, events, input)
             }),
           ),
+        ),
+        steer: Effect.fn("V2Session.promptQueue.steer")((input) =>
+          Effect.uninterruptible(Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            const admitted = yield* SessionInput.steerQueued(db, events, input)
+            if (admitted.promotedSeq === undefined) yield* execution.wake(input.sessionID)
+            return admitted
+          })).pipe(preparation.withPermit),
         ),
       },
       shell: Effect.fn("V2Session.shell")(function* (input) {

@@ -7,6 +7,7 @@ import {
 } from "./server-session-native-reducer"
 
 type Assistant = Extract<SessionMessageInfo, { type: "assistant" }> & { structured?: Record<string, unknown> }
+type AssistantToolError = Extract<Extract<Assistant["content"][number], { type: "tool" }>["state"], { status: "error" }>
 type Compaction = Extract<SessionMessageInfo, { type: "compaction" }>
 type Shell = Extract<SessionMessageInfo, { type: "shell" }>
 
@@ -338,6 +339,9 @@ export function createV2SessionReducer() {
       case "session.tool.failed":
         return updateTool(source, event.data.assistantMessageID, event.data.callID, sessionID, (tool) => {
           if (tool.state.status !== "streaming" && tool.state.status !== "running") return tool
+          // The native JSON bridge carries terminal evidence that the retained
+          // event declaration predates. Older events may omit either field.
+          const terminal: typeof event.data & Partial<Pick<AssistantToolError, "structured" | "content">> = event.data
           return {
             ...tool,
             executed: event.data.executed || tool.executed === true,
@@ -345,8 +349,8 @@ export function createV2SessionReducer() {
             state: {
               status: "error",
               input: typeof tool.state.input === "string" ? {} : tool.state.input,
-              structured: tool.state.status === "running" ? tool.state.structured : {},
-              content: tool.state.status === "running" ? tool.state.content : [],
+              structured: terminal.structured ?? (tool.state.status === "running" ? tool.state.structured : {}),
+              content: terminal.content ?? (tool.state.status === "running" ? tool.state.content : []),
               error: event.data.error,
               result: event.data.result,
             },
